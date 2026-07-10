@@ -159,6 +159,41 @@ export async function transfer(
   return { ok: true };
 }
 
+export async function giveCurrency(
+  guildId: string,
+  userId: string,
+  amount: number,
+): Promise<{ ok: true; balance: number } | { ok: false; reason: string }> {
+  if (amount === 0) {
+    return { ok: false, reason: "金額には0以外の値を指定してください。" };
+  }
+
+  await getOrCreateWallet(guildId, userId);
+
+  // Conditional on non-negative resulting balance so an admin can't push a
+  // user's balance below zero with a negative grant.
+  const [updated] = await db
+    .update(walletsTable)
+    .set({ balance: sql`${walletsTable.balance} + ${amount}` })
+    .where(
+      and(
+        eq(walletsTable.guildId, guildId),
+        eq(walletsTable.userId, userId),
+        sql`${walletsTable.balance} + ${amount} >= 0`,
+      ),
+    )
+    .returning();
+
+  if (!updated) {
+    const wallet = await getOrCreateWallet(guildId, userId);
+    return { ok: false, reason: `残高が不足しています(所持: ${wallet.balance}${CURRENCY_NAME})。` };
+  }
+
+  await recordTransaction(guildId, userId, amount, "admin-give");
+
+  return { ok: true, balance: updated.balance };
+}
+
 export async function getLeaderboard(
   guildId: string,
   limit = 10,

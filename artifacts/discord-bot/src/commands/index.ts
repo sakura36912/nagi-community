@@ -10,6 +10,7 @@ import {
   claimDaily,
   getLeaderboard,
   getOrCreateWallet,
+  giveCurrency,
   listInventory,
   listShopItems,
   removeShopItem,
@@ -94,6 +95,44 @@ const payCommand: Command = {
     const result = await transfer(guildId, interaction.user.id, target.id, amount);
     if (result.ok) {
       await interaction.reply(`<@${target.id}>に**${amount}${CURRENCY_NAME}**送金しました。`);
+    } else {
+      await interaction.reply({ content: result.reason, ephemeral: true });
+    }
+  },
+};
+
+const giveCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("give")
+    .setDescription(`ユーザーに${CURRENCY_NAME}を付与します(管理者用)`)
+    .addUserOption((opt) =>
+      opt.setName("user").setDescription("付与先のユーザー").setRequired(true),
+    )
+    .addIntegerOption((opt) =>
+      opt.setName("amount").setDescription("付与額(マイナスで没収)").setRequired(true),
+    ),
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+
+    if (!interaction.memberPermissions?.has("ManageGuild")) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+
+    const target = interaction.options.getUser("user", true);
+    const amount = interaction.options.getInteger("amount", true);
+
+    if (target.bot) {
+      await interaction.reply({ content: "Botには付与できません。", ephemeral: true });
+      return;
+    }
+
+    const result = await giveCurrency(guildId, target.id, amount);
+    if (result.ok) {
+      const verb = amount >= 0 ? "付与" : "没収";
+      await interaction.reply(
+        `<@${target.id}>から${verb}: ${Math.abs(amount)}${CURRENCY_NAME}。現在の残高: **${result.balance}${CURRENCY_NAME}**`,
+      );
     } else {
       await interaction.reply({ content: result.reason, ephemeral: true });
     }
@@ -227,6 +266,7 @@ export const commands: Command[] = [
   balanceCommand,
   dailyCommand,
   payCommand,
+  giveCommand,
   leaderboardCommand,
   shopCommand,
 ];
