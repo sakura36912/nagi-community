@@ -1,7 +1,13 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
   SlashCommandBuilder,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
 } from "discord.js";
+import type { ShopItem } from "@workspace/db";
 import {
   DEFAULT_DAILY_AMOUNT,
   addShopItem,
@@ -41,6 +47,69 @@ function formatMs(ms: number): string {
   const hours = Math.floor(ms / (60 * 60 * 1000));
   const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
   return `${hours}時間${minutes}分`;
+}
+
+export const SHOP_BUY_PREFIX = "shop:buy:";
+// Discord caps action rows at 5, each holding up to 5 buttons.
+const MAX_SHOP_BUY_BUTTONS = 25;
+
+function buildShopPanel(items: ShopItem[], currencyName: string) {
+  const embed = new EmbedBuilder()
+    .setTitle("🛒 ショップ")
+    .setColor(0xf5a623);
+
+  if (items.length === 0) {
+    embed.setDescription("ショップにアイテムはまだありません。");
+    return { embeds: [embed], components: [] };
+  }
+
+  embed.setDescription(
+    items
+      .map((i) => `**#${i.id} ${i.name}** — ${i.price}${currencyName}${i.description ? `\n${i.description}` : ""}`)
+      .join("\n\n"),
+  );
+
+  const buyable = items.slice(0, MAX_SHOP_BUY_BUTTONS);
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  for (let i = 0; i < buyable.length; i += 5) {
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      buyable.slice(i, i + 5).map((item) =>
+        new ButtonBuilder()
+          .setCustomId(`${SHOP_BUY_PREFIX}${item.id}`)
+          .setLabel(`購入: ${item.name}`.slice(0, 80))
+          .setStyle(ButtonStyle.Primary),
+      ),
+    );
+    rows.push(row);
+  }
+
+  return { embeds: [embed], components: rows };
+}
+
+export async function handleShopBuyButton(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "このボタンはサーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const itemId = Number(interaction.customId.slice(SHOP_BUY_PREFIX.length));
+  if (!Number.isInteger(itemId)) {
+    await interaction.reply({ content: "不正なボタンです。", ephemeral: true });
+    return;
+  }
+
+  // Defer immediately so DB latency can't blow past Discord's initial
+  // response window and fail the interaction.
+  await interaction.deferReply({ ephemeral: true });
+
+  const settings = await getGuildSettings(interaction.guildId);
+  const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+
+  if (result.ok) {
+    await interaction.editReply(`**${result.item.name}**を購入しました!`);
+  } else {
+    await interaction.editReply(result.reason);
+  }
 }
 
 const currencyCommand: Command = {
@@ -270,14 +339,8 @@ const shopCommand: Command = {
 
     if (sub === "list") {
       const [items, settings] = await Promise.all([listShopItems(guildId), getGuildSettings(guildId)]);
-      if (items.length === 0) {
-        await interaction.reply("ショップにアイテムはまだありません。");
-        return;
-      }
-      const lines = items.map(
-        (i) => `**#${i.id} ${i.name}** — ${i.price}${settings.currencyName}${i.description ? `\n  ${i.description}` : ""}`,
-      );
-      await interaction.reply(`## 🛒 ショップ\n${lines.join("\n")}`);
+      const panel = buildShopPanel(items, settings.currencyName);
+      await interaction.reply(panel);
       return;
     }
 
