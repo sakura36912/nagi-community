@@ -5,6 +5,7 @@ import {
   serial,
   timestamp,
   primaryKey,
+  unique,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -55,18 +56,22 @@ export type InsertShopItem = z.infer<typeof insertShopItemSchema>;
 export type ShopItem = typeof shopItemsTable.$inferSelect;
 
 // Items a user owns, purchased from the shop.
-export const inventoryItemsTable = pgTable("inventory_items", {
-  id: serial("id").primaryKey(),
-  guildId: text("guild_id").notNull(),
-  userId: text("user_id").notNull(),
-  shopItemId: integer("shop_item_id")
-    .notNull()
-    .references(() => shopItemsTable.id, { onDelete: "cascade" }),
-  quantity: integer("quantity").notNull().default(1),
-  purchasedAt: timestamp("purchased_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const inventoryItemsTable = pgTable(
+  "inventory_items",
+  {
+    id: serial("id").primaryKey(),
+    guildId: text("guild_id").notNull(),
+    userId: text("user_id").notNull(),
+    shopItemId: integer("shop_item_id")
+      .notNull()
+      .references(() => shopItemsTable.id, { onDelete: "cascade" }),
+    quantity: integer("quantity").notNull().default(1),
+    purchasedAt: timestamp("purchased_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [unique().on(table.guildId, table.userId, table.shopItemId)],
+);
 
 export const insertInventoryItemSchema = createInsertSchema(
   inventoryItemsTable,

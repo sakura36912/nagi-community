@@ -69,27 +69,35 @@ export async function claimDaily(
   guildId: string,
   userId: string,
 ): Promise<{ ok: true; balance: number } | { ok: false; msRemaining: number }> {
-  const wallet = await getOrCreateWallet(guildId, userId);
-  const now = Date.now();
+  await getOrCreateWallet(guildId, userId);
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - DAILY_COOLDOWN_MS);
 
-  if (wallet.lastDailyAt) {
-    const elapsed = now - wallet.lastDailyAt.getTime();
-    if (elapsed < DAILY_COOLDOWN_MS) {
-      return { ok: false, msRemaining: DAILY_COOLDOWN_MS - elapsed };
-    }
-  }
-
+  // Conditional update: only succeeds if the cooldown has actually elapsed,
+  // checked atomically in the same statement to prevent concurrent double-claims.
   const [updated] = await db
     .update(walletsTable)
     .set({
       balance: sql`${walletsTable.balance} + ${DAILY_AMOUNT}`,
-      lastDailyAt: new Date(now),
+      lastDailyAt: now,
     })
-    .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)))
+    .where(
+      and(
+        eq(walletsTable.guildId, guildId),
+        eq(walletsTable.userId, userId),
+        sql`(${walletsTable.lastDailyAt} IS NULL OR ${walletsTable.lastDailyAt} <= ${cutoff})`,
+      ),
+    )
     .returning();
 
   if (!updated) {
-    throw new Error("Failed to update wallet for daily claim");
+    const [wallet] = await db
+      .select()
+      .from(walletsTable)
+      .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)));
+
+    const elapsed = wallet?.lastDailyAt ? now.getTime() - wallet.lastDailyAt.getTime() : DAILY_COOLDOWN_MS;
+    return { ok: false, msRemaining: Math.max(DAILY_COOLDOWN_MS - elapsed, 0) };
   }
 
   await recordTransaction(guildId, userId, DAILY_AMOUNT, "daily");
@@ -110,24 +118,40 @@ export async function transfer(
     return { ok: false, reason: "自分自身には送金できません。" };
   }
 
-  const sender = await getOrCreateWallet(guildId, fromUserId);
-  if (sender.balance < amount) {
-    return { ok: false, reason: `残高が不足しています(所持: ${sender.balance}${CURRENCY_NAME})。` };
-  }
-
+  await getOrCreateWallet(guildId, fromUserId);
   await getOrCreateWallet(guildId, toUserId);
 
-  await db.transaction(async (tx) => {
-    await tx
+  // Debit is conditional on sufficient balance, checked atomically in the
+  // same statement so concurrent transfers can't overdraw the sender.
+  const insufficientFunds = await db.transaction(async (tx) => {
+    const [debited] = await tx
       .update(walletsTable)
       .set({ balance: sql`${walletsTable.balance} - ${amount}` })
-      .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, fromUserId)));
+      .where(
+        and(
+          eq(walletsTable.guildId, guildId),
+          eq(walletsTable.userId, fromUserId),
+          sql`${walletsTable.balance} >= ${amount}`,
+        ),
+      )
+      .returning();
+
+    if (!debited) {
+      return true;
+    }
 
     await tx
       .update(walletsTable)
       .set({ balance: sql`${walletsTable.balance} + ${amount}` })
       .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, toUserId)));
+
+    return false;
   });
+
+  if (insufficientFunds) {
+    const sender = await getOrCreateWallet(guildId, fromUserId);
+    return { ok: false, reason: `残高が不足しています(所持: ${sender.balance}${CURRENCY_NAME})。` };
+  }
 
   await recordTransaction(guildId, fromUserId, -amount, "transfer", toUserId);
   await recordTransaction(guildId, toUserId, amount, "transfer", fromUserId);
@@ -199,42 +223,51 @@ export async function buyItem(
     return { ok: false, reason: "そのアイテムは見つかりませんでした。" };
   }
 
-  const wallet = await getOrCreateWallet(guildId, userId);
-  if (wallet.balance < item.price) {
-    return { ok: false, reason: `残高が不足しています(所持: ${wallet.balance}${CURRENCY_NAME}、必要: ${item.price}${CURRENCY_NAME})。` };
-  }
+  await getOrCreateWallet(guildId, userId);
 
-  await db.transaction(async (tx) => {
-    await tx
+  // Debit is conditional on sufficient balance, checked atomically in the
+  // same statement so concurrent purchases can't overspend.
+  const insufficientFunds = await db.transaction(async (tx) => {
+    const [debited] = await tx
       .update(walletsTable)
       .set({ balance: sql`${walletsTable.balance} - ${item.price}` })
-      .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)));
-
-    const [existingInventory] = await tx
-      .select()
-      .from(inventoryItemsTable)
       .where(
         and(
-          eq(inventoryItemsTable.guildId, guildId),
-          eq(inventoryItemsTable.userId, userId),
-          eq(inventoryItemsTable.shopItemId, item.id),
+          eq(walletsTable.guildId, guildId),
+          eq(walletsTable.userId, userId),
+          sql`${walletsTable.balance} >= ${item.price}`,
         ),
-      );
+      )
+      .returning();
 
-    if (existingInventory) {
-      await tx
-        .update(inventoryItemsTable)
-        .set({ quantity: sql`${inventoryItemsTable.quantity} + 1` })
-        .where(eq(inventoryItemsTable.id, existingInventory.id));
-    } else {
-      await tx.insert(inventoryItemsTable).values({
-        guildId,
-        userId,
-        shopItemId: item.id,
-        quantity: 1,
-      });
+    if (!debited) {
+      return true;
     }
+
+    // Rely on the (guildId, userId, shopItemId) unique constraint so
+    // concurrent first-time purchases increment instead of duplicating rows.
+    await tx
+      .insert(inventoryItemsTable)
+      .values({ guildId, userId, shopItemId: item.id, quantity: 1 })
+      .onConflictDoUpdate({
+        target: [
+          inventoryItemsTable.guildId,
+          inventoryItemsTable.userId,
+          inventoryItemsTable.shopItemId,
+        ],
+        set: { quantity: sql`${inventoryItemsTable.quantity} + 1` },
+      });
+
+    return false;
   });
+
+  if (insufficientFunds) {
+    const wallet = await getOrCreateWallet(guildId, userId);
+    return {
+      ok: false,
+      reason: `残高が不足しています(所持: ${wallet.balance}${CURRENCY_NAME}、必要: ${item.price}${CURRENCY_NAME})。`,
+    };
+  }
 
   await recordTransaction(guildId, userId, -item.price, `shop:${item.name}`);
 

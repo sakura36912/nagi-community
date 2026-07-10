@@ -1,15 +1,18 @@
-# [Project name]
+# 通貨Bot (Discord Economy Bot)
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Discord bot that gives each server its own virtual currency ("円") economy — daily rewards, peer-to-peer payments, a leaderboard, and a shop.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/discord-bot run dev` — run the Discord bot (workflow: "Discord Bot")
+- `pnpm --filter @workspace/discord-bot exec tsx src/deploy-commands.ts` — (re)register global slash commands after changing command definitions; can take up to an hour to propagate
+- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000, currently unused by the bot)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- Required secrets: `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID` — from the Discord Developer Portal application
 
 ## Stack
 
@@ -19,18 +22,32 @@ _Replace the heading above with the project's name, and this line with one sente
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
+- Discord: discord.js v14 (slash commands), plain `tsx` dev process (no bundler)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/discord-bot/src/index.ts` — bot client login and interaction dispatch
+- `artifacts/discord-bot/src/deploy-commands.ts` — one-off script to register global slash commands
+- `artifacts/discord-bot/src/commands/index.ts` — all slash command definitions and handlers
+- `artifacts/discord-bot/src/lib/economy.ts` — wallet/shop/transaction business logic (source of truth for balance math)
+- `lib/db/src/schema/economy.ts` — DB schema: `wallets`, `shop_items`, `inventory_items`, `transactions` (all scoped per `guild_id`)
+- `artifacts/api-server` — shared Express API scaffold, not currently used by the bot
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The bot talks to Postgres directly via `@workspace/db` instead of going through the API server — there is no web frontend involved, so the extra HTTP hop added no value.
+- Currency is per-guild: every table is keyed by `(guild_id, user_id)` so balances don't leak across servers.
+- All balance-changing operations (`daily`, `pay`, `shop buy`) use conditional `UPDATE ... WHERE balance >= amount` statements (checked via `returning()` row presence) inside a transaction, rather than read-then-write, to stay correct under concurrent commands.
+- Slash commands are registered globally (`deploy-commands.ts` via `applicationCommands`), not per-guild — simpler ops, at the cost of up to ~1 hour propagation delay after command changes.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- `/balance [user]` — check your or someone else's balance
+- `/daily` — claim a daily currency reward (24h cooldown)
+- `/pay <user> <amount>` — send currency to another member
+- `/leaderboard` — top 10 balances in the server
+- `/shop list|buy|inventory` — browse, purchase, and view owned items
+- `/shop add|remove` — server admins (Manage Server permission) manage the shop catalog
 
 ## User preferences
 
@@ -38,7 +55,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- After changing any slash command definition in `commands/index.ts`, re-run `pnpm --filter @workspace/discord-bot exec tsx src/deploy-commands.ts` — the running bot process does not auto-register command changes with Discord.
+- Global slash command updates can take up to an hour to show up in Discord clients.
 
 ## Pointers
 
