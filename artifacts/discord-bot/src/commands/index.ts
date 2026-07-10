@@ -411,14 +411,26 @@ const giveCommand: Command = {
   },
 };
 
+const DISCORD_MESSAGE_LIMIT = 2000;
+
 const leaderboardCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("leaderboard")
-    .setDescription("サーバー内の資産ランキングを表示します"),
+    .setDescription("サーバー内の資産ランキングを表示します")
+    .addBooleanOption((opt) =>
+      opt.setName("all").setDescription("全員分の所持通貨を表示します(管理者用)").setRequired(false),
+    ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
+    const showAll = interaction.options.getBoolean("all") ?? false;
+
+    if (showAll && !requireManageGuild(interaction)) {
+      await interaction.reply({ content: "このオプションはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+
     const [wallets, settings] = await Promise.all([
-      getLeaderboard(guildId, 10),
+      getLeaderboard(guildId, showAll ? undefined : 10),
       getGuildSettings(guildId),
     ]);
 
@@ -431,10 +443,23 @@ const leaderboardCommand: Command = {
       (w, i) => `**${i + 1}位** <@${w.userId}> — ${w.balance}${settings.currencyName}`,
     );
 
-    await interaction.reply({
-      content: `## 🏆 ランキング\n${lines.join("\n")}`,
-      allowedMentions: { parse: [] },
-    });
+    const header = showAll ? `## 💰 全員の所持通貨(${wallets.length}人)` : "## 🏆 ランキング";
+    const chunks: string[] = [];
+    let current = header;
+    for (const line of lines) {
+      if (current.length + line.length + 1 > DISCORD_MESSAGE_LIMIT) {
+        chunks.push(current);
+        current = line;
+      } else {
+        current += `\n${line}`;
+      }
+    }
+    chunks.push(current);
+
+    await interaction.reply({ content: chunks[0], allowedMentions: { parse: [] }, ephemeral: showAll });
+    for (const chunk of chunks.slice(1)) {
+      await interaction.followUp({ content: chunk, allowedMentions: { parse: [] }, ephemeral: showAll });
+    }
   },
 };
 

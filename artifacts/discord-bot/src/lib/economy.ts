@@ -264,14 +264,15 @@ export async function giveCurrency(
 
 export async function getLeaderboard(
   guildId: string,
-  limit = 10,
+  limit?: number,
 ): Promise<Wallet[]> {
-  return db
+  const query = db
     .select()
     .from(walletsTable)
     .where(eq(walletsTable.guildId, guildId))
-    .orderBy(desc(walletsTable.balance))
-    .limit(limit);
+    .orderBy(desc(walletsTable.balance));
+
+  return limit === undefined ? query : query.limit(limit);
 }
 
 export async function listShopItems(guildId: string): Promise<ShopItem[]> {
