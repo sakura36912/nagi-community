@@ -10,6 +10,26 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
+// One row per guild, holding that server's custom currency configuration.
+export const guildSettingsTable = pgTable("guild_settings", {
+  guildId: text("guild_id").primaryKey(),
+  currencyName: text("currency_name").notNull().default("円"),
+  dailyAmount: integer("daily_amount").notNull().default(500),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
+export const insertGuildSettingsSchema = createInsertSchema(
+  guildSettingsTable,
+).omit({ createdAt: true, updatedAt: true });
+export type InsertGuildSettings = z.infer<typeof insertGuildSettingsSchema>;
+export type GuildSettings = typeof guildSettingsTable.$inferSelect;
+
 // One row per Discord user (per guild), tracking their currency balance.
 export const walletsTable = pgTable(
   "wallets",

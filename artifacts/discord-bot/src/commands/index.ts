@@ -3,11 +3,12 @@ import {
   type ChatInputCommandInteraction,
 } from "discord.js";
 import {
-  CURRENCY_NAME,
-  DAILY_AMOUNT,
+  DEFAULT_DAILY_AMOUNT,
   addShopItem,
   buyItem,
   claimDaily,
+  createOrUpdateCurrency,
+  getGuildSettings,
   getLeaderboard,
   getOrCreateWallet,
   giveCurrency,
@@ -29,11 +30,70 @@ function requireGuild(interaction: ChatInputCommandInteraction): string {
   return interaction.guildId;
 }
 
+function requireManageGuild(interaction: ChatInputCommandInteraction): boolean {
+  if (!interaction.memberPermissions?.has("ManageGuild")) {
+    return false;
+  }
+  return true;
+}
+
 function formatMs(ms: number): string {
   const hours = Math.floor(ms / (60 * 60 * 1000));
   const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
   return `${hours}時間${minutes}分`;
 }
+
+const currencyCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("currency")
+    .setDescription("このサーバー専用の通貨を設定します")
+    .addSubcommand((sub) =>
+      sub
+        .setName("create")
+        .setDescription("通貨を作成・設定します(管理者用)")
+        .addStringOption((opt) =>
+          opt.setName("name").setDescription("通貨の名前(例: コイン)").setRequired(true).setMaxLength(20),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("daily_amount")
+            .setDescription(`/daily で受け取れる額(デフォルト: ${DEFAULT_DAILY_AMOUNT})`)
+            .setRequired(false)
+            .setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) => sub.setName("info").setDescription("現在の通貨設定を表示します")),
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "create") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const name = interaction.options.getString("name", true).trim();
+      if (name.length === 0) {
+        await interaction.reply({ content: "通貨名を入力してください。", ephemeral: true });
+        return;
+      }
+      const dailyAmount = interaction.options.getInteger("daily_amount") ?? undefined;
+      const settings = await createOrUpdateCurrency(guildId, name, dailyAmount);
+      await interaction.reply(
+        `このサーバーの通貨を **${settings.currencyName}** に設定しました。\`/daily\` で1日あたり **${settings.dailyAmount}${settings.currencyName}** 受け取れます。`,
+      );
+      return;
+    }
+
+    if (sub === "info") {
+      const settings = await getGuildSettings(guildId);
+      await interaction.reply(
+        `現在の通貨: **${settings.currencyName}**\nデイリーボーナス: **${settings.dailyAmount}${settings.currencyName}**`,
+      );
+      return;
+    }
+  },
+};
 
 const balanceCommand: Command = {
   data: new SlashCommandBuilder()
@@ -45,9 +105,12 @@ const balanceCommand: Command = {
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const target = interaction.options.getUser("user") ?? interaction.user;
-    const wallet = await getOrCreateWallet(guildId, target.id);
+    const [wallet, settings] = await Promise.all([
+      getOrCreateWallet(guildId, target.id),
+      getGuildSettings(guildId),
+    ]);
     await interaction.reply(
-      `${target.id === interaction.user.id ? "あなた" : `<@${target.id}>`}の残高: **${wallet.balance}${CURRENCY_NAME}**`,
+      `${target.id === interaction.user.id ? "あなた" : `<@${target.id}>`}の残高: **${wallet.balance}${settings.currencyName}**`,
     );
   },
 };
@@ -55,13 +118,14 @@ const balanceCommand: Command = {
 const dailyCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("daily")
-    .setDescription(`毎日${DAILY_AMOUNT}${CURRENCY_NAME}を受け取ります`),
+    .setDescription("毎日受け取れる通貨を受け取ります"),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    const result = await claimDaily(guildId, interaction.user.id);
+    const settings = await getGuildSettings(guildId);
+    const result = await claimDaily(guildId, interaction.user.id, settings.dailyAmount);
     if (result.ok) {
       await interaction.reply(
-        `${DAILY_AMOUNT}${CURRENCY_NAME}を受け取りました!現在の残高: **${result.balance}${CURRENCY_NAME}**`,
+        `${settings.dailyAmount}${settings.currencyName}を受け取りました!現在の残高: **${result.balance}${settings.currencyName}**`,
       );
     } else {
       await interaction.reply({
@@ -92,9 +156,10 @@ const payCommand: Command = {
       return;
     }
 
-    const result = await transfer(guildId, interaction.user.id, target.id, amount);
+    const settings = await getGuildSettings(guildId);
+    const result = await transfer(guildId, interaction.user.id, target.id, amount, settings.currencyName);
     if (result.ok) {
-      await interaction.reply(`<@${target.id}>に**${amount}${CURRENCY_NAME}**送金しました。`);
+      await interaction.reply(`<@${target.id}>に**${amount}${settings.currencyName}**送金しました。`);
     } else {
       await interaction.reply({ content: result.reason, ephemeral: true });
     }
@@ -104,7 +169,7 @@ const payCommand: Command = {
 const giveCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("give")
-    .setDescription(`ユーザーに${CURRENCY_NAME}を付与します(管理者用)`)
+    .setDescription("ユーザーに通貨を付与します(管理者用)")
     .addUserOption((opt) =>
       opt.setName("user").setDescription("付与先のユーザー").setRequired(true),
     )
@@ -114,7 +179,7 @@ const giveCommand: Command = {
   async execute(interaction) {
     const guildId = requireGuild(interaction);
 
-    if (!interaction.memberPermissions?.has("ManageGuild")) {
+    if (!requireManageGuild(interaction)) {
       await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
       return;
     }
@@ -127,11 +192,12 @@ const giveCommand: Command = {
       return;
     }
 
-    const result = await giveCurrency(guildId, target.id, amount);
+    const settings = await getGuildSettings(guildId);
+    const result = await giveCurrency(guildId, target.id, amount, settings.currencyName);
     if (result.ok) {
       const verb = amount >= 0 ? "付与" : "没収";
       await interaction.reply(
-        `<@${target.id}>から${verb}: ${Math.abs(amount)}${CURRENCY_NAME}。現在の残高: **${result.balance}${CURRENCY_NAME}**`,
+        `<@${target.id}>から${verb}: ${Math.abs(amount)}${settings.currencyName}。現在の残高: **${result.balance}${settings.currencyName}**`,
       );
     } else {
       await interaction.reply({ content: result.reason, ephemeral: true });
@@ -145,7 +211,10 @@ const leaderboardCommand: Command = {
     .setDescription("サーバー内の資産ランキングを表示します"),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    const wallets = await getLeaderboard(guildId, 10);
+    const [wallets, settings] = await Promise.all([
+      getLeaderboard(guildId, 10),
+      getGuildSettings(guildId),
+    ]);
 
     if (wallets.length === 0) {
       await interaction.reply("まだランキングデータがありません。");
@@ -153,7 +222,7 @@ const leaderboardCommand: Command = {
     }
 
     const lines = wallets.map(
-      (w, i) => `**${i + 1}位** <@${w.userId}> — ${w.balance}${CURRENCY_NAME}`,
+      (w, i) => `**${i + 1}位** <@${w.userId}> — ${w.balance}${settings.currencyName}`,
     );
 
     await interaction.reply({
@@ -200,13 +269,13 @@ const shopCommand: Command = {
     const sub = interaction.options.getSubcommand();
 
     if (sub === "list") {
-      const items = await listShopItems(guildId);
+      const [items, settings] = await Promise.all([listShopItems(guildId), getGuildSettings(guildId)]);
       if (items.length === 0) {
         await interaction.reply("ショップにアイテムはまだありません。");
         return;
       }
       const lines = items.map(
-        (i) => `**#${i.id} ${i.name}** — ${i.price}${CURRENCY_NAME}${i.description ? `\n  ${i.description}` : ""}`,
+        (i) => `**#${i.id} ${i.name}** — ${i.price}${settings.currencyName}${i.description ? `\n  ${i.description}` : ""}`,
       );
       await interaction.reply(`## 🛒 ショップ\n${lines.join("\n")}`);
       return;
@@ -214,7 +283,8 @@ const shopCommand: Command = {
 
     if (sub === "buy") {
       const itemId = interaction.options.getInteger("item_id", true);
-      const result = await buyItem(guildId, interaction.user.id, itemId);
+      const settings = await getGuildSettings(guildId);
+      const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
       if (result.ok) {
         await interaction.reply(`**${result.item.name}**を購入しました!`);
       } else {
@@ -235,20 +305,23 @@ const shopCommand: Command = {
     }
 
     if (sub === "add") {
-      if (!interaction.memberPermissions?.has("ManageGuild")) {
+      if (!requireManageGuild(interaction)) {
         await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
       const name = interaction.options.getString("name", true);
       const price = interaction.options.getInteger("price", true);
       const description = interaction.options.getString("description");
-      const item = await addShopItem(guildId, name, price, description);
-      await interaction.reply(`アイテム **#${item.id} ${item.name}**(${item.price}${CURRENCY_NAME})をショップに追加しました。`);
+      const [item, settings] = await Promise.all([
+        addShopItem(guildId, name, price, description),
+        getGuildSettings(guildId),
+      ]);
+      await interaction.reply(`アイテム **#${item.id} ${item.name}**(${item.price}${settings.currencyName})をショップに追加しました。`);
       return;
     }
 
     if (sub === "remove") {
-      if (!interaction.memberPermissions?.has("ManageGuild")) {
+      if (!requireManageGuild(interaction)) {
         await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
@@ -263,6 +336,7 @@ const shopCommand: Command = {
 };
 
 export const commands: Command[] = [
+  currencyCommand,
   balanceCommand,
   dailyCommand,
   payCommand,

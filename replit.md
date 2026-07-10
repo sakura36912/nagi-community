@@ -42,9 +42,12 @@ A Discord bot that gives each server its own virtual currency ("円") economy �
 
 ## Product
 
+- `/currency create <name> [daily_amount]` — server admins name their own currency and set the daily reward amount (defaults: "円" / 500)
+- `/currency info` — show the server's current currency name and daily amount
 - `/balance [user]` — check your or someone else's balance
 - `/daily` — claim a daily currency reward (24h cooldown)
 - `/pay <user> <amount>` — send currency to another member
+- `/give <user> <amount>` — admins grant (or claw back with a negative amount) currency directly
 - `/leaderboard` — top 10 balances in the server
 - `/shop list|buy|inventory` — browse, purchase, and view owned items
 - `/shop add|remove` — server admins (Manage Server permission) manage the shop catalog

@@ -5,13 +5,75 @@ import {
   shopItemsTable,
   inventoryItemsTable,
   transactionsTable,
+  guildSettingsTable,
   type Wallet,
   type ShopItem,
+  type GuildSettings,
 } from "@workspace/db";
 
-export const CURRENCY_NAME = "円";
-export const DAILY_AMOUNT = 500;
+export const DEFAULT_CURRENCY_NAME = "円";
+export const DEFAULT_DAILY_AMOUNT = 500;
 export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+export async function getGuildSettings(guildId: string): Promise<GuildSettings> {
+  const [existing] = await db
+    .select()
+    .from(guildSettingsTable)
+    .where(eq(guildSettingsTable.guildId, guildId));
+
+  if (existing) {
+    return existing;
+  }
+
+  const [created] = await db
+    .insert(guildSettingsTable)
+    .values({ guildId })
+    .onConflictDoNothing()
+    .returning();
+
+  if (created) {
+    return created;
+  }
+
+  const [settings] = await db
+    .select()
+    .from(guildSettingsTable)
+    .where(eq(guildSettingsTable.guildId, guildId));
+
+  if (!settings) {
+    throw new Error("Failed to create or fetch guild settings");
+  }
+
+  return settings;
+}
+
+export async function createOrUpdateCurrency(
+  guildId: string,
+  currencyName: string,
+  dailyAmount?: number,
+): Promise<GuildSettings> {
+  const [settings] = await db
+    .insert(guildSettingsTable)
+    .values({
+      guildId,
+      currencyName,
+      ...(dailyAmount !== undefined ? { dailyAmount } : {}),
+    })
+    .onConflictDoUpdate({
+      target: guildSettingsTable.guildId,
+      set: {
+        currencyName,
+        ...(dailyAmount !== undefined ? { dailyAmount } : {}),
+      },
+    })
+    .returning();
+
+  if (!settings) {
+    throw new Error("Failed to create or update guild currency settings");
+  }
+
+  return settings;
+}
 
 export async function getOrCreateWallet(
   guildId: string,
@@ -68,6 +130,7 @@ export async function recordTransaction(
 export async function claimDaily(
   guildId: string,
   userId: string,
+  dailyAmount: number,
 ): Promise<{ ok: true; balance: number } | { ok: false; msRemaining: number }> {
   await getOrCreateWallet(guildId, userId);
   const now = new Date();
@@ -78,7 +141,7 @@ export async function claimDaily(
   const [updated] = await db
     .update(walletsTable)
     .set({
-      balance: sql`${walletsTable.balance} + ${DAILY_AMOUNT}`,
+      balance: sql`${walletsTable.balance} + ${dailyAmount}`,
       lastDailyAt: now,
     })
     .where(
@@ -100,7 +163,7 @@ export async function claimDaily(
     return { ok: false, msRemaining: Math.max(DAILY_COOLDOWN_MS - elapsed, 0) };
   }
 
-  await recordTransaction(guildId, userId, DAILY_AMOUNT, "daily");
+  await recordTransaction(guildId, userId, dailyAmount, "daily");
 
   return { ok: true, balance: updated.balance };
 }
@@ -110,6 +173,7 @@ export async function transfer(
   fromUserId: string,
   toUserId: string,
   amount: number,
+  currencyName: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   if (amount <= 0) {
     return { ok: false, reason: "金額は1以上を指定してください。" };
@@ -150,7 +214,7 @@ export async function transfer(
 
   if (insufficientFunds) {
     const sender = await getOrCreateWallet(guildId, fromUserId);
-    return { ok: false, reason: `残高が不足しています(所持: ${sender.balance}${CURRENCY_NAME})。` };
+    return { ok: false, reason: `残高が不足しています(所持: ${sender.balance}${currencyName})。` };
   }
 
   await recordTransaction(guildId, fromUserId, -amount, "transfer", toUserId);
@@ -163,6 +227,7 @@ export async function giveCurrency(
   guildId: string,
   userId: string,
   amount: number,
+  currencyName: string,
 ): Promise<{ ok: true; balance: number } | { ok: false; reason: string }> {
   if (amount === 0) {
     return { ok: false, reason: "金額には0以外の値を指定してください。" };
@@ -186,7 +251,7 @@ export async function giveCurrency(
 
   if (!updated) {
     const wallet = await getOrCreateWallet(guildId, userId);
-    return { ok: false, reason: `残高が不足しています(所持: ${wallet.balance}${CURRENCY_NAME})。` };
+    return { ok: false, reason: `残高が不足しています(所持: ${wallet.balance}${currencyName})。` };
   }
 
   await recordTransaction(guildId, userId, amount, "admin-give");
@@ -248,6 +313,7 @@ export async function buyItem(
   guildId: string,
   userId: string,
   itemId: number,
+  currencyName: string,
 ): Promise<{ ok: true; item: ShopItem } | { ok: false; reason: string }> {
   const [item] = await db
     .select()
@@ -300,7 +366,7 @@ export async function buyItem(
     const wallet = await getOrCreateWallet(guildId, userId);
     return {
       ok: false,
-      reason: `残高が不足しています(所持: ${wallet.balance}${CURRENCY_NAME}、必要: ${item.price}${CURRENCY_NAME})。`,
+      reason: `残高が不足しています(所持: ${wallet.balance}${currencyName}、必要: ${item.price}${currencyName})。`,
     };
   }
 
