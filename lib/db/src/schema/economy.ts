@@ -57,12 +57,17 @@ export type InsertWallet = z.infer<typeof insertWalletSchema>;
 export type Wallet = typeof walletsTable.$inferSelect;
 
 // Items available for purchase in a guild's shop.
+// `effectType`, when set, tells the bot to apply a special effect on
+// purchase instead of (or in addition to) just adding it to inventory.
+// Currently supported: "nickname_change" — lets the buyer set their own
+// server nickname.
 export const shopItemsTable = pgTable("shop_items", {
   id: serial("id").primaryKey(),
   guildId: text("guild_id").notNull(),
   name: text("name").notNull(),
   description: text("description"),
   price: integer("price").notNull(),
+  effectType: text("effect_type"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

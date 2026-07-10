@@ -3,13 +3,20 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  ModalBuilder,
   SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
+  type ModalSubmitInteraction,
 } from "discord.js";
 import type { ShopItem } from "@workspace/db";
+import type { Guild, GuildMember } from "discord.js";
+import { logger } from "../lib/logger";
 import {
   DEFAULT_DAILY_AMOUNT,
+  NICKNAME_CHANGE_EFFECT,
   addShopItem,
   buyItem,
   claimDaily,
@@ -17,9 +24,11 @@ import {
   getGuildSettings,
   getLeaderboard,
   getOrCreateWallet,
+  getShopItem,
   giveCurrency,
   listInventory,
   listShopItems,
+  refundPurchase,
   removeShopItem,
   transfer,
 } from "../lib/economy";
@@ -50,8 +59,90 @@ function formatMs(ms: number): string {
 }
 
 export const SHOP_BUY_PREFIX = "shop:buy:";
+export const NICKNAME_MODAL_PREFIX = "shop:nickname-modal:";
+const NICKNAME_MODAL_INPUT_ID = "nickname";
 // Discord caps action rows at 5, each holding up to 5 buttons.
 const MAX_SHOP_BUY_BUTTONS = 25;
+
+function buildNicknameModal(itemId: number): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`${NICKNAME_MODAL_PREFIX}${itemId}`)
+    .setTitle("新しいニックネーム")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId(NICKNAME_MODAL_INPUT_ID)
+          .setLabel("新しいニックネーム")
+          .setStyle(TextInputStyle.Short)
+          .setMinLength(1)
+          .setMaxLength(32)
+          .setRequired(true),
+      ),
+    );
+}
+
+// Checks whether the bot can actually set this member's nickname before we
+// charge anything for it: needs Manage Nicknames, and (per Discord's rules)
+// the bot's highest role must outrank the target's highest role, and the
+// target must not be the guild owner.
+function canSetNickname(guild: Guild, member: GuildMember): boolean {
+  const me = guild.members.me;
+  if (!me) {
+    return false;
+  }
+  if (!me.permissions.has("ManageNicknames")) {
+    return false;
+  }
+  if (member.id === guild.ownerId) {
+    return false;
+  }
+  return me.roles.highest.position > member.roles.highest.position;
+}
+
+async function purchaseAndApplyEffect(
+  guildId: string,
+  member: GuildMember,
+  itemId: number,
+  currencyName: string,
+  nickname: string,
+): Promise<{ ok: true; item: ShopItem } | { ok: false; reason: string }> {
+  if (!canSetNickname(member.guild, member)) {
+    return {
+      ok: false,
+      reason: "Botにニックネームを変更する権限がありません(Manage Nicknames権限、またはロールの順序を確認してください)。",
+    };
+  }
+
+  const result = await buyItem(guildId, member.id, itemId, currencyName);
+  if (!result.ok) {
+    return result;
+  }
+
+  try {
+    await member.setNickname(nickname);
+  } catch (err) {
+    // The effect failed after we already charged — undo the purchase so the
+    // user isn't billed for something that didn't happen.
+    try {
+      await refundPurchase(guildId, member.id, result.item);
+    } catch (refundErr) {
+      logger.error(
+        `Failed to refund ${member.id} for item #${result.item.id} after nickname change failure — user may be charged without effect`,
+        refundErr,
+      );
+      return {
+        ok: false,
+        reason: "ニックネームの変更と返金の両方に失敗しました。管理者にご連絡ください。",
+      };
+    }
+    return {
+      ok: false,
+      reason: "ニックネームの変更に失敗したため、購入を取り消し、返金しました。",
+    };
+  }
+
+  return result;
+}
 
 function buildShopPanel(items: ShopItem[], currencyName: string) {
   const embed = new EmbedBuilder()
@@ -98,6 +189,19 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     return;
   }
 
+  const item = await getShopItem(interaction.guildId, itemId);
+  if (!item) {
+    await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+    return;
+  }
+
+  // Nickname-change items need text input, so show a modal as the initial
+  // response instead of deferring/buying immediately.
+  if (item.effectType === NICKNAME_CHANGE_EFFECT) {
+    await interaction.showModal(buildNicknameModal(item.id));
+    return;
+  }
+
   // Defer immediately so DB latency can't blow past Discord's initial
   // response window and fail the interaction.
   await interaction.deferReply({ ephemeral: true });
@@ -107,6 +211,39 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
 
   if (result.ok) {
     await interaction.editReply(`**${result.item.name}**を購入しました!`);
+  } else {
+    await interaction.editReply(result.reason);
+  }
+}
+
+export async function handleNicknameModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+  if (!interaction.guildId || !interaction.member || !("setNickname" in interaction.member)) {
+    await interaction.reply({ content: "このフォームはサーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const itemId = Number(interaction.customId.slice(NICKNAME_MODAL_PREFIX.length));
+  const nickname = interaction.fields.getTextInputValue(NICKNAME_MODAL_INPUT_ID).trim();
+
+  if (!Number.isInteger(itemId) || nickname.length === 0) {
+    await interaction.reply({ content: "不正な入力です。", ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const member = interaction.member;
+  const settings = await getGuildSettings(interaction.guildId);
+  const result = await purchaseAndApplyEffect(
+    interaction.guildId,
+    member,
+    itemId,
+    settings.currencyName,
+    nickname,
+  );
+
+  if (result.ok) {
+    await interaction.editReply(`**${result.item.name}**を購入し、ニックネームを「${nickname}」に変更しました!`);
   } else {
     await interaction.editReply(result.reason);
   }
@@ -323,7 +460,14 @@ const shopCommand: Command = {
         .addIntegerOption((opt) =>
           opt.setName("price").setDescription("価格").setRequired(true).setMinValue(1),
         )
-        .addStringOption((opt) => opt.setName("description").setDescription("説明").setRequired(false)),
+        .addStringOption((opt) => opt.setName("description").setDescription("説明").setRequired(false))
+        .addStringOption((opt) =>
+          opt
+            .setName("effect")
+            .setDescription("購入時の特殊効果")
+            .setRequired(false)
+            .addChoices({ name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT }),
+        ),
     )
     .addSubcommand((sub) =>
       sub
@@ -346,6 +490,17 @@ const shopCommand: Command = {
 
     if (sub === "buy") {
       const itemId = interaction.options.getInteger("item_id", true);
+      const item = await getShopItem(guildId, itemId);
+      if (!item) {
+        await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+        return;
+      }
+
+      if (item.effectType === NICKNAME_CHANGE_EFFECT) {
+        await interaction.showModal(buildNicknameModal(item.id));
+        return;
+      }
+
       const settings = await getGuildSettings(guildId);
       const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
       if (result.ok) {
@@ -375,8 +530,9 @@ const shopCommand: Command = {
       const name = interaction.options.getString("name", true);
       const price = interaction.options.getInteger("price", true);
       const description = interaction.options.getString("description");
+      const effect = interaction.options.getString("effect");
       const [item, settings] = await Promise.all([
-        addShopItem(guildId, name, price, description),
+        addShopItem(guildId, name, price, description, effect),
         getGuildSettings(guildId),
       ]);
       await interaction.reply(`アイテム **#${item.id} ${item.name}**(${item.price}${settings.currencyName})をショップに追加しました。`);

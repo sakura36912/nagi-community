@@ -15,6 +15,9 @@ export const DEFAULT_CURRENCY_NAME = "円";
 export const DEFAULT_DAILY_AMOUNT = 500;
 export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
+// Shop item effect types recognized by the bot.
+export const NICKNAME_CHANGE_EFFECT = "nickname_change";
+
 export async function getGuildSettings(guildId: string): Promise<GuildSettings> {
   const [existing] = await db
     .select()
@@ -279,15 +282,25 @@ export async function listShopItems(guildId: string): Promise<ShopItem[]> {
     .orderBy(shopItemsTable.price);
 }
 
+export async function getShopItem(guildId: string, itemId: number): Promise<ShopItem | undefined> {
+  const [item] = await db
+    .select()
+    .from(shopItemsTable)
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.id, itemId)));
+
+  return item;
+}
+
 export async function addShopItem(
   guildId: string,
   name: string,
   price: number,
   description: string | null,
+  effectType: string | null = null,
 ): Promise<ShopItem> {
   const [item] = await db
     .insert(shopItemsTable)
-    .values({ guildId, name, price, description })
+    .values({ guildId, name, price, description, effectType })
     .returning();
 
   if (!item) {
@@ -373,6 +386,46 @@ export async function buyItem(
   await recordTransaction(guildId, userId, -item.price, `shop:${item.name}`);
 
   return { ok: true, item };
+}
+
+// Reverses a buyItem() purchase: refunds the price and removes one unit of
+// inventory (deleting the row if it drops to zero). Used when a purchase's
+// side effect (e.g. applying a shop item's effect) fails after charging.
+export async function refundPurchase(
+  guildId: string,
+  userId: string,
+  item: ShopItem,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(walletsTable)
+      .set({ balance: sql`${walletsTable.balance} + ${item.price}` })
+      .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)));
+
+    const [inventoryRow] = await tx
+      .select()
+      .from(inventoryItemsTable)
+      .where(
+        and(
+          eq(inventoryItemsTable.guildId, guildId),
+          eq(inventoryItemsTable.userId, userId),
+          eq(inventoryItemsTable.shopItemId, item.id),
+        ),
+      );
+
+    if (inventoryRow) {
+      if (inventoryRow.quantity <= 1) {
+        await tx.delete(inventoryItemsTable).where(eq(inventoryItemsTable.id, inventoryRow.id));
+      } else {
+        await tx
+          .update(inventoryItemsTable)
+          .set({ quantity: sql`${inventoryItemsTable.quantity} - 1` })
+          .where(eq(inventoryItemsTable.id, inventoryRow.id));
+      }
+    }
+  });
+
+  await recordTransaction(guildId, userId, item.price, `refund:${item.name}`);
 }
 
 export async function listInventory(

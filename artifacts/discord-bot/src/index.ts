@@ -1,5 +1,11 @@
 import { Client, Events, GatewayIntentBits, MessageFlags } from "discord.js";
-import { commands, handleShopBuyButton, SHOP_BUY_PREFIX } from "./commands";
+import {
+  commands,
+  handleNicknameModalSubmit,
+  handleShopBuyButton,
+  NICKNAME_MODAL_PREFIX,
+  SHOP_BUY_PREFIX,
+} from "./commands";
 import { logger } from "./lib/logger";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
@@ -32,6 +38,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(SHOP_BUY_PREFIX)) {
       await handleShopBuyButton(interaction);
+      return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(NICKNAME_MODAL_PREFIX)) {
+      await handleNicknameModalSubmit(interaction);
       return;
     }
   } catch (err) {
