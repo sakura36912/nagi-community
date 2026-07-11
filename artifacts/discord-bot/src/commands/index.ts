@@ -320,9 +320,10 @@ const balanceCommand: Command = {
       getOrCreateWallet(guildId, target.id),
       getGuildSettings(guildId),
     ]);
-    await interaction.reply(
-      `${target.id === interaction.user.id ? "あなた" : `<@${target.id}>`}の残高: **${wallet.balance}${settings.currencyName}**`,
-    );
+    await interaction.reply({
+      content: `${target.id === interaction.user.id ? "あなた" : `<@${target.id}>`}の残高: **${wallet.balance}${settings.currencyName}**`,
+      ephemeral: true,
+    });
   },
 };
 
