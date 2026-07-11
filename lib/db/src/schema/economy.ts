@@ -15,9 +15,11 @@ export const guildSettingsTable = pgTable("guild_settings", {
   guildId: text("guild_id").primaryKey(),
   currencyName: text("currency_name").notNull().default("円"),
   dailyAmount: integer("daily_amount").notNull().default(500),
-  // How often (in minutes) role-based auto-rewards are paid out.
-  // Default: 43200 = 30 days (monthly salary distribution).
+  // How often (in minutes) role-based auto-rewards are paid out (interval mode).
   rewardIntervalMinutes: integer("reward_interval_minutes").notNull().default(43200),
+  // If set (1–31), rewards are paid on this calendar day each month instead of
+  // using the interval. Takes priority over rewardIntervalMinutes.
+  rewardDayOfMonth: integer("reward_day_of_month"),
   // When role-based auto-rewards were last distributed for this guild.
   lastRewardAt: timestamp("last_reward_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })

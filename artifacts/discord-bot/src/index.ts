@@ -11,6 +11,7 @@ import {
   distributeRoleRewards,
   getGuildSettings,
   getGuildWalletUserIds,
+  isDueCalendarDay,
   markRewardDistributed,
 } from "./lib/economy";
 
@@ -35,9 +36,12 @@ async function runRewardScheduler(): Promise<void> {
     try {
       const settings = await getGuildSettings(guild.id);
 
-      const intervalMs = settings.rewardIntervalMinutes * 60 * 1000;
-      const lastAt = settings.lastRewardAt?.getTime() ?? 0;
-      if (now.getTime() - lastAt < intervalMs) {
+      // Calendar-day mode takes priority over interval mode.
+      const due = settings.rewardDayOfMonth !== null && settings.rewardDayOfMonth !== undefined
+        ? isDueCalendarDay(settings, now)
+        : now.getTime() - (settings.lastRewardAt?.getTime() ?? 0) >= settings.rewardIntervalMinutes * 60 * 1000;
+
+      if (!due) {
         continue;
       }
 

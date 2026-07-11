@@ -303,7 +303,7 @@ export async function setRewardInterval(guildId: string, minutes: number): Promi
   await getGuildSettings(guildId);
   const [settings] = await db
     .update(guildSettingsTable)
-    .set({ rewardIntervalMinutes: minutes })
+    .set({ rewardIntervalMinutes: minutes, rewardDayOfMonth: null })
     .where(eq(guildSettingsTable.guildId, guildId))
     .returning();
 
@@ -312,6 +312,45 @@ export async function setRewardInterval(guildId: string, minutes: number): Promi
   }
 
   return settings;
+}
+
+// Set a fixed calendar day (1–31) for monthly salary distribution.
+// Clears the interval mode — the two are mutually exclusive.
+export async function setRewardDayOfMonth(guildId: string, day: number): Promise<GuildSettings> {
+  await getGuildSettings(guildId);
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ rewardDayOfMonth: day })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+
+  if (!settings) {
+    throw new Error("Failed to update reward day of month");
+  }
+
+  return settings;
+}
+
+// Returns true when calendar-day mode is active and today is the configured
+// payout day AND we haven't already paid out this month.
+export function isDueCalendarDay(settings: GuildSettings, now: Date): boolean {
+  if (settings.rewardDayOfMonth === null || settings.rewardDayOfMonth === undefined) {
+    return false;
+  }
+
+  const targetDay = settings.rewardDayOfMonth;
+  const todayDay = now.getDate();
+  if (todayDay !== targetDay) {
+    return false;
+  }
+
+  const lastAt = settings.lastRewardAt;
+  if (!lastAt) {
+    return true;
+  }
+
+  // Already paid this calendar month?
+  return lastAt.getFullYear() !== now.getFullYear() || lastAt.getMonth() !== now.getMonth();
 }
 
 export async function markRewardDistributed(guildId: string, at: Date): Promise<void> {

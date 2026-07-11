@@ -32,6 +32,7 @@ import {
   refundPurchase,
   removeRoleReward,
   removeShopItem,
+  setRewardDayOfMonth,
   setRewardInterval,
   setRoleReward,
   transfer,
@@ -606,9 +607,22 @@ const rewardCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("interval")
-        .setDescription("自動報酬の配布間隔を設定します")
+        .setDescription("自動報酬の配布間隔を設定します(分指定)")
         .addIntegerOption((opt) =>
           opt.setName("minutes").setDescription("配布間隔(分)").setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("day")
+        .setDescription("毎月の給料日を設定します(例: 25 = 毎月25日)")
+        .addIntegerOption((opt) =>
+          opt
+            .setName("day")
+            .setDescription("給料日(1〜31)")
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(31),
         ),
     ),
   async execute(interaction) {
@@ -620,19 +634,6 @@ const rewardCommand: Command = {
     }
 
     const sub = interaction.options.getSubcommand();
-
-    if (sub === "set") {
-      const role = interaction.options.getRole("role", true);
-      const amount = interaction.options.getInteger("amount", true);
-      const [reward, settings] = await Promise.all([
-        setRoleReward(guildId, role.id, amount),
-        getGuildSettings(guildId),
-      ]);
-      await interaction.reply(
-        `<@&${reward.roleId}> の自動報酬を **${amount}${settings.currencyName}** に設定しました(配布間隔: ${settings.rewardIntervalMinutes}分ごと)。`,
-      );
-      return;
-    }
 
     if (sub === "remove") {
       const role = interaction.options.getRole("role", true);
@@ -650,10 +651,30 @@ const rewardCommand: Command = {
         return;
       }
       const lines = rewards.map((r) => `<@&${r.roleId}> — ${r.amount}${settings.currencyName}`);
+      const scheduleLabel = settings.rewardDayOfMonth
+        ? `毎月${settings.rewardDayOfMonth}日`
+        : `${settings.rewardIntervalMinutes}分ごと`;
       await interaction.reply({
-        content: `## ⏱️ 自動報酬設定(${settings.rewardIntervalMinutes}分ごと)\n${lines.join("\n")}`,
+        content: `## ⏱️ 自動報酬設定(${scheduleLabel})\n${lines.join("\n")}`,
         allowedMentions: { parse: [] },
       });
+      return;
+    }
+
+    if (sub === "set") {
+      // Re-fetch settings after upsert to reflect the current schedule label.
+      const role = interaction.options.getRole("role", true);
+      const amount = interaction.options.getInteger("amount", true);
+      const [reward, settings] = await Promise.all([
+        setRoleReward(guildId, role.id, amount),
+        getGuildSettings(guildId),
+      ]);
+      const scheduleLabel = settings.rewardDayOfMonth
+        ? `毎月${settings.rewardDayOfMonth}日`
+        : `${settings.rewardIntervalMinutes}分ごと`;
+      await interaction.reply(
+        `<@&${reward.roleId}> の自動報酬を **${amount}${settings.currencyName}** に設定しました(配布: ${scheduleLabel})。`,
+      );
       return;
     }
 
@@ -661,6 +682,13 @@ const rewardCommand: Command = {
       const minutes = interaction.options.getInteger("minutes", true);
       const settings = await setRewardInterval(guildId, minutes);
       await interaction.reply(`自動報酬の配布間隔を **${settings.rewardIntervalMinutes}分ごと** に設定しました。`);
+      return;
+    }
+
+    if (sub === "day") {
+      const day = interaction.options.getInteger("day", true);
+      const settings = await setRewardDayOfMonth(guildId, day);
+      await interaction.reply(`給料日を **毎月${settings.rewardDayOfMonth}日** に設定しました。`);
       return;
     }
   },
