@@ -7,6 +7,12 @@ import {
   SHOP_BUY_PREFIX,
 } from "./commands";
 import { logger } from "./lib/logger";
+import {
+  distributeRoleRewards,
+  getGuildSettings,
+  getGuildWalletUserIds,
+  markRewardDistributed,
+} from "./lib/economy";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 
@@ -20,8 +26,61 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
+// Checks every minute whether any guild's reward interval has elapsed and
+// distributes role-based rewards (salary) if so.
+async function runRewardScheduler(): Promise<void> {
+  const now = new Date();
+
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      const settings = await getGuildSettings(guild.id);
+
+      const intervalMs = settings.rewardIntervalMinutes * 60 * 1000;
+      const lastAt = settings.lastRewardAt?.getTime() ?? 0;
+      if (now.getTime() - lastAt < intervalMs) {
+        continue;
+      }
+
+      // Build userId → roleIds map from wallet holders only.
+      // We fetch each member individually via REST so no privileged
+      // GuildMembers gateway intent is needed.
+      const userIds = await getGuildWalletUserIds(guild.id);
+      const memberRoles = new Map<string, string[]>();
+      for (const userId of userIds) {
+        try {
+          const member = await guild.members.fetch(userId);
+          if (member.user.bot) continue;
+          memberRoles.set(userId, [...member.roles.cache.keys()]);
+        } catch {
+          // Member may have left the guild — skip silently.
+        }
+      }
+
+      const { paidCount, totalPaid } = await distributeRoleRewards(
+        guild.id,
+        settings.currencyName,
+        memberRoles,
+      );
+
+      await markRewardDistributed(guild.id, now);
+
+      if (paidCount > 0) {
+        logger.info(
+          `[reward] ${guild.name}: distributed ${totalPaid}${settings.currencyName} to ${paidCount} member(s).`,
+        );
+      }
+    } catch (err) {
+      logger.error(`[reward] Error processing guild ${guild.id}`, err);
+    }
+  }
+}
+
 client.once(Events.ClientReady, (readyClient) => {
   logger.info(`Logged in as ${readyClient.user.tag}`);
+  // Tick every 60 s; actual payout only happens when an interval has elapsed.
+  setInterval(() => {
+    runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
+  }, 60 * 1000);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {

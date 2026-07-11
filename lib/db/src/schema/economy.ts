@@ -15,6 +15,11 @@ export const guildSettingsTable = pgTable("guild_settings", {
   guildId: text("guild_id").primaryKey(),
   currencyName: text("currency_name").notNull().default("円"),
   dailyAmount: integer("daily_amount").notNull().default(500),
+  // How often (in minutes) role-based auto-rewards are paid out.
+  // Default: 43200 = 30 days (monthly salary distribution).
+  rewardIntervalMinutes: integer("reward_interval_minutes").notNull().default(43200),
+  // When role-based auto-rewards were last distributed for this guild.
+  lastRewardAt: timestamp("last_reward_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -122,3 +127,27 @@ export const insertTransactionSchema = createInsertSchema(
 ).omit({ id: true, createdAt: true });
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
 export type Transaction = typeof transactionsTable.$inferSelect;
+
+// Per-role auto-reward amounts. Members holding a configured role
+// automatically receive its amount every `rewardIntervalMinutes` (see
+// guildSettingsTable). Members with multiple configured roles get the sum.
+export const roleRewardsTable = pgTable(
+  "role_rewards",
+  {
+    id: serial("id").primaryKey(),
+    guildId: text("guild_id").notNull(),
+    roleId: text("role_id").notNull(),
+    amount: integer("amount").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [unique().on(table.guildId, table.roleId)],
+);
+
+export const insertRoleRewardSchema = createInsertSchema(roleRewardsTable).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertRoleReward = z.infer<typeof insertRoleRewardSchema>;
+export type RoleReward = typeof roleRewardsTable.$inferSelect;

@@ -6,9 +6,11 @@ import {
   inventoryItemsTable,
   transactionsTable,
   guildSettingsTable,
+  roleRewardsTable,
   type Wallet,
   type ShopItem,
   type GuildSettings,
+  type RoleReward,
 } from "@workspace/db";
 
 export const DEFAULT_CURRENCY_NAME = "円";
@@ -231,6 +233,7 @@ export async function giveCurrency(
   userId: string,
   amount: number,
   currencyName: string,
+  reason = "admin-give",
 ): Promise<{ ok: true; balance: number } | { ok: false; reason: string }> {
   if (amount === 0) {
     return { ok: false, reason: "金額には0以外の値を指定してください。" };
@@ -257,9 +260,108 @@ export async function giveCurrency(
     return { ok: false, reason: `残高が不足しています(所持: ${wallet.balance}${currencyName})。` };
   }
 
-  await recordTransaction(guildId, userId, amount, "admin-give");
+  await recordTransaction(guildId, userId, amount, reason);
 
   return { ok: true, balance: updated.balance };
+}
+
+export async function setRoleReward(
+  guildId: string,
+  roleId: string,
+  amount: number,
+): Promise<RoleReward> {
+  const [reward] = await db
+    .insert(roleRewardsTable)
+    .values({ guildId, roleId, amount })
+    .onConflictDoUpdate({
+      target: [roleRewardsTable.guildId, roleRewardsTable.roleId],
+      set: { amount },
+    })
+    .returning();
+
+  if (!reward) {
+    throw new Error("Failed to create or update role reward");
+  }
+
+  return reward;
+}
+
+export async function removeRoleReward(guildId: string, roleId: string): Promise<boolean> {
+  const deleted = await db
+    .delete(roleRewardsTable)
+    .where(and(eq(roleRewardsTable.guildId, guildId), eq(roleRewardsTable.roleId, roleId)))
+    .returning();
+
+  return deleted.length > 0;
+}
+
+export async function listRoleRewards(guildId: string): Promise<RoleReward[]> {
+  return db.select().from(roleRewardsTable).where(eq(roleRewardsTable.guildId, guildId));
+}
+
+export async function setRewardInterval(guildId: string, minutes: number): Promise<GuildSettings> {
+  await getGuildSettings(guildId);
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ rewardIntervalMinutes: minutes })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+
+  if (!settings) {
+    throw new Error("Failed to update reward interval");
+  }
+
+  return settings;
+}
+
+export async function markRewardDistributed(guildId: string, at: Date): Promise<void> {
+  await db
+    .update(guildSettingsTable)
+    .set({ lastRewardAt: at })
+    .where(eq(guildSettingsTable.guildId, guildId));
+}
+
+// Sums each member's applicable role-reward amounts and pays them out.
+// `members` maps userId -> the roleIds that member currently holds.
+export async function distributeRoleRewards(
+  guildId: string,
+  currencyName: string,
+  members: Map<string, string[]>,
+): Promise<{ paidCount: number; totalPaid: number }> {
+  const rewards = await listRoleRewards(guildId);
+  if (rewards.length === 0) {
+    return { paidCount: 0, totalPaid: 0 };
+  }
+
+  const amountByRoleId = new Map(rewards.map((r) => [r.roleId, r.amount]));
+
+  let paidCount = 0;
+  let totalPaid = 0;
+
+  for (const [userId, roleIds] of members) {
+    const amount = roleIds.reduce((sum, roleId) => sum + (amountByRoleId.get(roleId) ?? 0), 0);
+    if (amount <= 0) {
+      continue;
+    }
+
+    const result = await giveCurrency(guildId, userId, amount, currencyName, "auto-reward");
+    if (result.ok) {
+      paidCount += 1;
+      totalPaid += amount;
+    }
+  }
+
+  return { paidCount, totalPaid };
+}
+
+// Returns all user IDs that have a wallet in this guild (used by the reward
+// scheduler to know who to check roles for — no privileged intent needed).
+export async function getGuildWalletUserIds(guildId: string): Promise<string[]> {
+  const rows = await db
+    .select({ userId: walletsTable.userId })
+    .from(walletsTable)
+    .where(eq(walletsTable.guildId, guildId));
+  return rows.map((r) => r.userId);
 }
 
 export async function getLeaderboard(

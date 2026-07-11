@@ -27,9 +27,13 @@ import {
   getShopItem,
   giveCurrency,
   listInventory,
+  listRoleRewards,
   listShopItems,
   refundPurchase,
+  removeRoleReward,
   removeShopItem,
+  setRewardInterval,
+  setRoleReward,
   transfer,
 } from "../lib/economy";
 
@@ -579,6 +583,89 @@ const shopCommand: Command = {
   },
 };
 
+const rewardCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("reward")
+    .setDescription("ロールごとの自動報酬を設定します(管理者用)")
+    .addSubcommand((sub) =>
+      sub
+        .setName("set")
+        .setDescription("ロールに自動報酬を設定します")
+        .addRoleOption((opt) => opt.setName("role").setDescription("対象ロール").setRequired(true))
+        .addIntegerOption((opt) =>
+          opt.setName("amount").setDescription("配布間隔ごとの付与額").setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("ロールの自動報酬を解除します")
+        .addRoleOption((opt) => opt.setName("role").setDescription("対象ロール").setRequired(true)),
+    )
+    .addSubcommand((sub) => sub.setName("list").setDescription("設定済みの自動報酬一覧を表示します"))
+    .addSubcommand((sub) =>
+      sub
+        .setName("interval")
+        .setDescription("自動報酬の配布間隔を設定します")
+        .addIntegerOption((opt) =>
+          opt.setName("minutes").setDescription("配布間隔(分)").setRequired(true).setMinValue(1),
+        ),
+    ),
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+
+    if (!requireManageGuild(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "set") {
+      const role = interaction.options.getRole("role", true);
+      const amount = interaction.options.getInteger("amount", true);
+      const [reward, settings] = await Promise.all([
+        setRoleReward(guildId, role.id, amount),
+        getGuildSettings(guildId),
+      ]);
+      await interaction.reply(
+        `<@&${reward.roleId}> の自動報酬を **${amount}${settings.currencyName}** に設定しました(配布間隔: ${settings.rewardIntervalMinutes}分ごと)。`,
+      );
+      return;
+    }
+
+    if (sub === "remove") {
+      const role = interaction.options.getRole("role", true);
+      const removed = await removeRoleReward(guildId, role.id);
+      await interaction.reply(
+        removed ? `<@&${role.id}> の自動報酬を解除しました。` : "そのロールには自動報酬が設定されていません。",
+      );
+      return;
+    }
+
+    if (sub === "list") {
+      const [rewards, settings] = await Promise.all([listRoleRewards(guildId), getGuildSettings(guildId)]);
+      if (rewards.length === 0) {
+        await interaction.reply("自動報酬は設定されていません。");
+        return;
+      }
+      const lines = rewards.map((r) => `<@&${r.roleId}> — ${r.amount}${settings.currencyName}`);
+      await interaction.reply({
+        content: `## ⏱️ 自動報酬設定(${settings.rewardIntervalMinutes}分ごと)\n${lines.join("\n")}`,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    if (sub === "interval") {
+      const minutes = interaction.options.getInteger("minutes", true);
+      const settings = await setRewardInterval(guildId, minutes);
+      await interaction.reply(`自動報酬の配布間隔を **${settings.rewardIntervalMinutes}分ごと** に設定しました。`);
+      return;
+    }
+  },
+};
+
 export const commands: Command[] = [
   currencyCommand,
   balanceCommand,
@@ -587,4 +674,5 @@ export const commands: Command[] = [
   giveCommand,
   leaderboardCommand,
   shopCommand,
+  rewardCommand,
 ];
