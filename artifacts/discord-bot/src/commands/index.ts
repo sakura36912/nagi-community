@@ -222,7 +222,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
 }
 
 export async function handleNicknameModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
-  if (!interaction.guildId || !interaction.member || !("setNickname" in interaction.member)) {
+  if (!interaction.guild) {
     await interaction.reply({ content: "このフォームはサーバー内でのみ使用できます。", ephemeral: true });
     return;
   }
@@ -237,10 +237,12 @@ export async function handleNicknameModalSubmit(interaction: ModalSubmitInteract
 
   await interaction.deferReply({ ephemeral: true });
 
-  const member = interaction.member;
-  const settings = await getGuildSettings(interaction.guildId);
+  // Fetch a full GuildMember object so setNickname() and role cache are available.
+  // interaction.member may be a raw APIInteractionGuildMember without methods.
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const settings = await getGuildSettings(interaction.guild.id);
   const result = await purchaseAndApplyEffect(
-    interaction.guildId,
+    interaction.guild.id,
     member,
     itemId,
     settings.currencyName,
