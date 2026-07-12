@@ -13,6 +13,7 @@ import {
   getGuildWalletUserIds,
   isDueCalendarDay,
   markRewardDistributed,
+  seedDefaultShopItems,
 } from "./lib/economy";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
@@ -81,6 +82,14 @@ async function runRewardScheduler(): Promise<void> {
 
 client.once(Events.ClientReady, (readyClient) => {
   logger.info(`Logged in as ${readyClient.user.tag}`);
+
+  // Seed default shop items for all guilds already in the bot's cache.
+  for (const guild of readyClient.guilds.cache.values()) {
+    seedDefaultShopItems(guild.id).catch((err) =>
+      logger.error(`[seed] Failed to seed default shop items for guild ${guild.id}`, err),
+    );
+  }
+
   // Tick every 60 s; actual payout only happens when an interval has elapsed.
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));

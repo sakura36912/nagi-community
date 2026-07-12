@@ -20,6 +20,25 @@ export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 // Shop item effect types recognized by the bot.
 export const NICKNAME_CHANGE_EFFECT = "nickname_change";
 
+// Inserts the default shop items for a guild if it has none yet.
+// Safe to call multiple times — uses a count guard so it never duplicates.
+export async function seedDefaultShopItems(guildId: string): Promise<void> {
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(shopItemsTable)
+    .where(eq(shopItemsTable.guildId, guildId));
+
+  if (count > 0) return;
+
+  await db.insert(shopItemsTable).values({
+    guildId,
+    name: "名前変更券",
+    description: "サーバー内のニックネームを自由に変更できます。",
+    price: 1000,
+    effectType: NICKNAME_CHANGE_EFFECT,
+  });
+}
+
 export async function getGuildSettings(guildId: string): Promise<GuildSettings> {
   const [existing] = await db
     .select()
@@ -37,6 +56,8 @@ export async function getGuildSettings(guildId: string): Promise<GuildSettings> 
     .returning();
 
   if (created) {
+    // Seed default shop items for brand-new guilds.
+    await seedDefaultShopItems(guildId);
     return created;
   }
 
