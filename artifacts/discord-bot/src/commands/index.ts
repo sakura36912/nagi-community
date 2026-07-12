@@ -316,6 +316,12 @@ const balanceCommand: Command = {
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const target = interaction.options.getUser("user") ?? interaction.user;
+
+    if (target.id !== interaction.user.id && !requireManageGuild(interaction)) {
+      await interaction.reply({ content: "他のユーザーの残高を確認できるのは管理者のみです。", ephemeral: true });
+      return;
+    }
+
     const [wallet, settings] = await Promise.all([
       getOrCreateWallet(guildId, target.id),
       getGuildSettings(guildId),
