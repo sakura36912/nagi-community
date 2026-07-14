@@ -354,12 +354,12 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 /**
  * Searches every text channel whose name contains "名簿" for the most recent
  * message posted by the given user (up to 500 messages back per channel).
- * Returns the message content, or null if none found.
+ * Returns { content, url } of the message, or null if none found.
  */
-async function findNameboSelfIntro(
+async function findNameboMessage(
   guild: import("discord.js").Guild,
   userId: string,
-): Promise<string | null> {
+): Promise<{ content: string; url: string } | null> {
   const candidates = [...guild.channels.cache.values()].filter(
     (c) => c.name.includes("名簿") && c.isTextBased(),
   );
@@ -371,7 +371,7 @@ async function findNameboSelfIntro(
       const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
       if (!messages || messages.size === 0) break;
       const found = messages.find((m) => m.author.id === userId && m.content.trim().length > 0);
-      if (found) return found.content;
+      if (found) return { content: found.content, url: found.url };
       before = messages.last()?.id;
     }
   }
@@ -444,12 +444,12 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const roleName = newMember.guild.roles.cache.get(matchedRole)?.name ?? matchedRole;
   logger.info(`[sheet] Creating sheet for ${displayName} (${newMember.id}), role=${roleName}`);
 
-  const [vcSeconds, selfIntro] = await Promise.all([
+  const [vcSeconds, nameboMsg] = await Promise.all([
     getVcTimeInPeriod(guildId, newMember.id, startDate, endDate).catch(() => 0),
-    findNameboSelfIntro(newMember.guild, newMember.id).catch(() => null),
+    findNameboMessage(newMember.guild, newMember.id).catch(() => null),
   ]);
 
-  logger.info(`[sheet] selfIntro found=${!!selfIntro} vcSeconds=${vcSeconds}`);
+  logger.info(`[sheet] nameboMsg found=${!!nameboMsg} vcSeconds=${vcSeconds}`);
 
   const embed = buildSheetEmbed({
     targetUser,
@@ -457,8 +457,8 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     startDate,
     endDate,
     vcSeconds,
-    nameboardUrl: settings.nameboardUrl,
-    selfIntro,
+    nameboardUrl: nameboMsg?.url ?? settings.nameboardUrl,
+    selfIntro: nameboMsg?.content ?? null,
     createdByLabel: `ロール付与により自動生成（${roleName}）`,
   });
 
