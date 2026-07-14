@@ -1260,11 +1260,17 @@ export async function handleTempVcCreate(interaction: ButtonInteraction): Promis
   }
 
   const channelName = `🔊 ${member.displayName} の部屋`;
+  const lobbyId = await getLobbyChannelId(interaction.guildId).catch(() => null);
+  const parentId = lobbyId
+    ? (interaction.guild.channels.cache.get(lobbyId)?.parentId ?? undefined)
+    : undefined;
+
   let channel;
   try {
     channel = await interaction.guild.channels.create({
       name: channelName.slice(0, 100),
       type: ChannelType.GuildVoice,
+      parent: parentId,
     });
   } catch (err) {
     logger.error("[tempvc] Failed to create VC from panel", err);
