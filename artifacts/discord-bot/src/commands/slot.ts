@@ -14,20 +14,18 @@ import {
   addSlotEmoji,
   removeSlotEmoji,
   clearSlotEmojis,
+  setSlotEmojiWeight,
+  setSlotPayout,
+  resolveMultipliers,
+  DEFAULT_MULTIPLIERS,
 } from "../lib/slot";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MIN_BET = 10;
 const MAX_BET = 100_000;
-const SYMBOL_COUNT = 4; // distinct symbols per spin
+const SYMBOL_COUNT = 4;
 const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
-
-/**
- * Net profit as a multiplier of `bet` for each number of winning paylines.
- * Index = winning paylines (0–5).  Estimated return rate ≈ 86%.
- */
-const NET_MULTIPLIER = [-1, 1, 5, 11, 19, 34] as const;
 
 // ─── Paylines: 3 horizontal rows + 2 diagonals ───────────────────────────────
 
@@ -50,22 +48,23 @@ interface Command {
   execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
 
-// ─── Emoji parsing ────────────────────────────────────────────────────────────
+// ─── Emoji utilities ──────────────────────────────────────────────────────────
 
-/** Extract emoji ID from a raw input string like `<:name:123>` or `<a:name:123>`. */
 function parseEmojiId(input: string): string | null {
-  const match = input.trim().match(/<a?:[^:]+:(\d+)>/);
-  return match?.[1] ?? null;
+  return input.trim().match(/<a?:[^:]+:(\d+)>/)?.[1] ?? null;
 }
 
-/** Resolve an emoji ID to a display string using the guild's emoji cache. */
 function resolveEmoji(guild: Guild, emojiId: string): Sym | null {
   const e = guild.emojis.cache.get(emojiId);
-  if (!e || !e.name) return null;
+  if (!e?.name) return null;
   return e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
 }
 
-// ─── Symbol pool selection ────────────────────────────────────────────────────
+function extractEmojiId(sym: Sym): string | null {
+  return sym.match(/<a?:[^:]+:(\d+)>/)?.[1] ?? null;
+}
+
+// ─── Symbol pool & weighted random ───────────────────────────────────────────
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -76,50 +75,60 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+/** Expand each symbol according to its weight to form the reel pool. */
+function buildWeightedPool(symbols: Sym[], weights: Record<string, number>): Sym[] {
+  const pool: Sym[] = [];
+  for (const sym of symbols) {
+    const id = extractEmojiId(sym);
+    const w = Math.max(1, id ? (weights[id] ?? 1) : 1);
+    for (let i = 0; i < w; i++) pool.push(sym);
+  }
+  return pool;
+}
+
+function pickOne(pool: Sym[]): Sym {
+  return pool[Math.floor(Math.random() * pool.length)]!;
+}
+
 async function pickSymbolPool(
   interaction: ChatInputCommandInteraction,
-): Promise<Sym[]> {
+): Promise<{ symbols: Sym[]; weights: Record<string, number> }> {
   const guild = interaction.guild!;
   const settings = await getSlotSettings(guild.id);
+  const weights = settings.emojiWeights ?? {};
 
-  // Fixed mode: use pinned emojis (skip any that were deleted from the server).
+  // Fixed mode: use pinned emoji IDs, resolve to display strings.
   if (settings.fixedEmojiIds.length > 0) {
     const resolved = settings.fixedEmojiIds
       .map((id) => resolveEmoji(guild, id))
       .filter((s): s is Sym => s !== null);
 
     if (resolved.length >= 2) {
-      // Pad with defaults if fewer than SYMBOL_COUNT survived resolution.
-      if (resolved.length < SYMBOL_COUNT) {
-        const needed = SYMBOL_COUNT - resolved.length;
-        resolved.push(...DEFAULT_SYMBOLS.slice(0, needed));
-      }
-      return resolved.slice(0, SYMBOL_COUNT);
+      const padded =
+        resolved.length < SYMBOL_COUNT
+          ? [...resolved, ...DEFAULT_SYMBOLS.slice(0, SYMBOL_COUNT - resolved.length)]
+          : resolved.slice(0, SYMBOL_COUNT);
+      return { symbols: padded, weights };
     }
-    // Fall through to auto mode if too few valid emojis remain.
   }
 
-  // Auto mode: pick from all guild custom emojis.
+  // Auto mode: all guild custom emojis.
   const custom: Sym[] = [...guild.emojis.cache.values()]
     .filter((e) => !e.managed && !!e.name)
     .map((e) => (e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`));
 
-  const pool =
+  const base =
     custom.length >= SYMBOL_COUNT
       ? shuffle(custom)
       : [...custom, ...DEFAULT_SYMBOLS.filter((d) => !custom.includes(d))];
 
-  return pool.slice(0, SYMBOL_COUNT);
+  return { symbols: base.slice(0, SYMBOL_COUNT), weights };
 }
 
 // ─── Spin & evaluate ──────────────────────────────────────────────────────────
 
-function pickOne(symbols: Sym[]): Sym {
-  return symbols[Math.floor(Math.random() * symbols.length)]!;
-}
-
-function spinGrid(symbols: Sym[]): Grid {
-  const row = (): Row => [pickOne(symbols), pickOne(symbols), pickOne(symbols)];
+function spinGrid(pool: Sym[]): Grid {
+  const row = (): Row => [pickOne(pool), pickOne(pool), pickOne(pool)];
   return [row(), row(), row()];
 }
 
@@ -181,13 +190,11 @@ function buildResultEmbed(
   currencyName: string,
 ): EmbedBuilder {
   const rowWins = new Set(
-    paylines
-      .filter((p) => p.won && p.name.startsWith("横"))
-      .map((p) => p.name),
+    paylines.filter((p) => p.won && p.name.startsWith("横")).map((p) => p.name),
   );
   const rowLabels = ["横 上段", "横 中段", "横 下段"];
-  const gridLines = grid.map((row, i) =>
-    row.join("  ") + (rowWins.has(rowLabels[i]!) ? "  ✨" : ""),
+  const gridLines = grid.map(
+    (row, i) => row.join("  ") + (rowWins.has(rowLabels[i]!) ? "  ✨" : ""),
   );
   const diagWins = paylines.filter((p) => p.won && p.name.startsWith("斜め"));
   const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("　　");
@@ -218,27 +225,62 @@ function buildResultEmbed(
     .setFooter({ text: `残高: ${finalBalance.toLocaleString()} ${currencyName}` });
 }
 
-function buildSetupEmbed(guild: Guild, fixedEmojiIds: string[]): EmbedBuilder {
-  const mode = fixedEmojiIds.length === 0 ? "自動（全ギルド絵文字から抽選）" : "固定";
-  const symbols =
-    fixedEmojiIds.length === 0
-      ? "*未登録*"
-      : fixedEmojiIds
-          .map((id, i) => {
-            const sym = resolveEmoji(guild, id);
-            return sym ? `${i + 1}. ${sym}` : `${i + 1}. *(削除済み: ${id})*`;
-          })
-          .join("\n");
+function buildSetupEmbed(
+  guild: Guild,
+  fixedEmojiIds: string[],
+  emojiWeights: Record<string, number>,
+  payoutMultipliers: number[],
+): EmbedBuilder {
+  const multipliers = resolveMultipliers(payoutMultipliers);
+  const mode = fixedEmojiIds.length === 0 ? "🔄 自動（全ギルド絵文字から抽選）" : "📌 固定";
+
+  // Symbol list with weights.
+  let symbolsValue: string;
+  if (fixedEmojiIds.length === 0) {
+    symbolsValue = "*未登録（自動モード）*";
+  } else {
+    symbolsValue = fixedEmojiIds
+      .map((id) => {
+        const sym = resolveEmoji(guild, id);
+        const w = emojiWeights[id] ?? 1;
+        const bar = "█".repeat(Math.min(w, 10)) + (w > 10 ? `…${w}` : "");
+        return sym ? `${sym} \`${bar}\` ×${w}` : `*(削除済み: ${id})*`;
+      })
+      .join("\n");
+  }
+
+  // Payout table.
+  const payoutLines = [1, 2, 3, 4, 5].map((n) => {
+    const m = multipliers[n] ?? DEFAULT_MULTIPLIERS[n];
+    const label = n === 5 ? `${n}ライン 🎰` : `${n}ライン`;
+    return `\`${label}\` → +${m}× bet`;
+  });
+  payoutLines.unshift("`0ライン` → -1× bet（固定）");
+
+  const totalWeight = fixedEmojiIds.reduce(
+    (sum, id) => sum + (emojiWeights[id] ?? 1), 0,
+  );
+  const probLines = fixedEmojiIds.length > 0
+    ? fixedEmojiIds.map((id) => {
+        const sym = resolveEmoji(guild, id);
+        const w = emojiWeights[id] ?? 1;
+        const pct = totalWeight > 0 ? ((w / totalWeight) * 100).toFixed(1) : "0.0";
+        return sym ? `${sym} ${pct}%` : `*(削除済み)* ${pct}%`;
+      }).join("  ")
+    : "*固定モードでのみ表示*";
 
   return new EmbedBuilder()
-    .setTitle("🎰 スロット — 絵柄設定")
+    .setTitle("🎰 スロット — 設定")
     .setColor(0x5865f2)
     .addFields(
       { name: "モード", value: mode, inline: true },
-      { name: "登録数", value: `${fixedEmojiIds.length} 種類`, inline: true },
-      { name: "登録済み絵柄", value: symbols },
+      { name: "絵柄数", value: `${fixedEmojiIds.length || "自動"} 種類`, inline: true },
+      { name: "\u200b", value: "\u200b", inline: true },
+      { name: "絵柄と出現重み", value: symbolsValue },
+      { name: "各絵柄の出現確率", value: probLines },
+      { name: "当選配当", value: payoutLines.join("\n") },
     )
-    .setFooter({ text: "4種類以上登録すると固定モードが有効になります" });
+    .setFooter({ text: "weight: 出現重み（高いほど出やすい）| bet × multiplier が利益" });
 }
 
 // ─── Subcommand handlers ──────────────────────────────────────────────────────
@@ -249,9 +291,10 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   if (!guildId) return;
   const userId = interaction.user.id;
 
-  const [, { currencyName }] = await Promise.all([
+  const [, { currencyName }, slotSettings] = await Promise.all([
     getOrCreateWallet(guildId, userId),
     getGuildSettings(guildId),
+    getSlotSettings(guildId),
   ]);
 
   await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
@@ -269,11 +312,14 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const symbols = await pickSymbolPool(interaction);
-  const grid = spinGrid(symbols);
+  const { symbols, weights } = await pickSymbolPool(interaction);
+  const pool = buildWeightedPool(symbols, weights);
+  const grid = spinGrid(pool);
   const paylines = evaluatePaylines(grid);
   const wins = paylines.filter((p) => p.won).length;
-  const multiplier = NET_MULTIPLIER[Math.min(wins, 5)]!;
+
+  const multipliers = resolveMultipliers(slotSettings.payoutMultipliers);
+  const multiplier = multipliers[Math.min(wins, 5)] ?? -1;
   const netDelta = Math.floor(bet * multiplier);
 
   let finalBalance = afterDeduct.balance;
@@ -298,62 +344,96 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
 async function handleSetupAdd(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
-  const raw = interaction.options.getString("emoji", true);
-  const emojiId = parseEmojiId(raw);
-
+  const emojiId = parseEmojiId(interaction.options.getString("emoji", true));
   if (!emojiId) {
-    await interaction.reply({
-      content: "❌ カスタム絵文字を入力してください（例: `:emoji_name:`）。Unicode絵文字は使用できません。",
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ content: "❌ カスタム絵文字を入力してください。", flags: MessageFlags.Ephemeral });
     return;
   }
-
   if (!guild.emojis.cache.has(emojiId)) {
-    await interaction.reply({
-      content: "❌ このサーバーに登録されていない絵文字です。",
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ content: "❌ このサーバーに登録されていない絵文字です。", flags: MessageFlags.Ephemeral });
     return;
   }
-
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const settings = await addSlotEmoji(guild.id, emojiId);
-  await interaction.editReply({ embeds: [buildSetupEmbed(guild, settings.fixedEmojiIds)] });
+  const s = await addSlotEmoji(guild.id, emojiId);
+  await interaction.editReply({ embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)] });
 }
 
 async function handleSetupRemove(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
-  const raw = interaction.options.getString("emoji", true);
-  const emojiId = parseEmojiId(raw);
+  const emojiId = parseEmojiId(interaction.options.getString("emoji", true));
+  if (!emojiId) {
+    await interaction.reply({ content: "❌ カスタム絵文字を入力してください。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const s = await removeSlotEmoji(guild.id, emojiId);
+  await interaction.editReply({ embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)] });
+}
+
+async function handleSetupWeight(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guild = interaction.guild!;
+  const emojiId = parseEmojiId(interaction.options.getString("emoji", true));
+  const weight = interaction.options.getInteger("weight", true);
 
   if (!emojiId) {
+    await interaction.reply({ content: "❌ カスタム絵文字を入力してください。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  // Check emoji is in the fixed list.
+  const current = await getSlotSettings(guild.id);
+  if (!current.fixedEmojiIds.includes(emojiId)) {
     await interaction.reply({
-      content: "❌ カスタム絵文字を入力してください。",
+      content: "❌ 先に `/slot setup add` でその絵文字を登録してください。",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const settings = await removeSlotEmoji(guild.id, emojiId);
-  await interaction.editReply({ embeds: [buildSetupEmbed(guild, settings.fixedEmojiIds)] });
+  const s = await setSlotEmojiWeight(guild.id, emojiId, weight);
+  await interaction.editReply({
+    content: `✅ 重みを **×${weight}** に設定しました。`,
+    embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)],
+  });
+}
+
+async function handleSetupPayout(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guild = interaction.guild!;
+  const lines = interaction.options.getInteger("lines", true);
+  const multiplier = interaction.options.getInteger("multiplier", true);
+
+  if (lines < 1 || lines > 5) {
+    await interaction.reply({ content: "❌ lines は 1〜5 で指定してください。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  if (multiplier < 0) {
+    await interaction.reply({ content: "❌ multiplier は 0 以上の整数を指定してください。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const s = await setSlotPayout(guild.id, lines, multiplier);
+  await interaction.editReply({
+    content: `✅ **${lines}ライン当選** の倍率を **+${multiplier}×** に設定しました。`,
+    embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)],
+  });
 }
 
 async function handleSetupList(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const settings = await getSlotSettings(guild.id);
-  await interaction.editReply({ embeds: [buildSetupEmbed(guild, settings.fixedEmojiIds)] });
+  const s = await getSlotSettings(guild.id);
+  await interaction.editReply({ embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)] });
 }
 
 async function handleSetupClear(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const settings = await clearSlotEmojis(guild.id);
+  const s = await clearSlotEmojis(guild.id);
   await interaction.editReply({
-    content: "✅ 絵柄設定をリセットしました。自動モードに戻ります。",
-    embeds: [buildSetupEmbed(guild, settings.fixedEmojiIds)],
+    content: "✅ 絵柄設定をリセットしました。配当倍率はそのまま残ります。",
+    embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)],
   });
 }
 
@@ -379,16 +459,13 @@ export const slotCommand: Command = {
     .addSubcommandGroup((group) =>
       group
         .setName("setup")
-        .setDescription("スロット絵柄の管理（管理者）")
+        .setDescription("スロット設定（管理者）")
         .addSubcommand((sub) =>
           sub
             .setName("add")
             .setDescription("絵柄を追加登録します")
             .addStringOption((opt) =>
-              opt
-                .setName("emoji")
-                .setDescription("追加するサーバー絵文字（絵文字を直接入力）")
-                .setRequired(true),
+              opt.setName("emoji").setDescription("追加するサーバー絵文字").setRequired(true),
             ),
         )
         .addSubcommand((sub) =>
@@ -396,27 +473,58 @@ export const slotCommand: Command = {
             .setName("remove")
             .setDescription("絵柄を削除します")
             .addStringOption((opt) =>
-              opt
-                .setName("emoji")
-                .setDescription("削除するサーバー絵文字")
-                .setRequired(true),
+              opt.setName("emoji").setDescription("削除するサーバー絵文字").setRequired(true),
             ),
         )
         .addSubcommand((sub) =>
-          sub.setName("list").setDescription("登録済みの絵柄一覧を表示します"),
+          sub
+            .setName("weight")
+            .setDescription("絵柄の出現重みを設定します（確率調整）")
+            .addStringOption((opt) =>
+              opt.setName("emoji").setDescription("対象の絵文字").setRequired(true),
+            )
+            .addIntegerOption((opt) =>
+              opt
+                .setName("weight")
+                .setDescription("出現重み（1=基準、5=5倍出やすい、20=最大）")
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(20),
+            ),
         )
         .addSubcommand((sub) =>
-          sub.setName("clear").setDescription("絵柄設定をリセットし、自動モードに戻します"),
+          sub
+            .setName("payout")
+            .setDescription("当選ライン数ごとの配当倍率を設定します")
+            .addIntegerOption((opt) =>
+              opt
+                .setName("lines")
+                .setDescription("当選ライン数（1〜5）")
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(5),
+            )
+            .addIntegerOption((opt) =>
+              opt
+                .setName("multiplier")
+                .setDescription("賭け金に対する純利益の倍率（例: 3 → 賭け金+3倍の利益）")
+                .setRequired(true)
+                .setMinValue(0)
+                .setMaxValue(1000),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub.setName("list").setDescription("現在の設定を表示します"),
+        )
+        .addSubcommand((sub) =>
+          sub.setName("clear").setDescription("絵柄設定をリセットします（配当倍率は保持）"),
         ),
     )
     .setDefaultMemberPermissions(null) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guildId || !interaction.guild) {
-      await interaction.reply({
-        content: "このコマンドはサーバー内でのみ使用できます。",
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.reply({ content: "このコマンドはサーバー内でのみ使用できます。", flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -424,22 +532,19 @@ export const slotCommand: Command = {
     const sub = interaction.options.getSubcommand();
 
     if (group === "setup") {
-      // Admin-only gate for setup subcommands.
       if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-        await interaction.reply({
-          content: "❌ このサブコマンドは管理者のみ使用できます。",
-          flags: MessageFlags.Ephemeral,
-        });
+        await interaction.reply({ content: "❌ このサブコマンドは管理者のみ使用できます。", flags: MessageFlags.Ephemeral });
         return;
       }
-      if (sub === "add")    await handleSetupAdd(interaction);
-      else if (sub === "remove") await handleSetupRemove(interaction);
-      else if (sub === "list")   await handleSetupList(interaction);
-      else if (sub === "clear")  await handleSetupClear(interaction);
+      if (sub === "add")     { await handleSetupAdd(interaction); return; }
+      if (sub === "remove")  { await handleSetupRemove(interaction); return; }
+      if (sub === "weight")  { await handleSetupWeight(interaction); return; }
+      if (sub === "payout")  { await handleSetupPayout(interaction); return; }
+      if (sub === "list")    { await handleSetupList(interaction); return; }
+      if (sub === "clear")   { await handleSetupClear(interaction); return; }
       return;
     }
 
-    // play
     await handlePlay(interaction);
   },
 };
