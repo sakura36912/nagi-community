@@ -64,6 +64,14 @@ function extractEmojiId(sym: Sym): string | null {
   return sym.match(/<a?:[^:]+:(\d+)>/)?.[1] ?? null;
 }
 
+/** カスタム絵文字の CDN 画像 URL を返す。通常絵文字の場合は null。 */
+function emojiCdnUrl(sym: Sym): string | null {
+  const id = extractEmojiId(sym);
+  if (!id) return null;
+  const animated = sym.startsWith("<a:");
+  return `https://cdn.discordapp.com/emojis/${id}.${animated ? "gif" : "webp"}?size=256`;
+}
+
 // ─── Symbol pool & weighted random ───────────────────────────────────────────
 
 function shuffle<T>(arr: T[]): T[] {
@@ -200,6 +208,17 @@ function buildResultEmbed(
   const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("　　");
   const gridBlock = gridLines.join("\n\n") + (diagLine ? "\n\n" + diagLine : "");
 
+  // 大きく表示する絵柄: 当選時は当選ライン上の絵柄、ハズレ時は中央マス
+  let featuredSym: Sym = grid[1]![1]!;
+  if (wins > 0) {
+    const wonPayline = paylines.find((p) => p.won);
+    if (wonPayline) {
+      const def = PAYLINE_DEFS.find((d) => d.name === wonPayline.name);
+      if (def) featuredSym = grid[def.coords[0]![0]!]![def.coords[0]![1]!]!;
+    }
+  }
+  const featuredUrl = emojiCdnUrl(featuredSym);
+
   let resultText: string;
   let title: string;
   let color: number;
@@ -218,11 +237,14 @@ function buildResultEmbed(
     color = wins >= 3 ? 0xf1c40f : 0x57f287;
   }
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription(`${gridBlock}\n\n${resultText}`)
     .setColor(color)
     .setFooter({ text: `残高: ${finalBalance.toLocaleString()} ${currencyName}` });
+
+  if (featuredUrl) embed.setThumbnail(featuredUrl);
+  return embed;
 }
 
 function buildSetupEmbed(
