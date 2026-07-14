@@ -812,7 +812,7 @@ const payCommand: Command = {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
-        .setThumbnail(target.displayAvatarURL())
+        .setThumbnail(interaction.user.displayAvatarURL())
         .setDescription(`<@${target.id}> に **${amount.toLocaleString()}${settings.currencyName}** を送金しました`);
       if (memo) embed.addFields({ name: "📝 メモ", value: memo });
       await interaction.reply({ embeds: [embed] });
