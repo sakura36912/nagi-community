@@ -20,6 +20,10 @@ author = "agent"
 task = "workflow.run"
 args = "Discord Bot"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Community Bot"
+
 [[workflows.workflow]]
 name = "Discord Bot"
 author = "agent"
@@ -27,6 +31,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm --filter @workspace/discord-bot run dev"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Community Bot"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/community-bot run dev"
 
 [workflows.workflow.metadata]
 outputType = "console"

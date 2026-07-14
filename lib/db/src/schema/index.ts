@@ -19,4 +19,5 @@
 
 export * from "./economy";
 export * from "./evalsheet";
+export * from "./community";
 export * from "./vc";

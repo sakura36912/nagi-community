@@ -1,0 +1,23 @@
+import { REST, Routes } from "discord.js";
+import { commands } from "./commands/index.js";
+import { logger } from "./lib/logger.js";
+
+const token = process.env["COMMUNITY_BOT_TOKEN"];
+const clientId = process.env["COMMUNITY_CLIENT_ID"];
+
+if (!token) throw new Error("COMMUNITY_BOT_TOKEN environment variable is required.");
+if (!clientId) throw new Error("COMMUNITY_CLIENT_ID environment variable is required.");
+
+const rest = new REST().setToken(token);
+
+async function main() {
+  const body = commands.map((c) => c.data.toJSON());
+  logger.info(`Registering ${body.length} global slash command(s)...`);
+  await rest.put(Routes.applicationCommands(clientId!), { body });
+  logger.info("Slash commands registered. Global commands can take up to an hour to propagate.");
+}
+
+main().catch((err) => {
+  logger.error("Failed to register slash commands", err);
+  process.exit(1);
+});
