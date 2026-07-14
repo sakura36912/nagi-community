@@ -2,8 +2,10 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelType,
   EmbedBuilder,
   ModalBuilder,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -17,6 +19,7 @@ import { logger } from "../lib/logger";
 import {
   DEFAULT_DAILY_AMOUNT,
   NICKNAME_CHANGE_EFFECT,
+  PRIVATE_VC_EFFECT,
   addShopItem,
   buyItem,
   claimDaily,
@@ -149,6 +152,48 @@ async function purchaseAndApplyEffect(
   return result;
 }
 
+async function purchaseAndCreatePrivateVc(
+  guild: Guild,
+  member: GuildMember,
+  itemId: number,
+  currencyName: string,
+): Promise<{ ok: true; item: ShopItem; channelId: string } | { ok: false; reason: string }> {
+  const me = guild.members.me;
+  if (!me?.permissions.has("ManageChannels")) {
+    return { ok: false, reason: "BotにManageChannels権限がないため、VCを作成できません。" };
+  }
+
+  const result = await buyItem(guild.id, member.id, itemId, currencyName);
+  if (!result.ok) return result;
+
+  try {
+    const channel = await guild.channels.create({
+      name: `🔒 ${member.displayName}`,
+      type: ChannelType.GuildVoice,
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        {
+          id: member.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.Connect,
+            PermissionFlagsBits.Speak,
+          ],
+        },
+      ],
+    });
+    return { ok: true, item: result.item, channelId: channel.id };
+  } catch (err) {
+    try {
+      await refundPurchase(guild.id, member.id, result.item);
+    } catch (refundErr) {
+      logger.error(`Failed to refund ${member.id} after private VC creation failure`, refundErr);
+      return { ok: false, reason: "VCの作成と返金の両方に失敗しました。管理者にご連絡ください。" };
+    }
+    return { ok: false, reason: "VCの作成に失敗したため、購入を取り消し、返金しました。" };
+  }
+}
+
 function buildShopPanel(items: ShopItem[], currencyName: string) {
   const embed = new EmbedBuilder()
     .setTitle("🛒 ショップ")
@@ -212,6 +257,18 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   await interaction.deferReply({ ephemeral: true });
 
   const settings = await getGuildSettings(interaction.guildId);
+
+  if (item.effectType === PRIVATE_VC_EFFECT) {
+    const member = await interaction.guild!.members.fetch(interaction.user.id);
+    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName);
+    if (result.ok) {
+      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>`);
+    } else {
+      await interaction.editReply(result.reason);
+    }
+    return;
+  }
+
   const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
 
   if (result.ok) {
@@ -505,7 +562,10 @@ const shopCommand: Command = {
             .setName("effect")
             .setDescription("購入時の特殊効果")
             .setRequired(false)
-            .addChoices({ name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT }),
+            .addChoices(
+            { name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT },
+            { name: "非公開VC作成", value: PRIVATE_VC_EFFECT },
+          ),
         ),
     )
     .addSubcommand((sub) =>
@@ -540,12 +600,25 @@ const shopCommand: Command = {
         return;
       }
 
+      await interaction.deferReply({ ephemeral: true });
       const settings = await getGuildSettings(guildId);
+
+      if (item.effectType === PRIVATE_VC_EFFECT) {
+        const member = await interaction.guild!.members.fetch(interaction.user.id);
+        const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName);
+        if (result.ok) {
+          await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>`);
+        } else {
+          await interaction.editReply(result.reason);
+        }
+        return;
+      }
+
       const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
       if (result.ok) {
-        await interaction.reply(`**${result.item.name}**を購入しました!`);
+        await interaction.editReply(`**${result.item.name}**を購入しました!`);
       } else {
-        await interaction.reply({ content: result.reason, ephemeral: true });
+        await interaction.editReply(result.reason);
       }
       return;
     }

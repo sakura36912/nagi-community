@@ -19,6 +19,7 @@ export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // Shop item effect types recognized by the bot.
 export const NICKNAME_CHANGE_EFFECT = "nickname_change";
+export const PRIVATE_VC_EFFECT = "private_vc";
 
 // Inserts the default shop items for a guild if it has none yet.
 // Safe to call multiple times — uses a count guard so it never duplicates.
@@ -30,13 +31,22 @@ export async function seedDefaultShopItems(guildId: string): Promise<void> {
 
   if (count > 0) return;
 
-  await db.insert(shopItemsTable).values({
-    guildId,
-    name: "名前変更券",
-    description: "サーバー内のニックネームを自由に変更できます。",
-    price: 1000,
-    effectType: NICKNAME_CHANGE_EFFECT,
-  });
+  await db.insert(shopItemsTable).values([
+    {
+      guildId,
+      name: "名前変更券",
+      description: "サーバー内のニックネームを自由に変更できます。",
+      price: 1000,
+      effectType: NICKNAME_CHANGE_EFFECT,
+    },
+    {
+      guildId,
+      name: "非公開VC転送チャンネル",
+      description: "自分だけが見える専用のボイスチャンネルを作成します。",
+      price: 3000,
+      effectType: PRIVATE_VC_EFFECT,
+    },
+  ]);
 }
 
 export async function getGuildSettings(guildId: string): Promise<GuildSettings> {
