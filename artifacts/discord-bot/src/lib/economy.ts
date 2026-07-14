@@ -10,6 +10,7 @@ import {
   privateVcSessionsTable,
   squadTreasuriesTable,
   squadTreasuryTxTable,
+  communitySheetsTable,
   type Wallet,
   type ShopItem,
   type GuildSettings,
@@ -29,13 +30,22 @@ export const PRIVATE_VC_EFFECT = "private_vc"; // permanent (no expiry)
 export const PRIVATE_VC_1D_EFFECT = "private_vc_1d";
 export const PRIVATE_VC_1W_EFFECT = "private_vc_1w";
 export const PRIVATE_VC_1M_EFFECT = "private_vc_1m";
-export const EVAL_EXTEND_EFFECT = "eval_extend_1w"; // extends all eval sheets by 1 week
+export const EVAL_EXTEND_EFFECT    = "eval_extend_1w"; // +7 days
+export const EVAL_EXTEND_2W_EFFECT = "eval_extend_2w"; // +14 days
+export const EVAL_EXTEND_1M_EFFECT = "eval_extend_1m"; // +30 days
 
 // Duration in milliseconds for each timed VC effect type.
 export const TIMED_VC_DURATIONS: Record<string, number> = {
   [PRIVATE_VC_1D_EFFECT]: 24 * 60 * 60 * 1000,
   [PRIVATE_VC_1W_EFFECT]: 7 * 24 * 60 * 60 * 1000,
   [PRIVATE_VC_1M_EFFECT]: 30 * 24 * 60 * 60 * 1000,
+};
+
+/** Maps eval-extend effect type → number of days to add to endDate. */
+export const EVAL_EXTEND_DAYS: Record<string, number> = {
+  [EVAL_EXTEND_EFFECT]:    7,
+  [EVAL_EXTEND_2W_EFFECT]: 14,
+  [EVAL_EXTEND_1M_EFFECT]: 30,
 };
 
 // Inserts the default general shop items for a guild if it has none yet.
@@ -896,4 +906,41 @@ export async function listInventory(
     .where(and(eq(inventoryItemsTable.guildId, guildId), eq(inventoryItemsTable.userId, userId)));
 
   return rows;
+}
+
+/**
+ * Extends the endDate of the user's most recent community eval sheet by `days`.
+ * If the sheet has already expired, the extension starts from now instead of
+ * the (past) endDate, so the user always gets the full benefit.
+ * Returns { newEndDate } on success, or null when no sheet is found.
+ */
+export async function extendCommunitySheet(
+  guildId: string,
+  userId: string,
+  days: number,
+): Promise<{ newEndDate: Date } | null> {
+  const [sheet] = await db
+    .select()
+    .from(communitySheetsTable)
+    .where(
+      and(
+        eq(communitySheetsTable.guildId, guildId),
+        eq(communitySheetsTable.userId, userId),
+      ),
+    )
+    .orderBy(desc(communitySheetsTable.createdAt))
+    .limit(1);
+
+  if (!sheet) return null;
+
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const base = sheet.endDate < new Date() ? new Date() : sheet.endDate;
+  const newEndDate = new Date(base.getTime() + days * MS_PER_DAY);
+
+  await db
+    .update(communitySheetsTable)
+    .set({ endDate: newEndDate })
+    .where(eq(communitySheetsTable.id, sheet.id));
+
+  return { newEndDate };
 }

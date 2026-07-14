@@ -25,6 +25,8 @@ import {
   PRIVATE_VC_1W_EFFECT,
   PRIVATE_VC_1M_EFFECT,
   TIMED_VC_DURATIONS,
+  EVAL_EXTEND_DAYS,
+  extendCommunitySheet,
   addShopItem,
   buyItem,
   claimDaily,
@@ -296,6 +298,26 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
     } else {
       await interaction.editReply(result.reason);
+    }
+    return;
+  }
+
+  // Eval-sheet extension券: buy first, then extend the community eval sheet.
+  const extendDays = EVAL_EXTEND_DAYS[item.effectType ?? ""];
+  if (extendDays !== undefined) {
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    const extended = await extendCommunitySheet(interaction.guildId, interaction.user.id, extendDays);
+    if (extended) {
+      const ts = Math.floor(extended.newEndDate.getTime() / 1000);
+      await interaction.editReply(
+        `✅ **${result.item.name}**を購入しました！\n評価シートの期限を **<t:${ts}:D>** まで延長しました。`,
+      );
+    } else {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply(
+        "❌ 評価シートが見つかりませんでした。購入を取り消し、返金しました。\n管理者に評価シートの作成を依頼してください。",
+      );
     }
     return;
   }
@@ -695,6 +717,26 @@ function buildShopCommand(
             await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
           } else {
             await interaction.editReply(result.reason);
+          }
+          return;
+        }
+
+        // Eval-sheet extension券
+        const extendDays = EVAL_EXTEND_DAYS[item.effectType ?? ""];
+        if (extendDays !== undefined) {
+          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
+          if (!result.ok) { await interaction.editReply(result.reason); return; }
+          const extended = await extendCommunitySheet(guildId, interaction.user.id, extendDays);
+          if (extended) {
+            const ts = Math.floor(extended.newEndDate.getTime() / 1000);
+            await interaction.editReply(
+              `✅ **${result.item.name}**を購入しました！\n評価シートの期限を **<t:${ts}:D>** まで延長しました。`,
+            );
+          } else {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply(
+              "❌ 評価シートが見つかりませんでした。購入を取り消し、返金しました。\n管理者に評価シートの作成を依頼してください。",
+            );
           }
           return;
         }
