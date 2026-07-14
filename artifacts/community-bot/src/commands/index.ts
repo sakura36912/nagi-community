@@ -537,6 +537,9 @@ const eventCommand: Command = {
 
 // ─── /ticket ─────────────────────────────────────────────────────────────────
 
+/** チケットチャンネルを作成後に移動するカテゴリー */
+const TICKET_CATEGORY_ID = "1526691329805910016";
+
 // Defaults used when no custom message is configured
 const TICKET_DEFAULTS = {
   panelTitle: "🎫 サポートチケット",
@@ -1117,6 +1120,7 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
     channel = await interaction.guild.channels.create({
       name: channelName,
       type: ChannelType.GuildText,
+      parent: TICKET_CATEGORY_ID,
       permissionOverwrites: overwrites,
     });
   } catch (err) {
