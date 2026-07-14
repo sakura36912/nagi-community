@@ -22,6 +22,7 @@ import {
 } from "./lib/economy";
 import {
   EVAL_SHEET_DEFAULT_DURATION_MS,
+  deleteEvalSheet,
   getEvalSheetConfig,
   hasEvalSheet,
   recordEvalSheet,
@@ -217,18 +218,30 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   // fetch() はロール付与後の最新状態を返すため差分が空になる。
   // partial のときは全現在ロールを対象にし、hasEvalSheet で重複防止する。
   let addedRoleIds: string[];
+  let removedRoleIds: string[];
   if (oldMember.partial) {
     addedRoleIds = [...newMember.roles.cache.keys()];
-    logger.info(`[evalsheet] oldMember partial — checking all ${addedRoleIds.length} current roles`);
+    removedRoleIds = [];
+    dlog(`oldMember partial — treating all ${addedRoleIds.length} current roles as added`);
   } else {
     addedRoleIds = [...newMember.roles.cache.keys()].filter(
       (id) => !oldMember.roles.cache.has(id),
     );
-    logger.info(`[evalsheet] Newly added role IDs: [${addedRoleIds.join(", ")}]`);
+    removedRoleIds = [...oldMember.roles.cache.keys()].filter(
+      (id) => !newMember.roles.cache.has(id),
+    );
+    dlog(`added=[${addedRoleIds.join(",")}] removed=[${removedRoleIds.join(",")}]`);
+  }
+
+  // ロールが外されたときは DB レコードを削除して再付与時に新規作成できるようにする。
+  for (const roleId of removedRoleIds) {
+    const config = await getEvalSheetConfig(newMember.guild.id, roleId);
+    if (!config) continue;
+    const deleted = await deleteEvalSheet(newMember.guild.id, newMember.id, roleId);
+    dlog(`deleted eval sheet for user=${newMember.id} role=${roleId}: ${deleted}`);
   }
 
   if (addedRoleIds.length === 0) {
-    logger.info("[evalsheet] No newly added roles — skipping");
     return;
   }
 

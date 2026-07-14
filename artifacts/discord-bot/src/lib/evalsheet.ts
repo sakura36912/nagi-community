@@ -76,6 +76,26 @@ export async function getEvalSheetConfigsForGuild(guildId: string): Promise<Eval
     .where(eq(evalSheetConfigTable.guildId, guildId));
 }
 
+// Deletes the eval sheet record for a user/role so a new one can be created on re-assignment.
+export async function deleteEvalSheet(
+  guildId: string,
+  userId: string,
+  roleId: string,
+): Promise<boolean> {
+  const deleted = await db
+    .delete(evalSheetsTable)
+    .where(
+      and(
+        eq(evalSheetsTable.guildId, guildId),
+        eq(evalSheetsTable.userId, userId),
+        eq(evalSheetsTable.roleId, roleId),
+      ),
+    )
+    .returning();
+
+  return deleted.length > 0;
+}
+
 // Returns true when the user already has an eval sheet for this role.
 export async function hasEvalSheet(
   guildId: string,
