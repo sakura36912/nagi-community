@@ -16,6 +16,7 @@ import {
   setEvalSheetForumConfig,
   setEvalNameboardUrl,
 } from "../lib/economy";
+import { logger } from "../lib/logger";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -81,16 +82,21 @@ export async function applySheetEmbedUpdate(
   const { channelId, messageId, startDate, newEndDate, userId } = info;
   if (!channelId || !messageId) return;
 
+  logger.info(`[sheet] applySheetEmbedUpdate: userId=${userId} channelId=${channelId} messageId=${messageId}`);
   try {
-    const channel = await client.channels.fetch(channelId);
-    if (!channel?.isTextBased()) return;
+    // messageId stores the forum thread ID.
+    // The starter message of a forum thread has the same ID as the thread.
+    const thread = await client.channels.fetch(messageId);
+    logger.info(`[sheet] thread fetched: ${thread?.id} isTextBased=${thread?.isTextBased()}`);
+    if (!thread?.isTextBased()) return;
 
-    const message = await channel.messages.fetch(messageId);
+    const message = await thread.messages.fetch(messageId);
+    logger.info(`[sheet] starter message fetched: ${message.id}`);
     const targetUser = await client.users.fetch(userId);
 
     let displayName = targetUser.displayName;
     try {
-      const guild = await client.guilds.fetch(guildId);
+      const guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId);
       displayName = member.displayName;
     } catch { /* fallback to user displayName */ }
@@ -111,9 +117,8 @@ export async function applySheetEmbedUpdate(
     });
 
     await message.edit({ embeds: [embed] });
+    logger.info(`[sheet] ✅ embed updated for user=${userId}`);
   } catch (err) {
-    // Non-fatal — the DB is already updated; only the embed refresh failed.
-    const { logger } = await import("../lib/logger.js");
     logger.error(`[sheet] Failed to refresh embed for user=${userId}`, err);
   }
 }

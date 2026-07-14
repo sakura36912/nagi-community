@@ -314,7 +314,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       await interaction.editReply(
         `✅ **${result.item.name}**を購入しました！\n評価シートの期限を **<t:${ts}:D>** まで延長しました。`,
       );
-      applySheetEmbedUpdate(interaction.client, interaction.guildId, extended).catch(() => {});
+      applySheetEmbedUpdate(interaction.client, interaction.guildId, extended).catch((err) => logger.error("[sheet] applySheetEmbedUpdate error", err));
     } else {
       await refundPurchase(interaction.guildId, interaction.user.id, result.item);
       await interaction.editReply(
@@ -734,7 +734,7 @@ function buildShopCommand(
             await interaction.editReply(
               `✅ **${result.item.name}**を購入しました！\n評価シートの期限を **<t:${ts}:D>** まで延長しました。`,
             );
-            applySheetEmbedUpdate(interaction.client, guildId, extended).catch(() => {});
+            applySheetEmbedUpdate(interaction.client, guildId, extended).catch((err) => logger.error("[sheet] applySheetEmbedUpdate error", err));
           } else {
             await refundPurchase(guildId, interaction.user.id, result.item);
             await interaction.editReply(
