@@ -304,6 +304,41 @@ export async function getVcTimeInPeriod(
   return Number(rows.rows[0]?.total_seconds ?? 0);
 }
 
+/**
+ * Returns the 1-based rank of a user for a given period, or null if they have no sessions.
+ * periodStart = undefined means all time.
+ */
+export async function getUserVcRank(
+  guildId: string,
+  userId: string,
+  periodStart?: Date,
+): Promise<number | null> {
+  const periodFilter = periodStart
+    ? sql`AND COALESCE(${communityVcSessionsTable.leftAt}, NOW()) > ${periodStart}`
+    : sql``;
+
+  const startClamp = periodStart
+    ? sql`GREATEST(${communityVcSessionsTable.joinedAt}, ${periodStart})`
+    : sql`${communityVcSessionsTable.joinedAt}`;
+
+  const rows = await db.execute<{ rank: string }>(sql`
+    SELECT rank FROM (
+      SELECT user_id,
+        RANK() OVER (ORDER BY SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+          COALESCE(left_at, NOW()) - ${startClamp}
+        )))) DESC) AS rank
+      FROM community_vc_sessions
+      WHERE guild_id = ${guildId}
+        ${periodFilter}
+      GROUP BY user_id
+    ) ranked
+    WHERE user_id = ${userId}
+  `);
+
+  if (rows.rows.length === 0) return null;
+  return Number(rows.rows[0]!.rank);
+}
+
 // ─── Eval Sheets ─────────────────────────────────────────────────────────────
 
 export async function setNameboardUrl(guildId: string, nameboardUrl: string | null): Promise<void> {

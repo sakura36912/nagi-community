@@ -24,6 +24,7 @@ import {
   getSheetSettings,
   getTicketByChannel,
   getTicketSettings,
+  getUserVcRank,
   getVcRanking,
   getVcTimeInPeriod,
   listSheets,
@@ -514,6 +515,80 @@ const sheetCommand: Command = {
   },
 };
 
+// ─── /mystats ────────────────────────────────────────────────────────────────
+
+const mystatsCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("mystats")
+    .setDescription("自分（または指定メンバー）のVC滞在時間を確認します")
+    .addUserOption((opt) =>
+      opt
+        .setName("user")
+        .setDescription("確認するメンバー（管理者のみ）")
+        .setRequired(false),
+    ),
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    await interaction.deferReply({ ephemeral: true });
+
+    const targetOption = interaction.options.getUser("user");
+
+    // Non-admins cannot look up other users
+    if (targetOption && targetOption.id !== interaction.user.id && !requireAdmin(interaction)) {
+      await interaction.editReply("他のメンバーの統計を確認するには管理者権限が必要です。");
+      return;
+    }
+
+    const target = targetOption ?? interaction.user;
+
+    const now = new Date();
+
+    // Period start dates
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
+    const weekStart = new Date(now);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    // Fetch all periods in parallel
+    const [todaySeconds, weekSeconds, monthSeconds, allSeconds, allRank] = await Promise.all([
+      getVcTimeInPeriod(guildId, target.id, todayStart, now),
+      getVcTimeInPeriod(guildId, target.id, weekStart, now),
+      getVcTimeInPeriod(guildId, target.id, monthStart, now),
+      getVcTimeInPeriod(guildId, target.id, new Date(0), now),
+      getUserVcRank(guildId, target.id),
+    ]);
+
+    let member: GuildMember | null = null;
+    try {
+      member = await interaction.guild!.members.fetch(target.id);
+    } catch {
+      // ignore
+    }
+    const displayName = member?.displayName ?? target.displayName;
+
+    const rankText = allRank != null ? `第 **${allRank}** 位` : "記録なし";
+
+    const embed = new EmbedBuilder()
+      .setTitle(`🎙️ VCスタッツ — ${displayName}`)
+      .setColor(0x5865f2)
+      .setThumbnail(target.displayAvatarURL())
+      .addFields(
+        { name: "📅 今日", value: formatSeconds(todaySeconds), inline: true },
+        { name: "📆 今週", value: formatSeconds(weekSeconds), inline: true },
+        { name: "🗓️ 今月", value: formatSeconds(monthSeconds), inline: true },
+        { name: "🏆 全期間", value: formatSeconds(allSeconds), inline: true },
+        { name: "📊 ランキング順位", value: rankText, inline: true },
+      )
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
+  },
+};
+
 // ─── Button handlers ─────────────────────────────────────────────────────────
 
 export async function handleEventJoin(interaction: ButtonInteraction): Promise<void> {
@@ -674,6 +749,7 @@ export async function handleTempVcCreate(interaction: ButtonInteraction): Promis
 
 export const commands: Command[] = [
   rankingCommand,
+  mystatsCommand,
   tempvcCommand,
   eventCommand,
   ticketCommand,
