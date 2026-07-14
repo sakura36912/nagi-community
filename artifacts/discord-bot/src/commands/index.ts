@@ -222,6 +222,7 @@ async function purchaseAndCreatePrivateVc(
     const channel = await guild.channels.create({
       name: channelName.slice(0, 100),
       type: ChannelType.GuildVoice,
+      userLimit: 2,
       permissionOverwrites: [
         { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         {
