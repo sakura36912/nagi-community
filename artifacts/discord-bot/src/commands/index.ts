@@ -1,3 +1,4 @@
+import { sheetCommand } from "./sheet";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -1227,4 +1228,5 @@ export const commands: Command[] = [
   shiftCommand,
   vcsalaryCommand,
   slotCommand,
+  sheetCommand,
 ];

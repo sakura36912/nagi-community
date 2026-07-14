@@ -1,4 +1,4 @@
-import { and, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
 import {
   db,
   walletsTable,
@@ -11,6 +11,8 @@ import {
   squadTreasuriesTable,
   squadTreasuryTxTable,
   communitySheetsTable,
+  communitySheetSettingsTable,
+  communityVcSessionsTable,
   type Wallet,
   type ShopItem,
   type GuildSettings,
@@ -18,6 +20,8 @@ import {
   type PrivateVcSession,
   type SquadTreasury,
   type SquadTreasuryTx,
+  type CommunitySheet,
+  type CommunitySheetSettings,
 } from "@workspace/db";
 
 export const DEFAULT_CURRENCY_NAME = "円";
@@ -893,6 +897,74 @@ export async function getTreasuryHistory(
     .where(eq(squadTreasuryTxTable.treasuryId, treasuryId))
     .orderBy(desc(squadTreasuryTxTable.createdAt))
     .limit(limit);
+}
+
+// ─── Eval Sheet helpers ──────────────────────────────────────────────────────
+
+export async function getEvalSheetSettings(guildId: string): Promise<CommunitySheetSettings | undefined> {
+  const [row] = await db
+    .select()
+    .from(communitySheetSettingsTable)
+    .where(eq(communitySheetSettingsTable.guildId, guildId));
+  return row;
+}
+
+export async function createEvalSheet(
+  guildId: string,
+  userId: string,
+  startDate: Date,
+  endDate: Date,
+  channelId?: string,
+  messageId?: string,
+): Promise<CommunitySheet> {
+  const [row] = await db
+    .insert(communitySheetsTable)
+    .values({ guildId, userId, startDate, endDate, channelId, messageId })
+    .returning();
+  return row;
+}
+
+export async function listEvalSheets(guildId: string): Promise<CommunitySheet[]> {
+  return db
+    .select()
+    .from(communitySheetsTable)
+    .where(eq(communitySheetsTable.guildId, guildId))
+    .orderBy(asc(communitySheetsTable.createdAt));
+}
+
+export async function getLatestEvalSheet(guildId: string, userId: string): Promise<CommunitySheet | undefined> {
+  const [row] = await db
+    .select()
+    .from(communitySheetsTable)
+    .where(and(eq(communitySheetsTable.guildId, guildId), eq(communitySheetsTable.userId, userId)))
+    .orderBy(desc(communitySheetsTable.createdAt))
+    .limit(1);
+  return row;
+}
+
+export async function deleteEvalSheet(id: number): Promise<void> {
+  await db.delete(communitySheetsTable).where(eq(communitySheetsTable.id, id));
+}
+
+/** Total VC seconds for a user between two dates (mirrors community bot's getVcTimeInPeriod). */
+export async function getSheetVcSeconds(
+  guildId: string,
+  userId: string,
+  startDate: Date,
+  endDate: Date,
+): Promise<number> {
+  const rows = await db.execute<{ total_seconds: string }>(sql`
+    SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+      LEAST(COALESCE(left_at, NOW()), ${endDate})
+      - GREATEST(joined_at, ${startDate})
+    ))))::bigint AS total_seconds
+    FROM community_vc_sessions
+    WHERE guild_id = ${guildId}
+      AND user_id = ${userId}
+      AND joined_at < ${endDate}
+      AND COALESCE(left_at, NOW()) > ${startDate}
+  `);
+  return Number(rows.rows[0]?.total_seconds ?? 0);
 }
 
 export async function listInventory(
