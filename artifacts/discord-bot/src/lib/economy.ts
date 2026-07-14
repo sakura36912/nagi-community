@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lte, sql } from "drizzle-orm";
 import {
   db,
   walletsTable,
@@ -590,6 +590,43 @@ export async function createPrivateVcSession(
 
   if (!session) throw new Error("Failed to create private VC session");
   return session;
+}
+
+// Returns the user's active (not-yet-expired) VC session, or null if none.
+export async function getActivePrivateVcSession(
+  guildId: string,
+  userId: string,
+): Promise<PrivateVcSession | null> {
+  const now = new Date();
+  const [session] = await db
+    .select()
+    .from(privateVcSessionsTable)
+    .where(
+      and(
+        eq(privateVcSessionsTable.guildId, guildId),
+        eq(privateVcSessionsTable.userId, userId),
+        gt(privateVcSessionsTable.expiresAt, now),
+      ),
+    )
+    .limit(1);
+  return session ?? null;
+}
+
+// Extends the session's expiresAt by additionalMs (base = max(current expiresAt, now)).
+export async function extendPrivateVcSession(
+  id: number,
+  additionalMs: number,
+): Promise<PrivateVcSession> {
+  // Use SQL so the calculation happens atomically in the DB.
+  const [updated] = await db
+    .update(privateVcSessionsTable)
+    .set({
+      expiresAt: sql`GREATEST(${privateVcSessionsTable.expiresAt}, NOW()) + (${additionalMs} * interval '1 millisecond')`,
+    })
+    .where(eq(privateVcSessionsTable.id, id))
+    .returning();
+  if (!updated) throw new Error("Failed to extend private VC session");
+  return updated;
 }
 
 // Returns all sessions whose lease has expired (expiresAt <= now).

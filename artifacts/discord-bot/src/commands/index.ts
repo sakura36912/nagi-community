@@ -47,6 +47,8 @@ import {
   claimDaily,
   createOrUpdateCurrency,
   createPrivateVcSession,
+  getActivePrivateVcSession,
+  extendPrivateVcSession,
   depositToTreasury,
   getTreasuriesByRoles,
   getTreasuryHistory,
@@ -282,6 +284,60 @@ async function purchaseAndCreatePrivateVc(
   }
 }
 
+/**
+ * 裏フリールーム専用: 既存セッションがあれば期間延長、なければ新規作成。
+ * Returns the same shape as purchaseAndCreatePrivateVc, plus an `extended` flag.
+ */
+async function purchaseExtendOrCreateUraVc(
+  guild: Guild,
+  member: GuildMember,
+  itemId: number,
+  currencyName: string,
+  durationMs: number,
+  vcCategoryId?: string | null,
+): Promise<
+  | { ok: true; item: ShopItem; channelId: string; expiresAt: Date; extended: boolean }
+  | { ok: false; reason: string }
+> {
+  // Check for an existing active session for this user.
+  const existingSession = await getActivePrivateVcSession(guild.id, member.id);
+
+  if (!existingSession) {
+    // No session → create a new VC as usual.
+    const result = await purchaseAndCreatePrivateVc(guild, member, itemId, currencyName, durationMs, vcCategoryId);
+    if (!result.ok) return result;
+    return { ...result, expiresAt: result.expiresAt!, extended: false };
+  }
+
+  // Session exists → extend it.
+  const buyResult = await buyItem(guild.id, member.id, itemId, currencyName);
+  if (!buyResult.ok) return buyResult;
+
+  try {
+    const updated = await extendPrivateVcSession(existingSession.id, durationMs);
+
+    // Try to rename the channel to show the new expiry.
+    try {
+      const label =
+        durationMs <= 24 * 60 * 60 * 1000 ? "1日" :
+        durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月";
+      const ch = guild.channels.cache.get(existingSession.channelId)
+        ?? await guild.channels.fetch(existingSession.channelId).catch(() => null);
+      if (ch && ch.type === ChannelType.GuildVoice) {
+        await ch.setName(`🔒 ${member.displayName}(${label})`.slice(0, 100));
+      }
+    } catch {
+      // Rename failure is non-fatal; extension already saved.
+    }
+
+    return { ok: true, item: buyResult.item, channelId: existingSession.channelId, expiresAt: updated.expiresAt, extended: true };
+  } catch (err) {
+    await refundPurchase(guild.id, member.id, buyResult.item);
+    logger.error("[ura] Failed to extend session", err);
+    return { ok: false, reason: "期間の延長に失敗したため、購入を取り消し、返金しました。" };
+  }
+}
+
 function buildShopPanel(items: ShopItem[], currencyName: string, title = "🛒 ショップ", color: number = 0xf5a623) {
   const embed = new EmbedBuilder()
     .setTitle(title)
@@ -353,12 +409,15 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
     const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
-    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
+    const isUra = item.category === "ura" && vcDuration !== undefined;
+    const result = isUra
+      ? await purchaseExtendOrCreateUraVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration!, vcCatId)
+      : await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
     if (result.ok) {
-      const expiry = result.expiresAt
-        ? `\n期限: <t:${Math.floor(result.expiresAt.getTime() / 1000)}:F>（<t:${Math.floor(result.expiresAt.getTime() / 1000)}:R>に自動削除）`
-        : "";
-      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
+      const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
+      const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
+      const action = "extended" in result && result.extended ? "期間を延長しました！" : "購入しました!";
+      await interaction.editReply(`**${result.item.name}**を${action} あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
     } else {
       await interaction.editReply(result.reason);
     }
@@ -973,12 +1032,15 @@ function buildShopCommand(
         if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
           const member = await interaction.guild!.members.fetch(interaction.user.id);
           const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
-          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
+          const isUra = item.category === "ura" && vcDuration !== undefined;
+          const result = isUra
+            ? await purchaseExtendOrCreateUraVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration!, vcCatId)
+            : await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
           if (result.ok) {
-            const expiry = result.expiresAt
-              ? `\n期限: <t:${Math.floor(result.expiresAt.getTime() / 1000)}:F>（<t:${Math.floor(result.expiresAt.getTime() / 1000)}:R>に自動削除）`
-              : "";
-            await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
+            const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
+            const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
+            const action = "extended" in result && result.extended ? "期間を延長しました！" : "購入しました!";
+            await interaction.editReply(`**${result.item.name}**を${action} あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
           } else {
             await interaction.editReply(result.reason);
           }
