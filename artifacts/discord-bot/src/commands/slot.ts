@@ -441,89 +441,94 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   });
 }
 
+/** 入力値が絵文字文字列か sticker ID かを判定してキーを返す */
+function parseSymbolInput(input: string): { type: "emoji"; emojiId: string } | { type: "sticker"; stickerId: string } | null {
+  const emojiId = parseEmojiId(input);
+  if (emojiId) return { type: "emoji", emojiId };
+  if (/^\d+$/.test(input)) return { type: "sticker", stickerId: input };
+  return null;
+}
+
 async function handleSetupAdd(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
-  const input = interaction.options.getString("sticker-id", true).trim();
+  const input = interaction.options.getString("symbol", true).trim();
+  const parsed = parseSymbolInput(input);
 
-  if (!/^\d+$/.test(input)) {
-    await interaction.reply({
-      content: "❌ スタンプIDは数字のみです。Discoverモードで右クリック→「IDをコピー」で取得できます。",
-      flags: MessageFlags.Ephemeral,
-    });
+  if (!parsed) {
+    await interaction.reply({ content: "❌ サーバー絵文字またはスタンプ名を選択してください。", flags: MessageFlags.Ephemeral });
     return;
   }
 
-  // スティッカーキャッシュを補完してから検索
-  const stickers = guild.stickers.cache.size > 0
-    ? guild.stickers.cache
-    : await guild.stickers.fetch().catch(() => guild.stickers.cache);
-  const sticker = stickers.get(input) ?? await guild.stickers.fetch(input).catch(() => null);
+  if (parsed.type === "emoji") {
+    const emoji = guild.emojis.cache.get(parsed.emojiId) ?? await guild.emojis.fetch(parsed.emojiId).catch(() => null);
+    if (!emoji) {
+      await interaction.reply({ content: "❌ このサーバーに登録されていない絵文字です。", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const s = await addSlotEmoji(guild.id, parsed.emojiId);
+    await interaction.editReply({ content: `✅ ${input} を絵柄に登録しました。`, embeds: [buildSetupEmbed(guild, s)] });
+    return;
+  }
 
+  // sticker
+  const stickers = guild.stickers.cache.size > 0 ? guild.stickers.cache : await guild.stickers.fetch().catch(() => guild.stickers.cache);
+  const sticker = stickers.get(parsed.stickerId) ?? await guild.stickers.fetch(parsed.stickerId).catch(() => null);
   if (!sticker) {
-    await interaction.reply({
-      content: "❌ このサーバーに登録されていないスタンプIDです。",
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ content: "❌ このサーバーに登録されていないスタンプです。", flags: MessageFlags.Ephemeral });
     return;
   }
   if (sticker.format === StickerFormatType.Lottie) {
-    await interaction.reply({
-      content: "❌ Lottie形式のスタンプは非対応です（PNG / APNG / GIF のみ）。",
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ content: "❌ Lottie形式のスタンプは非対応です（PNG / APNG / GIF のみ）。", flags: MessageFlags.Ephemeral });
     return;
   }
-
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const s = await addSlotSticker(guild.id, input);
-  await interaction.editReply({
-    content: `✅ **${sticker.name}** を絵柄に登録しました。`,
-    embeds: [buildSetupEmbed(guild, s)],
-  });
+  const s = await addSlotSticker(guild.id, parsed.stickerId);
+  await interaction.editReply({ content: `✅ **${sticker.name}** を絵柄に登録しました。`, embeds: [buildSetupEmbed(guild, s)] });
 }
 
 async function handleSetupRemove(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
-  const input = interaction.options.getString("sticker-id", true).trim();
+  const input = interaction.options.getString("symbol", true).trim();
+  const parsed = parseSymbolInput(input);
 
-  if (!/^\d+$/.test(input)) {
-    await interaction.reply({ content: "❌ スタンプIDは数字のみです。", flags: MessageFlags.Ephemeral });
+  if (!parsed) {
+    await interaction.reply({ content: "❌ 有効な絵文字またはスタンプを選択してください。", flags: MessageFlags.Ephemeral });
     return;
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const s = await removeSlotSticker(guild.id, input);
-  await interaction.editReply({
-    content: "✅ スタンプを削除しました。",
-    embeds: [buildSetupEmbed(guild, s)],
-  });
+  const s = parsed.type === "emoji"
+    ? await removeSlotEmoji(guild.id, parsed.emojiId)
+    : await removeSlotSticker(guild.id, parsed.stickerId);
+  await interaction.editReply({ content: "✅ 絵柄を削除しました。", embeds: [buildSetupEmbed(guild, s)] });
 }
 
 async function handleSetupWeight(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
-  const input = interaction.options.getString("sticker-id", true).trim();
+  const input = interaction.options.getString("symbol", true).trim();
   const weight = interaction.options.getInteger("weight", true);
+  const parsed = parseSymbolInput(input);
 
-  if (!/^\d+$/.test(input)) {
-    await interaction.reply({ content: "❌ スタンプIDは数字のみです。", flags: MessageFlags.Ephemeral });
+  if (!parsed) {
+    await interaction.reply({ content: "❌ 有効な絵文字またはスタンプを選択してください。", flags: MessageFlags.Ephemeral });
     return;
   }
 
+  const key = parsed.type === "emoji" ? parsed.emojiId : parsed.stickerId;
   const current = await getSlotSettings(guild.id);
-  if (!current.stickerIds.includes(input)) {
-    await interaction.reply({
-      content: "❌ 先に `/slot setup add` でそのスタンプを登録してください。",
-      flags: MessageFlags.Ephemeral,
-    });
+  const registered = parsed.type === "emoji"
+    ? current.fixedEmojiIds.includes(key)
+    : current.stickerIds.includes(key);
+
+  if (!registered) {
+    await interaction.reply({ content: "❌ 先に `/slot setup add` でその絵柄を登録してください。", flags: MessageFlags.Ephemeral });
     return;
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const s = await setSlotEmojiWeight(guild.id, input, weight);
-  await interaction.editReply({
-    content: `✅ 重みを **×${weight}** に設定しました。`,
-    embeds: [buildSetupEmbed(guild, s)],
-  });
+  const s = await setSlotEmojiWeight(guild.id, key, weight);
+  await interaction.editReply({ content: `✅ 重みを **×${weight}** に設定しました。`, embeds: [buildSetupEmbed(guild, s)] });
 }
 
 async function handleSetupPayout(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -560,9 +565,10 @@ async function handleSetupList(interaction: ChatInputCommandInteraction): Promis
 async function handleSetupClear(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const s = await clearSlotStickers(guild.id);
+  await clearSlotStickers(guild.id);
+  const s = await clearSlotEmojis(guild.id);
   await interaction.editReply({
-    content: "✅ スタンプ絵柄設定をリセットしました。配当倍率はそのまま残ります。",
+    content: "✅ 絵柄設定をリセットしました。配当倍率はそのまま残ります。",
     embeds: [buildSetupEmbed(guild, s)],
   });
 }
@@ -593,17 +599,17 @@ export const slotCommand: Command = {
         .addSubcommand((sub) =>
           sub
             .setName("add")
-            .setDescription("スタンプを絵柄に追加登録します")
+            .setDescription("絵文字またはスタンプを絵柄に登録します")
             .addStringOption((opt) =>
-              opt.setName("sticker-id").setDescription("スタンプ名で検索").setRequired(true).setAutocomplete(true),
+              opt.setName("symbol").setDescription("絵文字 or スタンプ名で検索").setRequired(true).setAutocomplete(true),
             ),
         )
         .addSubcommand((sub) =>
           sub
             .setName("remove")
-            .setDescription("スタンプ絵柄を削除します")
+            .setDescription("絵柄を削除します")
             .addStringOption((opt) =>
-              opt.setName("sticker-id").setDescription("スタンプ名で検索").setRequired(true).setAutocomplete(true),
+              opt.setName("symbol").setDescription("絵文字 or スタンプ名で検索").setRequired(true).setAutocomplete(true),
             ),
         )
         .addSubcommand((sub) =>
@@ -611,7 +617,7 @@ export const slotCommand: Command = {
             .setName("weight")
             .setDescription("絵柄の出現重みを設定します（確率調整）")
             .addStringOption((opt) =>
-              opt.setName("sticker-id").setDescription("スタンプ名で検索").setRequired(true).setAutocomplete(true),
+              opt.setName("symbol").setDescription("絵文字 or スタンプ名で検索").setRequired(true).setAutocomplete(true),
             )
             .addIntegerOption((opt) =>
               opt
@@ -683,29 +689,45 @@ export const slotCommand: Command = {
     const sub = interaction.options.getSubcommand(false);
     const focused = interaction.options.getFocused().toLowerCase();
 
-    // スティッカーキャッシュを確保
-    const stickers = interaction.guild.stickers.cache.size > 0
-      ? interaction.guild.stickers.cache
-      : await interaction.guild.stickers.fetch().catch(() => interaction.guild!.stickers.cache);
+    // キャッシュ確保（並列）
+    const [stickers] = await Promise.all([
+      interaction.guild.stickers.cache.size > 0
+        ? Promise.resolve(interaction.guild.stickers.cache)
+        : interaction.guild.stickers.fetch().catch(() => interaction.guild!.stickers.cache),
+    ]);
 
-    let choices: { name: string; value: string }[];
+    let choices: { name: string; value: string }[] = [];
 
     if (sub === "remove" || sub === "weight") {
-      // 登録済みスタンプのみ候補に出す
+      // 登録済みのみ
       const settings = await getSlotSettings(interaction.guild.id);
-      choices = settings.stickerIds
-        .map((id) => {
-          const s = stickers.get(id);
-          return s ? { name: s.name, value: id } : null;
-        })
-        .filter((c): c is { name: string; value: string } => c !== null)
-        .filter((c) => c.name.toLowerCase().includes(focused));
+
+      // 登録済み絵文字
+      for (const id of settings.fixedEmojiIds) {
+        const e = interaction.guild.emojis.cache.get(id);
+        if (!e?.name) continue;
+        const sym = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
+        if (e.name.toLowerCase().includes(focused)) choices.push({ name: `🎨 ${e.name}`, value: sym });
+      }
+      // 登録済みスタンプ
+      for (const id of settings.stickerIds) {
+        const s = stickers.get(id);
+        if (!s) continue;
+        if (s.name.toLowerCase().includes(focused)) choices.push({ name: `🎴 ${s.name}`, value: id });
+      }
     } else {
-      // add: 全スタンプから選ぶ（Lottie除外）
-      choices = [...stickers.values()]
-        .filter((s) => s.format !== StickerFormatType.Lottie)
-        .filter((s) => s.name.toLowerCase().includes(focused))
-        .map((s) => ({ name: s.name, value: s.id }));
+      // add: 全絵文字＋全スタンプ
+      for (const e of interaction.guild.emojis.cache.values()) {
+        if (!e.name || e.managed) continue;
+        if (!e.name.toLowerCase().includes(focused)) continue;
+        const sym = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
+        choices.push({ name: `🎨 ${e.name}`, value: sym });
+      }
+      for (const s of stickers.values()) {
+        if (s.format === StickerFormatType.Lottie) continue;
+        if (!s.name.toLowerCase().includes(focused)) continue;
+        choices.push({ name: `🎴 ${s.name}`, value: s.id });
+      }
     }
 
     await interaction.respond(choices.slice(0, 25));
