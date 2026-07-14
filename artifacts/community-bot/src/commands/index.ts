@@ -29,6 +29,7 @@ import {
   getUserVcRank,
   getVcRanking,
   getVcTimeInPeriod,
+  isVcTrackingOptedOut,
   listSheets,
   listUpcomingEvents,
   removeParticipant,
@@ -36,6 +37,7 @@ import {
   setLobbyChannel,
   setNameboardUrl,
   setStaffRole,
+  setVcPrivacyOptOut,
   updateEventMessageId,
 } from "../lib/community.js";
 
@@ -590,6 +592,18 @@ const mystatsCommand: Command = {
 
     const target = targetOption ?? interaction.user;
 
+    // Check if this user has opted out of tracking
+    const optedOut = await isVcTrackingOptedOut(guildId, target.id);
+    if (optedOut) {
+      const isSelf = target.id === interaction.user.id;
+      await interaction.editReply({
+        content: isSelf
+          ? "🔒 あなたはVCトラッキングをオフにしています。`/privacy optin` で再開できます。"
+          : "🔒 このユーザーはVCトラッキングをオフにしています。",
+      });
+      return;
+    }
+
     const now = new Date();
 
     // Period start dates
@@ -649,6 +663,86 @@ const mystatsCommand: Command = {
     }
 
     await interaction.editReply({ embeds: [embed] });
+  },
+};
+
+// ─── /privacy ────────────────────────────────────────────────────────────────
+
+const privacyCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("privacy")
+    .setDescription("VCトラッキングのプライバシー設定を管理します")
+    .addSubcommand((sub) =>
+      sub
+        .setName("optout")
+        .setDescription("VCの滞在時間の記録を停止します（ランキングや統計から除外されます）"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("optin")
+        .setDescription("VCの滞在時間の記録を再開します"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("status")
+        .setDescription("現在のトラッキング設定を確認します"),
+    ),
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    const userId = interaction.user.id;
+    const sub = interaction.options.getSubcommand();
+
+    await interaction.deferReply({ ephemeral: true });
+
+    if (sub === "optout") {
+      await setVcPrivacyOptOut(guildId, userId, true);
+      const embed = new EmbedBuilder()
+        .setTitle("🔒 トラッキングを停止しました")
+        .setColor(0xed4245)
+        .setDescription(
+          "VCの滞在時間の記録を**停止**しました。\n\n" +
+          "• これ以降のVCセッションは記録されません\n" +
+          "• `/ranking` や `/mystats` にあなたのデータは表示されなくなります\n" +
+          "• 過去のデータはそのまま残ります\n\n" +
+          "再開するには `/privacy optin` を使用してください。",
+        )
+        .setTimestamp();
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    if (sub === "optin") {
+      await setVcPrivacyOptOut(guildId, userId, false);
+      const embed = new EmbedBuilder()
+        .setTitle("🔓 トラッキングを再開しました")
+        .setColor(0x57f287)
+        .setDescription(
+          "VCの滞在時間の記録を**再開**しました。\n\n" +
+          "• これ以降のVCセッションが記録されます\n" +
+          "• `/ranking` や `/mystats` にあなたのデータが表示されます\n\n" +
+          "停止するには `/privacy optout` を使用してください。",
+        )
+        .setTimestamp();
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    if (sub === "status") {
+      const optedOut = await isVcTrackingOptedOut(guildId, userId);
+      const embed = new EmbedBuilder()
+        .setTitle("🔎 プライバシー設定")
+        .setColor(optedOut ? 0xed4245 : 0x57f287)
+        .addFields({
+          name: "VCトラッキング",
+          value: optedOut
+            ? "🔴 **停止中** — `/privacy optin` で再開できます"
+            : "🟢 **有効** — `/privacy optout` で停止できます",
+          inline: false,
+        })
+        .setTimestamp();
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
   },
 };
 
@@ -813,6 +907,7 @@ export async function handleTempVcCreate(interaction: ButtonInteraction): Promis
 export const commands: Command[] = [
   rankingCommand,
   mystatsCommand,
+  privacyCommand,
   tempvcCommand,
   eventCommand,
   ticketCommand,

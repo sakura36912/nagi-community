@@ -9,6 +9,7 @@ import {
   communityTicketSettingsTable,
   communityTicketsTable,
   communityVcSessionsTable,
+  communityVcPrivacyTable,
   communitySheetSettingsTable,
   communitySheetsTable,
   type CommunityEvent,
@@ -239,9 +240,47 @@ export async function removeTicket(channelId: string) {
   await db.delete(communityTicketsTable).where(eq(communityTicketsTable.channelId, channelId));
 }
 
+// ─── VC Privacy ──────────────────────────────────────────────────────────────
+
+/**
+ * Set a user's VC tracking opt-out status for a guild.
+ * optedOut=true  → stop recording new sessions
+ * optedOut=false → resume recording
+ */
+export async function setVcPrivacyOptOut(guildId: string, userId: string, optedOut: boolean): Promise<void> {
+  await db
+    .insert(communityVcPrivacyTable)
+    .values({ guildId, userId, optedOut, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: [communityVcPrivacyTable.guildId, communityVcPrivacyTable.userId],
+      set: { optedOut, updatedAt: new Date() },
+    });
+}
+
+/** Returns true if the user has opted out of VC tracking in this guild. */
+export async function isVcTrackingOptedOut(guildId: string, userId: string): Promise<boolean> {
+  const [row] = await db
+    .select()
+    .from(communityVcPrivacyTable)
+    .where(
+      and(
+        eq(communityVcPrivacyTable.guildId, guildId),
+        eq(communityVcPrivacyTable.userId, userId),
+      ),
+    );
+  return row?.optedOut === true;
+}
+
 // ─── VC Sessions ─────────────────────────────────────────────────────────────
 
-export async function openSession(guildId: string, userId: string, channelId: string): Promise<CommunityVcSession> {
+/**
+ * Opens a new VC session for the user if they have not opted out of tracking.
+ * Returns the created session, or null if the user has opted out.
+ */
+export async function openSession(guildId: string, userId: string, channelId: string): Promise<CommunityVcSession | null> {
+  const optedOut = await isVcTrackingOptedOut(guildId, userId);
+  if (optedOut) return null;
+
   const [row] = await db
     .insert(communityVcSessionsTable)
     .values({ guildId, userId, channelId, joinedAt: new Date() })
@@ -313,6 +352,10 @@ export async function getVcRanking(guildId: string, periodStart?: Date): Promise
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       ${periodFilter}
+      AND user_id NOT IN (
+        SELECT user_id FROM community_vc_privacy
+        WHERE guild_id = ${guildId} AND opted_out = true
+      )
     GROUP BY user_id
     ORDER BY total_seconds DESC
     LIMIT 10
@@ -371,6 +414,10 @@ export async function getUserVcRank(
       FROM community_vc_sessions
       WHERE guild_id = ${guildId}
         ${periodFilter}
+        AND user_id NOT IN (
+          SELECT user_id FROM community_vc_privacy
+          WHERE guild_id = ${guildId} AND opted_out = true
+        )
       GROUP BY user_id
     ) ranked
     WHERE user_id = ${userId}

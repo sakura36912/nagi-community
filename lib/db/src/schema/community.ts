@@ -5,6 +5,7 @@ import {
   timestamp,
   integer,
   unique,
+  boolean,
 } from "drizzle-orm/pg-core";
 
 // ─── Temp VC ────────────────────────────────────────────────────────────────
@@ -119,6 +120,26 @@ export const communityVcSessionsTable = pgTable("community_vc_sessions", {
 });
 
 export type CommunityVcSession = typeof communityVcSessionsTable.$inferSelect;
+
+// ─── VC Privacy Opt-out ──────────────────────────────────────────────────────
+
+/**
+ * Users who have opted out of VC time tracking.
+ * Row presence with optedOut=true means tracking is disabled for that user in that guild.
+ * Using a table (rather than just absence) so we can toggle without deleting rows.
+ */
+export const communityVcPrivacyTable = pgTable(
+  "community_vc_privacy",
+  {
+    guildId: text("guild_id").notNull(),
+    userId: text("user_id").notNull(),
+    optedOut: boolean("opted_out").notNull().default(true),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique().on(table.guildId, table.userId)],
+);
+
+export type CommunityVcPrivacy = typeof communityVcPrivacyTable.$inferSelect;
 
 // ─── Eval Sheets ─────────────────────────────────────────────────────────────
 
