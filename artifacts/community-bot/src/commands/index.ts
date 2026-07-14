@@ -42,6 +42,7 @@ import {
   removeTicket,
   setLobbyChannel,
   setNameboardUrl,
+  setRankingSettings,
   setSheetForumConfig,
   setStaffRole,
   setVcPrivacyOptOut,
@@ -133,77 +134,148 @@ export async function buildEventEmbed(eventId: number, guild?: Guild): Promise<{
 
 // ─── /ranking ────────────────────────────────────────────────────────────────
 
+const RANKING_PERIOD_CHOICES = [
+  { name: "今日", value: "today" },
+  { name: "今週", value: "week" },
+  { name: "今月", value: "month" },
+  { name: "全期間", value: "all" },
+] as const;
+
+export type RankingPeriod = "today" | "week" | "month" | "all";
+
+export function buildRankingPeriodStart(period: RankingPeriod): Date | undefined {
+  const now = new Date();
+  if (period === "today") {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  if (period === "week") {
+    const d = new Date(now);
+    d.setDate(d.getDate() - d.getDay());
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  if (period === "month") {
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  return undefined; // "all"
+}
+
+export const RANKING_PERIOD_LABELS: Record<RankingPeriod, string> = {
+  today: "今日",
+  week: "今週",
+  month: "今月",
+  all: "全期間",
+};
+
+export function buildRankingEmbed(
+  ranking: { userId: string; totalSeconds: number }[],
+  activeCount: number,
+  period: RankingPeriod,
+): EmbedBuilder {
+  const medals = ["🥇", "🥈", "🥉"];
+  const lines = ranking.map((entry, i) => {
+    const prefix = medals[i] ?? `**${i + 1}.**`;
+    return `${prefix} <@${entry.userId}> — ${formatSeconds(entry.totalSeconds)}`;
+  });
+  const liveIndicator = activeCount > 0
+    ? `🔴 現在 ${activeCount}名 がVC参加中（スコアはリアルタイム集計）`
+    : "（現在VC参加者なし）";
+
+  return new EmbedBuilder()
+    .setTitle(`🎙️ VC滞在時間ランキング（${RANKING_PERIOD_LABELS[period]}）`)
+    .setColor(0xf5a623)
+    .setDescription(lines.join("\n"))
+    .setFooter({ text: liveIndicator })
+    .setTimestamp();
+}
+
 const rankingCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("ranking")
-    .setDescription("VC滞在時間のランキングを表示します")
-    .addStringOption((opt) =>
-      opt
-        .setName("period")
-        .setDescription("集計期間")
-        .setRequired(false)
-        .addChoices(
-          { name: "今日", value: "today" },
-          { name: "今週", value: "week" },
-          { name: "今月", value: "month" },
-          { name: "全期間", value: "all" },
+    .setDescription("VC滞在時間のランキングを表示・設定します")
+    .addSubcommand((sub) =>
+      sub
+        .setName("show")
+        .setDescription("VC滞在時間のランキングを表示します")
+        .addStringOption((opt) =>
+          opt
+            .setName("period")
+            .setDescription("集計期間")
+            .setRequired(false)
+            .addChoices(...RANKING_PERIOD_CHOICES),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("setup")
+        .setDescription("毎日0時に自動投稿するチャンネルと集計期間を設定します（管理者用）")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("投稿先チャンネル")
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("period")
+            .setDescription("集計期間（デフォルト: 今日）")
+            .setRequired(false)
+            .addChoices(...RANKING_PERIOD_CHOICES),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("disable").setDescription("毎日の自動投稿を停止します（管理者用）"),
     ),
+
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    await interaction.deferReply();
+    const sub = interaction.options.getSubcommand();
 
-    const period = (interaction.options.getString("period") ?? "all") as "today" | "week" | "month" | "all";
+    // ── show ──────────────────────────────────────────────────────────────────
+    if (sub === "show") {
+      await interaction.deferReply();
+      const period = (interaction.options.getString("period") ?? "all") as RankingPeriod;
+      const periodStart = buildRankingPeriodStart(period);
 
-    const now = new Date();
-    let periodStart: Date | undefined;
-    let periodLabel: string;
+      const [ranking, activeCount] = await Promise.all([
+        getVcRanking(guildId, periodStart),
+        getActiveSessionCount(guildId),
+      ]);
 
-    if (period === "today") {
-      periodStart = new Date(now);
-      periodStart.setHours(0, 0, 0, 0);
-      periodLabel = "今日";
-    } else if (period === "week") {
-      periodStart = new Date(now);
-      const day = periodStart.getDay();
-      periodStart.setDate(periodStart.getDate() - day);
-      periodStart.setHours(0, 0, 0, 0);
-      periodLabel = "今週";
-    } else if (period === "month") {
-      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      periodLabel = "今月";
-    } else {
-      periodLabel = "全期間";
-    }
+      if (ranking.length === 0) {
+        await interaction.editReply("まだVC滞在記録がありません。");
+        return;
+      }
 
-    const [ranking, activeCount] = await Promise.all([
-      getVcRanking(guildId, periodStart),
-      getActiveSessionCount(guildId),
-    ]);
-
-    if (ranking.length === 0) {
-      await interaction.editReply("まだVC滞在記録がありません。");
+      await interaction.editReply({ embeds: [buildRankingEmbed(ranking, activeCount, period)] });
       return;
     }
 
-    const medals = ["🥇", "🥈", "🥉"];
-    const lines = ranking.map((entry, i) => {
-      const prefix = medals[i] ?? `**${i + 1}.**`;
-      return `${prefix} <@${entry.userId}> — ${formatSeconds(entry.totalSeconds)}`;
-    });
+    // ── setup / disable — admin only ──────────────────────────────────────────
+    if (!requireAdmin(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
 
-    const liveIndicator = activeCount > 0
-      ? `🔴 現在 ${activeCount}名 がVC参加中（スコアはリアルタイム集計）`
-      : "（現在VC参加者なし）";
+    if (sub === "setup") {
+      const channel = interaction.options.getChannel("channel", true);
+      const period = (interaction.options.getString("period") ?? "today") as RankingPeriod;
+      await setRankingSettings(guildId, channel.id, period);
+      await interaction.reply({
+        content: `毎日0時（JST）に <#${channel.id}> へ **${RANKING_PERIOD_LABELS[period]}** のランキングを投稿します。`,
+        ephemeral: true,
+      });
+      return;
+    }
 
-    const embed = new EmbedBuilder()
-      .setTitle(`🎙️ VC滞在時間ランキング（${periodLabel}）`)
-      .setColor(0xf5a623)
-      .setDescription(lines.join("\n"))
-      .setFooter({ text: liveIndicator })
-      .setTimestamp();
-
-    await interaction.editReply({ embeds: [embed] });
+    if (sub === "disable") {
+      await setRankingSettings(guildId, null, "today");
+      await interaction.reply({ content: "毎日のランキング自動投稿を停止しました。", ephemeral: true });
+      return;
+    }
   },
 };
 

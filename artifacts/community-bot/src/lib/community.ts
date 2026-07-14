@@ -12,6 +12,7 @@ import {
   communityVcPrivacyTable,
   communitySheetSettingsTable,
   communitySheetsTable,
+  communityRankingSettingsTable,
   type CommunityEvent,
   type CommunityTicket,
   type CommunityVcSession,
@@ -20,6 +21,7 @@ import {
   type CommunityTicketSettings,
   type CommunityTempVcDeletionLog,
   type TempVcDeletionReason,
+  type CommunityRankingSettings,
 } from "@workspace/db";
 
 // ─── Temp VC ────────────────────────────────────────────────────────────────
@@ -475,7 +477,7 @@ export async function getUserVcRank(
     WHERE user_id = ${userId}
   `);
 
-  if (rows.rows.length === 0) return null;
+  if (!rows.rows[0] || rows.rows.length === 0) return null;
   return Number(rows.rows[0]!.rank);
 }
 
@@ -541,4 +543,27 @@ export async function listSheets(guildId: string): Promise<CommunitySheet[]> {
     .from(communitySheetsTable)
     .where(eq(communitySheetsTable.guildId, guildId))
     .orderBy(asc(communitySheetsTable.createdAt));
+}
+
+// ─── Daily Ranking Settings ───────────────────────────────────────────────────
+
+export async function setRankingSettings(
+  guildId: string,
+  channelId: string | null,
+  period: string,
+): Promise<void> {
+  await db
+    .insert(communityRankingSettingsTable)
+    .values({ guildId, channelId, period })
+    .onConflictDoUpdate({
+      target: communityRankingSettingsTable.guildId,
+      set: { channelId, period, updatedAt: new Date() },
+    });
+}
+
+export async function getAllRankingSettings(): Promise<CommunityRankingSettings[]> {
+  return db
+    .select()
+    .from(communityRankingSettingsTable)
+    .where(sql`${communityRankingSettingsTable.channelId} IS NOT NULL`);
 }

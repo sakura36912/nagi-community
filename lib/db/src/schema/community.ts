@@ -193,3 +193,20 @@ export const communitySheetsTable = pgTable("community_sheets", {
 
 export type CommunitySheetSettings = typeof communitySheetSettingsTable.$inferSelect;
 export type CommunitySheet = typeof communitySheetsTable.$inferSelect;
+
+// ─── Daily Ranking Post ──────────────────────────────────────────────────────
+
+/** Per-guild configuration for the daily VC ranking auto-post. */
+export const communityRankingSettingsTable = pgTable("community_ranking_settings", {
+  guildId: text("guild_id").primaryKey(),
+  /** Channel where the daily ranking embed is posted. Null = disabled. */
+  channelId: text("channel_id"),
+  /** Aggregation period: "today" | "week" | "month" | "all". */
+  period: text("period").notNull().default("all"),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
+export type CommunityRankingSettings = typeof communityRankingSettingsTable.$inferSelect;

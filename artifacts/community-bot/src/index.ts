@@ -12,11 +12,14 @@ import {
   closeSession,
   createSheet,
   getAllTempVcs,
+  getAllRankingSettings,
   getEventsNeedingReminder,
   getLobbyChannelId,
   getParticipants,
   getSheetSettings,
   getTempVcRecord,
+  getVcRanking,
+  getActiveSessionCount,
   getVcTimeInPeriod,
   isTempVc,
   logTempVcDeletion,
@@ -27,8 +30,11 @@ import {
 } from "./lib/community.js";
 import {
   buildEventEmbed,
+  buildRankingEmbed,
+  buildRankingPeriodStart,
   buildSheetEmbed,
   commands,
+  type RankingPeriod,
   COMM_EVENT_JOIN_PREFIX,
   COMM_EVENT_CANCEL_PREFIX,
   COMM_TICKET_CREATE,
@@ -234,6 +240,63 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   await runDeletionLogPrune();
   setInterval(runDeletionLogPrune, 24 * 60 * 60 * 1000);
+
+  // ── Daily ranking post ────────────────────────────────────────────────────
+  // Fires once a day at midnight JST (UTC+9 = 15:00 UTC).
+  // On startup we schedule the first fire at the next 15:00 UTC, then repeat every 24 h.
+  async function postDailyRankings(): Promise<void> {
+    const configs = await getAllRankingSettings().catch(() => []);
+    for (const config of configs) {
+      if (!config.channelId) continue;
+      try {
+        const guild = readyClient.guilds.cache.find((g) =>
+          g.id === config.guildId,
+        ) ?? await readyClient.guilds.fetch(config.guildId).catch(() => null);
+        if (!guild) continue;
+
+        const channel = guild.channels.cache.get(config.channelId)
+          ?? await guild.channels.fetch(config.channelId).catch(() => null);
+        if (!channel?.isTextBased()) continue;
+
+        const period = (config.period ?? "today") as RankingPeriod;
+        const periodStart = buildRankingPeriodStart(period);
+        const [ranking, activeCount] = await Promise.all([
+          getVcRanking(guild.id, periodStart),
+          getActiveSessionCount(guild.id),
+        ]);
+
+        if (ranking.length === 0) {
+          logger.info(`[ranking] No VC records for guild ${guild.id} — skipping daily post`);
+          continue;
+        }
+
+        const embed = buildRankingEmbed(ranking, activeCount, period);
+        await channel.send({ embeds: [embed] });
+        logger.info(`[ranking] Posted daily ranking to ${config.channelId} in guild ${config.guildId}`);
+      } catch (err) {
+        logger.error(`[ranking] Failed to post daily ranking for guild ${config.guildId}`, err);
+      }
+    }
+  }
+
+  // Schedule next midnight JST (= 15:00 UTC). If 15:00 UTC has already passed
+  // today, schedule for tomorrow.
+  function scheduleDailyRanking(): void {
+    const now = new Date();
+    const next = new Date(now);
+    next.setUTCHours(15, 0, 0, 0);
+    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+    const delay = next.getTime() - now.getTime();
+    logger.info(`[ranking] Next daily post in ${Math.round(delay / 60000)} min (${next.toISOString()})`);
+    setTimeout(() => {
+      postDailyRankings().catch((err) => logger.error("[ranking] Daily post error", err));
+      setInterval(() => {
+        postDailyRankings().catch((err) => logger.error("[ranking] Daily post error", err));
+      }, 24 * 60 * 60 * 1000);
+    }, delay);
+  }
+
+  scheduleDailyRanking();
 
   // Tick every 60 s.
   setInterval(() => {
