@@ -29,11 +29,15 @@ import {
   EVAL_EXTEND_DAYS,
   PERM_ROLE_EFFECT,
   EVAL_RESURFACE_EFFECT,
+  SHOP_LICENSE_EFFECT,
   extendCommunitySheet,
   addShopItem,
   createEvalSheet,
   getEvalSheetSettings,
   getSheetVcSeconds,
+  setShopLicenseConfig,
+  listShopLicenseConfigs,
+  getShopLicenseForUser,
   buyItem,
   claimDaily,
   createOrUpdateCurrency,
@@ -388,6 +392,28 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     return;
   }
 
+  // 個人ショップ開業券
+  if (item.effectType === SHOP_LICENSE_EFFECT) {
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    try {
+      const member = await interaction.guild!.members.fetch(interaction.user.id);
+      const userRoleIds = [...member.roles.cache.keys()];
+      const config = await getShopLicenseForUser(interaction.guildId, userRoleIds);
+      if (!config) {
+        await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+        await interaction.editReply("❌ あなたの隊ロールに対応するショップ開業設定が見つかりません。購入を取り消し、返金しました。");
+        return;
+      }
+      await member.roles.add(config.licenseRoleId);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`);
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
   const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
 
   if (result.ok) {
@@ -666,6 +692,7 @@ const DEFAULT_EFFECT_CHOICES: EffectChoice[] = [
   { name: "非公開VC作成(無期限)", value: PRIVATE_VC_EFFECT },
   { name: "永久ロール付与", value: PERM_ROLE_EFFECT },
   { name: "評価落ち浮上券", value: EVAL_RESURFACE_EFFECT },
+  { name: "個人ショップ開業券", value: SHOP_LICENSE_EFFECT },
 ];
 
 const VC_EFFECT_CHOICES: EffectChoice[] = [
@@ -682,67 +709,85 @@ function buildShopCommand(
   category: string,
   color: number,
   effectChoices: EffectChoice[] = DEFAULT_EFFECT_CHOICES,
+  options: { licenseSetup?: boolean } = {},
 ): Command {
   const listCmdDesc = `${displayName}の購入可能アイテム一覧を表示します`;
+
+  const builder = new SlashCommandBuilder()
+    .setName(commandName)
+    .setDescription(`${displayName}を操作します`)
+    .addSubcommand((sub) => sub.setName("list").setDescription(listCmdDesc))
+    .addSubcommand((sub) =>
+      sub
+        .setName("buy")
+        .setDescription("アイテムを購入します")
+        .addIntegerOption((opt) =>
+          opt
+            .setName("item_id")
+            .setDescription(`アイテムID(/${commandName} list で確認)`)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) => sub.setName("inventory").setDescription("自分の所持アイテムを表示します"))
+    .addSubcommand((sub) =>
+      sub
+        .setName("add")
+        .setDescription(`${displayName}にアイテムを追加します(管理者用)`)
+        .addStringOption((opt) => opt.setName("name").setDescription("アイテム名").setRequired(true))
+        .addIntegerOption((opt) =>
+          opt.setName("price").setDescription("価格").setRequired(true).setMinValue(1),
+        )
+        .addStringOption((opt) => opt.setName("description").setDescription("説明").setRequired(false))
+        .addStringOption((opt) =>
+          opt
+            .setName("effect")
+            .setDescription("購入時の特殊効果")
+            .setRequired(false)
+            .addChoices(...effectChoices),
+        )
+        .addRoleOption((opt) =>
+          opt
+            .setName("role")
+            .setDescription("付与するロール（永久ロール付与エフェクト使用時）")
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("price")
+        .setDescription("アイテムの価格を変更します(管理者用)")
+        .addIntegerOption((opt) =>
+          opt.setName("item_id").setDescription("アイテムID").setRequired(true),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName("price").setDescription("新しい価格").setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription(`${displayName}からアイテムを削除します(管理者用)`)
+        .addIntegerOption((opt) =>
+          opt.setName("item_id").setDescription("アイテムID").setRequired(true),
+        ),
+    );
+
+  if (options.licenseSetup) {
+    builder
+      .addSubcommand((sub) =>
+        sub
+          .setName("license-setup")
+          .setDescription("隊ロール→ショップ開業ロールのマッピングを設定します(管理者用)")
+          .addRoleOption((opt) => opt.setName("squad_role").setDescription("隊ロール").setRequired(true))
+          .addRoleOption((opt) => opt.setName("shop_role").setDescription("付与するショップ開業ロール").setRequired(true)),
+      )
+      .addSubcommand((sub) =>
+        sub.setName("license-list").setDescription("現在の隊→開業ロールのマッピング一覧を表示します(管理者用)"),
+      );
+  }
+
   return {
-    data: new SlashCommandBuilder()
-      .setName(commandName)
-      .setDescription(`${displayName}を操作します`)
-      .addSubcommand((sub) => sub.setName("list").setDescription(listCmdDesc))
-      .addSubcommand((sub) =>
-        sub
-          .setName("buy")
-          .setDescription("アイテムを購入します")
-          .addIntegerOption((opt) =>
-            opt
-              .setName("item_id")
-              .setDescription(`アイテムID(/${commandName} list で確認)`)
-              .setRequired(true),
-          ),
-      )
-      .addSubcommand((sub) => sub.setName("inventory").setDescription("自分の所持アイテムを表示します"))
-      .addSubcommand((sub) =>
-        sub
-          .setName("add")
-          .setDescription(`${displayName}にアイテムを追加します(管理者用)`)
-          .addStringOption((opt) => opt.setName("name").setDescription("アイテム名").setRequired(true))
-          .addIntegerOption((opt) =>
-            opt.setName("price").setDescription("価格").setRequired(true).setMinValue(1),
-          )
-          .addStringOption((opt) => opt.setName("description").setDescription("説明").setRequired(false))
-          .addStringOption((opt) =>
-            opt
-              .setName("effect")
-              .setDescription("購入時の特殊効果")
-              .setRequired(false)
-              .addChoices(...effectChoices),
-          )
-          .addRoleOption((opt) =>
-            opt
-              .setName("role")
-              .setDescription("付与するロール（永久ロール付与エフェクト使用時）")
-              .setRequired(false),
-          ),
-      )
-      .addSubcommand((sub) =>
-        sub
-          .setName("price")
-          .setDescription("アイテムの価格を変更します(管理者用)")
-          .addIntegerOption((opt) =>
-            opt.setName("item_id").setDescription("アイテムID").setRequired(true),
-          )
-          .addIntegerOption((opt) =>
-            opt.setName("price").setDescription("新しい価格").setRequired(true).setMinValue(1),
-          ),
-      )
-      .addSubcommand((sub) =>
-        sub
-          .setName("remove")
-          .setDescription(`${displayName}からアイテムを削除します(管理者用)`)
-          .addIntegerOption((opt) =>
-            opt.setName("item_id").setDescription("アイテムID").setRequired(true),
-          ),
-      ),
+    data: builder,
 
     async execute(interaction) {
       const guildId = requireGuild(interaction);
@@ -875,6 +920,28 @@ function buildShopCommand(
           return;
         }
 
+        // 個人ショップ開業券
+        if (item.effectType === SHOP_LICENSE_EFFECT) {
+          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
+          if (!result.ok) { await interaction.editReply(result.reason); return; }
+          try {
+            const member = await interaction.guild!.members.fetch(interaction.user.id);
+            const userRoleIds = [...member.roles.cache.keys()];
+            const config = await getShopLicenseForUser(guildId, userRoleIds);
+            if (!config) {
+              await refundPurchase(guildId, interaction.user.id, result.item);
+              await interaction.editReply("❌ あなたの隊ロールに対応するショップ開業設定が見つかりません。購入を取り消し、返金しました。");
+              return;
+            }
+            await member.roles.add(config.licenseRoleId);
+            await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`);
+          } catch {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+          }
+          return;
+        }
+
         const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
         if (result.ok) {
           await interaction.editReply(`**${result.item.name}**を購入しました!`);
@@ -952,13 +1019,42 @@ function buildShopCommand(
         );
         return;
       }
+
+      if (sub === "license-setup" && options.licenseSetup) {
+        if (!requireManageGuild(interaction)) {
+          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+          return;
+        }
+        const squadRole = interaction.options.getRole("squad_role", true);
+        const shopRole  = interaction.options.getRole("shop_role", true);
+        await setShopLicenseConfig(guildId, squadRole.id, shopRole.id);
+        await interaction.reply(
+          `✅ 隊ロール <@&${squadRole.id}> → 開業ロール <@&${shopRole.id}> のマッピングを設定しました。`,
+        );
+        return;
+      }
+
+      if (sub === "license-list" && options.licenseSetup) {
+        if (!requireManageGuild(interaction)) {
+          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+          return;
+        }
+        const configs = await listShopLicenseConfigs(guildId);
+        if (configs.length === 0) {
+          await interaction.reply({ content: "開業ロールの設定がまだありません。`/groupshop license-setup` で設定してください。", ephemeral: true });
+          return;
+        }
+        const lines = configs.map((c) => `<@&${c.squadRoleId}> → <@&${c.licenseRoleId}>`);
+        await interaction.reply({ content: `## ⚔️ 隊別ショップ開業ロール設定\n${lines.join("\n")}`, ephemeral: true });
+        return;
+      }
     },
   };
 }
 
 // The four independent shops
 const shopCommand        = buildShopCommand("shop",      "ショップ",               "🛒", "general", 0xf5a623);
-const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",           "⚔️", "group",   0xe74c3c);
+const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",           "⚔️", "group",   0xe74c3c, DEFAULT_EFFECT_CHOICES, { licenseSetup: true });
 const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",       "🔒", "vc",      0x3498db, VC_EFFECT_CHOICES);
 const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",     0x9b59b6, VC_EFFECT_CHOICES);
 

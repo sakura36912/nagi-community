@@ -13,6 +13,7 @@ import {
   communitySheetsTable,
   communitySheetSettingsTable,
   communityVcSessionsTable,
+  shopLicenseConfigTable,
   type Wallet,
   type ShopItem,
   type GuildSettings,
@@ -22,6 +23,7 @@ import {
   type SquadTreasuryTx,
   type CommunitySheet,
   type CommunitySheetSettings,
+  type ShopLicenseConfig,
 } from "@workspace/db";
 
 export const DEFAULT_CURRENCY_NAME = "円";
@@ -39,6 +41,7 @@ export const EVAL_EXTEND_2W_EFFECT = "eval_extend_2w"; // +14 days
 export const EVAL_EXTEND_1M_EFFECT = "eval_extend_1m"; // +30 days
 export const PERM_ROLE_EFFECT      = "perm_role";       // assign a role permanently
 export const EVAL_RESURFACE_EFFECT = "eval_resurface";  // create new eval sheet after failure
+export const SHOP_LICENSE_EFFECT   = "shop_license";    // assign squad-specific shop-license role
 
 // Duration in milliseconds for each timed VC effect type.
 export const TIMED_VC_DURATIONS: Record<string, number> = {
@@ -1060,4 +1063,46 @@ export async function extendCommunitySheet(
     startDate: sheet.startDate,
     userId: sheet.userId,
   };
+}
+
+// ─── Shop License Config ──────────────────────────────────────────────────────
+
+/** Upsert a squad-role → license-role mapping. */
+export async function setShopLicenseConfig(
+  guildId: string,
+  squadRoleId: string,
+  licenseRoleId: string,
+): Promise<ShopLicenseConfig> {
+  const [row] = await db
+    .insert(shopLicenseConfigTable)
+    .values({ guildId, squadRoleId, licenseRoleId })
+    .onConflictDoUpdate({
+      target: [shopLicenseConfigTable.guildId, shopLicenseConfigTable.squadRoleId],
+      set: { licenseRoleId },
+    })
+    .returning();
+  if (!row) throw new Error("Failed to upsert shop license config");
+  return row;
+}
+
+/** List all squad→license mappings for a guild. */
+export async function listShopLicenseConfigs(guildId: string): Promise<ShopLicenseConfig[]> {
+  return db
+    .select()
+    .from(shopLicenseConfigTable)
+    .where(eq(shopLicenseConfigTable.guildId, guildId))
+    .orderBy(asc(shopLicenseConfigTable.createdAt));
+}
+
+/**
+ * Given the IDs of roles a user currently holds, return the first matching
+ * shop-license config row, or undefined if none match.
+ */
+export async function getShopLicenseForUser(
+  guildId: string,
+  userRoleIds: string[],
+): Promise<ShopLicenseConfig | undefined> {
+  if (userRoleIds.length === 0) return undefined;
+  const configs = await listShopLicenseConfigs(guildId);
+  return configs.find((c) => userRoleIds.includes(c.squadRoleId));
 }

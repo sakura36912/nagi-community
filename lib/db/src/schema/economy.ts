@@ -219,3 +219,25 @@ export const squadTreasuryTxTable = pgTable("squad_treasury_transactions", {
 });
 
 export type SquadTreasuryTx = typeof squadTreasuryTxTable.$inferSelect;
+
+// ─── Shop License Config (個人ショップ開業設定) ───────────────────────────────
+
+/**
+ * Maps a squad role to the shop-license role to assign on purchase.
+ * One row per (guild, squad role) pair.
+ */
+export const shopLicenseConfigTable = pgTable(
+  "shop_license_config",
+  {
+    id: serial("id").primaryKey(),
+    guildId: text("guild_id").notNull(),
+    /** Discord role that identifies squad membership. */
+    squadRoleId: text("squad_role_id").notNull(),
+    /** Role to assign when the user buys a shop-license item. */
+    licenseRoleId: text("license_role_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique().on(table.guildId, table.squadRoleId)],
+);
+
+export type ShopLicenseConfig = typeof shopLicenseConfigTable.$inferSelect;
