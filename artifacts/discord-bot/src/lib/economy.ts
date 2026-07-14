@@ -909,6 +909,36 @@ export async function getEvalSheetSettings(guildId: string): Promise<CommunitySh
   return row;
 }
 
+export async function setEvalSheetForumConfig(
+  guildId: string,
+  forumChannelId: string | null,
+  triggerRoleIds: string[] | null,
+  evalPeriodDays: number,
+): Promise<void> {
+  await db
+    .insert(communitySheetSettingsTable)
+    .values({ guildId, forumChannelId, triggerRoleIds: triggerRoleIds?.join(",") ?? null, evalPeriodDays })
+    .onConflictDoUpdate({
+      target: communitySheetSettingsTable.guildId,
+      set: {
+        forumChannelId,
+        triggerRoleIds: triggerRoleIds?.join(",") ?? null,
+        evalPeriodDays,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+export async function setEvalNameboardUrl(guildId: string, nameboardUrl: string | null): Promise<void> {
+  await db
+    .insert(communitySheetSettingsTable)
+    .values({ guildId, nameboardUrl, evalPeriodDays: 14 })
+    .onConflictDoUpdate({
+      target: communitySheetSettingsTable.guildId,
+      set: { nameboardUrl, updatedAt: new Date() },
+    });
+}
+
 export async function createEvalSheet(
   guildId: string,
   userId: string,

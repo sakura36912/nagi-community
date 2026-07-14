@@ -12,6 +12,8 @@ import {
   getEvalSheetSettings,
   getSheetVcSeconds,
   listEvalSheets,
+  setEvalSheetForumConfig,
+  setEvalNameboardUrl,
 } from "../lib/economy";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -80,6 +82,41 @@ export const sheetCommand = {
         ),
     )
     .addSubcommand((sub) =>
+      sub
+        .setName("settings")
+        .setDescription("評価シートのロール・フォーラム設定を変更します（管理者）")
+        .addChannelOption((opt) =>
+          opt
+            .setName("forum")
+            .setDescription("自動投稿先のフォーラムチャンネル")
+            .addChannelTypes(15) // ChannelType.GuildForum = 15
+            .setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("trigger_role_1").setDescription("自動作成を起動するロール①").setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("trigger_role_2").setDescription("自動作成を起動するロール②").setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("trigger_role_3").setDescription("自動作成を起動するロール③").setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("eval_days")
+            .setDescription("評価期間（日数・デフォルト14）")
+            .setMinValue(1)
+            .setMaxValue(90)
+            .setRequired(false),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("url")
+            .setDescription("名簿URL（クリアするには '-' を入力）")
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
       sub.setName("list").setDescription("評価シートの一覧を表示します"),
     )
     .addSubcommand((sub) =>
@@ -100,6 +137,72 @@ export const sheetCommand = {
 
     const sub = interaction.options.getSubcommand();
     const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
+
+    // ── settings ────────────────────────────────────────────────────────────
+    if (sub === "settings") {
+      if (!isAdmin) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true });
+
+      const current = await getEvalSheetSettings(guildId);
+      const lines: string[] = [];
+
+      // Nameboard URL
+      const urlInput = interaction.options.getString("url");
+      if (urlInput !== null) {
+        const newUrl = urlInput === "-" ? null : urlInput;
+        await setEvalNameboardUrl(guildId, newUrl);
+        lines.push(newUrl ? `✅ 名簿URL: ${newUrl}` : "✅ 名簿URLを削除しました。");
+      }
+
+      // Forum / roles / eval days
+      const forumChannel = interaction.options.getChannel("forum");
+      const role1 = interaction.options.getRole("trigger_role_1");
+      const role2 = interaction.options.getRole("trigger_role_2");
+      const role3 = interaction.options.getRole("trigger_role_3");
+      const evalDaysInput = interaction.options.getInteger("eval_days");
+
+      const hasForumUpdate = forumChannel !== null || role1 !== null || role2 !== null || role3 !== null || evalDaysInput !== null;
+      if (hasForumUpdate) {
+        const newForumId = forumChannel ? forumChannel.id : (current?.forumChannelId ?? null);
+        const newRoles: string[] =
+          role1 || role2 || role3
+            ? [role1?.id, role2?.id, role3?.id].filter((id): id is string => !!id)
+            : (current?.triggerRoleIds?.split(",").filter(Boolean) ?? []);
+        const newDays = evalDaysInput ?? current?.evalPeriodDays ?? 14;
+        await setEvalSheetForumConfig(guildId, newForumId, newRoles.length ? newRoles : null, newDays);
+
+        if (forumChannel) lines.push(`✅ 投稿フォーラム: <#${forumChannel.id}>`);
+        if (role1 || role2 || role3) {
+          const mentions = newRoles.map((id) => `<@&${id}>`).join("、");
+          lines.push(`✅ トリガーロール: ${mentions}`);
+        }
+        if (evalDaysInput !== null) lines.push(`✅ 評価期間: ${evalDaysInput}日`);
+      }
+
+      if (lines.length === 0) {
+        // Show current settings
+        const s = current;
+        const roleList = s?.triggerRoleIds
+          ? s.triggerRoleIds.split(",").filter(Boolean).map((id) => `<@&${id}>`).join("、")
+          : "未設定";
+        const embed = new EmbedBuilder()
+          .setTitle("📋 評価シート設定")
+          .setColor(0x2ecc71)
+          .addFields(
+            { name: "📋 名簿URL", value: s?.nameboardUrl ?? "未設定", inline: false },
+            { name: "📢 投稿フォーラム", value: s?.forumChannelId ? `<#${s.forumChannelId}>` : "未設定", inline: true },
+            { name: "🔔 トリガーロール", value: roleList, inline: true },
+            { name: "📅 評価期間", value: `${s?.evalPeriodDays ?? 14}日`, inline: true },
+          );
+        await interaction.editReply({ embeds: [embed] });
+      } else {
+        await interaction.editReply({ content: lines.join("\n") });
+      }
+      return;
+    }
 
     // ── create ──────────────────────────────────────────────────────────────
     if (sub === "create") {
