@@ -14,6 +14,7 @@ import {
   communitySheetSettingsTable,
   communityVcSessionsTable,
   shopLicenseConfigTable,
+  groupShopSalesTable,
   type Wallet,
   type ShopItem,
   type GuildSettings,
@@ -24,6 +25,7 @@ import {
   type CommunitySheet,
   type CommunitySheetSettings,
   type ShopLicenseConfig,
+  type GroupShopSale,
 } from "@workspace/db";
 
 export const DEFAULT_CURRENCY_NAME = "円";
@@ -1105,4 +1107,59 @@ export async function getShopLicenseForUser(
   if (userRoleIds.length === 0) return undefined;
   const configs = await listShopLicenseConfigs(guildId);
   return configs.find((c) => userRoleIds.includes(c.squadRoleId));
+}
+
+// ─── Group Shop Sales Log ─────────────────────────────────────────────────────
+
+/** Record a group-shop purchase against a squad role (fire-and-forget safe). */
+export async function recordGroupShopSale(
+  guildId: string,
+  userId: string,
+  item: { id: number; name: string; price: number },
+  squadRoleId: string,
+): Promise<void> {
+  await db.insert(groupShopSalesTable).values({
+    guildId,
+    userId,
+    itemId: item.id,
+    itemName: item.name,
+    squadRoleId,
+    amount: item.price,
+  });
+}
+
+export type GroupShopSalesSummary = {
+  squadRoleId: string;
+  totalAmount: number;
+  purchaseCount: number;
+};
+
+/** Aggregate group-shop sales per squad role for a guild. */
+export async function getGroupShopSalesSummary(
+  guildId: string,
+): Promise<GroupShopSalesSummary[]> {
+  const rows = await db
+    .select({
+      squadRoleId: groupShopSalesTable.squadRoleId,
+      totalAmount: sql<number>`sum(${groupShopSalesTable.amount})::int`,
+      purchaseCount: sql<number>`count(*)::int`,
+    })
+    .from(groupShopSalesTable)
+    .where(eq(groupShopSalesTable.guildId, guildId))
+    .groupBy(groupShopSalesTable.squadRoleId)
+    .orderBy(sql`sum(${groupShopSalesTable.amount}) desc`);
+  return rows;
+}
+
+/** Detailed purchase log for a guild, newest first. */
+export async function getGroupShopSalesLog(
+  guildId: string,
+  limit = 50,
+): Promise<GroupShopSale[]> {
+  return db
+    .select()
+    .from(groupShopSalesTable)
+    .where(eq(groupShopSalesTable.guildId, guildId))
+    .orderBy(desc(groupShopSalesTable.purchasedAt))
+    .limit(limit);
 }

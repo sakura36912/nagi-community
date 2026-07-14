@@ -241,3 +241,22 @@ export const shopLicenseConfigTable = pgTable(
 );
 
 export type ShopLicenseConfig = typeof shopLicenseConfigTable.$inferSelect;
+
+// ─── Group Shop Sales Log (隊別売上記録) ─────────────────────────────────────
+
+/**
+ * One row per group-shop purchase. Squad role is captured at purchase time so
+ * the report stays accurate even if a member's roles change later.
+ */
+export const groupShopSalesTable = pgTable("group_shop_sales", {
+  id: serial("id").primaryKey(),
+  guildId: text("guild_id").notNull(),
+  userId: text("user_id").notNull(),
+  itemId: integer("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  squadRoleId: text("squad_role_id").notNull(),
+  amount: integer("amount").notNull(),
+  purchasedAt: timestamp("purchased_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type GroupShopSale = typeof groupShopSalesTable.$inferSelect;

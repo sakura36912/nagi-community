@@ -38,6 +38,8 @@ import {
   setShopLicenseConfig,
   listShopLicenseConfigs,
   getShopLicenseForUser,
+  recordGroupShopSale,
+  getGroupShopSalesSummary,
   buyItem,
   claimDaily,
   createOrUpdateCurrency,
@@ -71,6 +73,22 @@ import {
 interface Command {
   data: { name: string; toJSON: () => unknown };
   execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
+}
+
+/** Fire-and-forget: detect the buyer's squad and record the group-shop sale. */
+async function tryRecordGroupSale(
+  guild: import("discord.js").Guild,
+  guildId: string,
+  userId: string,
+  item: { id: number; name: string; price: number },
+): Promise<void> {
+  const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
+  if (!member) return;
+  const userRoleIds = [...member.roles.cache.keys()];
+  const treasuries = await listSquadTreasuries(guildId);
+  const treasury = treasuries.find((t) => userRoleIds.includes(t.roleId));
+  if (!treasury) return;
+  await recordGroupShopSale(guildId, userId, item, treasury.roleId);
 }
 
 function requireGuild(interaction: ChatInputCommandInteraction): string {
@@ -407,6 +425,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       }
       await member.roles.add(config.licenseRoleId);
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`);
+      tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
     } catch {
       await refundPurchase(interaction.guildId, interaction.user.id, result.item);
       await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
@@ -418,6 +437,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
 
   if (result.ok) {
     await interaction.editReply(`**${result.item.name}**を購入しました!`);
+    if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
   } else {
     await interaction.editReply(result.reason);
   }
@@ -783,6 +803,9 @@ function buildShopCommand(
       )
       .addSubcommand((sub) =>
         sub.setName("license-list").setDescription("現在の隊→開業ロールのマッピング一覧を表示します(管理者用)"),
+      )
+      .addSubcommand((sub) =>
+        sub.setName("sales").setDescription("隊ごとの売上を表示します"),
       );
   }
 
@@ -935,6 +958,7 @@ function buildShopCommand(
             }
             await member.roles.add(config.licenseRoleId);
             await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`);
+            tryRecordGroupSale(interaction.guild!, guildId, interaction.user.id, result.item).catch(() => {});
           } catch {
             await refundPurchase(guildId, interaction.user.id, result.item);
             await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
@@ -945,6 +969,7 @@ function buildShopCommand(
         const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
         if (result.ok) {
           await interaction.editReply(`**${result.item.name}**を購入しました!`);
+          if (category === "group") tryRecordGroupSale(interaction.guild!, guildId, interaction.user.id, result.item).catch(() => {});
         } else {
           await interaction.editReply(result.reason);
         }
@@ -1017,6 +1042,30 @@ function buildShopCommand(
         await interaction.reply(
           removed ? `アイテム#${itemId}を削除しました。` : "そのアイテムは見つかりませんでした。",
         );
+        return;
+      }
+
+      if (sub === "sales" && options.licenseSetup) {
+        const [summary, treasuries, settings] = await Promise.all([
+          getGroupShopSalesSummary(guildId),
+          listSquadTreasuries(guildId),
+          getGuildSettings(guildId),
+        ]);
+        if (summary.length === 0) {
+          await interaction.reply({ content: "まだ売上データがありません。", ephemeral: false });
+          return;
+        }
+        const medals = ["🥇", "🥈", "🥉"];
+        const lines = summary.map((row, i) => {
+          const treasury = treasuries.find(t => t.roleId === row.squadRoleId);
+          const name = treasury ? treasury.name : `<@&${row.squadRoleId}>`;
+          const rank = medals[i] ?? `${i + 1}位`;
+          return `${rank} **${name}**: ${row.totalAmount.toLocaleString()}${settings.currencyName}（${row.purchaseCount}件）`;
+        });
+        const total = summary.reduce((s, r) => s + r.totalAmount, 0);
+        const totalCount = summary.reduce((s, r) => s + r.purchaseCount, 0);
+        lines.push(`\n合計: **${total.toLocaleString()}${settings.currencyName}**（${totalCount}件）`);
+        await interaction.reply({ content: `## ⚔️ 隊別売上\n${lines.join("\n")}` });
         return;
       }
 
