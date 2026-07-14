@@ -309,11 +309,7 @@ function buildResultEmbed(
     .setColor(color)
     .setFooter({ text: `残高: ${finalBalance.toLocaleString()} ${currencyName}` });
 
-  // スタンプモードは setImage（大きく）、絵文字は setThumbnail（小さめ）
-  if (imageUrl) {
-    if (meta.size > 0) embed.setImage(imageUrl);
-    else embed.setThumbnail(imageUrl);
-  }
+  if (imageUrl) embed.setImage(imageUrl);
   return embed;
 }
 
