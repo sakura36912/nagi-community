@@ -17,6 +17,8 @@ import {
 import type { ShopItem } from "@workspace/db";
 import type { Guild } from "discord.js";
 import {
+  EVAL_SHEET_EXTEND_DURATION_MS,
+  extendEvalSheets,
   setEvalSheetConfig,
   removeEvalSheetConfig,
   listEvalSheetConfigs,
@@ -24,6 +26,7 @@ import {
 import { logger } from "../lib/logger";
 import {
   DEFAULT_DAILY_AMOUNT,
+  EVAL_EXTEND_EFFECT,
   NICKNAME_CHANGE_EFFECT,
   PRIVATE_VC_EFFECT,
   PRIVATE_VC_1D_EFFECT,
@@ -294,6 +297,41 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     } else {
       await interaction.editReply(result.reason);
     }
+    return;
+  }
+
+  // Eval sheet extension ticket — extends all the user's eval sheets by 1 week.
+  if (item.effectType === EVAL_EXTEND_EFFECT) {
+    const buyResult = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!buyResult.ok) {
+      await interaction.editReply(buyResult.reason);
+      return;
+    }
+
+    const extended = await extendEvalSheets(
+      interaction.guildId,
+      interaction.user.id,
+      EVAL_SHEET_EXTEND_DURATION_MS,
+    );
+
+    if (extended.length === 0) {
+      // No eval sheets exist — refund.
+      try {
+        await refundPurchase(interaction.guildId, interaction.user.id, buyResult.item);
+      } catch {
+        // ignore refund errors
+      }
+      await interaction.editReply("評価シートが見つかりませんでした。購入を取り消し、返金しました。");
+      return;
+    }
+
+    const lines = extended.map((s) => {
+      const ts = s.expiresAt ? `<t:${Math.floor(s.expiresAt.getTime() / 1000)}:F>` : "不明";
+      return `• ロール <@&${s.roleId}> の評価シート → 期限: ${ts}`;
+    });
+    await interaction.editReply(
+      `**${buyResult.item.name}**を使用しました！評価シートを1週間延長しました。\n${lines.join("\n")}`,
+    );
     return;
   }
 

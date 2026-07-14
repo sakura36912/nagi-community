@@ -33,6 +33,7 @@ export const evalSheetsTable = pgTable(
     userId: text("user_id").notNull(),
     roleId: text("role_id").notNull(),
     threadId: text("thread_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [unique().on(table.guildId, table.userId, table.roleId)],

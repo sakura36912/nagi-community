@@ -25,6 +25,7 @@ export const PRIVATE_VC_EFFECT = "private_vc"; // permanent (no expiry)
 export const PRIVATE_VC_1D_EFFECT = "private_vc_1d";
 export const PRIVATE_VC_1W_EFFECT = "private_vc_1w";
 export const PRIVATE_VC_1M_EFFECT = "private_vc_1m";
+export const EVAL_EXTEND_EFFECT = "eval_extend_1w"; // extends all eval sheets by 1 week
 
 // Duration in milliseconds for each timed VC effect type.
 export const TIMED_VC_DURATIONS: Record<string, number> = {
@@ -50,6 +51,14 @@ export async function seedDefaultShopItems(guildId: string): Promise<void> {
       description: "サーバー内のニックネームを自由に変更できます。",
       price: 1000,
       effectType: NICKNAME_CHANGE_EFFECT,
+      category: "general",
+    },
+    {
+      guildId,
+      name: "期間延長券",
+      description: "あなたの評価シートの期限を1週間延長します。",
+      price: 3000,
+      effectType: EVAL_EXTEND_EFFECT,
       category: "general",
     },
   ]);

@@ -21,6 +21,7 @@ import {
   seedDefaultUraShopItems,
 } from "./lib/economy";
 import {
+  EVAL_SHEET_DEFAULT_DURATION_MS,
   getEvalSheetConfig,
   hasEvalSheet,
   recordEvalSheet,
@@ -147,8 +148,13 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 // Builds the evaluation sheet embed posted as the first message in the forum thread.
-function buildEvalSheetEmbed(member: { id: string; displayName: string; displayAvatarURL: () => string }, roleId: string): EmbedBuilder {
+function buildEvalSheetEmbed(
+  member: { id: string; displayName: string; displayAvatarURL: () => string },
+  roleId: string,
+  expiresAt: Date,
+): EmbedBuilder {
   const now = Math.floor(Date.now() / 1000);
+  const exp = Math.floor(expiresAt.getTime() / 1000);
   return new EmbedBuilder()
     .setTitle(`📋 評価シート — ${member.displayName}`)
     .setColor(0x2ecc71)
@@ -157,6 +163,7 @@ function buildEvalSheetEmbed(member: { id: string; displayName: string; displayA
       { name: "👤 ユーザー", value: `<@${member.id}>`, inline: true },
       { name: "🏷️ 対象ロール", value: `<@&${roleId}>`, inline: true },
       { name: "📅 作成日", value: `<t:${now}:D>`, inline: true },
+      { name: "⏰ 有効期限", value: `<t:${exp}:F>（<t:${exp}:R>）`, inline: false },
       { name: "\u200b", value: "─────────────────────", inline: false },
       { name: "⭐ 総合評価", value: "☆ ☆ ☆ ☆ ☆", inline: false },
       { name: "💬 コミュニケーション", value: "─", inline: true },
@@ -168,7 +175,7 @@ function buildEvalSheetEmbed(member: { id: string; displayName: string; displayA
       { name: "\u200b", value: "─────────────────────", inline: false },
       { name: "📝 総評", value: "（管理者が記入してください）", inline: false },
     )
-    .setFooter({ text: "このシートは管理者のみ編集できます。" });
+    .setFooter({ text: "期間延長券を使うと期限を1週間延長できます。" });
 }
 
 // Fires when a member's roles change. Checks each newly added role against
@@ -227,7 +234,8 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         continue;
       }
 
-      const embed = buildEvalSheetEmbed(newMember, roleId);
+      const expiresAt = new Date(Date.now() + EVAL_SHEET_DEFAULT_DURATION_MS);
+      const embed = buildEvalSheetEmbed(newMember, roleId, expiresAt);
       const threadName = `${newMember.displayName} の評価シート`.slice(0, 100);
 
       logger.info(`[evalsheet] Creating thread "${threadName}" in forum ${config.forumChannelId}`);
@@ -237,8 +245,8 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         message: { embeds: [embed] },
       });
 
-      await recordEvalSheet(newMember.guild.id, newMember.id, roleId, thread.id);
-      logger.info(`[evalsheet] ✅ Created thread ${thread.id} for ${newMember.id} (role ${roleId})`);
+      await recordEvalSheet(newMember.guild.id, newMember.id, roleId, thread.id, expiresAt);
+      logger.info(`[evalsheet] ✅ Created thread ${thread.id} for ${newMember.id} (role ${roleId}), expires ${expiresAt.toISOString()}`);
     } catch (err) {
       logger.error(`[evalsheet] Error creating eval sheet for member ${newMember.id}, role ${roleId}`, err);
     }
