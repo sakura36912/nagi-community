@@ -243,11 +243,17 @@ export const vcsalaryCommand: Command = {
             ),
         ),
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
+    .setDefaultMemberPermissions(null) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const group = interaction.options.getSubcommandGroup(false);
     const sub = interaction.options.getSubcommand();
+
+    const isAdminSub = group === "category" || sub === "setup";
+    if (isAdminSub && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: "❌ このコマンドは管理者権限が必要です。", flags: MessageFlags.Ephemeral });
+      return;
+    }
 
     if (group === "category") {
       if (sub === "add") await handleCategoryAdd(interaction);

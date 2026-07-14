@@ -69,7 +69,7 @@ function requireGuild(interaction: ChatInputCommandInteraction): string {
 }
 
 function requireManageGuild(interaction: ChatInputCommandInteraction): boolean {
-  if (!interaction.memberPermissions?.has("ManageGuild")) {
+  if (!interaction.memberPermissions?.has("Administrator")) {
     return false;
   }
   return true;
@@ -972,12 +972,12 @@ const treasuryCommand: Command = {
     const currencyName = settings?.currencyName ?? "円";
 
     const member = interaction.member as GuildMember | null;
-    const isAdmin = !!member?.permissions.has("ManageGuild");
+    const isAdmin = !!member?.permissions.has("Administrator");
 
     // ── setup ────────────────────────────────────────────────────────────────
     if (sub === "setup") {
       if (!isAdmin) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        await interaction.reply({ content: "このコマンドは管理者権限が必要です。", ephemeral: true });
         return;
       }
       const role       = interaction.options.getRole("role", true);

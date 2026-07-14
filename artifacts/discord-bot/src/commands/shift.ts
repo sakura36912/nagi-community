@@ -1,6 +1,7 @@
 import {
   ChannelType,
   EmbedBuilder,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type Client,
@@ -364,7 +365,7 @@ export const shiftCommand: Command = {
 
     const guildId = interaction.guildId;
     const sub = interaction.options.getSubcommand();
-    const isAdmin = !!interaction.memberPermissions?.has("ManageGuild");
+    const isAdmin = !!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
 
     // ── /shift add ────────────────────────────────────────────────────────────
     if (sub === "add") {

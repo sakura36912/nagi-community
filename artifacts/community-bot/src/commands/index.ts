@@ -79,7 +79,7 @@ function requireGuild(interaction: ChatInputCommandInteraction): string {
 }
 
 function requireAdmin(interaction: ChatInputCommandInteraction): boolean {
-  return !!interaction.memberPermissions?.has("ManageGuild");
+  return !!interaction.memberPermissions?.has("Administrator");
 }
 
 function formatSeconds(seconds: number): string {
