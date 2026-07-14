@@ -1004,6 +1004,9 @@ const evalsheetCommand: Command = {
   },
 };
 
+export { VC_RENAME_BUTTON_PREFIX, durationFromKey, consumePendingRename } from "./vc";
+import { vcCommand } from "./vc";
+
 export const commands: Command[] = [
   currencyCommand,
   balanceCommand,
@@ -1017,4 +1020,5 @@ export const commands: Command[] = [
   uraShopCommand,
   rewardCommand,
   evalsheetCommand,
+  vcCommand,
 ];
