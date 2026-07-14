@@ -1,6 +1,7 @@
 import {
   ChannelType,
   Client,
+  EmbedBuilder,
   Events,
   GatewayIntentBits,
   MessageFlags,
@@ -13,7 +14,11 @@ import {
   createSheet,
   getAllTempVcs,
   getAllRankingSettings,
+  getEvent,
+  getEventSettings,
   getEventsNeedingReminder,
+  getEventsNeeding24hReminder,
+  mark24hReminderSent,
   getLobbyChannelId,
   getParticipants,
   getSheetSettings,
@@ -81,42 +86,91 @@ const client = new Client({
 
 // ─── Event reminder scheduler ────────────────────────────────────────────────
 
-async function runEventReminderScheduler(): Promise<void> {
-  const events = await getEventsNeedingReminder();
-  for (const event of events) {
+async function sendEventReminder(
+  eventId: number,
+  label: string,
+  emoji: string,
+): Promise<void> {
+  const event = await getEvent(eventId);
+  if (!event) return;
+
+  const guild = client.guilds.cache.get(event.guildId)
+    ?? await client.guilds.fetch(event.guildId).catch(() => null);
+  if (!guild) return;
+
+  const participants = await getParticipants(event.id);
+  const participantMentions = participants.map((id) => `<@${id}>`).join(" ");
+
+  // Notify channel (if configured) — @role + participant mentions
+  const settings = await getEventSettings(event.guildId);
+  const notifyCh = settings?.notifyChannelId
+    ? (guild.channels.cache.get(settings.notifyChannelId)
+        ?? await guild.channels.fetch(settings.notifyChannelId).catch(() => null))
+    : null;
+
+  const ts = Math.floor(event.scheduledAt.getTime() / 1000);
+  const reminderEmbed = new EmbedBuilder()
+    .setTitle(`${emoji} リマインダー: ${event.title}`)
+    .setColor(0xf5a623)
+    .addFields(
+      { name: "🕐 開催日時", value: `<t:${ts}:F>（<t:${ts}:R>）`, inline: false },
+      { name: "👥 参加者", value: participants.length > 0 ? participantMentions : "（まだいません）", inline: false },
+    );
+
+  const roleMention = settings?.notifyRoleId ? `<@&${settings.notifyRoleId}> ` : "";
+
+  if (notifyCh?.isTextBased()) {
+    await notifyCh.send({
+      content: `${roleMention}**${event.title}** の${label}リマインダーです！`,
+      embeds: [reminderEmbed],
+      allowedMentions: { roles: settings?.notifyRoleId ? [settings.notifyRoleId] : [], users: participants },
+    });
+  }
+
+  // Also post in the event's own channel if different from notify channel
+  const eventCh = guild.channels.cache.get(event.channelId)
+    ?? await guild.channels.fetch(event.channelId).catch(() => null);
+  if (eventCh?.isTextBased() && eventCh.id !== notifyCh?.id) {
+    const content = participants.length > 0
+      ? `${emoji} **${event.title}** の${label}リマインダー！\n${participantMentions}`
+      : `${emoji} **${event.title}** の${label}リマインダー！（参加者なし）`;
+    await eventCh.send({ content });
+  }
+
+  // Update the event panel embed
+  if (event.messageId && eventCh?.isTextBased()) {
     try {
-      const guild = client.guilds.cache.get(event.guildId);
-      if (!guild) continue;
-
-      const channel = guild.channels.cache.get(event.channelId)
-        ?? await guild.channels.fetch(event.channelId).catch(() => null);
-      if (!channel || !channel.isTextBased()) continue;
-
-      const participants = await getParticipants(event.id);
-      const mentions = participants.map((id) => `<@${id}>`).join(" ");
-
-      const content =
-        participants.length > 0
-          ? `🔔 **${event.title}** が30分後に始まります！\n${mentions}`
-          : `🔔 **${event.title}** が30分後に始まります！（参加者なし）`;
-
-      await channel.send({ content });
-
-      // Update the event panel message if it still exists.
-      if (event.messageId) {
-        try {
-          const msg = await channel.messages.fetch(event.messageId);
-          const { embed, rows } = await buildEventEmbed(event.id);
-          await msg.edit({ embeds: [embed], components: rows });
-        } catch {
-          // message may have been deleted — ignore
-        }
+      const msg = await eventCh.messages.fetch(event.messageId).catch(() => null);
+      if (msg) {
+        const { embed, rows } = await buildEventEmbed(event.id);
+        await msg.edit({ embeds: [embed], components: rows });
       }
+    } catch { /* ignore */ }
+  }
+}
 
+async function runEventReminderScheduler(): Promise<void> {
+  // 30-minute reminder
+  const soon = await getEventsNeedingReminder();
+  for (const event of soon) {
+    try {
+      await sendEventReminder(event.id, "30分前", "🔔");
       await markReminderSent(event.id);
-      logger.info(`[event] Reminder sent for event ${event.id} (${event.title})`);
+      logger.info(`[event] 30 min reminder sent for event ${event.id} (${event.title})`);
     } catch (err) {
-      logger.error(`[event] Failed to send reminder for event ${event.id}`, err);
+      logger.error(`[event] Failed to send 30 min reminder for event ${event.id}`, err);
+    }
+  }
+
+  // 24-hour reminder
+  const tomorrow = await getEventsNeeding24hReminder();
+  for (const event of tomorrow) {
+    try {
+      await sendEventReminder(event.id, "24時間前", "📅");
+      await mark24hReminderSent(event.id);
+      logger.info(`[event] 24 h reminder sent for event ${event.id} (${event.title})`);
+    } catch (err) {
+      logger.error(`[event] Failed to send 24 h reminder for event ${event.id}`, err);
     }
   }
 }

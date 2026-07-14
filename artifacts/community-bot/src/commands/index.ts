@@ -19,6 +19,8 @@ import {
   addParticipant,
   addTempVc,
   createEvent,
+  deleteEvent,
+  editEvent,
   createRoleButton,
   createSheet,
   createTicket,
@@ -33,6 +35,7 @@ import {
   getRecentTempVcDeletions,
   getRoleButtonById,
   getRoleButtonsByMessage,
+  getEventSettings,
   getSheetSettings,
   getTicketByChannel,
   getTicketSettings,
@@ -43,6 +46,7 @@ import {
   listRoleButtonPanels,
   listSheets,
   listUpcomingEvents,
+  setEventSettings,
   removeParticipant,
   removeTicket,
   setLobbyChannel,
@@ -446,28 +450,117 @@ const eventCommand: Command = {
           opt.setName("title").setDescription("イベントタイトル").setRequired(true).setMaxLength(100),
         )
         .addStringOption((opt) =>
-          opt
-            .setName("datetime")
-            .setDescription("開催日時（YYYY-MM-DD HH:MM 形式、日本時間）")
-            .setRequired(true),
+          opt.setName("datetime").setDescription("開催日時（YYYY-MM-DD HH:MM 形式、日本時間）").setRequired(true),
         )
         .addStringOption((opt) =>
           opt.setName("description").setDescription("イベントの説明").setRequired(false).setMaxLength(1000),
         ),
     )
-    .addSubcommand((sub) => sub.setName("list").setDescription("予定イベントの一覧を表示します")),
+    .addSubcommand((sub) =>
+      sub
+        .setName("edit")
+        .setDescription("イベントを編集します（管理者）")
+        .addIntegerOption((opt) =>
+          opt.setName("id").setDescription("イベントID（/event list で確認）").setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName("title").setDescription("新しいタイトル").setRequired(false).setMaxLength(100),
+        )
+        .addStringOption((opt) =>
+          opt.setName("datetime").setDescription("新しい日時（YYYY-MM-DD HH:MM、日本時間）").setRequired(false),
+        )
+        .addStringOption((opt) =>
+          opt.setName("description").setDescription("新しい説明").setRequired(false).setMaxLength(1000),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("delete")
+        .setDescription("イベントを削除します（管理者）")
+        .addIntegerOption((opt) =>
+          opt.setName("id").setDescription("イベントID（/event list で確認）").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) => sub.setName("list").setDescription("予定イベントの一覧を表示します"))
+    .addSubcommand((sub) =>
+      sub
+        .setName("notify")
+        .setDescription("イベント告知チャンネルとメンションロールを設定します（管理者）")
+        .addChannelOption((opt) =>
+          opt.setName("channel").setDescription("告知先チャンネル").setRequired(false)
+            .addChannelTypes(ChannelType.GuildText),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("role").setDescription("告知時にメンションするロール").setRequired(false),
+        ),
+    ),
+
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub = interaction.options.getSubcommand();
 
-    if (sub === "create") {
-      if (!requireAdmin(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+    // ── list（誰でも可）──────────────────────────────────────────────────────
+    if (sub === "list") {
+      await interaction.deferReply({ ephemeral: true });
+      const events = await listUpcomingEvents(guildId);
+      if (events.length === 0) {
+        await interaction.editReply("予定されているイベントはありません。");
         return;
       }
+      const lines = events.map((e) => {
+        const ts = Math.floor(e.scheduledAt.getTime() / 1000);
+        return `• **[ID:${e.id}] ${e.title}** — <t:${ts}:F>（<t:${ts}:R>）`;
+      });
+      const embed = new EmbedBuilder()
+        .setTitle("📅 予定イベント一覧")
+        .setColor(0x5865f2)
+        .setDescription(lines.join("\n"));
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    // 以降は管理者のみ
+    if (!requireAdmin(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+
+    // ── notify ───────────────────────────────────────────────────────────────
+    if (sub === "notify") {
+      const channel = interaction.options.getChannel("channel");
+      const role    = interaction.options.getRole("role");
+
+      if (!channel && !role) {
+        const s = await getEventSettings(guildId);
+        const embed = new EmbedBuilder()
+          .setTitle("📣 イベント通知設定")
+          .setColor(0x5865f2)
+          .addFields(
+            { name: "告知チャンネル", value: s?.notifyChannelId ? `<#${s.notifyChannelId}>` : "未設定", inline: true },
+            { name: "メンションロール", value: s?.notifyRoleId ? `<@&${s.notifyRoleId}>` : "未設定", inline: true },
+          )
+          .setFooter({ text: "channel / role を指定して再実行すると上書きされます。" });
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+        return;
+      }
+
+      await setEventSettings(guildId, {
+        notifyChannelId: channel?.id ?? undefined,
+        notifyRoleId:    role?.id    ?? undefined,
+      });
+      const parts = [
+        channel && `告知チャンネル: <#${channel.id}>`,
+        role    && `メンションロール: <@&${role.id}>`,
+      ].filter(Boolean).join("、");
+      await interaction.reply({ content: `✅ ${parts} に設定しました。`, ephemeral: true, allowedMentions: { parse: [] } });
+      return;
+    }
+
+    // ── create ───────────────────────────────────────────────────────────────
+    if (sub === "create") {
       await interaction.deferReply({ ephemeral: true });
 
-      const title = interaction.options.getString("title", true);
+      const title       = interaction.options.getString("title", true);
       const datetimeStr = interaction.options.getString("datetime", true);
       const description = interaction.options.getString("description");
 
@@ -480,7 +573,6 @@ const eventCommand: Command = {
         await interaction.editReply("過去の日時は設定できません。");
         return;
       }
-
       if (!interaction.channelId) {
         await interaction.editReply("チャンネルが特定できません。");
         return;
@@ -488,29 +580,114 @@ const eventCommand: Command = {
 
       const event = await createEvent(guildId, interaction.channelId, title, description, scheduledAt);
       const { embed, rows } = await buildEventEmbed(event.id);
-      const msg = interaction.channel?.isSendable() ? await interaction.channel.send({ embeds: [embed], components: rows }) : null;
+
+      // パネルをコマンド実行チャンネルに投稿
+      const msg = interaction.channel?.isSendable()
+        ? await interaction.channel.send({ embeds: [embed], components: rows })
+        : null;
       if (msg) await updateEventMessageId(event.id, msg.id);
+
+      // 告知チャンネルへのアナウンス
+      const settings = await getEventSettings(guildId);
+      if (settings?.notifyChannelId) {
+        const notifyCh = interaction.guild?.channels.cache.get(settings.notifyChannelId)
+          ?? await interaction.guild?.channels.fetch(settings.notifyChannelId).catch(() => null);
+        if (notifyCh?.isTextBased()) {
+          const ts = Math.floor(scheduledAt.getTime() / 1000);
+          const roleMention = settings.notifyRoleId ? `<@&${settings.notifyRoleId}> ` : "";
+          const announceEmbed = new EmbedBuilder()
+            .setTitle(`📣 新しいイベント: ${title}`)
+            .setColor(0x5865f2)
+            .addFields(
+              { name: "📝 説明", value: description ?? "なし", inline: false },
+              { name: "🕐 開催日時", value: `<t:${ts}:F>（<t:${ts}:R>）`, inline: false },
+            )
+            .setFooter({ text: msg ? `参加はイベントパネルのボタンから` : `イベントID: ${event.id}` });
+          await notifyCh.send({
+            content: `${roleMention}新しいイベントが作成されました！`,
+            embeds: [announceEmbed],
+            allowedMentions: { roles: settings.notifyRoleId ? [settings.notifyRoleId] : [] },
+          });
+        }
+      }
 
       await interaction.editReply(`✅ イベント「${title}」を作成しました。`);
       return;
     }
 
-    if (sub === "list") {
+    // ── edit ────────────────────────────────────────────────────────────────
+    if (sub === "edit") {
       await interaction.deferReply({ ephemeral: true });
-      const events = await listUpcomingEvents(guildId);
-      if (events.length === 0) {
-        await interaction.editReply("予定されているイベントはありません。");
+      const eventId     = interaction.options.getInteger("id", true);
+      const title       = interaction.options.getString("title");
+      const datetimeStr = interaction.options.getString("datetime");
+      const description = interaction.options.getString("description");
+
+      const event = await getEvent(eventId);
+      if (!event || event.guildId !== guildId) {
+        await interaction.editReply("イベントが見つかりません。");
         return;
       }
-      const lines = events.map((e) => {
-        const ts = Math.floor(e.scheduledAt.getTime() / 1000);
-        return `• **${e.title}** — <t:${ts}:F>`;
-      });
-      const embed = new EmbedBuilder()
-        .setTitle("📅 予定イベント一覧")
-        .setColor(0x5865f2)
-        .setDescription(lines.join("\n"));
-      await interaction.editReply({ embeds: [embed] });
+
+      let scheduledAt: Date | undefined;
+      if (datetimeStr) {
+        scheduledAt = parseDate(datetimeStr) ?? undefined;
+        if (!scheduledAt) {
+          await interaction.editReply("日時の形式が正しくありません。例: `2025-01-15 19:00`");
+          return;
+        }
+        if (scheduledAt <= new Date()) {
+          await interaction.editReply("過去の日時は設定できません。");
+          return;
+        }
+      }
+
+      await editEvent(eventId, { title: title ?? undefined, description, scheduledAt });
+
+      // パネルメッセージを更新
+      if (event.messageId) {
+        try {
+          const ch = interaction.guild?.channels.cache.get(event.channelId)
+            ?? await interaction.guild?.channels.fetch(event.channelId).catch(() => null);
+          if (ch?.isTextBased()) {
+            const panelMsg = await ch.messages.fetch(event.messageId).catch(() => null);
+            if (panelMsg) {
+              const { embed: updatedEmbed, rows: updatedRows } = await buildEventEmbed(eventId);
+              await panelMsg.edit({ embeds: [updatedEmbed], components: updatedRows });
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      await interaction.editReply(`✅ イベント「${title ?? event.title}」を更新しました。`);
+      return;
+    }
+
+    // ── delete ───────────────────────────────────────────────────────────────
+    if (sub === "delete") {
+      await interaction.deferReply({ ephemeral: true });
+      const eventId = interaction.options.getInteger("id", true);
+
+      const event = await getEvent(eventId);
+      if (!event || event.guildId !== guildId) {
+        await interaction.editReply("イベントが見つかりません。");
+        return;
+      }
+
+      // パネルメッセージを削除
+      if (event.messageId) {
+        try {
+          const ch = interaction.guild?.channels.cache.get(event.channelId)
+            ?? await interaction.guild?.channels.fetch(event.channelId).catch(() => null);
+          if (ch?.isTextBased()) {
+            const panelMsg = await ch.messages.fetch(event.messageId).catch(() => null);
+            await panelMsg?.delete();
+          }
+        } catch { /* ignore */ }
+      }
+
+      await deleteEvent(eventId);
+      await interaction.editReply(`✅ イベント「${event.title}」を削除しました。`);
       return;
     }
   },

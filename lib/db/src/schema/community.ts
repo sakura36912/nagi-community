@@ -54,6 +54,21 @@ export type CommunityTempVcDeletionLog = typeof communityTempVcDeletionLogTable.
 
 // ─── Events ─────────────────────────────────────────────────────────────────
 
+/** Per-guild configuration for event notifications. */
+export const communityEventSettingsTable = pgTable("community_event_settings", {
+  guildId: text("guild_id").primaryKey(),
+  /** Channel where new event announcements are posted. */
+  notifyChannelId: text("notify_channel_id"),
+  /** Role mentioned when a new event is announced or reminder fires. */
+  notifyRoleId: text("notify_role_id"),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
+export type CommunityEventSettings = typeof communityEventSettingsTable.$inferSelect;
+
 /** Community events with participation panels. */
 export const communityEventsTable = pgTable("community_events", {
   id: serial("id").primaryKey(),
@@ -64,6 +79,8 @@ export const communityEventsTable = pgTable("community_events", {
   description: text("description"),
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
   reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
+  /** Set when the 24-hour-before reminder has been sent. */
+  reminder24hSentAt: timestamp("reminder_24h_sent_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

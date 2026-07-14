@@ -4,6 +4,7 @@ import {
   communityTempVcSettingsTable,
   communityTempVcsTable,
   communityTempVcDeletionLogTable,
+  communityEventSettingsTable,
   communityEventsTable,
   communityEventParticipantsTable,
   communityTicketSettingsTable,
@@ -16,6 +17,7 @@ import {
   communityRoleButtonsTable,
   type CommunityRoleButton,
   type CommunityEvent,
+  type CommunityEventSettings,
   type CommunityTicket,
   type CommunityVcSession,
   type CommunitySheet,
@@ -128,7 +130,30 @@ export async function pruneOldTempVcDeletionLogs(retentionDays = 90): Promise<nu
   return result.length;
 }
 
-// ─── Events ─────────────────────────────────────────────────────────────────
+// ─── Event Settings ──────────────────────────────────────────────────────────
+
+export async function getEventSettings(guildId: string): Promise<CommunityEventSettings | undefined> {
+  const [row] = await db
+    .select()
+    .from(communityEventSettingsTable)
+    .where(eq(communityEventSettingsTable.guildId, guildId));
+  return row;
+}
+
+export async function setEventSettings(
+  guildId: string,
+  opts: { notifyChannelId?: string | null; notifyRoleId?: string | null },
+): Promise<void> {
+  await db
+    .insert(communityEventSettingsTable)
+    .values({ guildId, ...opts })
+    .onConflictDoUpdate({
+      target: communityEventSettingsTable.guildId,
+      set: { ...opts, updatedAt: new Date() },
+    });
+}
+
+// ─── Events ──────────────────────────────────────────────────────────────────
 
 export async function createEvent(
   guildId: string,
@@ -220,11 +245,54 @@ export async function getEventsNeedingReminder(): Promise<CommunityEvent[]> {
     );
 }
 
+export async function deleteEvent(eventId: number): Promise<void> {
+  await db
+    .delete(communityEventParticipantsTable)
+    .where(eq(communityEventParticipantsTable.eventId, eventId));
+  await db
+    .delete(communityEventsTable)
+    .where(eq(communityEventsTable.id, eventId));
+}
+
+export async function editEvent(
+  eventId: number,
+  opts: { title?: string; description?: string | null; scheduledAt?: Date },
+): Promise<void> {
+  await db
+    .update(communityEventsTable)
+    .set(opts)
+    .where(eq(communityEventsTable.id, eventId));
+}
+
 export async function markReminderSent(eventId: number) {
   await db
     .update(communityEventsTable)
     .set({ reminderSentAt: new Date() })
     .where(eq(communityEventsTable.id, eventId));
+}
+
+export async function mark24hReminderSent(eventId: number) {
+  await db
+    .update(communityEventsTable)
+    .set({ reminder24hSentAt: new Date() })
+    .where(eq(communityEventsTable.id, eventId));
+}
+
+/** Return events starting in 23–25 h that haven't had their 24 h reminder sent. */
+export async function getEventsNeeding24hReminder(): Promise<CommunityEvent[]> {
+  const now = new Date();
+  const in23h = new Date(now.getTime() + 23 * 60 * 60 * 1000);
+  const in25h = new Date(now.getTime() + 25 * 60 * 60 * 1000);
+  return db
+    .select()
+    .from(communityEventsTable)
+    .where(
+      and(
+        gt(communityEventsTable.scheduledAt, in23h),
+        lt(communityEventsTable.scheduledAt, in25h),
+        isNull(communityEventsTable.reminder24hSentAt),
+      ),
+    );
 }
 
 // ─── Tickets ─────────────────────────────────────────────────────────────────
