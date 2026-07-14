@@ -12,9 +12,16 @@ const rest = new REST().setToken(token);
 
 async function main() {
   const body = commands.map((c) => c.data.toJSON());
-  logger.info(`Registering ${body.length} global slash command(s)...`);
-  await rest.put(Routes.applicationCommands(clientId!), { body });
-  logger.info("Slash commands registered. Global commands can take up to an hour to propagate.");
+  const guildId = process.env["DEPLOY_GUILD_ID"];
+  if (guildId) {
+    logger.info(`Registering ${body.length} guild slash command(s) to guild ${guildId}...`);
+    await rest.put(Routes.applicationGuildCommands(clientId!, guildId), { body });
+    logger.info("Guild slash commands registered (instant propagation).");
+  } else {
+    logger.info(`Registering ${body.length} global slash command(s)...`);
+    await rest.put(Routes.applicationCommands(clientId!), { body });
+    logger.info("Slash commands registered. Global commands can take up to an hour to propagate.");
+  }
 }
 
 main().catch((err) => {
