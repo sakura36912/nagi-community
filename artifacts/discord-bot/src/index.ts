@@ -189,8 +189,6 @@ function buildEvalSheetEmbed(
       { name: "\u200b", value: "\u200b", inline: false },
       { name: "📅 評価開始", value: `<t:${created}:D>`, inline: true },
       { name: "⏰ 評価終了", value: `<t:${exp}:D>（<t:${exp}:R>）`, inline: true },
-      { name: "\u200b", value: "─────────────────────", inline: false },
-      { name: "📝 総評", value: "（管理者が記入してください）", inline: false },
     )
     .setFooter({ text: "期間延長券を使うと期限を1週間延長できます。" });
 }
