@@ -239,13 +239,15 @@ async function creditWinnings(
 
 const BLANK = "⬛";
 
-function buildSpinningEmbed(bet: number, currencyName: string): EmbedBuilder {
+function buildSpinningEmbed(bet: number, currencyName: string, imageUrl?: string): EmbedBuilder {
   const b = `${BLANK}　　${BLANK}　　${BLANK}`;
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle("🎰 スロット 3×3")
     .setDescription(`${b}\n\n${b}\n\n${b}\n\n*回転中...*`)
     .setColor(0xfaa61a)
     .setFooter({ text: `賭け: ${bet.toLocaleString()} ${currencyName}` });
+  if (imageUrl) embed.setImage(imageUrl);
+  return embed;
 }
 
 function buildResultEmbed(
@@ -393,7 +395,12 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     getSlotSettings(guildId),
   ]);
 
-  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
+  // プールを先に取得してスピニング画像を決定
+  const { symbols, weights, meta } = await pickSymbolPool(interaction);
+  const randomSym = symbols[Math.floor(Math.random() * symbols.length)];
+  const spinningImageUrl = randomSym ? featuredImageUrl(randomSym, meta) ?? undefined : undefined;
+
+  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName, spinningImageUrl)] });
 
   const afterDeduct = await deductBet(guildId, userId, bet);
   if (!afterDeduct) {
@@ -407,8 +414,6 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     });
     return;
   }
-
-  const { symbols, weights, meta } = await pickSymbolPool(interaction);
   const pool = buildWeightedPool(symbols, weights);
   const grid = spinGrid(pool);
   const paylines = evaluatePaylines(grid);
