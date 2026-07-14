@@ -48,8 +48,16 @@ export async function getLobbyChannelId(guildId: string): Promise<string | null>
   return row?.lobbyChannelId ?? null;
 }
 
-export async function addTempVc(guildId: string, channelId: string, ownerId: string) {
-  await db.insert(communityTempVcsTable).values({ guildId, channelId, ownerId }).onConflictDoNothing();
+export async function addTempVc(
+  guildId: string,
+  channelId: string,
+  ownerId: string,
+  categoryId?: string | null,
+) {
+  await db
+    .insert(communityTempVcsTable)
+    .values({ guildId, channelId, ownerId, categoryId: categoryId ?? null })
+    .onConflictDoNothing();
 }
 
 export async function removeTempVc(channelId: string) {
@@ -66,7 +74,7 @@ export async function isTempVc(channelId: string): Promise<boolean> {
 
 export async function getTempVcRecord(
   channelId: string,
-): Promise<{ guildId: string; channelId: string; ownerId: string } | undefined> {
+): Promise<{ guildId: string; channelId: string; ownerId: string; categoryId: string | null } | undefined> {
   const [row] = await db
     .select()
     .from(communityTempVcsTable)
@@ -74,7 +82,7 @@ export async function getTempVcRecord(
   return row;
 }
 
-export async function getAllTempVcs(): Promise<{ guildId: string; channelId: string; ownerId: string }[]> {
+export async function getAllTempVcs(): Promise<{ guildId: string; channelId: string; ownerId: string; categoryId: string | null }[]> {
   return db.select().from(communityTempVcsTable);
 }
 

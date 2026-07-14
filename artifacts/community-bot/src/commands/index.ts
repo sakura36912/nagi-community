@@ -1711,7 +1711,7 @@ export async function handleTempVcCreate(interaction: ButtonInteraction): Promis
     }
   }
 
-  await addTempVc(interaction.guildId, channel.id, interaction.user.id);
+  await addTempVc(interaction.guildId, channel.id, interaction.user.id, parentId ?? null);
   await interaction.editReply(`✅ 一時VCを作成しました: <#${channel.id}>`);
 }
 

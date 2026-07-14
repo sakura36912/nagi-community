@@ -412,9 +412,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         parent: parentId,
       });
 
-      await addTempVc(guildId, newVc.id, userId);
+      await addTempVc(guildId, newVc.id, userId, parentId ?? null);
       await member.voice.setChannel(newVc);
-      logger.info(`[tempvc] Created ${newVc.id} for user ${userId}`);
+      logger.info(`[tempvc] Created ${newVc.id} for user ${userId} category=${parentId ?? "none"}`);
       // Open a session for the moved user.
       await openSession(guildId, userId, newVc.id).catch(() => {});
     } catch (err) {
@@ -465,6 +465,37 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     } catch (err) {
       logger.error(`[tempvc] Failed to delete temp VC ${oldChannelId}`, err);
     }
+  }
+});
+
+// ─── ChannelUpdate — temp VC category lock ────────────────────────────────────
+
+client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
+  try {
+    if (
+      oldChannel.type !== ChannelType.GuildVoice ||
+      newChannel.type !== ChannelType.GuildVoice
+    ) return;
+
+    // Only act if the parent (category) changed
+    if (oldChannel.parentId === newChannel.parentId) return;
+
+    const record = await getTempVcRecord(newChannel.id).catch(() => undefined);
+    if (!record?.categoryId) return; // not a managed temp VC, or no category lock
+
+    // Category was changed — restore it
+    if (newChannel.parentId === record.categoryId) return; // already correct
+
+    logger.info(
+      `[tempvc] Category moved ${newChannel.id}: ${newChannel.parentId} → ${record.categoryId}. Reverting.`,
+    );
+
+    await newChannel.setParent(record.categoryId, {
+      lockPermissions: false,
+      reason: "一時VCのカテゴリを固定しています",
+    });
+  } catch (err) {
+    logger.error("[tempvc] Failed to restore temp VC category", err);
   }
 });
 

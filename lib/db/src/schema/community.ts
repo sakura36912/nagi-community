@@ -26,6 +26,8 @@ export const communityTempVcsTable = pgTable("community_temp_vcs", {
   guildId: text("guild_id").notNull(),
   channelId: text("channel_id").notNull().unique(),
   ownerId: text("owner_id").notNull(),
+  /** The Discord category (parent) this VC must stay in. Null = no restriction. */
+  categoryId: text("category_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
