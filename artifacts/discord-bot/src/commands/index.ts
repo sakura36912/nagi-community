@@ -8,6 +8,7 @@ import {
   ModalBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  SlashCommandSubcommandGroupBuilder,
   TextInputBuilder,
   TextInputStyle,
   type ButtonInteraction,
@@ -925,122 +926,103 @@ const VC_EFFECT_CHOICES: EffectChoice[] = [
   { name: "VCリネーム", value: VC_RENAME_EFFECT },
 ];
 
-function buildShopCommand(
-  commandName: string,
-  displayName: string,
-  emoji: string,
-  category: string,
-  color: number,
-  effectChoices: EffectChoice[] = DEFAULT_EFFECT_CHOICES,
-  options: { licenseSetup?: boolean; vcCategorySetup?: boolean; uraCategorySetup?: boolean; uraChannelSetup?: boolean } = {},
-): Command {
-  const listCmdDesc = `${displayName}の購入可能アイテム一覧を表示します`;
+// ─────────────────────────────────────────────────────────────
+// Unified /shop command  (subcommand-group per category)
+// Usage: /shop <general|group|vc|ura> <list|buy|add|…>
+// ─────────────────────────────────────────────────────────────
+interface ShopGroupConfig {
+  displayName: string;
+  emoji: string;
+  category: string;
+  color: number;
+  effectChoices: EffectChoice[];
+  licenseSetup?: boolean;
+  vcCategorySetup?: boolean;
+  uraCategorySetup?: boolean;
+  uraChannelSetup?: boolean;
+}
 
-  const builder = new SlashCommandBuilder()
-    .setName(commandName)
-    .setDescription(`${displayName}を操作します`)
-    .addSubcommand((sub) => sub.setName("list").setDescription(listCmdDesc))
+const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
+  general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623, effectChoices: DEFAULT_EFFECT_CHOICES },
+  group:   { displayName: "組別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c, effectChoices: DEFAULT_EFFECT_CHOICES, licenseSetup: true },
+  vc:      { displayName: "非公開VCショップ",       emoji: "🔒", category: "vc",      color: 0x3498db, effectChoices: VC_EFFECT_CHOICES,     vcCategorySetup: true },
+  ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6, effectChoices: VC_EFFECT_CHOICES,     uraCategorySetup: true, uraChannelSetup: true },
+};
+
+function buildShopGroup(groupName: string, cfg: ShopGroupConfig): SlashCommandSubcommandGroupBuilder {
+  const g = new SlashCommandSubcommandGroupBuilder()
+    .setName(groupName)
+    .setDescription(cfg.displayName)
+    .addSubcommand((sub) => sub.setName("list").setDescription(`${cfg.displayName}の購入可能アイテム一覧を表示します`))
     .addSubcommand((sub) =>
       sub
         .setName("buy")
         .setDescription("アイテムを購入します")
         .addIntegerOption((opt) =>
-          opt
-            .setName("item_id")
-            .setDescription(`アイテムID(/${commandName} list で確認)`)
-            .setRequired(true),
+          opt.setName("item_id").setDescription(`アイテムID(/shop ${groupName} list で確認)`).setRequired(true),
         ),
     )
     .addSubcommand((sub) => sub.setName("inventory").setDescription("自分の所持アイテムを表示します"))
     .addSubcommand((sub) =>
       sub
         .setName("add")
-        .setDescription(`${displayName}にアイテムを追加します(管理者用)`)
+        .setDescription(`${cfg.displayName}にアイテムを追加します(管理者用)`)
         .addStringOption((opt) => opt.setName("name").setDescription("アイテム名").setRequired(true))
-        .addIntegerOption((opt) =>
-          opt.setName("price").setDescription("価格").setRequired(true).setMinValue(1),
-        )
+        .addIntegerOption((opt) => opt.setName("price").setDescription("価格").setRequired(true).setMinValue(1))
         .addStringOption((opt) => opt.setName("description").setDescription("説明").setRequired(false))
         .addStringOption((opt) =>
-          opt
-            .setName("effect")
-            .setDescription("購入時の特殊効果")
-            .setRequired(false)
-            .addChoices(...effectChoices),
+          opt.setName("effect").setDescription("購入時の特殊効果").setRequired(false).addChoices(...cfg.effectChoices),
         )
         .addRoleOption((opt) =>
-          opt
-            .setName("role")
-            .setDescription("付与するロール（永久ロール付与エフェクト使用時）")
-            .setRequired(false),
+          opt.setName("role").setDescription("付与するロール（永久ロール付与エフェクト使用時）").setRequired(false),
         ),
     )
     .addSubcommand((sub) =>
       sub
         .setName("price")
         .setDescription("アイテムの価格を変更します(管理者用)")
-        .addIntegerOption((opt) =>
-          opt.setName("item_id").setDescription("アイテムID").setRequired(true),
-        )
-        .addIntegerOption((opt) =>
-          opt.setName("price").setDescription("新しい価格").setRequired(true).setMinValue(1),
-        ),
+        .addIntegerOption((opt) => opt.setName("item_id").setDescription("アイテムID").setRequired(true))
+        .addIntegerOption((opt) => opt.setName("price").setDescription("新しい価格").setRequired(true).setMinValue(1)),
     )
     .addSubcommand((sub) =>
       sub
         .setName("remove")
-        .setDescription(`${displayName}からアイテムを削除します(管理者用)`)
-        .addIntegerOption((opt) =>
-          opt.setName("item_id").setDescription("アイテムID").setRequired(true),
-        ),
+        .setDescription(`${cfg.displayName}からアイテムを削除します(管理者用)`)
+        .addIntegerOption((opt) => opt.setName("item_id").setDescription("アイテムID").setRequired(true)),
     );
 
-  if (options.vcCategorySetup) {
-    builder.addSubcommand((sub) =>
+  if (cfg.vcCategorySetup) {
+    g.addSubcommand((sub) =>
       sub
         .setName("vc-category")
         .setDescription("非公開VCを作成するカテゴリを設定します(管理者用)")
         .addChannelOption((opt) =>
-          opt
-            .setName("channel")
-            .setDescription("カテゴリチャンネルを選択")
-            .addChannelTypes(ChannelType.GuildCategory)
-            .setRequired(true),
+          opt.setName("channel").setDescription("カテゴリチャンネルを選択").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
         ),
     );
   }
-
-  if (options.uraCategorySetup) {
-    builder.addSubcommand((sub) =>
+  if (cfg.uraCategorySetup) {
+    g.addSubcommand((sub) =>
       sub
         .setName("ura-category")
         .setDescription("裏フリールームVCを作成するカテゴリを設定します(管理者用)")
         .addChannelOption((opt) =>
-          opt
-            .setName("channel")
-            .setDescription("カテゴリチャンネルを選択")
-            .addChannelTypes(ChannelType.GuildCategory)
-            .setRequired(true),
+          opt.setName("channel").setDescription("カテゴリチャンネルを選択").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
         ),
     );
   }
-
-  if (options.uraChannelSetup) {
-    builder.addSubcommand((sub) =>
+  if (cfg.uraChannelSetup) {
+    g.addSubcommand((sub) =>
       sub
         .setName("ura-channel")
         .setDescription("裏フリールーム購入者にアクセス権を付与するチャンネルを設定します(管理者用)")
         .addChannelOption((opt) =>
-          opt
-            .setName("channel")
-            .setDescription("テキスト・ボイスチャンネルを選択")
-            .setRequired(true),
+          opt.setName("channel").setDescription("テキスト・ボイスチャンネルを選択").setRequired(true),
         ),
     );
   }
-
-  if (options.licenseSetup) {
-    builder
+  if (cfg.licenseSetup) {
+    g
       .addSubcommand((sub) =>
         sub
           .setName("license-setup")
@@ -1048,21 +1030,29 @@ function buildShopCommand(
           .addRoleOption((opt) => opt.setName("squad_role").setDescription("隊ロール").setRequired(true))
           .addRoleOption((opt) => opt.setName("shop_role").setDescription("付与するショップ開業ロール").setRequired(true)),
       )
-      .addSubcommand((sub) =>
-        sub.setName("license-list").setDescription("現在の隊→開業ロールのマッピング一覧を表示します(管理者用)"),
-      )
-      .addSubcommand((sub) =>
-        sub.setName("sales").setDescription("隊ごとの売上を表示します"),
-      );
+      .addSubcommand((sub) => sub.setName("license-list").setDescription("現在の隊→開業ロールのマッピング一覧を表示します(管理者用)"))
+      .addSubcommand((sub) => sub.setName("sales").setDescription("隊ごとの売上を表示します"));
   }
 
-  return {
-    data: builder,
+  return g;
+}
 
-    async execute(interaction) {
-      const guildId = requireGuild(interaction);
-      const sub = interaction.options.getSubcommand();
-      const panelTitle = `${emoji} ${displayName}`;
+const shopCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("shop")
+    .setDescription("ショップを操作します")
+    .addSubcommandGroup(buildShopGroup("general", SHOP_GROUPS.general))
+    .addSubcommandGroup(buildShopGroup("group",   SHOP_GROUPS.group))
+    .addSubcommandGroup(buildShopGroup("vc",      SHOP_GROUPS.vc))
+    .addSubcommandGroup(buildShopGroup("ura",     SHOP_GROUPS.ura)),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    const groupName = interaction.options.getSubcommandGroup(true);
+    const sub = interaction.options.getSubcommand();
+    const cfg = SHOP_GROUPS[groupName];
+    const { displayName, emoji, category, color } = cfg;
+    const panelTitle = `${emoji} ${displayName}`;
 
       if (sub === "list") {
         const [items, settings] = await Promise.all([
@@ -1300,7 +1290,7 @@ function buildShopCommand(
         return;
       }
 
-      if (sub === "vc-category" && options.vcCategorySetup) {
+      if (sub === "vc-category" && cfg.vcCategorySetup) {
         if (!requireManageGuild(interaction)) {
           await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
           return;
@@ -1314,7 +1304,7 @@ function buildShopCommand(
         return;
       }
 
-      if (sub === "ura-category" && options.uraCategorySetup) {
+      if (sub === "ura-category" && cfg.uraCategorySetup) {
         if (!requireManageGuild(interaction)) {
           await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
           return;
@@ -1326,7 +1316,7 @@ function buildShopCommand(
         return;
       }
 
-      if (sub === "ura-channel" && options.uraChannelSetup) {
+      if (sub === "ura-channel" && cfg.uraChannelSetup) {
         if (!requireManageGuild(interaction)) {
           await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
           return;
@@ -1337,7 +1327,7 @@ function buildShopCommand(
         return;
       }
 
-      if (sub === "sales" && options.licenseSetup) {
+      if (sub === "sales" && cfg.licenseSetup) {
         const [summary, treasuries, settings] = await Promise.all([
           getGroupShopSalesSummary(guildId),
           listSquadTreasuries(guildId),
@@ -1361,7 +1351,7 @@ function buildShopCommand(
         return;
       }
 
-      if (sub === "license-setup" && options.licenseSetup) {
+      if (sub === "license-setup" && cfg.licenseSetup) {
         if (!requireManageGuild(interaction)) {
           await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
           return;
@@ -1375,14 +1365,14 @@ function buildShopCommand(
         return;
       }
 
-      if (sub === "license-list" && options.licenseSetup) {
+      if (sub === "license-list" && cfg.licenseSetup) {
         if (!requireManageGuild(interaction)) {
           await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
           return;
         }
         const configs = await listShopLicenseConfigs(guildId);
         if (configs.length === 0) {
-          await interaction.reply({ content: "開業ロールの設定がまだありません。`/groupshop license-setup` で設定してください。", ephemeral: true });
+          await interaction.reply({ content: "開業ロールの設定がまだありません。`/shop group license-setup` で設定してください。", ephemeral: true });
           return;
         }
         const lines = configs.map((c) => `<@&${c.squadRoleId}> → <@&${c.licenseRoleId}>`);
@@ -1390,14 +1380,7 @@ function buildShopCommand(
         return;
       }
     },
-  };
-}
-
-// The four independent shops
-const shopCommand        = buildShopCommand("shop",      "ショップ",               "🛒", "general", 0xf5a623);
-const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",           "⚔️", "group",   0xe74c3c, DEFAULT_EFFECT_CHOICES, { licenseSetup: true });
-const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",       "🔒", "vc",      0x3498db, VC_EFFECT_CHOICES, { vcCategorySetup: true });
-const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",     0x9b59b6, VC_EFFECT_CHOICES, { uraCategorySetup: true, uraChannelSetup: true });
+};
 
 const rewardCommand: Command = {
   data: new SlashCommandBuilder()
@@ -1793,9 +1776,6 @@ export const commands: Command[] = [
   giveCommand,
   leaderboardCommand,
   shopCommand,
-  groupShopCommand,
-  vcShopCommand,
-  uraShopCommand,
   rewardCommand,
   vcCommand,
   treasuryCommand,
