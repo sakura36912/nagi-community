@@ -46,6 +46,7 @@ import {
   setSheetForumConfig,
   setStaffRole,
   setTicketMessages,
+  setTicketRenameRole,
   setVcPrivacyOptOut,
   updateEventMessageId,
 } from "../lib/community.js";
@@ -532,9 +533,12 @@ const ticketCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("settings")
-        .setDescription("スタッフロールを設定します（管理者）")
+        .setDescription("スタッフロールと権限ロールを設定します（管理者）")
         .addRoleOption((opt) =>
-          opt.setName("staff_role").setDescription("チケット対応スタッフのロール").setRequired(true),
+          opt.setName("staff_role").setDescription("チケット対応スタッフのロール").setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("rename_role").setDescription("チャンネル名を変更できるロール").setRequired(false),
         ),
     )
     .addSubcommand((sub) =>
@@ -553,21 +557,102 @@ const ticketCommand: Command = {
         .addStringOption((opt) =>
           opt.setName("welcome_message").setDescription("チケット作成時にチャンネルへ送るメッセージ").setRequired(false).setMaxLength(2000),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("rename")
+        .setDescription("チケットチャンネルの名前を変更します")
+        .addStringOption((opt) =>
+          opt
+            .setName("name")
+            .setDescription("新しいチャンネル名（英数字・ハイフン・日本語）")
+            .setRequired(true)
+            .setMaxLength(100),
+        ),
     ),
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub = interaction.options.getSubcommand();
 
+    // ── rename — ticket channel only, admin or rename_role ────────────────────
+    if (sub === "rename") {
+      if (!interaction.channelId) {
+        await interaction.reply({ content: "チャンネル内でのみ使用できます。", ephemeral: true });
+        return;
+      }
+
+      const ticket = await getTicketByChannel(interaction.channelId);
+      if (!ticket) {
+        await interaction.reply({ content: "このチャンネルはチケットではありません。", ephemeral: true });
+        return;
+      }
+
+      const settings = await getTicketSettings(guildId);
+      const member = interaction.member as import("discord.js").GuildMember | null;
+      const isAdmin = requireAdmin(interaction);
+      const hasRenameRole = settings?.renameRoleId
+        ? member?.roles.cache.has(settings.renameRoleId) ?? false
+        : false;
+
+      if (!isAdmin && !hasRenameRole) {
+        const mention = settings?.renameRoleId ? ` または <@&${settings.renameRoleId}>` : "";
+        await interaction.reply({
+          content: `チャンネル名の変更は管理者${mention} のみ可能です。`,
+          ephemeral: true,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      const newName = interaction.options.getString("name", true).slice(0, 100);
+      try {
+        const ch = interaction.channel;
+        if (ch && "edit" in ch) await (ch as import("discord.js").TextChannel).edit({ name: newName });
+        await interaction.reply({ content: `✅ チャンネル名を **${newName}** に変更しました。`, ephemeral: true });
+      } catch {
+        await interaction.reply({ content: "チャンネル名の変更に失敗しました。Botに権限があるか確認してください。", ephemeral: true });
+      }
+      return;
+    }
+
+    // 以下は管理者専用
     if (!requireAdmin(interaction)) {
       await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
       return;
     }
 
     if (sub === "settings") {
-      const role = interaction.options.getRole("staff_role", true);
-      await setStaffRole(guildId, role.id);
-      await interaction.reply({ content: `✅ スタッフロールを <@&${role.id}> に設定しました。`, ephemeral: true });
+      const staffRole  = interaction.options.getRole("staff_role");
+      const renameRole = interaction.options.getRole("rename_role");
+
+      if (!staffRole && !renameRole) {
+        const settings = await getTicketSettings(guildId);
+        const embed = new EmbedBuilder()
+          .setTitle("🎫 チケット設定")
+          .setColor(0xfee75c)
+          .addFields(
+            { name: "スタッフロール", value: settings?.staffRoleId ? `<@&${settings.staffRoleId}>` : "未設定", inline: true },
+            { name: "名前変更可能ロール", value: settings?.renameRoleId ? `<@&${settings.renameRoleId}>` : "未設定（管理者のみ）", inline: true },
+          );
+        await interaction.reply({ embeds: [embed], ephemeral: true, allowedMentions: { parse: [] } });
+        return;
+      }
+
+      const replies: string[] = [];
+      if (staffRole) {
+        await setStaffRole(guildId, staffRole.id);
+        replies.push(`スタッフロール: <@&${staffRole.id}>`);
+      }
+      if (renameRole) {
+        await setTicketRenameRole(guildId, renameRole.id);
+        replies.push(`名前変更可能ロール: <@&${renameRole.id}>`);
+      }
+      await interaction.reply({
+        content: `✅ 設定しました。\n${replies.join("\n")}`,
+        ephemeral: true,
+        allowedMentions: { parse: [] },
+      });
       return;
     }
 

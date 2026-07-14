@@ -97,6 +97,8 @@ export const communityTicketSettingsTable = pgTable("community_ticket_settings",
   panelButtonLabel: text("panel_button_label"),
   /** First message posted inside the newly created ticket channel. */
   welcomeMessage: text("welcome_message"),
+  /** Role allowed to rename ticket channels (in addition to admins). */
+  renameRoleId: text("rename_role_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

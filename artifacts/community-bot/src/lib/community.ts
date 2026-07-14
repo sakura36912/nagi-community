@@ -255,6 +255,16 @@ export async function setTicketMessages(
     });
 }
 
+export async function setTicketRenameRole(guildId: string, renameRoleId: string | null) {
+  await db
+    .insert(communityTicketSettingsTable)
+    .values({ guildId, renameRoleId })
+    .onConflictDoUpdate({
+      target: communityTicketSettingsTable.guildId,
+      set: { renameRoleId, updatedAt: new Date() },
+    });
+}
+
 export async function getTicketSettings(guildId: string): Promise<CommunityTicketSettings | undefined> {
   const [row] = await db
     .select()
