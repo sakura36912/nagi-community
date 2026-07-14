@@ -703,8 +703,6 @@ const rewardCommand: Command = {
   },
 };
 
-import { vcCommand } from "./vc";
-
 export const commands: Command[] = [
   currencyCommand,
   balanceCommand,
@@ -714,5 +712,4 @@ export const commands: Command[] = [
   leaderboardCommand,
   shopCommand,
   rewardCommand,
-  vcCommand,
 ];

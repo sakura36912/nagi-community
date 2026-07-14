@@ -15,7 +15,6 @@ import {
   markRewardDistributed,
   seedDefaultShopItems,
 } from "./lib/economy";
-import { deleteVcScheduleById, getDueVcSchedules } from "./lib/vc";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 
@@ -28,28 +27,6 @@ const commandsByName = new Map(commands.map((c) => [c.data.name, c]));
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
-
-// Deletes any VCs whose scheduledDeleteAt has passed.
-async function runVcScheduler(): Promise<void> {
-  const due = await getDueVcSchedules(new Date());
-  for (const schedule of due) {
-    try {
-      const guild = client.guilds.cache.get(schedule.guildId);
-      if (guild) {
-        const channel = guild.channels.cache.get(schedule.channelId)
-          ?? await guild.channels.fetch(schedule.channelId).catch(() => null);
-        if (channel) {
-          await channel.delete("VC期間終了による自動削除");
-          logger.info(`[vc] Deleted channel "${schedule.newName}" (${schedule.channelId}) in guild ${schedule.guildId}`);
-        }
-      }
-    } catch (err) {
-      logger.error(`[vc] Failed to delete channel ${schedule.channelId}`, err);
-    }
-    // Always remove from DB, even if the channel was already gone.
-    await deleteVcScheduleById(schedule.id);
-  }
-}
 
 // Checks every minute whether any guild's reward interval has elapsed and
 // distributes role-based rewards (salary) if so.
@@ -117,11 +94,6 @@ client.once(Events.ClientReady, (readyClient) => {
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
   }, 60 * 1000);
-
-  // VC deletion scheduler — checks every 30 s for overdue schedules.
-  setInterval(() => {
-    runVcScheduler().catch((err) => logger.error("[vc] Scheduler error", err));
-  }, 30 * 1000);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
