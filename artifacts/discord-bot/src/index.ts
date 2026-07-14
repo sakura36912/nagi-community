@@ -12,6 +12,7 @@ import {
   postWeeklyShifts,
   getNextWeeklyPostTime,
 } from "./commands";
+import { buildSheetEmbed } from "./commands/sheet";
 import { saveSchedule, getExpiredSchedules, deleteSchedule } from "./lib/vc";
 import { logger } from "./lib/logger";
 import {
@@ -32,6 +33,9 @@ import {
   seedDefaultShopItems,
   seedDefaultVcShopItems,
   seedDefaultUraShopItems,
+  getEvalSheetSettings,
+  createEvalSheet,
+  getSheetVcSeconds,
 } from "./lib/economy";
 
 import { appendFileSync } from "fs";
@@ -373,6 +377,70 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 });
+
+// ─── GuildMemberUpdate — eval sheet auto-creation on role assign ─────────────
+
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+  const guildId = newMember.guild.id;
+
+  const addedRoleIds = oldMember.partial
+    ? [...newMember.roles.cache.keys()]
+    : [...newMember.roles.cache.keys()].filter((id) => !oldMember.roles.cache.has(id));
+
+  if (addedRoleIds.length === 0) return;
+
+  const settings = await getEvalSheetSettings(guildId).catch(() => undefined);
+  if (!settings?.forumChannelId || !settings.triggerRoleIds) return;
+
+  const triggerIds = settings.triggerRoleIds.split(",").filter(Boolean);
+  const matchedRoleId = addedRoleIds.find((id) => triggerIds.includes(id));
+  if (!matchedRoleId) return;
+
+  const forum =
+    newMember.guild.channels.cache.get(settings.forumChannelId) ??
+    await newMember.guild.channels.fetch(settings.forumChannelId).catch(() => null);
+
+  if (!forum || forum.type !== ChannelType.GuildForum) {
+    logger.error(`[sheet] forum channel ${settings.forumChannelId} not found or wrong type`);
+    return;
+  }
+
+  const evalDays = settings.evalPeriodDays ?? 14;
+  const startDate = new Date();
+  const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
+
+  let targetUser;
+  try { targetUser = await newMember.client.users.fetch(newMember.id); }
+  catch { logger.warn(`[sheet] Could not fetch user ${newMember.id}`); return; }
+
+  const displayName = newMember.displayName;
+  const roleName = newMember.guild.roles.cache.get(matchedRoleId)?.name ?? matchedRoleId;
+
+  const vcSeconds = await getSheetVcSeconds(guildId, newMember.id, startDate, endDate).catch(() => 0);
+
+  const embed = buildSheetEmbed({
+    targetUser,
+    displayName,
+    startDate,
+    endDate,
+    vcSeconds,
+    nameboardUrl: settings.nameboardUrl,
+    createdByLabel: `ロール付与により自動生成（${roleName}）`,
+  });
+
+  try {
+    const thread = await forum.threads.create({
+      name: `${displayName} — 評価シート`.slice(0, 100),
+      message: { embeds: [embed] },
+    });
+    await createEvalSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);
+    logger.info(`[sheet] ✅ Created thread ${thread.id} for user ${newMember.id} on role ${roleName}`);
+  } catch (err) {
+    logger.error(`[sheet] Failed to create forum thread for user ${newMember.id}`, err);
+  }
+});
+
+// ─── InteractionCreate ───────────────────────────────────────────────────────
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {

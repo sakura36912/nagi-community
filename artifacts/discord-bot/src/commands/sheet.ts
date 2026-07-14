@@ -32,7 +32,7 @@ function formatSeconds(totalSeconds: number): string {
     .join("") || "0秒";
 }
 
-function buildSheetEmbed(opts: {
+export function buildSheetEmbed(opts: {
   targetUser: User;
   displayName: string;
   startDate: Date;
