@@ -198,20 +198,16 @@ function buildEvalSheetEmbed(
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   logger.info(`[evalsheet] GuildMemberUpdate fired: user=${newMember.id} guild=${newMember.guild.id} oldPartial=${oldMember.partial}`);
 
-  // If oldMember is partial (not cached), we cannot diff roles reliably.
-  // Fetch the full old member first so we get an accurate before-state.
-  const resolvedOld = oldMember.partial
-    ? await oldMember.fetch().catch(() => null)
-    : oldMember;
-
+  // oldMember.partial が true のときは fetch() してはいけない。
+  // fetch() はロール付与後の最新状態を返すため差分が空になる。
+  // partial のときは全現在ロールを対象にし、hasEvalSheet で重複防止する。
   let addedRoleIds: string[];
-  if (!resolvedOld) {
-    // Couldn't fetch old state — check all current roles; hasEvalSheet prevents duplication.
+  if (oldMember.partial) {
     addedRoleIds = [...newMember.roles.cache.keys()];
-    logger.info(`[evalsheet] Could not resolve old member, checking all ${addedRoleIds.length} current roles`);
+    logger.info(`[evalsheet] oldMember partial — checking all ${addedRoleIds.length} current roles`);
   } else {
     addedRoleIds = [...newMember.roles.cache.keys()].filter(
-      (id) => !resolvedOld.roles.cache.has(id),
+      (id) => !oldMember.roles.cache.has(id),
     );
     logger.info(`[evalsheet] Newly added role IDs: [${addedRoleIds.join(", ")}]`);
   }
