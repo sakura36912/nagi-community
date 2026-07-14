@@ -31,12 +31,18 @@ import { appendFileSync } from "fs";
 const DEBUG_LOG = "/tmp/bot-debug.log";
 function dlog(msg: string) {
   const line = `${new Date().toISOString()} ${msg}\n`;
-  try { appendFileSync(DEBUG_LOG, line); } catch {}
+  try { appendFileSync(DEBUG_LOG, line); } catch (e) {
+    process.stderr.write(`dlog failed: ${e}\n`);
+  }
 }
 
+dlog("=== bot starting ===");
+
 const token = process.env["DISCORD_BOT_TOKEN"];
+dlog(`token present: ${!!token}`);
 
 if (!token) {
+  dlog("ERROR: no token");
   throw new Error("DISCORD_BOT_TOKEN environment variable is required.");
 }
 
@@ -311,7 +317,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+dlog("calling client.login()");
 client.login(token).catch((err) => {
+  dlog(`login failed: ${err}`);
   logger.error("Failed to log in to Discord", err);
   process.exit(1);
 });
