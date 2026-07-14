@@ -26,6 +26,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   vcCategoryId: text("vc_category_id"),
   // Discord category channel ID where 裏フリールーム VCs (urashop) are created.
   uraCategoryId: text("ura_category_id"),
+  // Discord text/voice channel ID that urashop buyers get ViewChannel access to.
+  uraChannelId: text("ura_channel_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -169,6 +171,8 @@ export const privateVcSessionsTable = pgTable("private_vc_sessions", {
   guildId: text("guild_id").notNull(),
   channelId: text("channel_id").notNull().unique(),
   userId: text("user_id").notNull(),
+  /** Shop category that created this session ("vc" | "ura"). Used to decide cleanup actions. */
+  category: text("category").notNull().default("vc"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

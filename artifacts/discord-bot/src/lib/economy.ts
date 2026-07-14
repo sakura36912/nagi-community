@@ -192,6 +192,20 @@ export async function setUraCategoryId(
   return settings;
 }
 
+export async function setUraChannelId(
+  guildId: string,
+  uraChannelId: string | null,
+): Promise<GuildSettings> {
+  await getGuildSettings(guildId);
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ uraChannelId })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+  if (!settings) throw new Error("Failed to update ura_channel_id");
+  return settings;
+}
+
 export async function createOrUpdateCurrency(
   guildId: string,
   currencyName: string,
@@ -582,10 +596,11 @@ export async function createPrivateVcSession(
   userId: string,
   channelId: string,
   expiresAt: Date,
+  category: string = "vc",
 ): Promise<PrivateVcSession> {
   const [session] = await db
     .insert(privateVcSessionsTable)
-    .values({ guildId, userId, channelId, expiresAt })
+    .values({ guildId, userId, channelId, expiresAt, category })
     .returning();
 
   if (!session) throw new Error("Failed to create private VC session");

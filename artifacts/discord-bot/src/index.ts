@@ -1,4 +1,4 @@
-import { ChannelType, Client, Events, GatewayIntentBits, MessageFlags, VoiceState } from "discord.js";
+import { ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState } from "discord.js";
 import { EmbedBuilder } from "discord.js";
 import {
   commands,
@@ -135,11 +135,29 @@ async function runVcExpiryScheduler(): Promise<void> {
     try {
       const guild = client.guilds.cache.get(session.guildId);
       if (guild) {
+        // Delete the VC channel.
         const channel = guild.channels.cache.get(session.channelId)
           ?? await guild.channels.fetch(session.channelId).catch(() => null);
         if (channel) {
           await channel.delete("非公開VCの期限切れ");
           logger.info(`[vc-expiry] Deleted expired VC ${session.channelId} for user ${session.userId} in guild ${session.guildId}`);
+        }
+
+        // For ura sessions, revoke the access channel permission.
+        if (session.category === "ura") {
+          try {
+            const settings = await getGuildSettings(session.guildId);
+            if (settings.uraChannelId) {
+              const accessCh = guild.channels.cache.get(settings.uraChannelId)
+                ?? await guild.channels.fetch(settings.uraChannelId).catch(() => null);
+              if (accessCh && "permissionOverwrites" in accessCh) {
+                await accessCh.permissionOverwrites.delete(session.userId, "裏フリールームVC期限切れ");
+                logger.info(`[vc-expiry] Revoked ura channel access for user ${session.userId}`);
+              }
+            }
+          } catch (err) {
+            logger.error(`[vc-expiry] Failed to revoke ura channel access for ${session.userId}`, err);
+          }
         }
       }
     } catch (err) {
