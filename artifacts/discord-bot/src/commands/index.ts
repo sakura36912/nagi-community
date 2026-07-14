@@ -29,6 +29,7 @@ import {
   claimDaily,
   createOrUpdateCurrency,
   createPrivateVcSession,
+  updateShopItemPrice,
   getGuildSettings,
   getLeaderboard,
   getOrCreateWallet,
@@ -620,6 +621,17 @@ function buildShopCommand(
       )
       .addSubcommand((sub) =>
         sub
+          .setName("price")
+          .setDescription("アイテムの価格を変更します(管理者用)")
+          .addIntegerOption((opt) =>
+            opt.setName("item_id").setDescription("アイテムID").setRequired(true),
+          )
+          .addIntegerOption((opt) =>
+            opt.setName("price").setDescription("新しい価格").setRequired(true).setMinValue(1),
+          ),
+      )
+      .addSubcommand((sub) =>
+        sub
           .setName("remove")
           .setDescription(`${displayName}からアイテムを削除します(管理者用)`)
           .addIntegerOption((opt) =>
@@ -713,6 +725,27 @@ function buildShopCommand(
         ]);
         await interaction.reply(
           `アイテム **#${item.id} ${item.name}**(${item.price}${settings.currencyName})を${displayName}に追加しました。`,
+        );
+        return;
+      }
+
+      if (sub === "price") {
+        if (!requireManageGuild(interaction)) {
+          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+          return;
+        }
+        const itemId = interaction.options.getInteger("item_id", true);
+        const newPrice = interaction.options.getInteger("price", true);
+        const [updated, settings] = await Promise.all([
+          updateShopItemPrice(guildId, itemId, newPrice),
+          getGuildSettings(guildId),
+        ]);
+        if (!updated) {
+          await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+          return;
+        }
+        await interaction.reply(
+          `**#${updated.id} ${updated.name}** の価格を **${newPrice}${settings.currencyName}** に変更しました。`,
         );
         return;
       }

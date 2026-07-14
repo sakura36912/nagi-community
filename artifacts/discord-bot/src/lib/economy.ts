@@ -560,6 +560,20 @@ export async function addShopItem(
   return item;
 }
 
+export async function updateShopItemPrice(
+  guildId: string,
+  itemId: number,
+  price: number,
+): Promise<ShopItem | null> {
+  const [updated] = await db
+    .update(shopItemsTable)
+    .set({ price })
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.id, itemId)))
+    .returning();
+
+  return updated ?? null;
+}
+
 export async function removeShopItem(
   guildId: string,
   itemId: number,
