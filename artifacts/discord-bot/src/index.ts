@@ -12,7 +12,7 @@ import {
   getNextWeeklyPostTime,
 } from "./commands";
 import { buildSheetEmbed, findSelfIntro } from "./commands/sheet";
-import { saveSchedule, getExpiredSchedules, deleteSchedule } from "./lib/vc";
+
 import { logger } from "./lib/logger";
 import {
   getVcRewardSettings,
@@ -169,51 +169,6 @@ async function runVcExpiryScheduler(): Promise<void> {
   }
 }
 
-// Checks every 60 s for VC rename schedules whose lease has expired,
-// deletes the Discord channel, and removes the schedule record from the DB.
-// Bot requires ManageChannels permission to delete channels.
-async function runVcDeleteScheduler(): Promise<void> {
-  const now = new Date();
-  const expired = await getExpiredSchedules(now);
-
-  for (const schedule of expired) {
-    try {
-      const guild = client.guilds.cache.get(schedule.guildId);
-      if (!guild) {
-        // Bot is no longer in this guild — safe to clean up the record.
-        await deleteSchedule(schedule.channelId).catch((err) =>
-          logger.error(`[vc-schedule] Failed to remove orphaned schedule ${schedule.channelId}`, err),
-        );
-        continue;
-      }
-
-      // Try to fetch the channel; null means it was already deleted manually.
-      const channel = guild.channels.cache.get(schedule.channelId)
-        ?? await guild.channels.fetch(schedule.channelId).catch(() => null);
-
-      if (!channel) {
-        // Channel is already gone — clean up the stale record.
-        logger.info(`[vc-schedule] Channel ${schedule.channelId} already absent; removing schedule`);
-        await deleteSchedule(schedule.channelId).catch((err) =>
-          logger.error(`[vc-schedule] Failed to delete stale schedule ${schedule.channelId}`, err),
-        );
-        continue;
-      }
-
-      // Attempt deletion. Only remove the DB record on success so that
-      // transient or permission errors don't silently drop the schedule.
-      await channel.delete("VCスケジュールの期限切れ");
-      logger.info(`[vc-schedule] Deleted expired VC ${schedule.channelId} ("${schedule.channelName}") in guild ${schedule.guildId}`);
-      await deleteSchedule(schedule.channelId).catch((err) =>
-        logger.error(`[vc-schedule] Channel deleted but failed to remove schedule ${schedule.channelId}`, err),
-      );
-    } catch (err) {
-      // channel.delete() threw — log and retain the DB record so the next
-      // tick can retry (e.g., transient error) or an admin can investigate.
-      logger.error(`[vc-schedule] Failed to delete channel ${schedule.channelId}; schedule retained for retry`, err);
-    }
-  }
-}
 
 client.once(Events.ClientReady, (readyClient) => {
   dlog(`Logged in as ${readyClient.user.tag}`);
@@ -247,7 +202,6 @@ client.once(Events.ClientReady, (readyClient) => {
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
     runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
-    runVcDeleteScheduler().catch((err) => logger.error("[vc-schedule] Scheduler error", err));
   }, 60 * 1000);
 
   // ── Weekly shift post — every Monday 00:00 UTC (= 09:00 JST) ─────────────
