@@ -100,6 +100,17 @@ export async function getRecentTempVcDeletions(
     .limit(limit);
 }
 
+/** Returns every deletion log entry for the guild (no limit), oldest first. */
+export async function getAllTempVcDeletions(
+  guildId: string,
+): Promise<CommunityTempVcDeletionLog[]> {
+  return db
+    .select()
+    .from(communityTempVcDeletionLogTable)
+    .where(eq(communityTempVcDeletionLogTable.guildId, guildId))
+    .orderBy(asc(communityTempVcDeletionLogTable.deletedAt));
+}
+
 // ─── Events ─────────────────────────────────────────────────────────────────
 
 export async function createEvent(

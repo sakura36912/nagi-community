@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -22,6 +23,7 @@ import {
   getEvent,
   getParticipants,
   getActiveSession,
+  getAllTempVcDeletions,
   getLobbyChannelId,
   getRecentTempVcDeletions,
   getSheetSettings,
@@ -230,6 +232,11 @@ const tempvcCommand: Command = {
             .setMinValue(1)
             .setMaxValue(20),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("export")
+        .setDescription("一時VC削除履歴をCSVファイルとしてエクスポートします（管理者）"),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -287,6 +294,43 @@ const tempvcCommand: Command = {
         .setTimestamp();
 
       await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    if (sub === "export") {
+      await interaction.deferReply({ ephemeral: true });
+      const logs = await getAllTempVcDeletions(guildId);
+
+      if (logs.length === 0) {
+        await interaction.editReply("エクスポートできる削除履歴がありません。");
+        return;
+      }
+
+      // Build CSV — BOM付きUTF-8でExcelでも文字化けしない
+      const BOM = "\uFEFF";
+      const header = "channelName,ownerId,reason,deletedAt";
+      const rows = logs.map((entry) => {
+        const channelName = `"${entry.channelName.replace(/"/g, '""')}"`;
+        const ownerId = `"${entry.ownerId}"`;
+        const reason = `"${(TEMPVC_DELETION_REASON_LABEL[entry.reason] ?? entry.reason).replace(/"/g, '""')}"`;
+        const deletedAt = entry.deletedAt.toISOString();
+        return `${channelName},${ownerId},${reason},${deletedAt}`;
+      });
+      const csvContent = BOM + [header, ...rows].join("\r\n");
+
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 10);
+      const fileName = `tempvc-deletion-log-${guildId}-${dateStr}.csv`;
+
+      const attachment = new AttachmentBuilder(Buffer.from(csvContent, "utf-8"), {
+        name: fileName,
+        description: `一時VC削除履歴 ${logs.length}件 (${dateStr})`,
+      });
+
+      await interaction.editReply({
+        content: `📄 削除履歴 **${logs.length}件** をエクスポートしました。`,
+        files: [attachment],
+      });
       return;
     }
   },
