@@ -502,26 +502,40 @@ export function buildSheetEmbed(opts: {
   endDate: Date;
   vcSeconds: number;
   nameboardUrl: string | null | undefined;
+  selfIntro: string | null | undefined;
   createdByLabel: string;
 }): EmbedBuilder {
-  const { targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl, createdByLabel } = opts;
+  const { targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl, selfIntro, createdByLabel } = opts;
   const startTs = Math.floor(startDate.getTime() / 1000);
   const endTs = Math.floor(endDate.getTime() / 1000);
   const nameboardValue = nameboardUrl ? `[名簿を見る](${nameboardUrl})` : "未設定";
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle(`📋 評価シート — ${displayName}`)
     .setColor(0x2ecc71)
     .setThumbnail(targetUser.displayAvatarURL())
     .addFields(
       { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
       { name: "📋 名簿", value: nameboardValue, inline: false },
-      { name: "📅 評価開始", value: `<t:${startTs}:D>`, inline: true },
-      { name: "⏰ 評価終了", value: `<t:${endTs}:D>`, inline: true },
-      { name: "🎙️ 期間中のVC滞在時間", value: formatSeconds(vcSeconds), inline: false },
-    )
-    .setFooter({ text: createdByLabel })
-    .setTimestamp();
+    );
+
+  if (selfIntro) {
+    embed.addFields({
+      name: "📝 自己紹介",
+      value: selfIntro.slice(0, 1024),
+      inline: false,
+    });
+  }
+
+  embed.addFields(
+    { name: "📅 評価開始", value: `<t:${startTs}:D>`, inline: true },
+    { name: "⏰ 評価終了", value: `<t:${endTs}:D>`, inline: true },
+    { name: "🎙️ 期間中のVC滞在時間", value: formatSeconds(vcSeconds), inline: false },
+  )
+  .setFooter({ text: createdByLabel })
+  .setTimestamp();
+
+  return embed;
 }
 
 const sheetCommand: Command = {
@@ -687,6 +701,7 @@ const sheetCommand: Command = {
         endDate,
         vcSeconds,
         nameboardUrl: settings?.nameboardUrl,
+        selfIntro: null,
         createdByLabel: `作成者: ${interaction.user.displayName}`,
       });
 

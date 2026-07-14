@@ -349,6 +349,35 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 });
 
+// ─── Nameboard self-intro lookup ─────────────────────────────────────────────
+
+/**
+ * Searches every text channel whose name contains "名簿" for the most recent
+ * message posted by the given user (up to 500 messages back per channel).
+ * Returns the message content, or null if none found.
+ */
+async function findNameboSelfIntro(
+  guild: import("discord.js").Guild,
+  userId: string,
+): Promise<string | null> {
+  const candidates = [...guild.channels.cache.values()].filter(
+    (c) => c.name.includes("名簿") && c.isTextBased(),
+  );
+
+  for (const channel of candidates) {
+    if (!channel.isTextBased()) continue;
+    let before: string | undefined;
+    for (let page = 0; page < 5; page++) {
+      const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
+      if (!messages || messages.size === 0) break;
+      const found = messages.find((m) => m.author.id === userId && m.content.trim().length > 0);
+      if (found) return found.content;
+      before = messages.last()?.id;
+    }
+  }
+  return null;
+}
+
 // ─── GuildMemberUpdate — auto eval sheet on role assign ─────────────────────
 
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
@@ -415,7 +444,12 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const roleName = newMember.guild.roles.cache.get(matchedRole)?.name ?? matchedRole;
   logger.info(`[sheet] Creating sheet for ${displayName} (${newMember.id}), role=${roleName}`);
 
-  const vcSeconds = await getVcTimeInPeriod(guildId, newMember.id, startDate, endDate).catch(() => 0);
+  const [vcSeconds, selfIntro] = await Promise.all([
+    getVcTimeInPeriod(guildId, newMember.id, startDate, endDate).catch(() => 0),
+    findNameboSelfIntro(newMember.guild, newMember.id).catch(() => null),
+  ]);
+
+  logger.info(`[sheet] selfIntro found=${!!selfIntro} vcSeconds=${vcSeconds}`);
 
   const embed = buildSheetEmbed({
     targetUser,
@@ -424,6 +458,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     endDate,
     vcSeconds,
     nameboardUrl: settings.nameboardUrl,
+    selfIntro,
     createdByLabel: `ロール付与により自動生成（${roleName}）`,
   });
 
