@@ -171,6 +171,14 @@ function buildEvalSheetEmbed(member: { id: string; displayName: string; displayA
     .setFooter({ text: "このシートは管理者のみ編集できます。" });
 }
 
+// Raw gateway debug — logs every GUILD_MEMBER_UPDATE packet so we can verify
+// the event is arriving even if the high-level handler doesn't fire.
+client.on("raw", (packet: { t: string; d: unknown }) => {
+  if (packet.t === "GUILD_MEMBER_UPDATE") {
+    logger.info(`[evalsheet-raw] GUILD_MEMBER_UPDATE packet received: ${JSON.stringify(packet.d).slice(0, 300)}`);
+  }
+});
+
 // Fires when a member's roles change. Checks each newly added role against
 // the eval sheet config and creates a forum thread if one is configured.
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
