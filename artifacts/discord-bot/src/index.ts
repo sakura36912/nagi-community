@@ -12,7 +12,7 @@ import {
   postWeeklyShifts,
   getNextWeeklyPostTime,
 } from "./commands";
-import { buildSheetEmbed } from "./commands/sheet";
+import { buildSheetEmbed, findSelfIntro } from "./commands/sheet";
 import { saveSchedule, getExpiredSchedules, deleteSchedule } from "./lib/vc";
 import { logger } from "./lib/logger";
 import {
@@ -416,7 +416,10 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const displayName = newMember.displayName;
   const roleName = newMember.guild.roles.cache.get(matchedRoleId)?.name ?? matchedRoleId;
 
-  const vcSeconds = await getSheetVcSeconds(guildId, newMember.id, startDate, endDate).catch(() => 0);
+  const [vcSeconds, selfIntro] = await Promise.all([
+    getSheetVcSeconds(guildId, newMember.id, startDate, endDate).catch(() => 0),
+    findSelfIntro(newMember.guild, newMember.id).catch(() => null),
+  ]);
 
   const embed = buildSheetEmbed({
     targetUser,
@@ -425,6 +428,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     endDate,
     vcSeconds,
     nameboardUrl: settings.nameboardUrl,
+    selfIntro,
     createdByLabel: `ロール付与により自動生成（${roleName}）`,
   });
 

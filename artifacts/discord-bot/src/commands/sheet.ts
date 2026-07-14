@@ -41,26 +41,62 @@ export function buildSheetEmbed(opts: {
   endDate: Date;
   vcSeconds: number;
   nameboardUrl: string | null | undefined;
+  selfIntro: string | null | undefined;
   createdByLabel: string;
 }): EmbedBuilder {
-  const { targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl, createdByLabel } = opts;
+  const { targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl, selfIntro, createdByLabel } = opts;
   const startTs = Math.floor(startDate.getTime() / 1000);
   const endTs = Math.floor(endDate.getTime() / 1000);
   const nameboardValue = nameboardUrl ? `[名簿を見る](${nameboardUrl})` : "未設定";
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle(`📋 評価シート — ${displayName}`)
     .setColor(0x2ecc71)
     .setThumbnail(targetUser.displayAvatarURL())
     .addFields(
       { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
       { name: "📋 名簿", value: nameboardValue, inline: false },
-      { name: "📅 評価開始", value: `<t:${startTs}:D>`, inline: true },
-      { name: "⏰ 評価終了", value: `<t:${endTs}:D>`, inline: true },
-      { name: "🎙️ 期間中のVC滞在時間", value: formatSeconds(vcSeconds), inline: false },
-    )
-    .setFooter({ text: createdByLabel })
-    .setTimestamp();
+    );
+
+  if (selfIntro) {
+    embed.addFields({ name: "📝 自己紹介", value: selfIntro.slice(0, 1024), inline: false });
+  }
+
+  embed.addFields(
+    { name: "📅 評価開始", value: `<t:${startTs}:D>`, inline: true },
+    { name: "⏰ 評価終了", value: `<t:${endTs}:D>`, inline: true },
+    { name: "🎙️ 期間中のVC滞在時間", value: formatSeconds(vcSeconds), inline: false },
+  )
+  .setFooter({ text: createdByLabel })
+  .setTimestamp();
+
+  return embed;
+}
+
+/**
+ * Searches every text channel whose name contains "名簿" for the most recent
+ * message posted by the given user (up to 500 messages back per channel).
+ * Returns the message content, or null if none found.
+ */
+export async function findSelfIntro(
+  guild: import("discord.js").Guild,
+  userId: string,
+): Promise<string | null> {
+  const candidates = [...guild.channels.cache.values()].filter(
+    (c) => c.name.includes("名簿") && c.isTextBased(),
+  );
+  for (const channel of candidates) {
+    if (!channel.isTextBased()) continue;
+    let before: string | undefined;
+    for (let page = 0; page < 5; page++) {
+      const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
+      if (!messages || messages.size === 0) break;
+      const found = messages.find((m) => m.author.id === userId && m.content.trim().length > 0);
+      if (found) return found.content;
+      before = messages.last()?.id;
+    }
+  }
+  return null;
 }
 
 /**
@@ -95,15 +131,17 @@ export async function applySheetEmbedUpdate(
     const targetUser = await client.users.fetch(userId);
 
     let displayName = targetUser.displayName;
+    let guild: import("discord.js").Guild | null = null;
     try {
-      const guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
+      guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId);
       displayName = member.displayName;
     } catch { /* fallback to user displayName */ }
 
-    const [settings, vcSeconds] = await Promise.all([
+    const [settings, vcSeconds, selfIntro] = await Promise.all([
       getEvalSheetSettings(guildId),
       getSheetVcSeconds(guildId, userId, startDate, newEndDate),
+      guild ? findSelfIntro(guild, userId) : Promise.resolve(null),
     ]);
 
     const embed = buildSheetEmbed({
@@ -113,6 +151,7 @@ export async function applySheetEmbedUpdate(
       endDate: newEndDate,
       vcSeconds,
       nameboardUrl: settings?.nameboardUrl,
+      selfIntro,
       createdByLabel: "評価期間延長券により更新",
     });
 
@@ -293,9 +332,10 @@ export const sheetCommand = {
       try { member = await interaction.guild!.members.fetch(targetUser.id); } catch { /* ignore */ }
       const displayName = member?.displayName ?? targetUser.displayName;
 
-      const [settings, vcSeconds] = await Promise.all([
+      const [settings, vcSeconds, selfIntro] = await Promise.all([
         getEvalSheetSettings(guildId),
         getSheetVcSeconds(guildId, targetUser.id, startDate, endDate),
+        findSelfIntro(interaction.guild!, targetUser.id),
       ]);
 
       const embed = buildSheetEmbed({
@@ -305,6 +345,7 @@ export const sheetCommand = {
         endDate,
         vcSeconds,
         nameboardUrl: settings?.nameboardUrl,
+        selfIntro,
         createdByLabel: `作成者: ${interaction.user.displayName}`,
       });
 
