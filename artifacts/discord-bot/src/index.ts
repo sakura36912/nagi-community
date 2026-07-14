@@ -477,24 +477,10 @@ client.on(Events.MessageCreate, async (message) => {
 
   try {
     const settings = await getGuildSettings(guildId);
-    const result   = await claimInitialIssue(guildId, userId, INITIAL_ISSUE_AMOUNT, settings.currencyName);
+    const result = await claimInitialIssue(guildId, userId, INITIAL_ISSUE_AMOUNT, settings.currencyName);
+    if (!result.ok) return;   // すでに受け取り済み — 無視
 
-    if (!result.ok) {
-      await message.reply("初期発行は1回のみです。すでに受け取っています。");
-      return;
-    }
-
-    const embed = new EmbedBuilder()
-      .setColor(0xf1c40f)
-      .setAuthor({
-        name:    message.author.displayName ?? message.author.username,
-        iconURL: message.author.displayAvatarURL(),
-      })
-      .setDescription(
-        `🎉 初期発行として **${INITIAL_ISSUE_AMOUNT.toLocaleString()}${settings.currencyName}** を付与しました！\n残高：**${result.newBalance.toLocaleString()}${settings.currencyName}**`,
-      );
-
-    await message.reply({ embeds: [embed] });
+    await message.react("✅");
   } catch (err) {
     logger.error("[initial-issue] Error", err);
   }
