@@ -353,25 +353,47 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const guildId = newMember.guild.id;
+  logger.info(`[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} partial=${oldMember.partial}`);
 
-  // Detect newly added roles
-  const addedRoleIds = [...newMember.roles.cache.keys()].filter(
-    (id) => !oldMember.roles.cache.has(id),
-  );
-  if (addedRoleIds.length === 0) return;
+  // When oldMember is partial its role cache is empty — treat all current roles
+  // as candidates and rely on settings check to filter. This matches Discord.js
+  // recommended practice for privileged GuildMembers intent events.
+  const addedRoleIds = oldMember.partial
+    ? [...newMember.roles.cache.keys()]
+    : [...newMember.roles.cache.keys()].filter((id) => !oldMember.roles.cache.has(id));
+
+  if (addedRoleIds.length === 0) {
+    logger.info(`[sheet] no added roles — skipping`);
+    return;
+  }
 
   // Fetch settings and check if forum auto-post is configured
   const settings = await getSheetSettings(guildId).catch(() => undefined);
-  if (!settings?.forumChannelId || !settings.triggerRoleIds) return;
+  if (!settings?.forumChannelId || !settings.triggerRoleIds) {
+    logger.info(`[sheet] no forum/role config for guild ${guildId} — skipping`);
+    return;
+  }
 
   const triggerIds = settings.triggerRoleIds.split(",").filter(Boolean);
-  const matchedRole = addedRoleIds.find((id) => triggerIds.includes(id));
-  if (!matchedRole) return;
+  logger.info(`[sheet] triggerIds=${triggerIds.join(",")} addedRoles=${addedRoleIds.join(",")}`);
 
-  // Find the forum channel
-  const forum = newMember.guild.channels.cache.get(settings.forumChannelId);
-  if (!forum || forum.type !== ChannelType.GuildForum) {
-    logger.warn(`[sheet] forumChannelId ${settings.forumChannelId} is not a forum channel`);
+  const matchedRole = addedRoleIds.find((id) => triggerIds.includes(id));
+  if (!matchedRole) {
+    logger.info(`[sheet] no trigger role matched — skipping`);
+    return;
+  }
+
+  // Find the forum channel — fetch if not cached
+  const forum =
+    newMember.guild.channels.cache.get(settings.forumChannelId) ??
+    await newMember.guild.channels.fetch(settings.forumChannelId).catch(() => null);
+
+  if (!forum) {
+    logger.error(`[sheet] forum channel ${settings.forumChannelId} not found`);
+    return;
+  }
+  if (forum.type !== ChannelType.GuildForum) {
+    logger.error(`[sheet] channel ${settings.forumChannelId} is type ${forum.type}, expected GuildForum`);
     return;
   }
 
@@ -391,6 +413,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
   const displayName = newMember.displayName;
   const roleName = newMember.guild.roles.cache.get(matchedRole)?.name ?? matchedRole;
+  logger.info(`[sheet] Creating sheet for ${displayName} (${newMember.id}), role=${roleName}`);
 
   const vcSeconds = await getVcTimeInPeriod(guildId, newMember.id, startDate, endDate).catch(() => 0);
 
@@ -406,11 +429,11 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
   try {
     const thread = await forum.threads.create({
-      name: `${displayName} — 評価シート`,
+      name: `${displayName} — 評価シート`.slice(0, 100),
       message: { embeds: [embed] },
     });
     await createSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);
-    logger.info(`[sheet] Auto-created eval sheet thread ${thread.id} for user ${newMember.id} on role ${roleName}`);
+    logger.info(`[sheet] ✅ Created thread ${thread.id} for user ${newMember.id} on role ${roleName}`);
   } catch (err) {
     logger.error(`[sheet] Failed to create forum thread for user ${newMember.id}`, err);
   }
