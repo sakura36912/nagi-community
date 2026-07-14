@@ -342,19 +342,20 @@ export const shiftCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("setup")
-        .setDescription("毎週月曜 9:00（JST）に自動投稿するチャンネルを設定する（管理者）")
+        .setDescription("週次自動投稿の設定・手動投稿（管理者）")
         .addChannelOption((opt) =>
           opt
             .setName("channel")
-            .setDescription("投稿先テキストチャンネル")
+            .setDescription("投稿先テキストチャンネル（変更する場合のみ指定）")
             .addChannelTypes(ChannelType.GuildText)
-            .setRequired(true),
+            .setRequired(false),
+        )
+        .addBooleanOption((opt) =>
+          opt
+            .setName("post-now")
+            .setDescription("今すぐ今週のシフト表を投稿する")
+            .setRequired(false),
         ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("post")
-        .setDescription("今週のシフト表を今すぐ投稿する（管理者）"),
     ),
 
   async execute(interaction) {
@@ -502,58 +503,54 @@ export const shiftCommand: Command = {
         return;
       }
 
-      const channel = interaction.options.getChannel("channel", true);
-      await setShiftSettings(guildId, channel.id);
-
-      const nextPost = getNextWeeklyPostTime();
-      const ts = Math.floor(nextPost.getTime() / 1000);
-
-      await interaction.reply({
-        content: [
-          `✅ 週次シフト自動投稿チャンネルを <#${channel.id}> に設定しました。`,
-          `次回投稿: <t:${ts}:F>（<t:${ts}:R>）`,
-        ].join("\n"),
-        ephemeral: true,
-      });
-      return;
-    }
-
-    // ── /shift post ───────────────────────────────────────────────────────────
-    if (sub === "post") {
-      if (!isAdmin) {
-        await interaction.reply({
-          content: "このコマンドはサーバー管理権限が必要です。",
-          ephemeral: true,
-        });
-        return;
-      }
-
       await interaction.deferReply({ ephemeral: true });
 
-      const settings = await getShiftSettings(guildId);
-      if (!settings?.channelId) {
+      const channelOpt = interaction.options.getChannel("channel");
+      const postNow    = interaction.options.getBoolean("post-now") ?? false;
+
+      if (!channelOpt && !postNow) {
         await interaction.editReply(
-          "投稿チャンネルが設定されていません。先に `/shift setup channel:` で設定してください。",
+          "`channel` でチャンネルを指定するか、`post-now: True` で今すぐ投稿してください。",
         );
         return;
       }
 
-      const channel =
-        interaction.guild?.channels.cache.get(settings.channelId) ??
-        (await interaction.guild?.channels.fetch(settings.channelId).catch(() => null));
+      const lines: string[] = [];
 
-      if (!channel?.isTextBased()) {
-        await interaction.editReply(
-          "設定されたチャンネルが見つからないか、テキストチャンネルではありません。",
-        );
-        return;
+      // チャンネル変更
+      if (channelOpt) {
+        await setShiftSettings(guildId, channelOpt.id);
+        const nextPost = getNextWeeklyPostTime();
+        const ts = Math.floor(nextPost.getTime() / 1000);
+        lines.push(`✅ 週次シフト自動投稿チャンネルを <#${channelOpt.id}> に設定しました。`);
+        lines.push(`次回自動投稿: <t:${ts}:F>（<t:${ts}:R>）`);
       }
 
-      const { from, to } = getWeekRange();
-      const shifts = await getShiftsInRange(guildId, from, to);
-      const embeds = buildShiftEmbeds(shifts, "📅 今週のシフト", from, to);
-      await channel.send({ embeds });
-      await interaction.editReply(`✅ <#${settings.channelId}> に今週のシフト表を投稿しました。`);
+      // 即時投稿
+      if (postNow) {
+        const settings = await getShiftSettings(guildId);
+        const targetId = channelOpt?.id ?? settings?.channelId;
+        if (!targetId) {
+          await interaction.editReply(
+            "投稿チャンネルが設定されていません。`channel` オプションで指定してください。",
+          );
+          return;
+        }
+        const ch =
+          interaction.guild?.channels.cache.get(targetId) ??
+          (await interaction.guild?.channels.fetch(targetId).catch(() => null));
+        if (!ch?.isTextBased()) {
+          await interaction.editReply("チャンネルが見つからないか、テキストチャンネルではありません。");
+          return;
+        }
+        const { from, to } = getWeekRange();
+        const shifts = await getShiftsInRange(guildId, from, to);
+        const embeds = buildShiftEmbeds(shifts, "📅 今週のシフト", from, to);
+        await ch.send({ embeds });
+        lines.push(`✅ <#${targetId}> に今週のシフト表を投稿しました。`);
+      }
+
+      await interaction.editReply(lines.join("\n"));
       return;
     }
   },
