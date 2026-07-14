@@ -22,6 +22,7 @@ import {
   getEvent,
   getParticipants,
   getActiveSession,
+  getLobbyChannelId,
   getRecentTempVcDeletions,
   getSheetSettings,
   getTicketByChannel,
@@ -746,6 +747,80 @@ const privacyCommand: Command = {
   },
 };
 
+// ─── /botstatus ──────────────────────────────────────────────────────────────
+
+const botstatusCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("botstatus")
+    .setDescription("Botのセットアップ状況を確認します（管理者）"),
+  async execute(interaction) {
+    requireGuild(interaction);
+
+    if (!requireAdmin(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const guild = interaction.guild!;
+    const me = guild.members.me;
+
+    // ── Permissions ───────────────────────────────────────────────────────────
+    const hasManageChannels = me?.permissions.has("ManageChannels") ?? false;
+    const hasMoveMembers    = me?.permissions.has("MoveMembers")    ?? false;
+
+    const manageChannelsLine = hasManageChannels
+      ? "✅ ManageChannels — 付与済み"
+      : "❌ ManageChannels — **未付与** (Server Settings → Roles → Community Bot で付与してください)";
+
+    const moveMembersLine = hasMoveMembers
+      ? "✅ MoveMembers — 付与済み"
+      : "❌ MoveMembers — **未付与** (Server Settings → Roles → Community Bot で付与してください)";
+
+    // ── GuildMembers privileged intent ────────────────────────────────────────
+    // If the intent is active the bot's own member record will always be cached.
+    // We use guild.members.cache.size > 0 as a reliable runtime signal:
+    // with GuildMembers enabled Discord pushes all members into cache on ready;
+    // without it the cache typically contains only the bot itself.
+    const guildMembersIntentBit = 1 << 1; // GatewayIntentBits.GuildMembers = 2
+    const intents = interaction.client.options.intents;
+    let hasGuildMembersIntent = false;
+    if (typeof (intents as { has?: (bit: number) => boolean }).has === "function") {
+      hasGuildMembersIntent = (intents as { has: (bit: number) => boolean }).has(guildMembersIntentBit);
+    } else if (typeof intents === "number" || typeof intents === "bigint") {
+      hasGuildMembersIntent = Boolean(BigInt(intents as number) & BigInt(guildMembersIntentBit));
+    }
+
+    const guildMembersLine = hasGuildMembersIntent
+      ? "✅ GuildMembers intent — 有効"
+      : "❌ GuildMembers intent — **無効** (Discord Developer Portal → Bot → Privileged Gateway Intents で有効化してください)";
+
+    // ── Lobby channel ─────────────────────────────────────────────────────────
+    const lobbyId = await getLobbyChannelId(guild.id).catch(() => null);
+    const lobbyLine = lobbyId
+      ? `✅ ロビーVC — <#${lobbyId}>`
+      : "⚠️ ロビーVC — **未設定** (`/tempvc setup` で設定してください)";
+
+    // ── Overall status ────────────────────────────────────────────────────────
+    const allGood = hasManageChannels && hasMoveMembers && hasGuildMembersIntent && !!lobbyId;
+    const statusLine = allGood
+      ? "🟢 **すべて正常です**"
+      : "🔴 **設定に問題があります** — 上記の項目を確認してください";
+
+    const embed = new EmbedBuilder()
+      .setTitle("🤖 Bot セットアップ状況")
+      .setColor(allGood ? 0x57f287 : 0xed4245)
+      .setDescription(
+        [statusLine, "", manageChannelsLine, moveMembersLine, guildMembersLine, lobbyLine].join("\n"),
+      )
+      .setFooter({ text: `サーバー: ${guild.name}` })
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
+  },
+};
+
 // ─── Button handlers ─────────────────────────────────────────────────────────
 
 export async function handleEventJoin(interaction: ButtonInteraction): Promise<void> {
@@ -912,4 +987,5 @@ export const commands: Command[] = [
   eventCommand,
   ticketCommand,
   sheetCommand,
+  botstatusCommand,
 ];
