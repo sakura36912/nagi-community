@@ -350,6 +350,23 @@ export async function getActiveSession(
   return row;
 }
 
+/**
+ * Permanently deletes all VC session rows for a user in a guild.
+ * Returns the number of rows deleted.
+ */
+export async function deleteUserVcSessions(guildId: string, userId: string): Promise<number> {
+  const result = await db
+    .delete(communityVcSessionsTable)
+    .where(
+      and(
+        eq(communityVcSessionsTable.guildId, guildId),
+        eq(communityVcSessionsTable.userId, userId),
+      ),
+    )
+    .returning({ id: communityVcSessionsTable.id });
+  return result.length;
+}
+
 /** Count of unique users currently in a tracked VC session for this guild. */
 export async function getActiveSessionCount(guildId: string): Promise<number> {
   const rows = await db.execute<{ cnt: string }>(sql`

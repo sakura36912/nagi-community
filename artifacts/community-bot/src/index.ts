@@ -30,11 +30,19 @@ import {
   COMM_TICKET_CREATE,
   COMM_TICKET_CLOSE_PREFIX,
   COMM_TEMPVC_CREATE,
+  COMM_PRIVACY_DELETE_CONFIRM,
+  COMM_PRIVACY_DELETE_CANCEL,
+  COMM_PRIVACY_OPTOUT_KEEP,
+  COMM_PRIVACY_OPTOUT_DELETE,
   handleEventJoin,
   handleEventCancel,
   handleTicketCreate,
   handleTicketClose,
   handleTempVcCreate,
+  handlePrivacyDeleteConfirm,
+  handlePrivacyDeleteCancel,
+  handlePrivacyOptoutKeep,
+  handlePrivacyOptoutDelete,
 } from "./commands/index.js";
 
 const token = process.env["COMMUNITY_BOT_TOKEN"];
@@ -366,6 +374,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id.startsWith(COMM_TICKET_CLOSE_PREFIX)) {
         await handleTicketClose(interaction);
+        return;
+      }
+      if (id === COMM_PRIVACY_OPTOUT_KEEP) {
+        await handlePrivacyOptoutKeep(interaction);
+        return;
+      }
+      if (id === COMM_PRIVACY_OPTOUT_DELETE) {
+        await handlePrivacyOptoutDelete(interaction);
+        return;
+      }
+      if (id === COMM_PRIVACY_DELETE_CONFIRM) {
+        await handlePrivacyDeleteConfirm(interaction);
+        return;
+      }
+      if (id === COMM_PRIVACY_DELETE_CANCEL) {
+        await handlePrivacyDeleteCancel(interaction);
         return;
       }
       if (id === COMM_TEMPVC_CREATE) {

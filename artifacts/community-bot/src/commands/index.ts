@@ -22,6 +22,7 @@ import {
   createTicket,
   getEvent,
   getParticipants,
+  deleteUserVcSessions,
   getActiveSession,
   getActiveSessionCount,
   getAllTempVcDeletions,
@@ -52,6 +53,10 @@ export const COMM_EVENT_CANCEL_PREFIX = "comm:event:cancel:";
 export const COMM_TICKET_CREATE = "comm:ticket:create";
 export const COMM_TICKET_CLOSE_PREFIX = "comm:ticket:close:";
 export const COMM_TEMPVC_CREATE = "comm:tempvc:create";
+export const COMM_PRIVACY_DELETE_CONFIRM = "comm:privacy:delete:confirm";
+export const COMM_PRIVACY_DELETE_CANCEL = "comm:privacy:delete:cancel";
+export const COMM_PRIVACY_OPTOUT_KEEP = "comm:privacy:optout:keep";
+export const COMM_PRIVACY_OPTOUT_DELETE = "comm:privacy:optout:delete";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -740,6 +745,11 @@ const privacyCommand: Command = {
       sub
         .setName("status")
         .setDescription("現在のトラッキング設定を確認します"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("delete")
+        .setDescription("過去のVC滞在記録をすべて削除します（取り消し不可）"),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -749,19 +759,56 @@ const privacyCommand: Command = {
     await interaction.deferReply({ ephemeral: true });
 
     if (sub === "optout") {
-      await setVcPrivacyOptOut(guildId, userId, true);
       const embed = new EmbedBuilder()
-        .setTitle("🔒 トラッキングを停止しました")
-        .setColor(0xed4245)
+        .setTitle("🔒 VCトラッキングを停止しますか？")
+        .setColor(0xfee75c)
         .setDescription(
-          "VCの滞在時間の記録を**停止**しました。\n\n" +
-          "• これ以降のVCセッションは記録されません\n" +
-          "• `/ranking` や `/mystats` にあなたのデータは表示されなくなります\n" +
-          "• 過去のデータはそのまま残ります\n\n" +
-          "再開するには `/privacy optin` を使用してください。",
+          "VCの滞在時間の記録を停止します。過去のデータをどうするか選択してください。\n\n" +
+          "**🗄️ 停止のみ（データを保持）**\n" +
+          "• 新しい記録は残りません\n" +
+          "• 既存のランキングや統計データはそのまま残ります\n\n" +
+          "**🗑️ 停止＋過去データを削除（取り消し不可）**\n" +
+          "• 新しい記録は残りません\n" +
+          "• このサーバーでの全VC記録が完全に削除されます",
         )
         .setTimestamp();
-      await interaction.editReply({ embeds: [embed] });
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(COMM_PRIVACY_OPTOUT_KEEP)
+          .setLabel("停止のみ（データを保持）")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(COMM_PRIVACY_OPTOUT_DELETE)
+          .setLabel("停止＋過去データを削除 🗑️")
+          .setStyle(ButtonStyle.Danger),
+      );
+      await interaction.editReply({ embeds: [embed], components: [row] });
+      return;
+    }
+
+    if (sub === "delete") {
+      const embed = new EmbedBuilder()
+        .setTitle("⚠️ 過去のVC記録を削除しますか？")
+        .setColor(0xfee75c)
+        .setDescription(
+          "このサーバーにおけるあなたの**すべてのVC滞在記録**を削除します。\n\n" +
+          "• ランキングや `/mystats` から完全に除外されます\n" +
+          "• この操作は**取り消せません**\n" +
+          "• 同時にトラッキングも停止します\n\n" +
+          "本当に削除しますか？",
+        )
+        .setTimestamp();
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(COMM_PRIVACY_DELETE_CONFIRM)
+          .setLabel("削除する 🗑️")
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(COMM_PRIVACY_DELETE_CANCEL)
+          .setLabel("キャンセル")
+          .setStyle(ButtonStyle.Secondary),
+      );
+      await interaction.editReply({ embeds: [embed], components: [row] });
       return;
     }
 
@@ -981,6 +1028,80 @@ export async function handleTicketClose(interaction: ButtonInteraction): Promise
   } catch (err) {
     logger.error("[ticket] Failed to delete channel", err);
   }
+}
+
+export async function handlePrivacyOptoutKeep(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) return;
+  await interaction.deferUpdate();
+  await setVcPrivacyOptOut(interaction.guildId, interaction.user.id, true);
+  const embed = new EmbedBuilder()
+    .setTitle("🔒 トラッキングを停止しました")
+    .setColor(0xed4245)
+    .setDescription(
+      "VCの滞在時間の記録を**停止**しました。\n\n" +
+      "• 新しいセッションは記録されません\n" +
+      "• 過去のデータはそのまま残ります\n\n" +
+      "再開するには `/privacy optin` を使用してください。",
+    )
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+export async function handlePrivacyOptoutDelete(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) return;
+  await interaction.deferUpdate();
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+  const [deleted] = await Promise.all([
+    deleteUserVcSessions(guildId, userId),
+    setVcPrivacyOptOut(guildId, userId, true),
+  ]);
+  const embed = new EmbedBuilder()
+    .setTitle("🗑️ トラッキングを停止し、過去データを削除しました")
+    .setColor(0xed4245)
+    .setDescription(
+      `VCの滞在記録 **${deleted}件** を削除し、トラッキングを停止しました。\n\n` +
+      "• ランキングや統計からあなたのデータは除外されます\n" +
+      "• 再開するには `/privacy optin` を使用してください",
+    )
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+export async function handlePrivacyDeleteConfirm(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+  await interaction.deferUpdate();
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+
+  const [deleted] = await Promise.all([
+    deleteUserVcSessions(guildId, userId),
+    setVcPrivacyOptOut(guildId, userId, true),
+  ]);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🗑️ VC記録を削除しました")
+    .setColor(0xed4245)
+    .setDescription(
+      `このサーバーでのVC滞在記録 **${deleted}件** を削除し、トラッキングを停止しました。\n\n` +
+      "• ランキングや統計からあなたのデータは除外されます\n" +
+      "• トラッキングを再開するには `/privacy optin` を使用してください",
+    )
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+export async function handlePrivacyDeleteCancel(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferUpdate();
+  const embed = new EmbedBuilder()
+    .setTitle("✅ キャンセルしました")
+    .setColor(0x57f287)
+    .setDescription("VC記録の削除をキャンセルしました。データはそのまま保持されます。")
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
 }
 
 export async function handleTempVcCreate(interaction: ButtonInteraction): Promise<void> {
