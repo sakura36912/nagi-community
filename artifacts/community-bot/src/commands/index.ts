@@ -763,7 +763,9 @@ const privacyCommand: Command = {
         .setTitle("🔒 VCトラッキングを停止しますか？")
         .setColor(0xfee75c)
         .setDescription(
-          "VCの滞在時間の記録を停止します。過去のデータをどうするか選択してください。\n\n" +
+          "**このサーバー**でのVCの滞在時間の記録を停止します。\n" +
+          "⚠️ この設定は**サーバーごと**に管理されます。他のサーバーでも停止したい場合は、そのサーバーで個別に `/privacy optout` を実行してください。\n\n" +
+          "過去のデータをどうするか選択してください。\n\n" +
           "**🗄️ 停止のみ（データを保持）**\n" +
           "• 新しい記録は残りません\n" +
           "• 既存のランキングや統計データはそのまま残ります\n\n" +
@@ -818,9 +820,10 @@ const privacyCommand: Command = {
         .setTitle("🔓 トラッキングを再開しました")
         .setColor(0x57f287)
         .setDescription(
-          "VCの滞在時間の記録を**再開**しました。\n\n" +
+          "**このサーバー**でのVCの滞在時間の記録を**再開**しました。\n\n" +
           "• これ以降のVCセッションが記録されます\n" +
           "• `/ranking` や `/mystats` にあなたのデータが表示されます\n\n" +
+          "ℹ️ この設定は**サーバーごと**に管理されます。\n" +
           "停止するには `/privacy optout` を使用してください。",
         )
         .setTimestamp();
@@ -831,15 +834,22 @@ const privacyCommand: Command = {
     if (sub === "status") {
       const optedOut = await isVcTrackingOptedOut(guildId, userId);
       const embed = new EmbedBuilder()
-        .setTitle("🔎 プライバシー設定")
+        .setTitle("🔎 プライバシー設定（このサーバー）")
         .setColor(optedOut ? 0xed4245 : 0x57f287)
-        .addFields({
-          name: "VCトラッキング",
-          value: optedOut
-            ? "🔴 **停止中** — `/privacy optin` で再開できます"
-            : "🟢 **有効** — `/privacy optout` で停止できます",
-          inline: false,
-        })
+        .addFields(
+          {
+            name: "VCトラッキング",
+            value: optedOut
+              ? "🔴 **停止中** — `/privacy optin` で再開できます"
+              : "🟢 **有効** — `/privacy optout` で停止できます",
+            inline: false,
+          },
+          {
+            name: "ℹ️ 設定の範囲",
+            value: "この設定は**このサーバー専用**です。他のサーバーで設定を変更したい場合は、そのサーバーで個別にコマンドを実行してください。サーバーを退出・再参加しても、設定はそのまま保持されます。",
+            inline: false,
+          },
+        )
         .setTimestamp();
       await interaction.editReply({ embeds: [embed] });
       return;

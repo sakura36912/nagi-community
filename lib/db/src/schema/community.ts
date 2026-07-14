@@ -125,8 +125,19 @@ export type CommunityVcSession = typeof communityVcSessionsTable.$inferSelect;
 
 /**
  * Users who have opted out of VC time tracking.
- * Row presence with optedOut=true means tracking is disabled for that user in that guild.
- * Using a table (rather than just absence) so we can toggle without deleting rows.
+ *
+ * Scope: per-guild (guild_id + user_id composite key).
+ * Rationale: each guild is an independent community; opt-out in server A does not
+ * automatically apply to server B. Users who care about privacy across all servers
+ * must run /privacy optout in each one. A future global opt-out table (keyed only
+ * by user_id) could be added to complement this per-guild table if cross-guild
+ * privacy becomes a requirement.
+ *
+ * Rejoining a server: the row persists in the DB after a user leaves, so if they
+ * rejoin the same guild their opt-out preference is restored automatically.
+ *
+ * Toggle design: using optedOut=true/false on a row (rather than row presence/absence)
+ * so toggling back to opt-in does not lose the row and allows auditing.
  */
 export const communityVcPrivacyTable = pgTable(
   "community_vc_privacy",
