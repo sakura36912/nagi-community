@@ -194,10 +194,10 @@ async function purchaseAndCreatePrivateVc(
   }
 }
 
-function buildShopPanel(items: ShopItem[], currencyName: string) {
+function buildShopPanel(items: ShopItem[], currencyName: string, title = "🛒 ショップ", color: number = 0xf5a623) {
   const embed = new EmbedBuilder()
-    .setTitle("🛒 ショップ")
-    .setColor(0xf5a623);
+    .setTitle(title)
+    .setColor(color);
 
   if (items.length === 0) {
     embed.setDescription("ショップにアイテムはまだありません。");
@@ -534,137 +534,172 @@ const leaderboardCommand: Command = {
   },
 };
 
-const shopCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("shop")
-    .setDescription("ショップを操作します")
-    .addSubcommand((sub) => sub.setName("list").setDescription("購入可能なアイテム一覧を表示します"))
-    .addSubcommand((sub) =>
-      sub
-        .setName("buy")
-        .setDescription("アイテムを購入します")
-        .addIntegerOption((opt) =>
-          opt.setName("item_id").setDescription("アイテムID(/shop list で確認)").setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) => sub.setName("inventory").setDescription("自分の所持アイテムを表示します"))
-    .addSubcommand((sub) =>
-      sub
-        .setName("add")
-        .setDescription("ショップにアイテムを追加します(管理者用)")
-        .addStringOption((opt) => opt.setName("name").setDescription("アイテム名").setRequired(true))
-        .addIntegerOption((opt) =>
-          opt.setName("price").setDescription("価格").setRequired(true).setMinValue(1),
-        )
-        .addStringOption((opt) => opt.setName("description").setDescription("説明").setRequired(false))
-        .addStringOption((opt) =>
-          opt
-            .setName("effect")
-            .setDescription("購入時の特殊効果")
-            .setRequired(false)
-            .addChoices(
-            { name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT },
-            { name: "非公開VC作成", value: PRIVATE_VC_EFFECT },
+// ---------------------------------------------------------------------------
+// Shop command factory — creates an independent /shop-style command scoped to
+// a single `category` in the shopItemsTable. All shops share the same button
+// and modal handlers (items are identified by ID, not category).
+// ---------------------------------------------------------------------------
+function buildShopCommand(
+  commandName: string,
+  displayName: string,
+  emoji: string,
+  category: string,
+  color: number,
+): Command {
+  const listCmdDesc = `${displayName}の購入可能アイテム一覧を表示します`;
+  return {
+    data: new SlashCommandBuilder()
+      .setName(commandName)
+      .setDescription(`${displayName}を操作します`)
+      .addSubcommand((sub) => sub.setName("list").setDescription(listCmdDesc))
+      .addSubcommand((sub) =>
+        sub
+          .setName("buy")
+          .setDescription("アイテムを購入します")
+          .addIntegerOption((opt) =>
+            opt
+              .setName("item_id")
+              .setDescription(`アイテムID(/${commandName} list で確認)`)
+              .setRequired(true),
           ),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("remove")
-        .setDescription("ショップからアイテムを削除します(管理者用)")
-        .addIntegerOption((opt) =>
-          opt.setName("item_id").setDescription("アイテムID").setRequired(true),
-        ),
-    ),
-  async execute(interaction) {
-    const guildId = requireGuild(interaction);
-    const sub = interaction.options.getSubcommand();
+      )
+      .addSubcommand((sub) => sub.setName("inventory").setDescription("自分の所持アイテムを表示します"))
+      .addSubcommand((sub) =>
+        sub
+          .setName("add")
+          .setDescription(`${displayName}にアイテムを追加します(管理者用)`)
+          .addStringOption((opt) => opt.setName("name").setDescription("アイテム名").setRequired(true))
+          .addIntegerOption((opt) =>
+            opt.setName("price").setDescription("価格").setRequired(true).setMinValue(1),
+          )
+          .addStringOption((opt) => opt.setName("description").setDescription("説明").setRequired(false))
+          .addStringOption((opt) =>
+            opt
+              .setName("effect")
+              .setDescription("購入時の特殊効果")
+              .setRequired(false)
+              .addChoices(
+                { name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT },
+                { name: "非公開VC作成", value: PRIVATE_VC_EFFECT },
+              ),
+          ),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("remove")
+          .setDescription(`${displayName}からアイテムを削除します(管理者用)`)
+          .addIntegerOption((opt) =>
+            opt.setName("item_id").setDescription("アイテムID").setRequired(true),
+          ),
+      ),
 
-    if (sub === "list") {
-      const [items, settings] = await Promise.all([listShopItems(guildId), getGuildSettings(guildId)]);
-      const panel = buildShopPanel(items, settings.currencyName);
-      await interaction.reply(panel);
-      return;
-    }
+    async execute(interaction) {
+      const guildId = requireGuild(interaction);
+      const sub = interaction.options.getSubcommand();
+      const panelTitle = `${emoji} ${displayName}`;
 
-    if (sub === "buy") {
-      const itemId = interaction.options.getInteger("item_id", true);
-      const item = await getShopItem(guildId, itemId);
-      if (!item) {
-        await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+      if (sub === "list") {
+        const [items, settings] = await Promise.all([
+          listShopItems(guildId, category),
+          getGuildSettings(guildId),
+        ]);
+        const panel = buildShopPanel(items, settings.currencyName, panelTitle, color);
+        await interaction.reply(panel);
         return;
       }
 
-      if (item.effectType === NICKNAME_CHANGE_EFFECT) {
-        await interaction.showModal(buildNicknameModal(item.id));
-        return;
-      }
+      if (sub === "buy") {
+        const itemId = interaction.options.getInteger("item_id", true);
+        const item = await getShopItem(guildId, itemId);
+        if (!item) {
+          await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+          return;
+        }
+        // Guard: prevent buying items from a different shop via this command
+        if (item.category !== category) {
+          await interaction.reply({ content: "そのアイテムはこのショップでは購入できません。", ephemeral: true });
+          return;
+        }
 
-      await interaction.deferReply({ ephemeral: true });
-      const settings = await getGuildSettings(guildId);
+        if (item.effectType === NICKNAME_CHANGE_EFFECT) {
+          await interaction.showModal(buildNicknameModal(item.id));
+          return;
+        }
 
-      if (item.effectType === PRIVATE_VC_EFFECT) {
-        const member = await interaction.guild!.members.fetch(interaction.user.id);
-        const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName);
+        await interaction.deferReply({ ephemeral: true });
+        const settings = await getGuildSettings(guildId);
+
+        if (item.effectType === PRIVATE_VC_EFFECT) {
+          const member = await interaction.guild!.members.fetch(interaction.user.id);
+          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName);
+          if (result.ok) {
+            await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>`);
+          } else {
+            await interaction.editReply(result.reason);
+          }
+          return;
+        }
+
+        const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
         if (result.ok) {
-          await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>`);
+          await interaction.editReply(`**${result.item.name}**を購入しました!`);
         } else {
           await interaction.editReply(result.reason);
         }
         return;
       }
 
-      const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-      if (result.ok) {
-        await interaction.editReply(`**${result.item.name}**を購入しました!`);
-      } else {
-        await interaction.editReply(result.reason);
-      }
-      return;
-    }
-
-    if (sub === "inventory") {
-      const items = await listInventory(guildId, interaction.user.id);
-      if (items.length === 0) {
-        await interaction.reply({ content: "所持アイテムはありません。", ephemeral: true });
+      if (sub === "inventory") {
+        const items = await listInventory(guildId, interaction.user.id);
+        if (items.length === 0) {
+          await interaction.reply({ content: "所持アイテムはありません。", ephemeral: true });
+          return;
+        }
+        const lines = items.map((row) => `**${row.item.name}** x${row.quantity}`);
+        await interaction.reply({ content: `## 🎒 所持アイテム\n${lines.join("\n")}`, ephemeral: true });
         return;
       }
-      const lines = items.map((row) => `**${row.item.name}** x${row.quantity}`);
-      await interaction.reply({ content: `## 🎒 所持アイテム\n${lines.join("\n")}`, ephemeral: true });
-      return;
-    }
 
-    if (sub === "add") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      if (sub === "add") {
+        if (!requireManageGuild(interaction)) {
+          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+          return;
+        }
+        const name = interaction.options.getString("name", true);
+        const price = interaction.options.getInteger("price", true);
+        const description = interaction.options.getString("description");
+        const effect = interaction.options.getString("effect");
+        const [item, settings] = await Promise.all([
+          addShopItem(guildId, name, price, description, effect, category),
+          getGuildSettings(guildId),
+        ]);
+        await interaction.reply(
+          `アイテム **#${item.id} ${item.name}**(${item.price}${settings.currencyName})を${displayName}に追加しました。`,
+        );
         return;
       }
-      const name = interaction.options.getString("name", true);
-      const price = interaction.options.getInteger("price", true);
-      const description = interaction.options.getString("description");
-      const effect = interaction.options.getString("effect");
-      const [item, settings] = await Promise.all([
-        addShopItem(guildId, name, price, description, effect),
-        getGuildSettings(guildId),
-      ]);
-      await interaction.reply(`アイテム **#${item.id} ${item.name}**(${item.price}${settings.currencyName})をショップに追加しました。`);
-      return;
-    }
 
-    if (sub === "remove") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      if (sub === "remove") {
+        if (!requireManageGuild(interaction)) {
+          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+          return;
+        }
+        const itemId = interaction.options.getInteger("item_id", true);
+        const removed = await removeShopItem(guildId, itemId);
+        await interaction.reply(
+          removed ? `アイテム#${itemId}を削除しました。` : "そのアイテムは見つかりませんでした。",
+        );
         return;
       }
-      const itemId = interaction.options.getInteger("item_id", true);
-      const removed = await removeShopItem(guildId, itemId);
-      await interaction.reply(
-        removed ? `アイテム#${itemId}を削除しました。` : "そのアイテムは見つかりませんでした。",
-      );
-      return;
-    }
-  },
-};
+    },
+  };
+}
+
+// The four independent shops
+const shopCommand        = buildShopCommand("shop",      "ショップ",            "🛒", "general", 0xf5a623);
+const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",        "⚔️", "group",   0xe74c3c);
+const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",    "🔒", "vc",      0x3498db);
+const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",  0x9b59b6);
 
 const rewardCommand: Command = {
   data: new SlashCommandBuilder()
@@ -784,5 +819,8 @@ export const commands: Command[] = [
   giveCommand,
   leaderboardCommand,
   shopCommand,
+  groupShopCommand,
+  vcShopCommand,
+  uraShopCommand,
   rewardCommand,
 ];

@@ -447,11 +447,11 @@ export async function getLeaderboard(
   return limit === undefined ? query : query.limit(limit);
 }
 
-export async function listShopItems(guildId: string): Promise<ShopItem[]> {
+export async function listShopItems(guildId: string, category = "general"): Promise<ShopItem[]> {
   return db
     .select()
     .from(shopItemsTable)
-    .where(eq(shopItemsTable.guildId, guildId))
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, category)))
     .orderBy(shopItemsTable.price);
 }
 
@@ -470,10 +470,11 @@ export async function addShopItem(
   price: number,
   description: string | null,
   effectType: string | null = null,
+  category = "general",
 ): Promise<ShopItem> {
   const [item] = await db
     .insert(shopItemsTable)
-    .values({ guildId, name, price, description, effectType })
+    .values({ guildId, name, price, description, effectType, category })
     .returning();
 
   if (!item) {

@@ -68,6 +68,8 @@ export type Wallet = typeof walletsTable.$inferSelect;
 // purchase instead of (or in addition to) just adding it to inventory.
 // Currently supported: "nickname_change" — lets the buyer set their own
 // server nickname.
+// `category` groups items into separate shops (e.g. "general", "group",
+// "vc", "ura"). Each shop command filters by its own category.
 export const shopItemsTable = pgTable("shop_items", {
   id: serial("id").primaryKey(),
   guildId: text("guild_id").notNull(),
@@ -75,6 +77,7 @@ export const shopItemsTable = pgTable("shop_items", {
   description: text("description"),
   price: integer("price").notNull(),
   effectType: text("effect_type"),
+  category: text("category").notNull().default("general"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
