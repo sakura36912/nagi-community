@@ -240,7 +240,10 @@ async function purchaseAndCreatePrivateVc(
 
   try {
     const expiresAt = durationMs !== undefined ? new Date(Date.now() + durationMs) : undefined;
-    const channelName = `🔒 ${member.displayName}`;
+    const label = durationMs !== undefined
+      ? (durationMs <= 24 * 60 * 60 * 1000 ? "1日" : durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月")
+      : "";
+    const channelName = label ? `🔒 ${member.displayName}(${label})` : `🔒 ${member.displayName}`;
 
     // Resolve the category from cache or fetch it so discord.js can set parent_id correctly.
     const parentCategory = vcCategoryId
@@ -329,7 +332,10 @@ async function purchaseExtendOrCreateUraVc(
 
     try {
       const expiresAt = new Date(Date.now() + durationMs);
-      const channelName = `🔒 ${member.displayName}`;
+      const label =
+        durationMs <= 24 * 60 * 60 * 1000 ? "1日" :
+        durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月";
+      const channelName = `🔒 ${member.displayName}(${label})`;
 
       const parentCategory = vcCategoryId
         ? (guild.channels.cache.get(vcCategoryId) ?? await guild.channels.fetch(vcCategoryId).catch(() => null))
@@ -366,12 +372,15 @@ async function purchaseExtendOrCreateUraVc(
   try {
     const updated = await extendPrivateVcSession(existingSession.id, durationMs);
 
-    // Keep channel name consistent on extension (non-fatal).
+    // Rename the channel to reflect the new expiry period (non-fatal).
     try {
+      const label =
+        durationMs <= 24 * 60 * 60 * 1000 ? "1日" :
+        durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月";
       const ch = guild.channels.cache.get(existingSession.channelId)
         ?? await guild.channels.fetch(existingSession.channelId).catch(() => null);
-      if (ch && ch.type === ChannelType.GuildVoice && ch.name !== `🔒 ${member.displayName}`) {
-        await ch.setName(`🔒 ${member.displayName}`.slice(0, 100));
+      if (ch && ch.type === ChannelType.GuildVoice) {
+        await ch.setName(`🔒 ${member.displayName}(${label})`.slice(0, 100));
       }
     } catch { /* non-fatal */ }
 
