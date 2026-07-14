@@ -190,14 +190,6 @@ function buildEvalSheetEmbed(
       { name: "📅 評価開始", value: `<t:${created}:D>`, inline: true },
       { name: "⏰ 評価終了", value: `<t:${exp}:D>（<t:${exp}:R>）`, inline: true },
       { name: "\u200b", value: "─────────────────────", inline: false },
-      { name: "⭐ 総合評価", value: "☆ ☆ ☆ ☆ ☆", inline: false },
-      { name: "💬 コミュニケーション", value: "─", inline: true },
-      { name: "🔥 積極性", value: "─", inline: true },
-      { name: "🤝 チームワーク", value: "─", inline: true },
-      { name: "🛠️ 専門スキル", value: "─", inline: true },
-      { name: "✅ 責任感", value: "─", inline: true },
-      { name: "📈 成長性", value: "─", inline: true },
-      { name: "\u200b", value: "─────────────────────", inline: false },
       { name: "📝 総評", value: "（管理者が記入してください）", inline: false },
     )
     .setFooter({ text: "期間延長券を使うと期限を1週間延長できます。" });
