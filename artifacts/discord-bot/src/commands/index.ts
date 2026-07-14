@@ -804,8 +804,9 @@ function buildShopCommand(
         .addChannelOption((opt) =>
           opt
             .setName("channel")
-            .setDescription("対象カテゴリ（省略すると設定を解除）")
-            .setRequired(false),
+            .setDescription("カテゴリチャンネルを選択")
+            .addChannelTypes(ChannelType.GuildCategory)
+            .setRequired(true),
         ),
     );
   }
