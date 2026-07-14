@@ -27,6 +27,13 @@ import {
   recordEvalSheet,
 } from "./lib/evalsheet";
 
+import { appendFileSync } from "fs";
+const DEBUG_LOG = "/tmp/bot-debug.log";
+function dlog(msg: string) {
+  const line = `${new Date().toISOString()} ${msg}\n`;
+  try { appendFileSync(DEBUG_LOG, line); } catch {}
+}
+
 const token = process.env["DISCORD_BOT_TOKEN"];
 
 if (!token) {
@@ -125,6 +132,7 @@ async function runVcExpiryScheduler(): Promise<void> {
 }
 
 client.once(Events.ClientReady, (readyClient) => {
+  dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
 
   // Seed default shop items for all guilds already in the bot's cache.
@@ -196,6 +204,7 @@ function buildEvalSheetEmbed(
 // Fires when a member's roles change. Checks each newly added role against
 // the eval sheet config and creates a forum thread if one is configured.
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+  dlog(`GuildMemberUpdate fired: user=${newMember.id} guild=${newMember.guild.id} oldPartial=${oldMember.partial}`);
   logger.info(`[evalsheet] GuildMemberUpdate fired: user=${newMember.id} guild=${newMember.guild.id} oldPartial=${oldMember.partial}`);
 
   // oldMember.partial が true のときは fetch() してはいけない。
