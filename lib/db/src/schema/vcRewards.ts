@@ -5,6 +5,7 @@ import {
   timestamp,
   primaryKey,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -35,6 +36,15 @@ export const vcRewardSettingsTable = pgTable("vc_reward_settings", {
   ratePerHour: integer("rate_per_hour").notNull().default(0),
   /** Minimum continuous minutes required before any reward is paid. */
   minMinutes: integer("min_minutes").notNull().default(5),
+  /**
+   * Allowlist of Discord category channel IDs.
+   * Empty array = all categories are eligible.
+   * Non-empty = only VCs whose parentId is in this list earn rewards.
+   */
+  includedCategoryIds: text("included_category_ids")
+    .array()
+    .notNull()
+    .default(sql`'{}'::text[]`),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

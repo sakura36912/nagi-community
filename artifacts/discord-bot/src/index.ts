@@ -251,6 +251,21 @@ client.once(Events.ClientReady, (readyClient) => {
 // ─── VC-time reward handler ───────────────────────────────────────────────────
 
 /**
+ * Returns true if the given channelId is in an eligible category.
+ * When includedCategoryIds is empty, all categories are eligible.
+ */
+function isEligibleChannel(
+  channelId: string,
+  includedCategoryIds: string[],
+  guild: VoiceState["guild"],
+): boolean {
+  if (includedCategoryIds.length === 0) return true;
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel || !channel.parentId) return false;
+  return includedCategoryIds.includes(channel.parentId);
+}
+
+/**
  * Credit a user's wallet for a completed VC session and notify them via DM.
  * Silently no-ops when the reward comes out to 0 (below minMinutes, rate=0).
  */
@@ -313,7 +328,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   if (isInVc && !isInAfk && (!wasInVc || wasInAfk)) {
     try {
       const settings = await getVcRewardSettings(guild.id);
-      if (settings.ratePerHour > 0) {
+      if (settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild)) {
         await recordVcJoin(guild.id, userId, newState.channelId!);
       }
     } catch (err) {
@@ -334,8 +349,29 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     return;
   }
 
-  // Channel switch between two non-AFK VCs — keep the original joinedAt so
-  // time accumulates across moves. No DB action needed.
+  // ── Moved between two non-AFK VCs ────────────────────────────────────────
+  // Check whether the category eligibility changed.
+  if (wasInVc && !wasInAfk && isInVc && !isInAfk && oldState.channelId !== newState.channelId) {
+    try {
+      const settings = await getVcRewardSettings(guild.id);
+      if (settings.ratePerHour <= 0) return;
+
+      const wasEligible = isEligibleChannel(oldState.channelId!, settings.includedCategoryIds, guild);
+      const nowEligible = isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild);
+
+      if (wasEligible && !nowEligible) {
+        // Moved out of an eligible category → pay out and stop tracking.
+        const presence = await clearVcPresence(guild.id, userId).catch(() => undefined);
+        if (presence) await handleVcLeave(guild, userId, presence.joinedAt);
+      } else if (!wasEligible && nowEligible) {
+        // Moved into an eligible category → start tracking from now.
+        await recordVcJoin(guild.id, userId, newState.channelId!);
+      }
+      // Both eligible or both ineligible → joinedAt stays, no action needed.
+    } catch (err) {
+      logger.error(`[vcsalary] channel-move handling error for ${userId}`, err);
+    }
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {

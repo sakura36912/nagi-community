@@ -1,17 +1,23 @@
 import {
+  ChannelType,
   ChatInputCommandInteraction,
   EmbedBuilder,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
 } from "discord.js";
-import { getVcRewardSettings, setVcRewardSettings } from "../lib/vcReward";
+import {
+  getVcRewardSettings,
+  setVcRewardSettings,
+  addVcRewardCategory,
+  removeVcRewardCategory,
+} from "../lib/vcReward";
+import { getGuildSettings } from "../lib/economy";
 
 interface Command {
   data: SlashCommandBuilder;
   execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
-import { getGuildSettings } from "../lib/economy";
 
 // ─── Embed helpers ────────────────────────────────────────────────────────────
 
@@ -19,8 +25,18 @@ function buildInfoEmbed(
   ratePerHour: number,
   minMinutes: number,
   currencyName: string,
+  includedCategoryIds: string[],
+  categoryNames: string[],
 ): EmbedBuilder {
   const enabled = ratePerHour > 0;
+
+  const categoryValue =
+    includedCategoryIds.length === 0
+      ? "すべてのカテゴリ"
+      : categoryNames.length > 0
+        ? categoryNames.map((n) => `• ${n}`).join("\n")
+        : includedCategoryIds.map((id) => `• <#${id}>`).join("\n");
+
   return new EmbedBuilder()
     .setTitle("🎙️ VC滞在報酬 設定")
     .setColor(enabled ? 0x5865f2 : 0x747f8d)
@@ -40,6 +56,10 @@ function buildInfoEmbed(
         value: `${minMinutes} 分`,
         inline: true,
       },
+      {
+        name: "対象カテゴリ",
+        value: categoryValue,
+      },
     )
     .setFooter({
       text: enabled
@@ -48,76 +68,120 @@ function buildInfoEmbed(
     });
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function requireGuild(interaction: ChatInputCommandInteraction): string | null {
+  if (!interaction.guildId) {
+    interaction
+      .reply({
+        content: "このコマンドはサーバー内でのみ使用できます。",
+        flags: MessageFlags.Ephemeral,
+      })
+      .catch(() => {});
+    return null;
+  }
+  return interaction.guildId;
+}
+
+async function resolvedInfoEmbed(
+  guildId: string,
+  interaction: ChatInputCommandInteraction,
+): Promise<EmbedBuilder> {
+  const [settings, guildSettings] = await Promise.all([
+    getVcRewardSettings(guildId),
+    getGuildSettings(guildId),
+  ]);
+
+  // Resolve category names from the guild's channel cache.
+  const categoryNames = settings.includedCategoryIds.map((id) => {
+    const ch = interaction.guild?.channels.cache.get(id);
+    return ch ? ch.name : id;
+  });
+
+  return buildInfoEmbed(
+    settings.ratePerHour,
+    settings.minMinutes,
+    guildSettings.currencyName,
+    settings.includedCategoryIds,
+    categoryNames,
+  );
+}
+
 // ─── Subcommand handlers ──────────────────────────────────────────────────────
 
 async function handleSetup(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  if (!interaction.guildId) {
-    await interaction.reply({
-      content: "このコマンドはサーバー内でのみ使用できます。",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
+  const guildId = requireGuild(interaction);
+  if (!guildId) return;
 
   const rate = interaction.options.getInteger("rate", true);
   const min = interaction.options.getInteger("min", true);
 
-  if (rate < 0) {
-    await interaction.reply({
-      content: "レートは 0 以上の整数を指定してください。（0 = 無効）",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-  if (min < 1 || min > 120) {
-    await interaction.reply({
-      content: "最低滞在時間は 1〜120 分で指定してください。",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const [settings, guildSettings] = await Promise.all([
-    setVcRewardSettings(interaction.guildId, rate, min),
-    getGuildSettings(interaction.guildId),
-  ]);
-
-  const embed = buildInfoEmbed(
-    settings.ratePerHour,
-    settings.minMinutes,
-    guildSettings.currencyName,
-  );
+  await setVcRewardSettings(guildId, rate, min);
+  const embed = await resolvedInfoEmbed(guildId, interaction);
   await interaction.editReply({ embeds: [embed] });
 }
 
 async function handleInfo(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  if (!interaction.guildId) {
+  const guildId = requireGuild(interaction);
+  if (!guildId) return;
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const embed = await resolvedInfoEmbed(guildId, interaction);
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleCategoryAdd(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
+  const guildId = requireGuild(interaction);
+  if (!guildId) return;
+
+  const channel = interaction.options.getChannel("category", true);
+  if (channel.type !== ChannelType.GuildCategory) {
     await interaction.reply({
-      content: "このコマンドはサーバー内でのみ使用できます。",
+      content: "カテゴリチャンネルを選択してください。",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await addVcRewardCategory(guildId, channel.id);
+  const embed = await resolvedInfoEmbed(guildId, interaction);
+  await interaction.editReply({
+    content: `✅ **${channel.name}** を対象カテゴリに追加しました。`,
+    embeds: [embed],
+  });
+}
 
-  const [settings, guildSettings] = await Promise.all([
-    getVcRewardSettings(interaction.guildId),
-    getGuildSettings(interaction.guildId),
-  ]);
+async function handleCategoryRemove(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
+  const guildId = requireGuild(interaction);
+  if (!guildId) return;
 
-  const embed = buildInfoEmbed(
-    settings.ratePerHour,
-    settings.minMinutes,
-    guildSettings.currencyName,
-  );
-  await interaction.editReply({ embeds: [embed] });
+  const channel = interaction.options.getChannel("category", true);
+  if (channel.type !== ChannelType.GuildCategory) {
+    await interaction.reply({
+      content: "カテゴリチャンネルを選択してください。",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await removeVcRewardCategory(guildId, channel.id);
+  const embed = await resolvedInfoEmbed(guildId, interaction);
+  await interaction.editReply({
+    content: `✅ **${channel.name}** を対象カテゴリから除外しました。`,
+    embeds: [embed],
+  });
 }
 
 // ─── Command definition ───────────────────────────────────────────────────────
@@ -141,25 +205,57 @@ export const vcsalaryCommand: Command = {
         .addIntegerOption((opt) =>
           opt
             .setName("min")
-            .setDescription("報酬を受け取るための最低連続滞在時間（分）。デフォルト: 5")
+            .setDescription("最低連続滞在時間（分）。デフォルト: 5")
             .setRequired(true)
             .setMinValue(1)
             .setMaxValue(120),
         ),
     )
     .addSubcommand((sub) =>
-      sub
-        .setName("info")
-        .setDescription("現在のVC報酬設定を確認します"),
+      sub.setName("info").setDescription("現在のVC報酬設定を確認します"),
+    )
+    .addSubcommandGroup((group) =>
+      group
+        .setName("category")
+        .setDescription("報酬対象カテゴリの管理（管理者）")
+        .addSubcommand((sub) =>
+          sub
+            .setName("add")
+            .setDescription("対象カテゴリを追加します")
+            .addChannelOption((opt) =>
+              opt
+                .setName("category")
+                .setDescription("追加するカテゴリ")
+                .addChannelTypes(ChannelType.GuildCategory)
+                .setRequired(true),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("remove")
+            .setDescription("対象カテゴリを除外します")
+            .addChannelOption((opt) =>
+              opt
+                .setName("category")
+                .setDescription("除外するカテゴリ")
+                .addChannelTypes(ChannelType.GuildCategory)
+                .setRequired(true),
+            ),
+        ),
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+    const group = interaction.options.getSubcommandGroup(false);
     const sub = interaction.options.getSubcommand();
-    if (sub === "setup") {
-      await handleSetup(interaction);
-    } else {
-      await handleInfo(interaction);
+
+    if (group === "category") {
+      if (sub === "add") await handleCategoryAdd(interaction);
+      else if (sub === "remove") await handleCategoryRemove(interaction);
+      return;
     }
+
+    if (sub === "setup") await handleSetup(interaction);
+    else await handleInfo(interaction);
   },
 };

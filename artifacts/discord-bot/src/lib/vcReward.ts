@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import {
   db,
   vcPresenceTable,
@@ -39,6 +39,44 @@ export async function setVcRewardSettings(
       target: vcRewardSettingsTable.guildId,
       set: { ratePerHour, minMinutes },
     })
+    .returning();
+  return row!;
+}
+
+/** Append a category ID to the allowlist (no-op if already present). */
+export async function addVcRewardCategory(
+  guildId: string,
+  categoryId: string,
+): Promise<VcRewardSettings> {
+  // Ensure a row exists first.
+  await getVcRewardSettings(guildId);
+  const [row] = await db
+    .update(vcRewardSettingsTable)
+    .set({
+      includedCategoryIds: sql`
+        CASE WHEN ${categoryId} = ANY(included_category_ids)
+          THEN included_category_ids
+          ELSE array_append(included_category_ids, ${categoryId})
+        END
+      `,
+    })
+    .where(eq(vcRewardSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
+/** Remove a category ID from the allowlist. */
+export async function removeVcRewardCategory(
+  guildId: string,
+  categoryId: string,
+): Promise<VcRewardSettings> {
+  await getVcRewardSettings(guildId);
+  const [row] = await db
+    .update(vcRewardSettingsTable)
+    .set({
+      includedCategoryIds: sql`array_remove(included_category_ids, ${categoryId})`,
+    })
+    .where(eq(vcRewardSettingsTable.guildId, guildId))
     .returning();
   return row!;
 }
