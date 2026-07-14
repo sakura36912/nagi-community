@@ -93,12 +93,9 @@ function isStickerSym(sym: Sym): boolean {
   return /^\d+$/.test(sym);
 }
 
-/** sym の表示文字列を返す。スティッカーなら「🎴」（カード統一）、絵文字ならそのまま。 */
-function displaySym(sym: Sym, meta: Map<string, StickerInfo>): string {
-  if (isStickerSym(sym)) {
-    return meta.has(sym) ? "🎴" : "🎴";
-  }
-  return sym;
+/** sym の表示文字列を返す。スティッカー・絵文字どちらも「🎴」統一。 */
+function displaySym(_sym: Sym, _meta: Map<string, StickerInfo>): string {
+  return "🎴";
 }
 
 /** sym に対応する大きな画像 URL を返す（embed の setImage/setThumbnail 用）。 */
