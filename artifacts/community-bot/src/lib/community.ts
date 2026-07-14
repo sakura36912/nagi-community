@@ -13,6 +13,8 @@ import {
   communitySheetSettingsTable,
   communitySheetsTable,
   communityRankingSettingsTable,
+  communityRoleButtonsTable,
+  type CommunityRoleButton,
   type CommunityEvent,
   type CommunityTicket,
   type CommunityVcSession,
@@ -571,6 +573,51 @@ export async function listSheets(guildId: string): Promise<CommunitySheet[]> {
     .from(communitySheetsTable)
     .where(eq(communitySheetsTable.guildId, guildId))
     .orderBy(asc(communitySheetsTable.createdAt));
+}
+
+// ─── Role Buttons ────────────────────────────────────────────────────────────
+
+export async function createRoleButton(opts: {
+  guildId: string;
+  channelId: string;
+  messageId: string;
+  roleId: string;
+  label: string;
+  style: number;
+}): Promise<CommunityRoleButton> {
+  const [row] = await db.insert(communityRoleButtonsTable).values(opts).returning();
+  if (!row) throw new Error("Failed to create role button");
+  return row;
+}
+
+export async function getRoleButtonsByMessage(messageId: string): Promise<CommunityRoleButton[]> {
+  return db
+    .select()
+    .from(communityRoleButtonsTable)
+    .where(eq(communityRoleButtonsTable.messageId, messageId))
+    .orderBy(asc(communityRoleButtonsTable.id));
+}
+
+export async function getRoleButtonById(id: number): Promise<CommunityRoleButton | undefined> {
+  const [row] = await db
+    .select()
+    .from(communityRoleButtonsTable)
+    .where(eq(communityRoleButtonsTable.id, id));
+  return row;
+}
+
+export async function listRoleButtonPanels(guildId: string): Promise<CommunityRoleButton[]> {
+  return db
+    .select()
+    .from(communityRoleButtonsTable)
+    .where(eq(communityRoleButtonsTable.guildId, guildId))
+    .orderBy(asc(communityRoleButtonsTable.messageId), asc(communityRoleButtonsTable.id));
+}
+
+export async function deleteRoleButtonsByMessage(messageId: string): Promise<void> {
+  await db
+    .delete(communityRoleButtonsTable)
+    .where(eq(communityRoleButtonsTable.messageId, messageId));
 }
 
 // ─── Daily Ranking Settings ───────────────────────────────────────────────────

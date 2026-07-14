@@ -19,8 +19,10 @@ import {
   addParticipant,
   addTempVc,
   createEvent,
+  createRoleButton,
   createSheet,
   createTicket,
+  deleteRoleButtonsByMessage,
   getEvent,
   getParticipants,
   deleteUserVcSessions,
@@ -29,6 +31,8 @@ import {
   getAllTempVcDeletions,
   getLobbyChannelId,
   getRecentTempVcDeletions,
+  getRoleButtonById,
+  getRoleButtonsByMessage,
   getSheetSettings,
   getTicketByChannel,
   getTicketSettings,
@@ -36,6 +40,7 @@ import {
   getVcRanking,
   getVcTimeInPeriod,
   isVcTrackingOptedOut,
+  listRoleButtonPanels,
   listSheets,
   listUpcomingEvents,
   removeParticipant,
@@ -1533,6 +1538,244 @@ export async function handleTempVcCreate(interaction: ButtonInteraction): Promis
   await interaction.editReply(`✅ 一時VCを作成しました: <#${channel.id}>`);
 }
 
+// ─── /rolebutton ─────────────────────────────────────────────────────────────
+
+export const COMM_ROLEBUTTON_PREFIX = "comm:rolebutton:";
+
+const BUTTON_STYLE_CHOICES = [
+  { name: "青（Primary）", value: "1" },
+  { name: "グレー（Secondary）", value: "2" },
+  { name: "緑（Success）", value: "3" },
+  { name: "赤（Danger）", value: "4" },
+] as const;
+
+const roleButtonCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("rolebutton")
+    .setDescription("ボタンを押すとロールが付与・解除されるパネルを管理します")
+    .addSubcommand((sub) =>
+      sub
+        .setName("create")
+        .setDescription("ロールボタンパネルを設置します（管理者）")
+        .addStringOption((opt) =>
+          opt.setName("title").setDescription("パネルのタイトル").setRequired(true).setMaxLength(256),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("role1").setDescription("付与するロール①").setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName("label1").setDescription("ボタン①のラベル").setRequired(true).setMaxLength(80),
+        )
+        .addStringOption((opt) =>
+          opt.setName("style1").setDescription("ボタン①の色").setRequired(false).addChoices(...BUTTON_STYLE_CHOICES),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("role2").setDescription("付与するロール②").setRequired(false),
+        )
+        .addStringOption((opt) =>
+          opt.setName("label2").setDescription("ボタン②のラベル").setRequired(false).setMaxLength(80),
+        )
+        .addStringOption((opt) =>
+          opt.setName("style2").setDescription("ボタン②の色").setRequired(false).addChoices(...BUTTON_STYLE_CHOICES),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("role3").setDescription("付与するロール③").setRequired(false),
+        )
+        .addStringOption((opt) =>
+          opt.setName("label3").setDescription("ボタン③のラベル").setRequired(false).setMaxLength(80),
+        )
+        .addStringOption((opt) =>
+          opt.setName("style3").setDescription("ボタン③の色").setRequired(false).addChoices(...BUTTON_STYLE_CHOICES),
+        )
+        .addStringOption((opt) =>
+          opt.setName("description").setDescription("パネルの説明文").setRequired(false).setMaxLength(4096),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("設置済みのロールボタンパネル一覧を表示します（管理者）"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("delete")
+        .setDescription("ロールボタンパネルを削除します（管理者）")
+        .addStringOption((opt) =>
+          opt.setName("message_id").setDescription("削除するパネルのメッセージID").setRequired(true),
+        ),
+    ),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    const sub = interaction.options.getSubcommand();
+
+    if (!requireAdmin(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+
+    // ── list ────────────────────────────────────────────────────────────────
+    if (sub === "list") {
+      const panels = await listRoleButtonPanels(guildId);
+      if (panels.length === 0) {
+        await interaction.reply({ content: "ロールボタンパネルはまだありません。", ephemeral: true });
+        return;
+      }
+      // Group by messageId
+      const grouped = new Map<string, typeof panels>();
+      for (const btn of panels) {
+        const arr = grouped.get(btn.messageId) ?? [];
+        arr.push(btn);
+        grouped.set(btn.messageId, arr);
+      }
+      const lines = [...grouped.entries()].map(([msgId, btns]) => {
+        const roles = btns.map((b) => `<@&${b.roleId}> \`${b.label}\``).join(", ");
+        return `• \`${msgId}\` → ${roles}`;
+      });
+      await interaction.reply({
+        content: `## 🎛️ ロールボタンパネル一覧\n${lines.join("\n")}`,
+        ephemeral: true,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    // ── delete ──────────────────────────────────────────────────────────────
+    if (sub === "delete") {
+      const messageId = interaction.options.getString("message_id", true);
+      await deleteRoleButtonsByMessage(messageId);
+      // Try to delete the Discord message too
+      try {
+        const panels = await listRoleButtonPanels(guildId);
+        const sample = panels.find((p) => p.messageId === messageId);
+        if (sample) {
+          const ch = interaction.guild?.channels.cache.get(sample.channelId);
+          if (ch?.isTextBased()) {
+            const msg = await ch.messages.fetch(messageId).catch(() => null);
+            await msg?.delete();
+          }
+        }
+      } catch { /* ignore */ }
+      await interaction.reply({ content: `✅ パネル \`${messageId}\` を削除しました。`, ephemeral: true });
+      return;
+    }
+
+    // ── create ──────────────────────────────────────────────────────────────
+    if (sub === "create") {
+      if (!interaction.channel?.isSendable()) {
+        await interaction.reply({ content: "このチャンネルには送信できません。", ephemeral: true });
+        return;
+      }
+
+      const title       = interaction.options.getString("title", true);
+      const description = interaction.options.getString("description");
+
+      const slots = [1, 2, 3] as const;
+      const buttons: { role: import("discord.js").Role; label: string; style: number }[] = [];
+
+      for (const n of slots) {
+        const role  = interaction.options.getRole(`role${n}`);
+        const label = interaction.options.getString(`label${n}`);
+        const style = Number(interaction.options.getString(`style${n}`) ?? "1");
+        if (role && label) buttons.push({ role: role as import("discord.js").Role, label, style });
+      }
+
+      if (buttons.length === 0) {
+        await interaction.reply({ content: "ロールとラベルを少なくとも1つ指定してください。", ephemeral: true });
+        return;
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle(title)
+        .setColor(0x5865f2);
+      if (description) embed.setDescription(description);
+
+      // Post the panel message first (without button IDs — we need the messageId first)
+      const placeholderRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        buttons.map((b) =>
+          new ButtonBuilder()
+            .setCustomId("pending")
+            .setLabel(b.label)
+            .setStyle(b.style as ButtonStyle)
+            .setDisabled(true),
+        ),
+      );
+
+      await interaction.deferReply({ ephemeral: true });
+      const msg = await interaction.channel.send({ embeds: [embed], components: [placeholderRow] });
+
+      // Persist each button
+      for (const b of buttons) {
+        await createRoleButton({
+          guildId,
+          channelId: msg.channelId,
+          messageId: msg.id,
+          roleId: b.role.id,
+          label: b.label,
+          style: b.style,
+        });
+      }
+
+      // Fetch the saved buttons to get their IDs, then update the message with real customIds
+      const saved = await getRoleButtonsByMessage(msg.id);
+      const realRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        saved.map((b) =>
+          new ButtonBuilder()
+            .setCustomId(`${COMM_ROLEBUTTON_PREFIX}${b.id}`)
+            .setLabel(b.label)
+            .setStyle(b.style as ButtonStyle),
+        ),
+      );
+      await msg.edit({ components: [realRow] });
+
+      await interaction.editReply(`✅ ロールボタンパネルを設置しました: <#${msg.channelId}>`);
+      return;
+    }
+  },
+};
+
+export async function handleRoleButton(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild || !interaction.guildId) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const buttonId = Number(interaction.customId.slice(COMM_ROLEBUTTON_PREFIX.length));
+  if (isNaN(buttonId)) return;
+
+  const btnRecord = await getRoleButtonById(buttonId);
+  if (!btnRecord) {
+    await interaction.reply({ content: "このボタンの設定が見つかりません。管理者にご連絡ください。", ephemeral: true });
+    return;
+  }
+
+  let member: GuildMember;
+  try {
+    member = await interaction.guild.members.fetch(interaction.user.id);
+  } catch {
+    await interaction.reply({ content: "メンバー情報の取得に失敗しました。", ephemeral: true });
+    return;
+  }
+
+  const role = interaction.guild.roles.cache.get(btnRecord.roleId)
+    ?? await interaction.guild.roles.fetch(btnRecord.roleId).catch(() => null);
+  if (!role) {
+    await interaction.reply({ content: "対象ロールが見つかりません。管理者にご連絡ください。", ephemeral: true });
+    return;
+  }
+
+  const has = member.roles.cache.has(role.id);
+  try {
+    if (has) {
+      await member.roles.remove(role, "ロールボタンによる解除");
+      await interaction.reply({ content: `✅ **${role.name}** を解除しました。`, ephemeral: true });
+    } else {
+      await member.roles.add(role, "ロールボタンによる付与");
+      await interaction.reply({ content: `✅ **${role.name}** を付与しました。`, ephemeral: true });
+    }
+  } catch {
+    await interaction.reply({ content: "ロールの変更に失敗しました。Botに権限があるか確認してください。", ephemeral: true });
+  }
+}
+
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 export const commands: Command[] = [
@@ -1544,4 +1787,5 @@ export const commands: Command[] = [
   ticketCommand,
   sheetCommand,
   botstatusCommand,
+  roleButtonCommand,
 ];

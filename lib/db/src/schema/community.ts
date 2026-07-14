@@ -204,6 +204,28 @@ export const communitySheetsTable = pgTable("community_sheets", {
 export type CommunitySheetSettings = typeof communitySheetSettingsTable.$inferSelect;
 export type CommunitySheet = typeof communitySheetsTable.$inferSelect;
 
+// ─── Role Buttons ────────────────────────────────────────────────────────────
+
+/**
+ * Each row is one button in a role-button panel.
+ * Multiple rows can share the same messageId (= one panel with many buttons).
+ */
+export const communityRoleButtonsTable = pgTable("community_role_buttons", {
+  id: serial("id").primaryKey(),
+  guildId: text("guild_id").notNull(),
+  channelId: text("channel_id").notNull(),
+  messageId: text("message_id").notNull(),
+  /** Discord role ID granted/revoked when this button is pressed. */
+  roleId: text("role_id").notNull(),
+  /** Label shown on the button (max 80 chars). */
+  label: text("label").notNull(),
+  /** ButtonStyle value: 1=Primary 2=Secondary 3=Success 4=Danger */
+  style: integer("style").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type CommunityRoleButton = typeof communityRoleButtonsTable.$inferSelect;
+
 // ─── Daily Ranking Post ──────────────────────────────────────────────────────
 
 /** Per-guild configuration for the daily VC ranking auto-post. */

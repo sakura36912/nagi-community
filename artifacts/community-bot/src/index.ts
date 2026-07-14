@@ -55,6 +55,8 @@ import {
   handlePrivacyOptoutKeep,
   handlePrivacyOptoutDelete,
   handleBotstatusRefresh,
+  handleRoleButton,
+  COMM_ROLEBUTTON_PREFIX,
 } from "./commands/index.js";
 
 const token = process.env["COMMUNITY_BOT_TOKEN"];
@@ -592,6 +594,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id === COMM_TEMPVC_CREATE) {
         await handleTempVcCreate(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_ROLEBUTTON_PREFIX)) {
+        await handleRoleButton(interaction);
         return;
       }
     }
