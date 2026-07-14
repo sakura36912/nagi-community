@@ -70,8 +70,9 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildVoiceStates, // required for voiceStateUpdate
-    GatewayIntentBits.GuildMessages,    // required for messageCreate
-    GatewayIntentBits.MessageContent,   // privileged — enable in Developer Portal
+    GatewayIntentBits.GuildMessages,         // required for messageCreate
+    GatewayIntentBits.MessageContent,        // privileged — enable in Developer Portal
+    GatewayIntentBits.GuildEmojisAndStickers, // required for emoji cache (slot setup)
   ],
 });
 

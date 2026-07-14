@@ -349,7 +349,9 @@ async function handleSetupAdd(interaction: ChatInputCommandInteraction): Promise
     await interaction.reply({ content: "❌ カスタム絵文字を入力してください。", flags: MessageFlags.Ephemeral });
     return;
   }
-  if (!guild.emojis.cache.has(emojiId)) {
+  // キャッシュになくても API から取得して確認する（キャッシュが未充填の場合に備える）
+  const emoji = guild.emojis.cache.get(emojiId) ?? await guild.emojis.fetch(emojiId).catch(() => null);
+  if (!emoji) {
     await interaction.reply({ content: "❌ このサーバーに登録されていない絵文字です。", flags: MessageFlags.Ephemeral });
     return;
   }
