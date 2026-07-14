@@ -12,27 +12,54 @@ import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/e
 
 const MIN_BET = 10;
 const MAX_BET = 100_000;
-const SLOT_SYMBOL_COUNT = 5; // number of distinct symbols per session
-
-// When the guild has fewer than SLOT_SYMBOL_COUNT custom emojis, fill the rest
-// with these unicode fallbacks.
-const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "⭐"];
 
 /**
- * Profit multiplier on the bet for each outcome type.
- *   three → profit = bet × 5   (return bet + 5× profit  = 6× total)
- *   two   → profit = bet × 0.5 (return bet + 0.5× profit = 1.5× total)
- *   none  → profit = -bet      (lose entire bet)
- *
- * Expected return ≈ 96% with 5 equally-weighted symbols.
+ * Number of distinct symbols per spin.
+ * 4 symbols → each payline hits at 6.25%, giving ~28% overall win rate.
  */
-const PAYOUT_THREE = 5;
-const PAYOUT_TWO_FRAC_NUM = 1;
-const PAYOUT_TWO_FRAC_DEN = 2;
+const SYMBOL_COUNT = 4;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+/** Fallback unicode symbols when the guild has fewer than SYMBOL_COUNT emojis. */
+const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
 
-type Symbol = string; // "<:name:id>", "<a:name:id>", or unicode
+/**
+ * Net profit as a multiplier of `bet` for each number of winning paylines.
+ * Index = winning paylines (0–5).
+ *
+ * Estimated return rate ~86% with 4 symbols.
+ *
+ *   0 lines → lose bet  (-1×)
+ *   1 line  → +1× bet
+ *   2 lines → +5× bet
+ *   3 lines → +11× bet
+ *   4 lines → +19× bet
+ *   5 lines → +34× bet  (jackpot)
+ */
+const NET_MULTIPLIER = [-1, 1, 5, 11, 19, 34] as const;
+
+// ─── 5 paylines: 3 horizontal rows + 2 diagonals ─────────────────────────────
+
+/** Each payline is three [row, col] coordinates. */
+const PAYLINE_DEFS = [
+  { name: "横 上段", coords: [[0, 0], [0, 1], [0, 2]] },
+  { name: "横 中段", coords: [[1, 0], [1, 1], [1, 2]] },
+  { name: "横 下段", coords: [[2, 0], [2, 1], [2, 2]] },
+  { name: "斜め ↘",  coords: [[0, 0], [1, 1], [2, 2]] },
+  { name: "斜め ↙",  coords: [[0, 2], [1, 1], [2, 0]] },
+] as const;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Sym = string; // "<:name:id>" | "<a:name:id>" | unicode
+type Row = [Sym, Sym, Sym];
+type Grid = [Row, Row, Row];
+
+interface PaylineResult {
+  name: string;
+  won: boolean;
+}
+
+// ─── Symbol selection ─────────────────────────────────────────────────────────
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -43,67 +70,44 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-/** Pick SLOT_SYMBOL_COUNT symbols, preferring the guild's custom emojis. */
-function pickSymbols(interaction: ChatInputCommandInteraction): Symbol[] {
+function pickSymbolPool(interaction: ChatInputCommandInteraction): Sym[] {
   const guild = interaction.guild;
-  const custom: Symbol[] = guild
+  const custom: Sym[] = guild
     ? [...guild.emojis.cache.values()]
-        .filter((e) => !e.managed && e.name)
+        .filter((e) => !e.managed && !!e.name)
         .map((e) =>
-          e.animated
-            ? `<a:${e.name}:${e.id}>`
-            : `<:${e.name}:${e.id}>`,
+          e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`,
         )
     : [];
 
   const pool =
-    custom.length >= SLOT_SYMBOL_COUNT
+    custom.length >= SYMBOL_COUNT
       ? shuffle(custom)
       : [...custom, ...DEFAULT_SYMBOLS.filter((d) => !custom.includes(d))];
 
-  return pool.slice(0, SLOT_SYMBOL_COUNT);
+  return pool.slice(0, SYMBOL_COUNT);
 }
 
-function pickReel(symbols: Symbol[]): Symbol {
+function pickOne(symbols: Sym[]): Sym {
   return symbols[Math.floor(Math.random() * symbols.length)]!;
 }
 
-type Reels = [Symbol, Symbol, Symbol];
+// ─── Spin & evaluate ──────────────────────────────────────────────────────────
 
-function spinReels(symbols: Symbol[]): Reels {
-  return [pickReel(symbols), pickReel(symbols), pickReel(symbols)];
+function spinGrid(symbols: Sym[]): Grid {
+  const row = (): Row => [pickOne(symbols), pickOne(symbols), pickOne(symbols)];
+  return [row(), row(), row()];
 }
 
-type Outcome =
-  | { kind: "three"; netDelta: number }
-  | { kind: "two"; netDelta: number }
-  | { kind: "none"; netDelta: number };
-
-function evaluate(reels: Reels, bet: number): Outcome {
-  const [a, b, c] = reels;
-  if (a === b && b === c) {
-    return { kind: "three", netDelta: Math.floor(bet * PAYOUT_THREE) };
-  }
-  if (a === b || b === c || a === c) {
-    return {
-      kind: "two",
-      netDelta: Math.floor((bet * PAYOUT_TWO_FRAC_NUM) / PAYOUT_TWO_FRAC_DEN),
-    };
-  }
-  return { kind: "none", netDelta: -bet };
+function evaluatePaylines(grid: Grid): PaylineResult[] {
+  return PAYLINE_DEFS.map(({ name, coords }) => {
+    const [a, b, c] = coords.map(([r, c]) => grid[r]![c]!);
+    return { name, won: a === b && b === c };
+  });
 }
 
-function reelLine(reels: Reels, spinning = false): string {
-  if (spinning) return "⬛ \\| ⬛ \\| ⬛";
-  return `${reels[0]} \\| ${reels[1]} \\| ${reels[2]}`;
-}
+// ─── Balance helpers ──────────────────────────────────────────────────────────
 
-// ─── Balance operations ───────────────────────────────────────────────────────
-
-/**
- * Atomically deduct `bet` from the user's wallet.
- * Returns the updated wallet, or null if the balance was insufficient.
- */
 async function deductBet(
   guildId: string,
   userId: string,
@@ -123,7 +127,6 @@ async function deductBet(
   return row ?? null;
 }
 
-/** Add `amount` to the user's wallet (used for winnings). */
 async function creditWinnings(
   guildId: string,
   userId: string,
@@ -132,60 +135,87 @@ async function creditWinnings(
   const [row] = await db
     .update(walletsTable)
     .set({ balance: sql`${walletsTable.balance} + ${amount}` })
-    .where(
-      and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)),
-    )
+    .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)))
     .returning({ balance: walletsTable.balance });
   return row?.balance ?? 0;
 }
 
-// ─── Embed builders ───────────────────────────────────────────────────────────
+// ─── Display helpers ──────────────────────────────────────────────────────────
+
+const BLANK = "⬛";
 
 function buildSpinningEmbed(bet: number, currencyName: string): EmbedBuilder {
+  const blank = `${BLANK}  ${BLANK}  ${BLANK}`;
   return new EmbedBuilder()
-    .setTitle("🎰 スロット")
-    .setDescription(`**[ ⬛ | ⬛ | ⬛ ]**\n\n*回転中...*`)
+    .setTitle("🎰 スロット 3×3")
+    .setDescription(`${blank}\n${blank}\n${blank}\n\n*回転中...*`)
     .setColor(0xfaa61a)
     .setFooter({ text: `賭け: ${bet.toLocaleString()} ${currencyName}` });
 }
 
 function buildResultEmbed(
-  reels: Reels,
-  outcome: Outcome,
+  grid: Grid,
+  paylines: PaylineResult[],
+  wins: number,
+  netDelta: number,
   finalBalance: number,
   bet: number,
   currencyName: string,
 ): EmbedBuilder {
-  const line = reelLine(reels);
+  // ── Grid display ───────────────────────────────────────────────────────────
+  // Mark horizontal wins with a trailing ✨ on the row.
+  const rowWinNames = new Set(
+    paylines
+      .filter((p) => p.won && p.name.startsWith("横"))
+      .map((p) => p.name),
+  );
+  const rowLabels = ["横 上段", "横 中段", "横 下段"];
+  const gridLines = grid.map((row, i) => {
+    const cells = row.join("  ");
+    const marker = rowWinNames.has(rowLabels[i]!) ? "  ✨" : "";
+    return cells + marker;
+  });
 
-  let color: number;
+  // Diagonal wins shown below grid.
+  const diagWins = paylines.filter((p) => p.won && p.name.startsWith("斜め"));
+  const diagLine =
+    diagWins.length > 0 ? diagWins.map((p) => `✨ ${p.name}`).join("　　") : "";
+
+  const gridBlock = gridLines.join("\n") + (diagLine ? "\n" + diagLine : "");
+
+  // ── Result text ────────────────────────────────────────────────────────────
   let resultText: string;
   let title: string;
+  let color: number;
 
-  if (outcome.kind === "three") {
-    color = 0xf1c40f;
-    title = "🎰 スロット — 大当たり！";
-    resultText = `🎊 **3枚揃い！** +${outcome.netDelta.toLocaleString()} ${currencyName}`;
-  } else if (outcome.kind === "two") {
-    color = 0x57f287;
-    title = "🎰 スロット — 当たり！";
-    resultText = `✨ **2枚揃い！** +${outcome.netDelta.toLocaleString()} ${currencyName}`;
-  } else {
+  if (wins === 0) {
+    title = "🎰 スロット 3×3 — ハズレ";
     color = 0xed4245;
-    title = "🎰 スロット — ハズレ";
     resultText = `💸 ハズレ… **-${bet.toLocaleString()} ${currencyName}**`;
+  } else {
+    const wonNames = paylines.filter((p) => p.won).map((p) => p.name);
+    const profit = Math.abs(netDelta);
+    resultText =
+      `🎊 **${wins}ライン当選！ +${profit.toLocaleString()} ${currencyName}**\n` +
+      wonNames.map((n) => `　✨ ${n}`).join("\n");
+
+    if (wins >= 3) {
+      title = "🎰 スロット 3×3 — 大当たり！";
+      color = 0xf1c40f;
+    } else {
+      title = "🎰 スロット 3×3 — 当たり！";
+      color = 0x57f287;
+    }
   }
 
   return new EmbedBuilder()
     .setTitle(title)
-    .setDescription(`**[ ${line} ]**\n\n${resultText}`)
+    .setDescription(`${gridBlock}\n\n${resultText}`)
     .setColor(color)
-    .setFooter({
-      text: `残高: ${finalBalance.toLocaleString()} ${currencyName}`,
-    });
+    .setFooter({ text: `残高: ${finalBalance.toLocaleString()} ${currencyName}` });
 }
 
-// ─── Command ──────────────────────────────────────────────────────────────────
+// ─── Command definition ───────────────────────────────────────────────────────
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -195,7 +225,9 @@ interface Command {
 export const slotCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("slot")
-    .setDescription("スロットマシンで賭けをします 🎰")
+    .setDescription(
+      "3×3スロット 🎰 ｜ 横3・斜め2 の計5ライン ｜ 揃ったライン数で配当",
+    )
     .addIntegerOption((opt) =>
       opt
         .setName("bet")
@@ -215,26 +247,25 @@ export const slotCommand: Command = {
     }
 
     const bet = interaction.options.getInteger("bet", true);
-    const guildId = interaction.guildId;
+    const { guildId } = interaction;
     const userId = interaction.user.id;
 
-    // Ensure wallet exists.
-    await getOrCreateWallet(guildId, userId);
-    const [guildSettings] = await Promise.all([getGuildSettings(guildId)]);
-    const { currencyName } = guildSettings;
+    // Ensure wallet exists, load guild settings.
+    const [, { currencyName }] = await Promise.all([
+      getOrCreateWallet(guildId, userId),
+      getGuildSettings(guildId),
+    ]);
 
-    // Show spinning animation first.
-    await interaction.reply({
-      embeds: [buildSpinningEmbed(bet, currencyName)],
-    });
+    // 1. Show spinning state immediately.
+    await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
 
-    // Atomically deduct the bet.
+    // 2. Atomically deduct bet (fails if insufficient balance).
     const afterDeduct = await deductBet(guildId, userId, bet);
     if (!afterDeduct) {
       await interaction.editReply({
         embeds: [
           new EmbedBuilder()
-            .setTitle("🎰 スロット")
+            .setTitle("🎰 スロット 3×3")
             .setDescription("❌ 残高が不足しています。")
             .setColor(0xed4245),
         ],
@@ -242,34 +273,48 @@ export const slotCommand: Command = {
       return;
     }
 
-    // Spin the reels.
-    const symbols = pickSymbols(interaction);
-    const reels = spinReels(symbols);
-    const outcome = evaluate(reels, bet);
+    // 3. Spin the 3×3 grid and evaluate paylines.
+    const symbols = pickSymbolPool(interaction);
+    const grid = spinGrid(symbols);
+    const paylines = evaluatePaylines(grid);
+    const wins = paylines.filter((p) => p.won).length;
 
-    // Credit winnings if positive.
+    const multiplier = NET_MULTIPLIER[Math.min(wins, 5)]!;
+    const netDelta = Math.floor(bet * multiplier);
+
+    // 4. Credit winnings if positive.
     let finalBalance = afterDeduct.balance;
-    if (outcome.netDelta > 0) {
-      finalBalance = await creditWinnings(guildId, userId, outcome.netDelta);
+    if (netDelta > 0) {
+      finalBalance = await creditWinnings(guildId, userId, netDelta);
     }
 
-    // Record transaction.
-    const txAmount = outcome.netDelta; // negative for loss, positive for win
-    if (txAmount !== 0) {
-      const reason =
-        outcome.kind === "three"
-          ? `スロット大当たり（賭け: ${bet}）`
-          : outcome.kind === "two"
-            ? `スロット当たり（賭け: ${bet}）`
-            : `スロットハズレ（賭け: ${bet}）`;
-      await recordTransaction(guildId, userId, txAmount, reason);
+    // 5. Record transaction.
+    if (netDelta !== 0) {
+      await recordTransaction(
+        guildId,
+        userId,
+        netDelta,
+        wins > 0
+          ? `スロット${wins}ライン当選（賭け: ${bet}）`
+          : `スロットハズレ（賭け: ${bet}）`,
+      );
     }
 
-    // Small delay so the "spinning" embed is visible.
-    await new Promise((res) => setTimeout(res, 1200));
+    // 6. Brief pause so the spinning animation is visible, then show result.
+    await new Promise((res) => setTimeout(res, 1300));
 
     await interaction.editReply({
-      embeds: [buildResultEmbed(reels, outcome, finalBalance, bet, currencyName)],
+      embeds: [
+        buildResultEmbed(
+          grid,
+          paylines,
+          wins,
+          netDelta,
+          finalBalance,
+          bet,
+          currencyName,
+        ),
+      ],
     });
   },
 };
