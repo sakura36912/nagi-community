@@ -16,7 +16,15 @@ export const slotSettingsTable = pgTable("slot_settings", {
     .notNull()
     .default(sql`'{}'::text[]`),
   /**
-   * emojiId → weight mapping.
+   * Ordered list of guild sticker IDs used as slot symbols.
+   * When non-empty, sticker mode takes priority over emoji mode.
+   */
+  stickerIds: text("sticker_ids")
+    .array()
+    .notNull()
+    .default(sql`'{}'::text[]`),
+  /**
+   * emojiId/stickerId → weight mapping.
    * Weight controls how many times the symbol appears in the reel pool.
    * e.g. weight=5 means that symbol is 5× more likely than weight=1.
    */

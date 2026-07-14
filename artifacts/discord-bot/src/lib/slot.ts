@@ -23,6 +23,55 @@ export async function getSlotSettings(guildId: string): Promise<SlotSettings> {
   return created!;
 }
 
+// ─── Sticker list management ──────────────────────────────────────────────────
+
+export async function addSlotSticker(
+  guildId: string,
+  stickerId: string,
+): Promise<SlotSettings> {
+  await getSlotSettings(guildId);
+  const [row] = await db
+    .update(slotSettingsTable)
+    .set({
+      stickerIds: sql`
+        CASE WHEN ${stickerId} = ANY(sticker_ids)
+          THEN sticker_ids
+          ELSE array_append(sticker_ids, ${stickerId})
+        END`,
+    })
+    .where(eq(slotSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
+export async function removeSlotSticker(
+  guildId: string,
+  stickerId: string,
+): Promise<SlotSettings> {
+  await getSlotSettings(guildId);
+  const [row] = await db
+    .update(slotSettingsTable)
+    .set({
+      stickerIds: sql`array_remove(sticker_ids, ${stickerId})`,
+      emojiWeights: sql`emoji_weights - ${stickerId}`,
+    })
+    .where(eq(slotSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
+export async function clearSlotStickers(guildId: string): Promise<SlotSettings> {
+  await getSlotSettings(guildId);
+  const [row] = await db
+    .update(slotSettingsTable)
+    .set({
+      stickerIds: sql`'{}'::text[]`,
+    })
+    .where(eq(slotSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
 // ─── Emoji list management ────────────────────────────────────────────────────
 
 export async function addSlotEmoji(

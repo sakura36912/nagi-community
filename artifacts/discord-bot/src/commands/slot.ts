@@ -5,12 +5,16 @@ import {
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  StickerFormatType,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
 import {
   getSlotSettings,
+  addSlotSticker,
+  removeSlotSticker,
+  clearSlotStickers,
   addSlotEmoji,
   removeSlotEmoji,
   clearSlotEmojis,
@@ -72,6 +76,38 @@ function emojiCdnUrl(sym: Sym): string | null {
   return `https://cdn.discordapp.com/emojis/${id}.${animated ? "gif" : "webp"}?size=256`;
 }
 
+// ─── Sticker utilities ────────────────────────────────────────────────────────
+
+interface StickerInfo { name: string; animated: boolean }
+
+/** スティッカーの CDN 画像 URL を返す。 */
+function stickerCdnUrl(id: string, animated: boolean): string {
+  return `https://cdn.discordapp.com/stickers/${id}.${animated ? "gif" : "webp"}?size=512`;
+}
+
+/** sym が sticker ID（純数字）かどうか判定。 */
+function isStickerSym(sym: Sym): boolean {
+  return /^\d+$/.test(sym);
+}
+
+/** sym の表示文字列を返す。スティッカーなら「🎴 名前」、絵文字ならそのまま。 */
+function displaySym(sym: Sym, meta: Map<string, StickerInfo>): string {
+  if (isStickerSym(sym)) {
+    const info = meta.get(sym);
+    return info ? `🎴${info.name}` : `🎴?`;
+  }
+  return sym;
+}
+
+/** sym に対応する大きな画像 URL を返す（embed の setImage/setThumbnail 用）。 */
+function featuredImageUrl(sym: Sym, meta: Map<string, StickerInfo>): string | null {
+  if (isStickerSym(sym)) {
+    const info = meta.get(sym);
+    return info ? stickerCdnUrl(sym, info.animated) : null;
+  }
+  return emojiCdnUrl(sym);
+}
+
 // ─── Symbol pool & weighted random ───────────────────────────────────────────
 
 function shuffle<T>(arr: T[]): T[] {
@@ -84,11 +120,15 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 /** Expand each symbol according to its weight to form the reel pool. */
-function buildWeightedPool(symbols: Sym[], weights: Record<string, number>): Sym[] {
+function buildWeightedPool(
+  symbols: Sym[],
+  weights: Record<string, number>,
+): Sym[] {
   const pool: Sym[] = [];
   for (const sym of symbols) {
-    const id = extractEmojiId(sym);
-    const w = Math.max(1, id ? (weights[id] ?? 1) : 1);
+    // Sticker mode: sym IS the sticker ID. Emoji mode: extract ID from string.
+    const key = isStickerSym(sym) ? sym : (extractEmojiId(sym) ?? sym);
+    const w = Math.max(1, weights[key] ?? 1);
     for (let i = 0; i < w; i++) pool.push(sym);
   }
   return pool;
@@ -100,12 +140,33 @@ function pickOne(pool: Sym[]): Sym {
 
 async function pickSymbolPool(
   interaction: ChatInputCommandInteraction,
-): Promise<{ symbols: Sym[]; weights: Record<string, number> }> {
+): Promise<{ symbols: Sym[]; weights: Record<string, number>; meta: Map<string, StickerInfo> }> {
   const guild = interaction.guild!;
   const settings = await getSlotSettings(guild.id);
   const weights = settings.emojiWeights ?? {};
+  const meta = new Map<string, StickerInfo>();
 
-  // Fixed mode: use pinned emoji IDs, resolve to display strings.
+  // ── Sticker mode (priority) ──────────────────────────────────────────────
+  if (settings.stickerIds.length >= 2) {
+    // Fetch sticker cache; populate meta map.
+    const stickers = guild.stickers.cache.size > 0
+      ? guild.stickers.cache
+      : await guild.stickers.fetch().catch(() => guild.stickers.cache);
+
+    const valid = settings.stickerIds.filter((id) => stickers.has(id));
+    if (valid.length >= 2) {
+      for (const id of valid) {
+        const s = stickers.get(id)!;
+        meta.set(id, {
+          name: s.name,
+          animated: s.format === StickerFormatType.APNG || s.format === StickerFormatType.GIF,
+        });
+      }
+      return { symbols: valid, weights, meta };
+    }
+  }
+
+  // ── Emoji fixed mode ─────────────────────────────────────────────────────
   if (settings.fixedEmojiIds.length > 0) {
     const resolved = settings.fixedEmojiIds
       .map((id) => resolveEmoji(guild, id))
@@ -116,11 +177,11 @@ async function pickSymbolPool(
         resolved.length < SYMBOL_COUNT
           ? [...resolved, ...DEFAULT_SYMBOLS.slice(0, SYMBOL_COUNT - resolved.length)]
           : resolved.slice(0, SYMBOL_COUNT);
-      return { symbols: padded, weights };
+      return { symbols: padded, weights, meta };
     }
   }
 
-  // Auto mode: all guild custom emojis.
+  // ── Auto mode: all guild custom emojis ───────────────────────────────────
   const custom: Sym[] = [...guild.emojis.cache.values()]
     .filter((e) => !e.managed && !!e.name)
     .map((e) => (e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`));
@@ -130,7 +191,7 @@ async function pickSymbolPool(
       ? shuffle(custom)
       : [...custom, ...DEFAULT_SYMBOLS.filter((d) => !custom.includes(d))];
 
-  return { symbols: base.slice(0, SYMBOL_COUNT), weights };
+  return { symbols: base.slice(0, SYMBOL_COUNT), weights, meta };
 }
 
 // ─── Spin & evaluate ──────────────────────────────────────────────────────────
@@ -196,13 +257,16 @@ function buildResultEmbed(
   finalBalance: number,
   bet: number,
   currencyName: string,
+  meta: Map<string, StickerInfo>,
 ): EmbedBuilder {
   const rowWins = new Set(
     paylines.filter((p) => p.won && p.name.startsWith("横")).map((p) => p.name),
   );
   const rowLabels = ["横 上段", "横 中段", "横 下段"];
   const gridLines = grid.map(
-    (row, i) => row.join("　　") + (rowWins.has(rowLabels[i]!) ? "　✨" : ""),
+    (row, i) =>
+      row.map((s) => displaySym(s, meta)).join("　　") +
+      (rowWins.has(rowLabels[i]!) ? "　✨" : ""),
   );
   const diagWins = paylines.filter((p) => p.won && p.name.startsWith("斜め"));
   const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("　　");
@@ -217,7 +281,7 @@ function buildResultEmbed(
       if (def) featuredSym = grid[def.coords[0]![0]!]![def.coords[0]![1]!]!;
     }
   }
-  const featuredUrl = emojiCdnUrl(featuredSym);
+  const imageUrl = featuredImageUrl(featuredSym, meta);
 
   let resultText: string;
   let title: string;
@@ -243,32 +307,44 @@ function buildResultEmbed(
     .setColor(color)
     .setFooter({ text: `残高: ${finalBalance.toLocaleString()} ${currencyName}` });
 
-  if (featuredUrl) embed.setThumbnail(featuredUrl);
+  // スタンプモードは setImage（大きく）、絵文字は setThumbnail（小さめ）
+  if (imageUrl) {
+    if (meta.size > 0) embed.setImage(imageUrl);
+    else embed.setThumbnail(imageUrl);
+  }
   return embed;
 }
 
 function buildSetupEmbed(
   guild: Guild,
-  fixedEmojiIds: string[],
-  emojiWeights: Record<string, number>,
-  payoutMultipliers: number[],
+  settings: { stickerIds: string[]; fixedEmojiIds: string[]; emojiWeights: Record<string, number>; payoutMultipliers: number[] },
 ): EmbedBuilder {
+  const { stickerIds, fixedEmojiIds, emojiWeights, payoutMultipliers } = settings;
   const multipliers = resolveMultipliers(payoutMultipliers);
-  const mode = fixedEmojiIds.length === 0 ? "🔄 自動（全ギルド絵文字から抽選）" : "📌 固定";
 
-  // Symbol list with weights.
+  // ── Sticker mode ──────────────────────────────────────────────────────────
+  const useStickerMode = stickerIds.length > 0;
+  const mode = useStickerMode ? "🎴 スタンプ固定" : fixedEmojiIds.length === 0 ? "🔄 自動（絵文字）" : "📌 絵文字固定";
+  const symbolCount = useStickerMode ? stickerIds.length : fixedEmojiIds.length || "自動";
+
   let symbolsValue: string;
-  if (fixedEmojiIds.length === 0) {
+  if (useStickerMode) {
+    const stickers = guild.stickers.cache;
+    symbolsValue = stickerIds.map((id) => {
+      const s = stickers.get(id);
+      const w = emojiWeights[id] ?? 1;
+      const bar = "█".repeat(Math.min(w, 10)) + (w > 10 ? `…${w}` : "");
+      return s ? `🎴 **${s.name}** \`${bar}\` ×${w}` : `*(削除済み: ${id})* \`${bar}\` ×${w}`;
+    }).join("\n");
+  } else if (fixedEmojiIds.length === 0) {
     symbolsValue = "*未登録（自動モード）*";
   } else {
-    symbolsValue = fixedEmojiIds
-      .map((id) => {
-        const sym = resolveEmoji(guild, id);
-        const w = emojiWeights[id] ?? 1;
-        const bar = "█".repeat(Math.min(w, 10)) + (w > 10 ? `…${w}` : "");
-        return sym ? `${sym} \`${bar}\` ×${w}` : `*(削除済み: ${id})*`;
-      })
-      .join("\n");
+    symbolsValue = fixedEmojiIds.map((id) => {
+      const sym = resolveEmoji(guild, id);
+      const w = emojiWeights[id] ?? 1;
+      const bar = "█".repeat(Math.min(w, 10)) + (w > 10 ? `…${w}` : "");
+      return sym ? `${sym} \`${bar}\` ×${w}` : `*(削除済み: ${id})*`;
+    }).join("\n");
   }
 
   // Payout table.
@@ -279,14 +355,17 @@ function buildSetupEmbed(
   });
   payoutLines.unshift("`0ライン` → -1× bet（固定）");
 
-  const totalWeight = fixedEmojiIds.reduce(
-    (sum, id) => sum + (emojiWeights[id] ?? 1), 0,
-  );
-  const probLines = fixedEmojiIds.length > 0
-    ? fixedEmojiIds.map((id) => {
-        const sym = resolveEmoji(guild, id);
+  const activeIds = useStickerMode ? stickerIds : fixedEmojiIds;
+  const totalWeight = activeIds.reduce((sum, id) => sum + (emojiWeights[id] ?? 1), 0);
+  const probLines = activeIds.length > 0
+    ? activeIds.map((id) => {
         const w = emojiWeights[id] ?? 1;
         const pct = totalWeight > 0 ? ((w / totalWeight) * 100).toFixed(1) : "0.0";
+        if (useStickerMode) {
+          const s = guild.stickers.cache.get(id);
+          return s ? `🎴${s.name} ${pct}%` : `*(削除済み)* ${pct}%`;
+        }
+        const sym = resolveEmoji(guild, id);
         return sym ? `${sym} ${pct}%` : `*(削除済み)* ${pct}%`;
       }).join("  ")
     : "*固定モードでのみ表示*";
@@ -296,9 +375,9 @@ function buildSetupEmbed(
     .setColor(0x5865f2)
     .addFields(
       { name: "モード", value: mode, inline: true },
-      { name: "絵柄数", value: `${fixedEmojiIds.length || "自動"} 種類`, inline: true },
+      { name: "絵柄数", value: `${symbolCount} 種類`, inline: true },
       { name: "\u200b", value: "\u200b", inline: true },
-      { name: "絵柄と出現重み", value: symbolsValue },
+      { name: "絵柄と出現重み", value: symbolsValue || "*なし*" },
       { name: "各絵柄の出現確率", value: probLines },
       { name: "当選配当", value: payoutLines.join("\n") },
     )
@@ -334,7 +413,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const { symbols, weights } = await pickSymbolPool(interaction);
+  const { symbols, weights, meta } = await pickSymbolPool(interaction);
   const pool = buildWeightedPool(symbols, weights);
   const grid = spinGrid(pool);
   const paylines = evaluatePaylines(grid);
@@ -360,65 +439,92 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   await new Promise((res) => setTimeout(res, 1300));
   await interaction.editReply({
-    embeds: [buildResultEmbed(grid, paylines, wins, netDelta, finalBalance, bet, currencyName)],
+    embeds: [buildResultEmbed(grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta)],
   });
 }
 
 async function handleSetupAdd(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
-  const emojiId = parseEmojiId(interaction.options.getString("emoji", true));
-  if (!emojiId) {
-    await interaction.reply({ content: "❌ カスタム絵文字を入力してください。", flags: MessageFlags.Ephemeral });
-    return;
-  }
-  // キャッシュになくても API から取得して確認する（キャッシュが未充填の場合に備える）
-  const emoji = guild.emojis.cache.get(emojiId) ?? await guild.emojis.fetch(emojiId).catch(() => null);
-  if (!emoji) {
-    await interaction.reply({ content: "❌ このサーバーに登録されていない絵文字です。", flags: MessageFlags.Ephemeral });
-    return;
-  }
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const s = await addSlotEmoji(guild.id, emojiId);
-  await interaction.editReply({ embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)] });
-}
+  const input = interaction.options.getString("sticker-id", true).trim();
 
-async function handleSetupRemove(interaction: ChatInputCommandInteraction): Promise<void> {
-  const guild = interaction.guild!;
-  const emojiId = parseEmojiId(interaction.options.getString("emoji", true));
-  if (!emojiId) {
-    await interaction.reply({ content: "❌ カスタム絵文字を入力してください。", flags: MessageFlags.Ephemeral });
-    return;
-  }
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const s = await removeSlotEmoji(guild.id, emojiId);
-  await interaction.editReply({ embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)] });
-}
-
-async function handleSetupWeight(interaction: ChatInputCommandInteraction): Promise<void> {
-  const guild = interaction.guild!;
-  const emojiId = parseEmojiId(interaction.options.getString("emoji", true));
-  const weight = interaction.options.getInteger("weight", true);
-
-  if (!emojiId) {
-    await interaction.reply({ content: "❌ カスタム絵文字を入力してください。", flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  // Check emoji is in the fixed list.
-  const current = await getSlotSettings(guild.id);
-  if (!current.fixedEmojiIds.includes(emojiId)) {
+  if (!/^\d+$/.test(input)) {
     await interaction.reply({
-      content: "❌ 先に `/slot setup add` でその絵文字を登録してください。",
+      content: "❌ スタンプIDは数字のみです。Discoverモードで右クリック→「IDをコピー」で取得できます。",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // スティッカーキャッシュを補完してから検索
+  const stickers = guild.stickers.cache.size > 0
+    ? guild.stickers.cache
+    : await guild.stickers.fetch().catch(() => guild.stickers.cache);
+  const sticker = stickers.get(input) ?? await guild.stickers.fetch(input).catch(() => null);
+
+  if (!sticker) {
+    await interaction.reply({
+      content: "❌ このサーバーに登録されていないスタンプIDです。",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  if (sticker.format === StickerFormatType.Lottie) {
+    await interaction.reply({
+      content: "❌ Lottie形式のスタンプは非対応です（PNG / APNG / GIF のみ）。",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const s = await setSlotEmojiWeight(guild.id, emojiId, weight);
+  const s = await addSlotSticker(guild.id, input);
+  await interaction.editReply({
+    content: `✅ **${sticker.name}** を絵柄に登録しました。`,
+    embeds: [buildSetupEmbed(guild, s)],
+  });
+}
+
+async function handleSetupRemove(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guild = interaction.guild!;
+  const input = interaction.options.getString("sticker-id", true).trim();
+
+  if (!/^\d+$/.test(input)) {
+    await interaction.reply({ content: "❌ スタンプIDは数字のみです。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const s = await removeSlotSticker(guild.id, input);
+  await interaction.editReply({
+    content: "✅ スタンプを削除しました。",
+    embeds: [buildSetupEmbed(guild, s)],
+  });
+}
+
+async function handleSetupWeight(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guild = interaction.guild!;
+  const input = interaction.options.getString("sticker-id", true).trim();
+  const weight = interaction.options.getInteger("weight", true);
+
+  if (!/^\d+$/.test(input)) {
+    await interaction.reply({ content: "❌ スタンプIDは数字のみです。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const current = await getSlotSettings(guild.id);
+  if (!current.stickerIds.includes(input)) {
+    await interaction.reply({
+      content: "❌ 先に `/slot setup add` でそのスタンプを登録してください。",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const s = await setSlotEmojiWeight(guild.id, input, weight);
   await interaction.editReply({
     content: `✅ 重みを **×${weight}** に設定しました。`,
-    embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)],
+    embeds: [buildSetupEmbed(guild, s)],
   });
 }
 
@@ -440,24 +546,26 @@ async function handleSetupPayout(interaction: ChatInputCommandInteraction): Prom
   const s = await setSlotPayout(guild.id, lines, multiplier);
   await interaction.editReply({
     content: `✅ **${lines}ライン当選** の倍率を **+${multiplier}×** に設定しました。`,
-    embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)],
+    embeds: [buildSetupEmbed(guild, s)],
   });
 }
 
 async function handleSetupList(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  // スティッカーキャッシュを確保
+  if (guild.stickers.cache.size === 0) await guild.stickers.fetch().catch(() => null);
   const s = await getSlotSettings(guild.id);
-  await interaction.editReply({ embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)] });
+  await interaction.editReply({ embeds: [buildSetupEmbed(guild, s)] });
 }
 
 async function handleSetupClear(interaction: ChatInputCommandInteraction): Promise<void> {
   const guild = interaction.guild!;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const s = await clearSlotEmojis(guild.id);
+  const s = await clearSlotStickers(guild.id);
   await interaction.editReply({
-    content: "✅ 絵柄設定をリセットしました。配当倍率はそのまま残ります。",
-    embeds: [buildSetupEmbed(guild, s.fixedEmojiIds, s.emojiWeights, s.payoutMultipliers)],
+    content: "✅ スタンプ絵柄設定をリセットしました。配当倍率はそのまま残ります。",
+    embeds: [buildSetupEmbed(guild, s)],
   });
 }
 
@@ -487,17 +595,17 @@ export const slotCommand: Command = {
         .addSubcommand((sub) =>
           sub
             .setName("add")
-            .setDescription("絵柄を追加登録します")
+            .setDescription("スタンプを絵柄に追加登録します")
             .addStringOption((opt) =>
-              opt.setName("emoji").setDescription("追加するサーバー絵文字").setRequired(true),
+              opt.setName("sticker-id").setDescription("スタンプID（開発者モード→右クリック→IDをコピー）").setRequired(true),
             ),
         )
         .addSubcommand((sub) =>
           sub
             .setName("remove")
-            .setDescription("絵柄を削除します")
+            .setDescription("スタンプ絵柄を削除します")
             .addStringOption((opt) =>
-              opt.setName("emoji").setDescription("削除するサーバー絵文字").setRequired(true),
+              opt.setName("sticker-id").setDescription("スタンプID").setRequired(true),
             ),
         )
         .addSubcommand((sub) =>
@@ -505,7 +613,7 @@ export const slotCommand: Command = {
             .setName("weight")
             .setDescription("絵柄の出現重みを設定します（確率調整）")
             .addStringOption((opt) =>
-              opt.setName("emoji").setDescription("対象の絵文字").setRequired(true),
+              opt.setName("sticker-id").setDescription("スタンプID").setRequired(true),
             )
             .addIntegerOption((opt) =>
               opt
