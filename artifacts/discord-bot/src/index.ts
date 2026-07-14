@@ -10,6 +10,12 @@ import {
   SHOP_BUY_PREFIX,
   postWeeklyShifts,
   getNextWeeklyPostTime,
+  SHIFT_TOGGLE_PREFIX,
+  SHIFT_CONFIRM_PREFIX,
+  SHIFT_CANCEL_PREFIX,
+  handleShiftToggle,
+  handleShiftConfirm,
+  handleShiftCancel,
 } from "./commands";
 import { buildSheetEmbed, findSelfIntro } from "./commands/sheet";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
@@ -508,6 +514,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(SHOP_BUY_PREFIX)) {
       await handleShopBuyButton(interaction);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_TOGGLE_PREFIX)) {
+      await handleShiftToggle(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_CONFIRM_PREFIX)) {
+      await handleShiftConfirm(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_CANCEL_PREFIX)) {
+      await handleShiftCancel(interaction);
       return;
     }
 

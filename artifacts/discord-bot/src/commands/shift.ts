@@ -1,8 +1,12 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   EmbedBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Client,
 } from "discord.js";
@@ -19,6 +23,33 @@ import {
   setShiftSettings,
   type Shift,
 } from "../lib/shift.js";
+
+// ─── Button prefix constants ─────────────────────────────────────────────────
+
+export const SHIFT_TOGGLE_PREFIX  = "shift:toggle:";
+export const SHIFT_CONFIRM_PREFIX = "shift:confirm:";
+export const SHIFT_CANCEL_PREFIX  = "shift:cancel:";
+
+// ─── In-memory submit sessions ────────────────────────────────────────────────
+
+interface SubmitSession {
+  guildId: string;
+  userId: string;
+  dates: string[];                        // Mon→Sun "YYYY-MM-DD"
+  selections: Record<string, "○" | "✕" | null>;
+  startTime: string;
+  endTime: string;
+  expiresAt: number;
+}
+
+const submitSessions = new Map<string, SubmitSession>();
+
+function cleanExpiredSessions(): void {
+  const now = Date.now();
+  for (const [k, v] of submitSessions) {
+    if (v.expiresAt < now) submitSessions.delete(k);
+  }
+}
 
 // ─── Date / time helpers ──────────────────────────────────────────────────────
 
@@ -106,6 +137,73 @@ function getMonthRange(monthStr?: string): { from: string; to: string; label: st
   const lastDay = new Date(Date.UTC(year, month + 1, 0));
   const to = lastDay.toISOString().slice(0, 10);
   return { from, to, label: `${year}年${month + 1}月` };
+}
+
+/** Returns Mon–Sun "YYYY-MM-DD" strings for the week `weekOffset` weeks from now (JST). */
+function getWeekDates(weekOffset = 0): string[] {
+  const jstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const dow = jstNow.getUTCDay(); // 0=Sun
+  const mondayOffset = dow === 0 ? -6 : 1 - dow;
+  const monday = new Date(jstNow);
+  monday.setUTCDate(jstNow.getUTCDate() + mondayOffset + weekOffset * 7);
+
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setUTCDate(monday.getUTCDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+}
+
+function buildSubmitComponents(
+  sessionId: string,
+  session: SubmitSession,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const dayButtons = session.dates.map((date) => {
+    const d = new Date(`${date}T00:00:00+09:00`);
+    const dow = WEEKDAY_JA[d.getDay()]!;
+    const label = `${d.getMonth() + 1}/${d.getDate()}(${dow})`;
+    const sel = session.selections[date];
+    const mark  = sel === "○" ? " ○" : sel === "✕" ? " ✕" : " —";
+    const style = sel === "○" ? ButtonStyle.Success : sel === "✕" ? ButtonStyle.Danger : ButtonStyle.Secondary;
+    return new ButtonBuilder()
+      .setCustomId(`${SHIFT_TOGGLE_PREFIX}${sessionId}:${date}`)
+      .setLabel(label + mark)
+      .setStyle(style);
+  });
+
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(dayButtons.slice(0, 5)),  // Mon–Fri
+    new ActionRowBuilder<ButtonBuilder>().addComponents(dayButtons.slice(5, 7)),  // Sat, Sun
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${SHIFT_CONFIRM_PREFIX}${sessionId}`)
+        .setLabel("✅ 提出する")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`${SHIFT_CANCEL_PREFIX}${sessionId}`)
+        .setLabel("❌ キャンセル")
+        .setStyle(ButtonStyle.Secondary),
+    ),
+  ];
+}
+
+function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
+  const from = session.dates[0]!;
+  const to   = session.dates[6]!;
+  const lines = session.dates.map((date) => {
+    const sel = session.selections[date];
+    const mark = sel === "○" ? "🟢 ○" : sel === "✕" ? "🔴 ✕" : "⬜ —";
+    return `${mark}  ${formatDateLabel(date)}`;
+  });
+  return new EmbedBuilder()
+    .setTitle("📋 シフト提出")
+    .setColor(0x5865f2)
+    .setDescription(
+      `**${formatDateLabel(from)} 〜 ${formatDateLabel(to)}**\n` +
+      `時間: **${session.startTime}〜${session.endTime}**\n\n` +
+      lines.join("\n"),
+    )
+    .setFooter({ text: "○/✕ ボタンで切り替え → 「提出する」で確定（15分以内）" });
 }
 
 // ─── Embed builders ──────────────────────────────────────────────────────────
@@ -342,6 +440,31 @@ export const shiftCommand: Command = {
     )
     .addSubcommand((sub) =>
       sub
+        .setName("submit")
+        .setDescription("○/✕ボタンで週間シフトをまとめて提出する")
+        .addStringOption((opt) =>
+          opt
+            .setName("start")
+            .setDescription("出勤時刻（例: 10:00）")
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("end")
+            .setDescription("退勤時刻（例: 18:00）")
+            .setRequired(true),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("week")
+            .setDescription("対象週（0=今週・1=来週・-1=先週。デフォルト: 0）")
+            .setRequired(false)
+            .setMinValue(-4)
+            .setMaxValue(4),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName("setup")
         .setDescription("週次自動投稿の設定・手動投稿（管理者）")
         .addChannelOption((opt) =>
@@ -432,6 +555,50 @@ export const shiftCommand: Command = {
       if (note) embed.addFields({ name: "📝 備考", value: note, inline: false });
 
       await interaction.reply({ embeds: [embed], ephemeral: true });
+      return;
+    }
+
+    // ── /shift submit ─────────────────────────────────────────────────────────
+    if (sub === "submit") {
+      const startInput = interaction.options.getString("start", true);
+      const endInput   = interaction.options.getString("end",   true);
+      const weekOffset = interaction.options.getInteger("week") ?? 0;
+
+      const start = parseTime(startInput);
+      if (!start) {
+        await interaction.reply({ content: "❌ 出勤時刻の形式が正しくありません。例: `10:00`", ephemeral: true });
+        return;
+      }
+      const end = parseTime(endInput);
+      if (!end) {
+        await interaction.reply({ content: "❌ 退勤時刻の形式が正しくありません。例: `18:00`", ephemeral: true });
+        return;
+      }
+      if (calcMinutes(start, end) <= 0) {
+        await interaction.reply({ content: "❌ 退勤時刻は出勤時刻より後にしてください。", ephemeral: true });
+        return;
+      }
+
+      cleanExpiredSessions();
+
+      const sessionId = interaction.id;
+      const dates = getWeekDates(weekOffset);
+      const session: SubmitSession = {
+        guildId,
+        userId: interaction.user.id,
+        dates,
+        selections: Object.fromEntries(dates.map((d) => [d, null])),
+        startTime: start,
+        endTime: end,
+        expiresAt: Date.now() + 15 * 60 * 1000,
+      };
+      submitSessions.set(sessionId, session);
+
+      await interaction.reply({
+        embeds: [buildSubmitEmbed(session)],
+        components: buildSubmitComponents(sessionId, session),
+        ephemeral: true,
+      });
       return;
     }
 
@@ -574,3 +741,105 @@ export const shiftCommand: Command = {
     }
   },
 };
+
+// ─── /shift submit — button handlers ─────────────────────────────────────────
+
+/** Toggle a day's selection: null → ○ → ✕ → null */
+export async function handleShiftToggle(interaction: ButtonInteraction): Promise<void> {
+  // customId = "shift:toggle:{sessionId}:{date}"
+  const rest = interaction.customId.slice(SHIFT_TOGGLE_PREFIX.length);
+  const colonIdx = rest.indexOf(":");
+  const sessionId = rest.slice(0, colonIdx);
+  const date = rest.slice(colonIdx + 1);
+
+  const session = submitSessions.get(sessionId);
+  if (!session || session.userId !== interaction.user.id) {
+    await interaction.reply({ content: "このフォームはあなたのものではないか、期限切れです。", ephemeral: true });
+    return;
+  }
+  if (Date.now() > session.expiresAt) {
+    submitSessions.delete(sessionId);
+    await interaction.reply({ content: "フォームの有効期限が切れました。もう一度 `/shift submit` を実行してください。", ephemeral: true });
+    return;
+  }
+
+  const current = session.selections[date];
+  session.selections[date] = current === null ? "○" : current === "○" ? "✕" : null;
+
+  await interaction.update({
+    embeds: [buildSubmitEmbed(session)],
+    components: buildSubmitComponents(sessionId, session),
+  });
+}
+
+/** Confirm and save all ○ days as shifts. */
+export async function handleShiftConfirm(interaction: ButtonInteraction): Promise<void> {
+  const sessionId = interaction.customId.slice(SHIFT_CONFIRM_PREFIX.length);
+  const session = submitSessions.get(sessionId);
+  if (!session || session.userId !== interaction.user.id) {
+    await interaction.reply({ content: "このフォームはあなたのものではないか、期限切れです。", ephemeral: true });
+    return;
+  }
+  if (Date.now() > session.expiresAt) {
+    submitSessions.delete(sessionId);
+    await interaction.reply({ content: "フォームの有効期限が切れました。もう一度 `/shift submit` を実行してください。", ephemeral: true });
+    return;
+  }
+
+  await interaction.deferUpdate();
+
+  const workDays = session.dates.filter((d) => session.selections[d] === "○");
+  const offDays  = session.dates.filter((d) => session.selections[d] === "✕");
+
+  // Register all ○ days
+  const saved: string[] = [];
+  for (const date of workDays) {
+    try {
+      await addShift(session.guildId, session.userId, date, session.startTime, session.endTime, null);
+      saved.push(date);
+    } catch (err) {
+      logger.error(`[shift:submit] Failed to save shift for ${date}`, err);
+    }
+  }
+
+  submitSessions.delete(sessionId);
+
+  const mins = calcMinutes(session.startTime, session.endTime);
+  const lines: string[] = [];
+  if (saved.length > 0) {
+    lines.push(`✅ **出勤（${saved.length}日）**: ${saved.map(formatDateLabel).join("、")}`);
+    lines.push(`　 時間: ${session.startTime}〜${session.endTime}（${formatDuration(mins)}）`);
+  }
+  if (offDays.length > 0) {
+    lines.push(`✕ **休み（${offDays.length}日）**: ${offDays.map(formatDateLabel).join("、")}`);
+  }
+  const unset = session.dates.filter((d) => session.selections[d] === null);
+  if (unset.length > 0) {
+    lines.push(`— **未回答（${unset.length}日）**: ${unset.map(formatDateLabel).join("、")}`);
+  }
+  if (saved.length === 0) {
+    lines.unshift("出勤日が選択されていないためシフトは登録されませんでした。");
+  }
+
+  const resultEmbed = new EmbedBuilder()
+    .setTitle("📋 シフト提出完了")
+    .setColor(saved.length > 0 ? 0x57f287 : 0x95a5a6)
+    .setDescription(lines.join("\n"))
+    .setTimestamp();
+
+  await interaction.editReply({ embeds: [resultEmbed], components: [] });
+}
+
+/** Cancel without saving. */
+export async function handleShiftCancel(interaction: ButtonInteraction): Promise<void> {
+  const sessionId = interaction.customId.slice(SHIFT_CANCEL_PREFIX.length);
+  submitSessions.delete(sessionId);
+  await interaction.update({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("❌ シフト提出をキャンセルしました")
+        .setColor(0x95a5a6),
+    ],
+    components: [],
+  });
+}

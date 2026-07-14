@@ -1777,7 +1777,17 @@ const treasuryCommand: Command = {
 };
 
 import { vcCommand } from "./vc";
-export { shiftCommand, postWeeklyShifts, getNextWeeklyPostTime } from "./shift";
+export {
+  shiftCommand,
+  postWeeklyShifts,
+  getNextWeeklyPostTime,
+  SHIFT_TOGGLE_PREFIX,
+  SHIFT_CONFIRM_PREFIX,
+  SHIFT_CANCEL_PREFIX,
+  handleShiftToggle,
+  handleShiftConfirm,
+  handleShiftCancel,
+} from "./shift";
 import { shiftCommand } from "./shift";
 import { vcsalaryCommand } from "./vcsalary";
 import { slotCommand } from "./slot";
