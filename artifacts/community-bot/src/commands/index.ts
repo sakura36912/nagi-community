@@ -23,6 +23,7 @@ import {
   getEvent,
   getParticipants,
   getActiveSession,
+  getActiveSessionCount,
   getAllTempVcDeletions,
   getLobbyChannelId,
   getRecentTempVcDeletions,
@@ -167,7 +168,10 @@ const rankingCommand: Command = {
       periodLabel = "全期間";
     }
 
-    const ranking = await getVcRanking(guildId, periodStart);
+    const [ranking, activeCount] = await Promise.all([
+      getVcRanking(guildId, periodStart),
+      getActiveSessionCount(guildId),
+    ]);
 
     if (ranking.length === 0) {
       await interaction.editReply("まだVC滞在記録がありません。");
@@ -180,10 +184,15 @@ const rankingCommand: Command = {
       return `${prefix} <@${entry.userId}> — ${formatSeconds(entry.totalSeconds)}`;
     });
 
+    const liveIndicator = activeCount > 0
+      ? `🔴 現在 ${activeCount}名 がVC参加中（スコアはリアルタイム集計）`
+      : "（現在VC参加者なし）";
+
     const embed = new EmbedBuilder()
       .setTitle(`🎙️ VC滞在時間ランキング（${periodLabel}）`)
       .setColor(0xf5a623)
       .setDescription(lines.join("\n"))
+      .setFooter({ text: liveIndicator })
       .setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });

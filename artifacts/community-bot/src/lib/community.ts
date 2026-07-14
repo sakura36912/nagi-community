@@ -350,6 +350,17 @@ export async function getActiveSession(
   return row;
 }
 
+/** Count of unique users currently in a tracked VC session for this guild. */
+export async function getActiveSessionCount(guildId: string): Promise<number> {
+  const rows = await db.execute<{ cnt: string }>(sql`
+    SELECT COUNT(DISTINCT user_id)::bigint AS cnt
+    FROM community_vc_sessions
+    WHERE guild_id = ${guildId}
+      AND left_at IS NULL
+  `);
+  return Number(rows.rows[0]?.cnt ?? 0);
+}
+
 export interface RankingEntry {
   userId: string;
   totalSeconds: number;
