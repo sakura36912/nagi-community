@@ -536,6 +536,22 @@ export async function listSheets(guildId: string): Promise<CommunitySheet[]> {
     .orderBy(asc(communitySheetsTable.createdAt));
 }
 
+/** Returns the most recent sheet for a given user in a guild, or undefined. */
+export async function getLatestSheet(guildId: string, userId: string): Promise<CommunitySheet | undefined> {
+  const [row] = await db
+    .select()
+    .from(communitySheetsTable)
+    .where(and(eq(communitySheetsTable.guildId, guildId), eq(communitySheetsTable.userId, userId)))
+    .orderBy(desc(communitySheetsTable.createdAt))
+    .limit(1);
+  return row;
+}
+
+/** Deletes a sheet record by primary key. */
+export async function deleteSheet(id: number): Promise<void> {
+  await db.delete(communitySheetsTable).where(eq(communitySheetsTable.id, id));
+}
+
 /** Returns sheets flagged for a Discord-message re-render (up to 10 per tick). */
 export async function getPendingSheetUpdates(): Promise<CommunitySheet[]> {
   return db

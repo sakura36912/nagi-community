@@ -39,6 +39,8 @@ import {
   getVcTimeInPeriod,
   isVcTrackingOptedOut,
   listRoleButtonPanels,
+  deleteSheet,
+  getLatestSheet,
   listSheets,
   listUpcomingEvents,
   setEventSettings,
@@ -849,7 +851,15 @@ const sheetCommand: Command = {
             .setRequired(true),
         ),
     )
-    .addSubcommand((sub) => sub.setName("list").setDescription("評価シートの一覧を表示します")),
+    .addSubcommand((sub) => sub.setName("list").setDescription("評価シートの一覧を表示します"))
+    .addSubcommand((sub) =>
+      sub
+        .setName("delete")
+        .setDescription("メンバーの評価シートを削除します（管理者）")
+        .addUserOption((opt) =>
+          opt.setName("member").setDescription("削除対象のメンバー").setRequired(true),
+        ),
+    ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub = interaction.options.getSubcommand();
@@ -991,6 +1001,40 @@ const sheetCommand: Command = {
         .setColor(0x2ecc71)
         .setDescription(lines.join("\n").slice(0, 4000));
       await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    if (sub === "delete") {
+      if (!requireAdmin(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true });
+      const target = interaction.options.getUser("member", true);
+      const sheet = await getLatestSheet(guildId, target.id);
+      if (!sheet) {
+        await interaction.editReply(`<@${target.id}> の評価シートは見つかりませんでした。`);
+        return;
+      }
+
+      // Delete the DB record first.
+      await deleteSheet(sheet.id);
+
+      // Try to delete the Discord thread that holds the sheet message.
+      if (sheet.channelId) {
+        try {
+          const ch = await interaction.guild!.channels.fetch(sheet.channelId);
+          if (ch) await ch.delete("評価シート削除コマンド");
+        } catch {
+          // Channel may already be gone — ignore.
+        }
+      }
+
+      const startTs = Math.floor(sheet.startDate.getTime() / 1000);
+      const endTs   = Math.floor(sheet.endDate.getTime() / 1000);
+      await interaction.editReply(
+        `✅ <@${target.id}> の評価シート（<t:${startTs}:D> 〜 <t:${endTs}:D>）を削除しました。`,
+      );
       return;
     }
   },
