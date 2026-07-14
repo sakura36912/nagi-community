@@ -1,4 +1,5 @@
-import { Client, Events, GatewayIntentBits, MessageFlags } from "discord.js";
+import { ChannelType, Client, Events, GatewayIntentBits, MessageFlags } from "discord.js";
+import { EmbedBuilder } from "discord.js";
 import {
   commands,
   handleNicknameModalSubmit,
@@ -19,6 +20,11 @@ import {
   seedDefaultVcShopItems,
   seedDefaultUraShopItems,
 } from "./lib/economy";
+import {
+  getEvalSheetConfig,
+  hasEvalSheet,
+  recordEvalSheet,
+} from "./lib/evalsheet";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 
@@ -29,7 +35,11 @@ if (!token) {
 const commandsByName = new Map(commands.map((c) => [c.data.name, c]));
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  // NOTE: GuildMembers (privileged intent) is commented out until you enable
+  // "Server Members Intent" in the Discord Developer Portal.
+  // Bot → Privileged Gateway Intents → Server Members Intent → ON
+  // After enabling it there, restore GatewayIntentBits.GuildMembers here.
+  intents: [GatewayIntentBits.Guilds /* GatewayIntentBits.GuildMembers */],
 });
 
 // Checks every minute whether any guild's reward interval has elapsed and
@@ -134,6 +144,75 @@ client.once(Events.ClientReady, (readyClient) => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
     runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
   }, 60 * 1000);
+});
+
+// Builds the evaluation sheet embed posted as the first message in the forum thread.
+function buildEvalSheetEmbed(member: { id: string; displayName: string; displayAvatarURL: () => string }, roleId: string): EmbedBuilder {
+  const now = Math.floor(Date.now() / 1000);
+  return new EmbedBuilder()
+    .setTitle(`📋 評価シート — ${member.displayName}`)
+    .setColor(0x2ecc71)
+    .setThumbnail(member.displayAvatarURL())
+    .addFields(
+      { name: "👤 ユーザー", value: `<@${member.id}>`, inline: true },
+      { name: "🏷️ 対象ロール", value: `<@&${roleId}>`, inline: true },
+      { name: "📅 作成日", value: `<t:${now}:D>`, inline: true },
+      { name: "\u200b", value: "─────────────────────", inline: false },
+      { name: "⭐ 総合評価", value: "☆ ☆ ☆ ☆ ☆", inline: false },
+      { name: "💬 コミュニケーション", value: "─", inline: true },
+      { name: "🔥 積極性", value: "─", inline: true },
+      { name: "🤝 チームワーク", value: "─", inline: true },
+      { name: "🛠️ 専門スキル", value: "─", inline: true },
+      { name: "✅ 責任感", value: "─", inline: true },
+      { name: "📈 成長性", value: "─", inline: true },
+      { name: "\u200b", value: "─────────────────────", inline: false },
+      { name: "📝 総評", value: "（管理者が記入してください）", inline: false },
+    )
+    .setFooter({ text: "このシートは管理者のみ編集できます。" });
+}
+
+// Fires when a member's roles change. Checks each newly added role against
+// the eval sheet config and creates a forum thread if one is configured.
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+  const addedRoleIds = [...newMember.roles.cache.keys()].filter(
+    (id) => !oldMember.roles.cache.has(id),
+  );
+
+  if (addedRoleIds.length === 0) return;
+
+  for (const roleId of addedRoleIds) {
+    try {
+      const config = await getEvalSheetConfig(newMember.guild.id, roleId);
+      if (!config) continue;
+
+      const already = await hasEvalSheet(newMember.guild.id, newMember.id, roleId);
+      if (already) {
+        logger.info(`[evalsheet] ${newMember.id} already has a sheet for role ${roleId} — skipping`);
+        continue;
+      }
+
+      const forumChannel = newMember.guild.channels.cache.get(config.forumChannelId)
+        ?? await newMember.guild.channels.fetch(config.forumChannelId).catch(() => null);
+
+      if (!forumChannel || forumChannel.type !== ChannelType.GuildForum) {
+        logger.error(`[evalsheet] Channel ${config.forumChannelId} not found or is not a forum`);
+        continue;
+      }
+
+      const embed = buildEvalSheetEmbed(newMember, roleId);
+      const threadName = `${newMember.displayName} の評価シート`.slice(0, 100);
+
+      const thread = await forumChannel.threads.create({
+        name: threadName,
+        message: { embeds: [embed] },
+      });
+
+      await recordEvalSheet(newMember.guild.id, newMember.id, roleId, thread.id);
+      logger.info(`[evalsheet] Created thread ${thread.id} for ${newMember.id} (role ${roleId}) in guild ${newMember.guild.id}`);
+    } catch (err) {
+      logger.error(`[evalsheet] Error creating eval sheet for member ${newMember.id}, role ${roleId}`, err);
+    }
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
