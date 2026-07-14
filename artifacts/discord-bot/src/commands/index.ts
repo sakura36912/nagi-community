@@ -16,17 +16,9 @@ import {
 } from "discord.js";
 import type { ShopItem } from "@workspace/db";
 import type { Guild } from "discord.js";
-import {
-  EVAL_SHEET_EXTEND_DURATION_MS,
-  extendEvalSheets,
-  setEvalSheetConfig,
-  removeEvalSheetConfig,
-  listEvalSheetConfigs,
-} from "../lib/evalsheet";
 import { logger } from "../lib/logger";
 import {
   DEFAULT_DAILY_AMOUNT,
-  EVAL_EXTEND_EFFECT,
   NICKNAME_CHANGE_EFFECT,
   PRIVATE_VC_EFFECT,
   PRIVATE_VC_1D_EFFECT,
@@ -297,41 +289,6 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     } else {
       await interaction.editReply(result.reason);
     }
-    return;
-  }
-
-  // Eval sheet extension ticket — extends all the user's eval sheets by 1 week.
-  if (item.effectType === EVAL_EXTEND_EFFECT) {
-    const buyResult = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
-    if (!buyResult.ok) {
-      await interaction.editReply(buyResult.reason);
-      return;
-    }
-
-    const extended = await extendEvalSheets(
-      interaction.guildId,
-      interaction.user.id,
-      EVAL_SHEET_EXTEND_DURATION_MS,
-    );
-
-    if (extended.length === 0) {
-      // No eval sheets exist — refund.
-      try {
-        await refundPurchase(interaction.guildId, interaction.user.id, buyResult.item);
-      } catch {
-        // ignore refund errors
-      }
-      await interaction.editReply("評価シートが見つかりませんでした。購入を取り消し、返金しました。");
-      return;
-    }
-
-    const lines = extended.map((s) => {
-      const ts = s.expiresAt ? `<t:${Math.floor(s.expiresAt.getTime() / 1000)}:F>` : "不明";
-      return `• ロール <@&${s.roleId}> の評価シート → 期限: ${ts}`;
-    });
-    await interaction.editReply(
-      `**${buyResult.item.name}**を使用しました！評価シートを1週間延長しました。\n${lines.join("\n")}`,
-    );
     return;
   }
 
@@ -926,83 +883,6 @@ const rewardCommand: Command = {
   },
 };
 
-const evalsheetCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("evalsheet")
-    .setDescription("評価シート自動作成を設定します(管理者用)")
-    .addSubcommand((sub) =>
-      sub
-        .setName("set")
-        .setDescription("ロールにフォーラムを紐付け、評価シートを自動作成します")
-        .addRoleOption((opt) =>
-          opt.setName("role").setDescription("対象ロール").setRequired(true),
-        )
-        .addChannelOption((opt) =>
-          opt
-            .setName("forum")
-            .setDescription("評価シートを作成するフォーラムチャンネル")
-            .setRequired(true)
-            .addChannelTypes(ChannelType.GuildForum),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("remove")
-        .setDescription("ロールの評価シート設定を削除します")
-        .addRoleOption((opt) =>
-          opt.setName("role").setDescription("対象ロール").setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub.setName("list").setDescription("設定済みの評価シート設定一覧を表示します"),
-    ),
-
-  async execute(interaction) {
-    const guildId = requireGuild(interaction);
-    if (!requireManageGuild(interaction)) {
-      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-      return;
-    }
-
-    const sub = interaction.options.getSubcommand();
-
-    if (sub === "set") {
-      const role = interaction.options.getRole("role", true);
-      const forum = interaction.options.getChannel("forum", true);
-      await setEvalSheetConfig(guildId, role.id, forum.id);
-      await interaction.reply({
-        content: `<@&${role.id}> が付与されたメンバーの評価シートを <#${forum.id}> に自動作成するよう設定しました。`,
-        allowedMentions: { parse: [] },
-      });
-      return;
-    }
-
-    if (sub === "remove") {
-      const role = interaction.options.getRole("role", true);
-      const removed = await removeEvalSheetConfig(guildId, role.id);
-      await interaction.reply(
-        removed
-          ? `<@&${role.id}> の評価シート設定を削除しました。`
-          : "その設定は見つかりませんでした。",
-      );
-      return;
-    }
-
-    if (sub === "list") {
-      const configs = await listEvalSheetConfigs(guildId);
-      if (configs.length === 0) {
-        await interaction.reply({ content: "評価シートの設定はまだありません。", ephemeral: true });
-        return;
-      }
-      const lines = configs.map((c) => `<@&${c.roleId}> → <#${c.forumChannelId}>`);
-      await interaction.reply({
-        content: `## 📋 評価シート設定\n${lines.join("\n")}`,
-        allowedMentions: { parse: [] },
-      });
-      return;
-    }
-  },
-};
 
 export { VC_RENAME_BUTTON_PREFIX, durationFromKey, consumePendingRename } from "./vc";
 import { vcCommand } from "./vc";
@@ -1019,6 +899,5 @@ export const commands: Command[] = [
   vcShopCommand,
   uraShopCommand,
   rewardCommand,
-  evalsheetCommand,
   vcCommand,
 ];
