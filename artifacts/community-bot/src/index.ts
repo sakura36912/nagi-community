@@ -403,16 +403,19 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
     try {
       const channelName = `🔊 ${member.displayName} の部屋`;
-      const lobbyChannel = guild.channels.cache.get(lobbyId);
-      const parentId = lobbyChannel?.parentId ?? undefined;
+      // Fetch lobby channel to get its categoryId — fall back to fetch() if not cached
+      const lobbyChannel =
+        guild.channels.cache.get(lobbyId) ??
+        (await guild.channels.fetch(lobbyId).catch(() => null));
+      const parentId = (lobbyChannel && "parentId" in lobbyChannel ? lobbyChannel.parentId : null) ?? null;
 
       const newVc = await guild.channels.create({
         name: channelName.slice(0, 100),
         type: ChannelType.GuildVoice,
-        parent: parentId,
+        parent: parentId ?? undefined,
       });
 
-      await addTempVc(guildId, newVc.id, userId, parentId ?? null);
+      await addTempVc(guildId, newVc.id, userId, parentId);
       await member.voice.setChannel(newVc);
       logger.info(`[tempvc] Created ${newVc.id} for user ${userId} category=${parentId ?? "none"}`);
       // Open a session for the moved user.
@@ -470,27 +473,27 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
 // ─── ChannelUpdate — temp VC category lock ────────────────────────────────────
 
-client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
+client.on(Events.ChannelUpdate, async (_oldChannel, newChannel) => {
   try {
-    if (
-      oldChannel.type !== ChannelType.GuildVoice ||
-      newChannel.type !== ChannelType.GuildVoice
-    ) return;
-
-    // Only act if the parent (category) changed
-    if (oldChannel.parentId === newChannel.parentId) return;
+    // Only care about voice channels
+    if (newChannel.type !== ChannelType.GuildVoice) return;
 
     const record = await getTempVcRecord(newChannel.id).catch(() => undefined);
-    if (!record?.categoryId) return; // not a managed temp VC, or no category lock
+    if (!record) return; // not a temp VC
 
-    // Category was changed — restore it
-    if (newChannel.parentId === record.categoryId) return; // already correct
+    // Compare current parentId against the locked categoryId (both may be null)
+    const current  = newChannel.parentId ?? null;
+    const expected = record.categoryId ?? null;
+    if (current === expected) return; // already in the right place
 
     logger.info(
-      `[tempvc] Category moved ${newChannel.id}: ${newChannel.parentId} → ${record.categoryId}. Reverting.`,
+      `[tempvc] Category mismatch ${newChannel.id}: ` +
+      `current=${current ?? "uncategorized"} expected=${expected ?? "uncategorized"}. Reverting.`,
     );
 
-    await newChannel.setParent(record.categoryId, {
+    // Cast needed because discord.js types ChannelUpdate as DMChannel | NonThreadGuildBasedChannel
+    const vc = newChannel as import("discord.js").VoiceChannel;
+    await vc.setParent(expected, {
       lockPermissions: false,
       reason: "一時VCのカテゴリを固定しています",
     });
