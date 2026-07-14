@@ -397,10 +397,10 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     return;
   }
 
-  // Calculate eval period
+  // Calculate eval period: start = today (role assigned), end = today + evalDays
   const evalDays = settings.evalPeriodDays ?? 14;
-  const endDate = new Date();
-  const startDate = new Date(endDate.getTime() - evalDays * 24 * 60 * 60 * 1000);
+  const startDate = new Date();
+  const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
 
   // Fetch the Discord User object (needed for avatar URL etc.)
   let targetUser;
