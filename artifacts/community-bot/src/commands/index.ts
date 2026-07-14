@@ -57,6 +57,7 @@ export const COMM_PRIVACY_DELETE_CONFIRM = "comm:privacy:delete:confirm";
 export const COMM_PRIVACY_DELETE_CANCEL = "comm:privacy:delete:cancel";
 export const COMM_PRIVACY_OPTOUT_KEEP = "comm:privacy:optout:keep";
 export const COMM_PRIVACY_OPTOUT_DELETE = "comm:privacy:optout:delete";
+export const COMM_BOTSTATUS_REFRESH = "comm:botstatus:refresh";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -859,6 +860,72 @@ const privacyCommand: Command = {
 
 // ─── /botstatus ──────────────────────────────────────────────────────────────
 
+import type { Client, Guild as DjsGuild } from "discord.js";
+
+/** Builds the botstatus embed + refresh button row for a guild. */
+async function buildBotstatusContent(
+  guild: DjsGuild,
+  client: Client,
+): Promise<{ embed: EmbedBuilder; row: ActionRowBuilder<ButtonBuilder> }> {
+  const me = guild.members.me;
+
+  // ── Permissions ─────────────────────────────────────────────────────────────
+  const hasManageChannels = me?.permissions.has("ManageChannels") ?? false;
+  const hasMoveMembers    = me?.permissions.has("MoveMembers")    ?? false;
+
+  const manageChannelsLine = hasManageChannels
+    ? "✅ ManageChannels — 付与済み"
+    : "❌ ManageChannels — **未付与** (Server Settings → Roles → Community Bot で付与してください)";
+
+  const moveMembersLine = hasMoveMembers
+    ? "✅ MoveMembers — 付与済み"
+    : "❌ MoveMembers — **未付与** (Server Settings → Roles → Community Bot で付与してください)";
+
+  // ── GuildMembers privileged intent ──────────────────────────────────────────
+  const guildMembersIntentBit = 1 << 1; // GatewayIntentBits.GuildMembers = 2
+  const intents = client.options.intents;
+  let hasGuildMembersIntent = false;
+  if (typeof (intents as { has?: (bit: number) => boolean }).has === "function") {
+    hasGuildMembersIntent = (intents as { has: (bit: number) => boolean }).has(guildMembersIntentBit);
+  } else if (typeof intents === "number" || typeof intents === "bigint") {
+    hasGuildMembersIntent = Boolean(BigInt(intents as number) & BigInt(guildMembersIntentBit));
+  }
+
+  const guildMembersLine = hasGuildMembersIntent
+    ? "✅ GuildMembers intent — 有効"
+    : "❌ GuildMembers intent — **無効** (Discord Developer Portal → Bot → Privileged Gateway Intents で有効化してください)";
+
+  // ── Lobby channel ────────────────────────────────────────────────────────────
+  const lobbyId = await getLobbyChannelId(guild.id).catch(() => null);
+  const lobbyLine = lobbyId
+    ? `✅ ロビーVC — <#${lobbyId}>`
+    : "⚠️ ロビーVC — **未設定** (`/tempvc setup` で設定してください)";
+
+  // ── Overall status ───────────────────────────────────────────────────────────
+  const allGood = hasManageChannels && hasMoveMembers && hasGuildMembersIntent && !!lobbyId;
+  const statusLine = allGood
+    ? "🟢 **すべて正常です**"
+    : "🔴 **設定に問題があります** — 上記の項目を確認してください";
+
+  const embed = new EmbedBuilder()
+    .setTitle("🤖 Bot セットアップ状況")
+    .setColor(allGood ? 0x57f287 : 0xed4245)
+    .setDescription(
+      [statusLine, "", manageChannelsLine, moveMembersLine, guildMembersLine, lobbyLine].join("\n"),
+    )
+    .setFooter({ text: `サーバー: ${guild.name}` })
+    .setTimestamp();
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(COMM_BOTSTATUS_REFRESH)
+      .setLabel("再チェック 🔄")
+      .setStyle(ButtonStyle.Secondary),
+  );
+
+  return { embed, row };
+}
+
 const botstatusCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("botstatus")
@@ -873,61 +940,8 @@ const botstatusCommand: Command = {
 
     await interaction.deferReply({ ephemeral: true });
 
-    const guild = interaction.guild!;
-    const me = guild.members.me;
-
-    // ── Permissions ───────────────────────────────────────────────────────────
-    const hasManageChannels = me?.permissions.has("ManageChannels") ?? false;
-    const hasMoveMembers    = me?.permissions.has("MoveMembers")    ?? false;
-
-    const manageChannelsLine = hasManageChannels
-      ? "✅ ManageChannels — 付与済み"
-      : "❌ ManageChannels — **未付与** (Server Settings → Roles → Community Bot で付与してください)";
-
-    const moveMembersLine = hasMoveMembers
-      ? "✅ MoveMembers — 付与済み"
-      : "❌ MoveMembers — **未付与** (Server Settings → Roles → Community Bot で付与してください)";
-
-    // ── GuildMembers privileged intent ────────────────────────────────────────
-    // If the intent is active the bot's own member record will always be cached.
-    // We use guild.members.cache.size > 0 as a reliable runtime signal:
-    // with GuildMembers enabled Discord pushes all members into cache on ready;
-    // without it the cache typically contains only the bot itself.
-    const guildMembersIntentBit = 1 << 1; // GatewayIntentBits.GuildMembers = 2
-    const intents = interaction.client.options.intents;
-    let hasGuildMembersIntent = false;
-    if (typeof (intents as { has?: (bit: number) => boolean }).has === "function") {
-      hasGuildMembersIntent = (intents as { has: (bit: number) => boolean }).has(guildMembersIntentBit);
-    } else if (typeof intents === "number" || typeof intents === "bigint") {
-      hasGuildMembersIntent = Boolean(BigInt(intents as number) & BigInt(guildMembersIntentBit));
-    }
-
-    const guildMembersLine = hasGuildMembersIntent
-      ? "✅ GuildMembers intent — 有効"
-      : "❌ GuildMembers intent — **無効** (Discord Developer Portal → Bot → Privileged Gateway Intents で有効化してください)";
-
-    // ── Lobby channel ─────────────────────────────────────────────────────────
-    const lobbyId = await getLobbyChannelId(guild.id).catch(() => null);
-    const lobbyLine = lobbyId
-      ? `✅ ロビーVC — <#${lobbyId}>`
-      : "⚠️ ロビーVC — **未設定** (`/tempvc setup` で設定してください)";
-
-    // ── Overall status ────────────────────────────────────────────────────────
-    const allGood = hasManageChannels && hasMoveMembers && hasGuildMembersIntent && !!lobbyId;
-    const statusLine = allGood
-      ? "🟢 **すべて正常です**"
-      : "🔴 **設定に問題があります** — 上記の項目を確認してください";
-
-    const embed = new EmbedBuilder()
-      .setTitle("🤖 Bot セットアップ状況")
-      .setColor(allGood ? 0x57f287 : 0xed4245)
-      .setDescription(
-        [statusLine, "", manageChannelsLine, moveMembersLine, guildMembersLine, lobbyLine].join("\n"),
-      )
-      .setFooter({ text: `サーバー: ${guild.name}` })
-      .setTimestamp();
-
-    await interaction.editReply({ embeds: [embed] });
+    const { embed, row } = await buildBotstatusContent(interaction.guild!, interaction.client);
+    await interaction.editReply({ embeds: [embed], components: [row] });
   },
 };
 
@@ -1038,6 +1052,16 @@ export async function handleTicketClose(interaction: ButtonInteraction): Promise
   } catch (err) {
     logger.error("[ticket] Failed to delete channel", err);
   }
+}
+
+export async function handleBotstatusRefresh(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+  await interaction.deferUpdate();
+  const { embed, row } = await buildBotstatusContent(interaction.guild, interaction.client);
+  await interaction.editReply({ embeds: [embed], components: [row] });
 }
 
 export async function handlePrivacyOptoutKeep(interaction: ButtonInteraction): Promise<void> {

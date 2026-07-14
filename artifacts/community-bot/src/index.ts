@@ -34,6 +34,7 @@ import {
   COMM_PRIVACY_DELETE_CANCEL,
   COMM_PRIVACY_OPTOUT_KEEP,
   COMM_PRIVACY_OPTOUT_DELETE,
+  COMM_BOTSTATUS_REFRESH,
   handleEventJoin,
   handleEventCancel,
   handleTicketCreate,
@@ -43,6 +44,7 @@ import {
   handlePrivacyDeleteCancel,
   handlePrivacyOptoutKeep,
   handlePrivacyOptoutDelete,
+  handleBotstatusRefresh,
 } from "./commands/index.js";
 
 const token = process.env["COMMUNITY_BOT_TOKEN"];
@@ -374,6 +376,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id.startsWith(COMM_TICKET_CLOSE_PREFIX)) {
         await handleTicketClose(interaction);
+        return;
+      }
+      if (id === COMM_BOTSTATUS_REFRESH) {
+        await handleBotstatusRefresh(interaction);
         return;
       }
       if (id === COMM_PRIVACY_OPTOUT_KEEP) {
