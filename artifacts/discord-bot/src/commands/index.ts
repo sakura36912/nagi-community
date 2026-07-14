@@ -1166,6 +1166,7 @@ import { vcCommand } from "./vc";
 export { shiftCommand, postWeeklyShifts, getNextWeeklyPostTime } from "./shift";
 import { shiftCommand } from "./shift";
 import { vcsalaryCommand } from "./vcsalary";
+import { slotCommand } from "./slot";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -1183,4 +1184,5 @@ export const commands: Command[] = [
   treasuryCommand,
   shiftCommand,
   vcsalaryCommand,
+  slotCommand,
 ];
