@@ -1,8 +1,8 @@
 /**
- * /vc command — rename an existing VC with a scheduled auto-delete.
+ * /vc command — rename an existing VC, and manage scheduled auto-delete.
  *
  * Subcommands:
- *   rename <channel> <new-name>  — show a duration picker (buttons)
+ *   rename <channel> <new-name>  — immediately rename a VC (no duration picker)
  *   list                         — show all scheduled VCs and their remaining time
  *   cancel <channel>             — remove the schedule (channel is NOT deleted)
  *
@@ -10,9 +10,6 @@
  */
 
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   ChannelType,
   EmbedBuilder,
   PermissionFlagsBits,
@@ -21,54 +18,6 @@ import {
 } from "discord.js";
 import { logger } from "../lib/logger";
 import { deleteSchedule, listSchedules } from "../lib/vc";
-
-// customId format: vc:rename:<durationKey>:<token>
-// The token is a short random key that maps to { channelId, newName } stored
-// in an in-memory Map. This keeps customId well within Discord's 100-char limit
-// even for long/multibyte channel names.
-export const VC_RENAME_BUTTON_PREFIX = "vc:rename:";
-
-export const DURATION_OPTIONS = [
-  { key: "1d", label: "1日", ms: 24 * 60 * 60 * 1000 },
-  { key: "1w", label: "1週間", ms: 7 * 24 * 60 * 60 * 1000 },
-  { key: "1m", label: "1ヶ月", ms: 30 * 24 * 60 * 60 * 1000 },
-] as const;
-
-export type DurationKey = (typeof DURATION_OPTIONS)[number]["key"];
-
-export function durationFromKey(key: string): (typeof DURATION_OPTIONS)[number] | undefined {
-  return DURATION_OPTIONS.find((d) => d.key === key);
-}
-
-// Pending rename records — keyed by a short random token.
-// Entries expire after 15 minutes to avoid unbounded growth.
-const PENDING_RENAME_TTL_MS = 15 * 60 * 1000;
-interface PendingRename { channelId: string; newName: string; expiresAt: number }
-const pendingRenames = new Map<string, PendingRename>();
-
-function generateToken(): string {
-  // 8 random hex chars — collision probability negligible at this scale
-  return Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
-}
-
-export function storePendingRename(channelId: string, newName: string): string {
-  // Prune stale entries on each new write
-  const now = Date.now();
-  for (const [key, val] of pendingRenames) {
-    if (val.expiresAt < now) pendingRenames.delete(key);
-  }
-  const token = generateToken();
-  pendingRenames.set(token, { channelId, newName, expiresAt: now + PENDING_RENAME_TTL_MS });
-  return token;
-}
-
-export function consumePendingRename(token: string): PendingRename | undefined {
-  const entry = pendingRenames.get(token);
-  if (!entry) return undefined;
-  pendingRenames.delete(token);
-  if (entry.expiresAt < Date.now()) return undefined;
-  return entry;
-}
 
 function formatRelativeTime(ms: number): string {
   if (ms <= 0) return "期限切れ";
@@ -168,27 +117,17 @@ async function handleRename(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
 
-  // Store rename data in memory and use a short token in customId.
-  // Discord limits customId to 100 chars; embedding a full channel name
-  // (especially URL-encoded Japanese) would easily exceed that limit.
-  const token = storePendingRename(channel.id, newName);
+  // Rename immediately — no duration picker.
+  const voiceChannel = interaction.guild?.channels.cache.get(channel.id)
+    ?? await interaction.guild?.channels.fetch(channel.id).catch(() => null);
 
-  // customId format: vc:rename:<durationKey>:<token>
-  // Max length: 10 + 2 + 1 + 8 = 21 chars — safely under Discord's 100-char limit.
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    DURATION_OPTIONS.map((d) =>
-      new ButtonBuilder()
-        .setCustomId(`${VC_RENAME_BUTTON_PREFIX}${d.key}:${token}`)
-        .setLabel(d.label)
-        .setStyle(ButtonStyle.Primary),
-    ),
-  );
+  if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+    await interaction.reply({ content: "対象のボイスチャンネルが見つかりませんでした。", ephemeral: true });
+    return;
+  }
 
-  await interaction.reply({
-    content: `<#${channel.id}> を **${newName}** にリネームします。期間を選択してください:`,
-    components: [row],
-    ephemeral: true,
-  });
+  await voiceChannel.setName(newName);
+  await interaction.reply({ content: `<#${channel.id}> を **${newName}** にリネームしました。`, ephemeral: true });
 }
 
 async function handleList(interaction: ChatInputCommandInteraction): Promise<void> {

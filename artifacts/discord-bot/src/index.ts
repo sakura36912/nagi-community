@@ -8,9 +8,6 @@ import {
   NICKNAME_MODAL_PREFIX,
   VC_RENAME_MODAL_PREFIX,
   SHOP_BUY_PREFIX,
-  VC_RENAME_BUTTON_PREFIX,
-  durationFromKey,
-  consumePendingRename,
   postWeeklyShifts,
   getNextWeeklyPostTime,
 } from "./commands";
@@ -480,72 +477,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(SHOP_BUY_PREFIX)) {
       await handleShopBuyButton(interaction);
-      return;
-    }
-
-    if (interaction.isButton() && interaction.customId.startsWith(VC_RENAME_BUTTON_PREFIX)) {
-      // customId format: vc:rename:<durationKey>:<token>
-      const payload = interaction.customId.slice(VC_RENAME_BUTTON_PREFIX.length);
-      const colonIdx = payload.indexOf(":");
-      const durationKey = payload.slice(0, colonIdx);
-      const token = payload.slice(colonIdx + 1);
-
-      const duration = durationFromKey(durationKey);
-      const pending = token ? consumePendingRename(token) : undefined;
-
-      if (!duration || !pending) {
-        await interaction.reply({
-          content: "このボタンは有効期限切れか不正です。もう一度 `/vc rename` を実行してください。",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const { channelId, newName } = pending;
-
-      if (!interaction.guildId) {
-        await interaction.reply({ content: "このボタンはサーバー内でのみ使用できます。", ephemeral: true });
-        return;
-      }
-
-      // Re-validate caller permissions at execution time (defence-in-depth).
-      const memberPerms = interaction.memberPermissions;
-      if (!memberPerms?.has("ManageChannels")) {
-        await interaction.reply({
-          content: "VCをリネームするには ManageChannels 権限が必要です。",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      await interaction.deferReply({ ephemeral: true });
-
-      const guild = interaction.guild;
-      if (!guild) {
-        await interaction.editReply("サーバー情報を取得できませんでした。");
-        return;
-      }
-
-      const channel = guild.channels.cache.get(channelId)
-        ?? await guild.channels.fetch(channelId).catch(() => null);
-
-      if (!channel) {
-        await interaction.editReply("チャンネルが見つかりませんでした。");
-        return;
-      }
-
-      // Rename the VC
-      await channel.setName(newName);
-
-      const expiresAt = new Date(Date.now() + duration.ms);
-      await saveSchedule(interaction.guildId, channelId, newName, expiresAt);
-
-      const ts = Math.floor(expiresAt.getTime() / 1000);
-      logger.info(`[vc] Renamed channel ${channelId} to "${newName}", expires at ${expiresAt.toISOString()}`);
-
-      await interaction.editReply(
-        `<#${channelId}> を **${newName}** にリネームしました。\n削除予定: <t:${ts}:F>（<t:${ts}:R>）`,
-      );
       return;
     }
 
