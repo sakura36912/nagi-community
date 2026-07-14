@@ -174,16 +174,40 @@ function buildEvalSheetEmbed(member: { id: string; displayName: string; displayA
 // Fires when a member's roles change. Checks each newly added role against
 // the eval sheet config and creates a forum thread if one is configured.
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
-  const addedRoleIds = [...newMember.roles.cache.keys()].filter(
-    (id) => !oldMember.roles.cache.has(id),
-  );
+  logger.info(`[evalsheet] GuildMemberUpdate fired: user=${newMember.id} guild=${newMember.guild.id} oldPartial=${oldMember.partial}`);
 
-  if (addedRoleIds.length === 0) return;
+  // If oldMember is partial (not cached), we cannot diff roles reliably.
+  // Fetch the full old member first so we get an accurate before-state.
+  const resolvedOld = oldMember.partial
+    ? await oldMember.fetch().catch(() => null)
+    : oldMember;
+
+  let addedRoleIds: string[];
+  if (!resolvedOld) {
+    // Couldn't fetch old state — check all current roles; hasEvalSheet prevents duplication.
+    addedRoleIds = [...newMember.roles.cache.keys()];
+    logger.info(`[evalsheet] Could not resolve old member, checking all ${addedRoleIds.length} current roles`);
+  } else {
+    addedRoleIds = [...newMember.roles.cache.keys()].filter(
+      (id) => !resolvedOld.roles.cache.has(id),
+    );
+    logger.info(`[evalsheet] Newly added role IDs: [${addedRoleIds.join(", ")}]`);
+  }
+
+  if (addedRoleIds.length === 0) {
+    logger.info("[evalsheet] No newly added roles — skipping");
+    return;
+  }
 
   for (const roleId of addedRoleIds) {
     try {
       const config = await getEvalSheetConfig(newMember.guild.id, roleId);
-      if (!config) continue;
+      if (!config) {
+        logger.info(`[evalsheet] No config for role ${roleId} — skipping`);
+        continue;
+      }
+
+      logger.info(`[evalsheet] Config found: role=${roleId} forum=${config.forumChannelId}`);
 
       const already = await hasEvalSheet(newMember.guild.id, newMember.id, roleId);
       if (already) {
@@ -194,13 +218,19 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       const forumChannel = newMember.guild.channels.cache.get(config.forumChannelId)
         ?? await newMember.guild.channels.fetch(config.forumChannelId).catch(() => null);
 
-      if (!forumChannel || forumChannel.type !== ChannelType.GuildForum) {
-        logger.error(`[evalsheet] Channel ${config.forumChannelId} not found or is not a forum`);
+      if (!forumChannel) {
+        logger.error(`[evalsheet] Channel ${config.forumChannelId} not found`);
+        continue;
+      }
+      if (forumChannel.type !== ChannelType.GuildForum) {
+        logger.error(`[evalsheet] Channel ${config.forumChannelId} is type ${forumChannel.type}, expected GuildForum (${ChannelType.GuildForum})`);
         continue;
       }
 
       const embed = buildEvalSheetEmbed(newMember, roleId);
       const threadName = `${newMember.displayName} の評価シート`.slice(0, 100);
+
+      logger.info(`[evalsheet] Creating thread "${threadName}" in forum ${config.forumChannelId}`);
 
       const thread = await forumChannel.threads.create({
         name: threadName,
@@ -208,7 +238,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       });
 
       await recordEvalSheet(newMember.guild.id, newMember.id, roleId, thread.id);
-      logger.info(`[evalsheet] Created thread ${thread.id} for ${newMember.id} (role ${roleId}) in guild ${newMember.guild.id}`);
+      logger.info(`[evalsheet] ✅ Created thread ${thread.id} for ${newMember.id} (role ${roleId})`);
     } catch (err) {
       logger.error(`[evalsheet] Error creating eval sheet for member ${newMember.id}, role ${roleId}`, err);
     }
