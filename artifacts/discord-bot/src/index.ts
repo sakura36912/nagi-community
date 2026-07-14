@@ -1,4 +1,4 @@
-import { ChannelType, Client, Events, GatewayIntentBits, MessageFlags } from "discord.js";
+import { ChannelType, Client, Events, GatewayIntentBits, MessageFlags, VoiceState } from "discord.js";
 import { EmbedBuilder } from "discord.js";
 import {
   commands,
@@ -14,6 +14,13 @@ import {
 } from "./commands";
 import { saveSchedule, getExpiredSchedules, deleteSchedule } from "./lib/vc";
 import { logger } from "./lib/logger";
+import {
+  getVcRewardSettings,
+  recordVcJoin,
+  clearVcPresence,
+  getAllVcPresences,
+  payVcReward,
+} from "./lib/vcReward";
 import {
   distributeRoleRewards,
   getExpiredPrivateVcSessions,
@@ -53,7 +60,11 @@ const client = new Client({
   // "Server Members Intent" in the Discord Developer Portal.
   // Bot → Privileged Gateway Intents → Server Members Intent → ON
   // After enabling it there, restore GatewayIntentBits.GuildMembers here.
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildVoiceStates, // required for voiceStateUpdate
+  ],
 });
 
 // Checks every minute whether any guild's reward interval has elapsed and
@@ -187,6 +198,17 @@ client.once(Events.ClientReady, (readyClient) => {
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
 
+  // Clear stale vc_presence rows left over from a previous bot session.
+  // We cannot recover exact join times after a restart, so we simply discard
+  // them to prevent phantom payouts on the next leave event.
+  getAllVcPresences()
+    .then(async (rows) => {
+      if (rows.length === 0) return;
+      await Promise.all(rows.map((r) => clearVcPresence(r.guildId, r.userId)));
+      logger.info(`[vcsalary] Cleared ${rows.length} stale presence record(s) on startup`);
+    })
+    .catch((err) => logger.error("[vcsalary] Failed to clear stale presences", err));
+
   // Seed default shop items for all guilds already in the bot's cache.
   for (const guild of readyClient.guilds.cache.values()) {
     seedDefaultShopItems(guild.id).catch((err) =>
@@ -225,6 +247,96 @@ client.once(Events.ClientReady, (readyClient) => {
   }, shiftDelay);
 });
 
+
+// ─── VC-time reward handler ───────────────────────────────────────────────────
+
+/**
+ * Credit a user's wallet for a completed VC session and notify them via DM.
+ * Silently no-ops when the reward comes out to 0 (below minMinutes, rate=0).
+ */
+async function handleVcLeave(
+  guild: VoiceState["guild"],
+  userId: string,
+  joinedAt: Date,
+): Promise<void> {
+  try {
+    const [settings, guildSettings] = await Promise.all([
+      getVcRewardSettings(guild.id),
+      getGuildSettings(guild.id),
+    ]);
+    const reward = await payVcReward(
+      guild.id,
+      userId,
+      joinedAt,
+      guildSettings.currencyName,
+      settings,
+    );
+    if (reward <= 0) return;
+
+    const minutes = Math.floor((Date.now() - joinedAt.getTime()) / 60_000);
+    logger.info(
+      `[vcsalary] ${userId} in ${guild.id}: +${reward}${guildSettings.currencyName} for ${minutes}min VC`,
+    );
+
+    // DM the user (best-effort; closed DMs are silently ignored).
+    try {
+      const member = guild.members.cache.get(userId)
+        ?? await guild.members.fetch(userId).catch(() => null);
+      if (member) {
+        await member.send(
+          `🎙️ VC滞在報酬として **${reward} ${guildSettings.currencyName}** が付与されました！（${minutes}分 滞在）`,
+        );
+      }
+    } catch {
+      // DMs closed or member left — ignore.
+    }
+  } catch (err) {
+    logger.error(`[vcsalary] Error paying VC reward for ${userId} in ${guild.id}`, err);
+  }
+}
+
+client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  // Ignore bots.
+  const userId = newState.member?.id ?? oldState.member?.id;
+  if (!userId) return;
+  if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
+
+  const guild = newState.guild;
+  const afkChannelId = guild.afkChannelId;
+
+  const wasInVc = oldState.channelId !== null;
+  const isInVc = newState.channelId !== null;
+  const wasInAfk = oldState.channelId === afkChannelId;
+  const isInAfk = newState.channelId === afkChannelId;
+
+  // ── Joined VC (from nothing or from AFK) ─────────────────────────────────
+  if (isInVc && !isInAfk && (!wasInVc || wasInAfk)) {
+    try {
+      const settings = await getVcRewardSettings(guild.id);
+      if (settings.ratePerHour > 0) {
+        await recordVcJoin(guild.id, userId, newState.channelId!);
+      }
+    } catch (err) {
+      logger.error(`[vcsalary] recordVcJoin error for ${userId}`, err);
+    }
+    return;
+  }
+
+  // ── Left VC (to nothing or to AFK) ───────────────────────────────────────
+  if (wasInVc && !wasInAfk && (!isInVc || isInAfk)) {
+    const presence = await clearVcPresence(guild.id, userId).catch((err) => {
+      logger.error(`[vcsalary] clearVcPresence error for ${userId}`, err);
+      return undefined;
+    });
+    if (presence) {
+      await handleVcLeave(guild, userId, presence.joinedAt);
+    }
+    return;
+  }
+
+  // Channel switch between two non-AFK VCs — keep the original joinedAt so
+  // time accumulates across moves. No DB action needed.
+});
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {

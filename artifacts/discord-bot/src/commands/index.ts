@@ -1165,6 +1165,7 @@ export { VC_RENAME_BUTTON_PREFIX, durationFromKey, consumePendingRename } from "
 import { vcCommand } from "./vc";
 export { shiftCommand, postWeeklyShifts, getNextWeeklyPostTime } from "./shift";
 import { shiftCommand } from "./shift";
+import { vcsalaryCommand } from "./vcsalary";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -1181,4 +1182,5 @@ export const commands: Command[] = [
   vcCommand,
   treasuryCommand,
   shiftCommand,
+  vcsalaryCommand,
 ];
