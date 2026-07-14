@@ -163,6 +163,20 @@ export async function getGuildSettings(guildId: string): Promise<GuildSettings> 
   return settings;
 }
 
+export async function setVcCategoryId(
+  guildId: string,
+  vcCategoryId: string | null,
+): Promise<GuildSettings> {
+  await getGuildSettings(guildId); // ensure row exists
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ vcCategoryId })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+  if (!settings) throw new Error("Failed to update vc_category_id");
+  return settings;
+}
+
 export async function createOrUpdateCurrency(
   guildId: string,
   currencyName: string,

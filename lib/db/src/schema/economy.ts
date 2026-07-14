@@ -22,6 +22,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   rewardDayOfMonth: integer("reward_day_of_month"),
   // When role-based auto-rewards were last distributed for this guild.
   lastRewardAt: timestamp("last_reward_at", { withTimezone: true }),
+  // Discord category channel ID where private VCs are created.
+  vcCategoryId: text("vc_category_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

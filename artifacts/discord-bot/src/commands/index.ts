@@ -40,6 +40,7 @@ import {
   getShopLicenseForUser,
   recordGroupShopSale,
   getGroupShopSalesSummary,
+  setVcCategoryId,
   buyItem,
   claimDaily,
   createOrUpdateCurrency,
@@ -203,6 +204,7 @@ async function purchaseAndCreatePrivateVc(
   itemId: number,
   currencyName: string,
   durationMs?: number,
+  vcCategoryId?: string | null,
 ): Promise<{ ok: true; item: ShopItem; channelId: string; expiresAt?: Date } | { ok: false; reason: string }> {
   const me = guild.members.me;
   if (!me?.permissions.has("ManageChannels")) {
@@ -223,6 +225,7 @@ async function purchaseAndCreatePrivateVc(
       name: channelName.slice(0, 100),
       type: ChannelType.GuildVoice,
       userLimit: 2,
+      ...(vcCategoryId ? { parent: vcCategoryId } : {}),
       permissionOverwrites: [
         { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         {
@@ -319,7 +322,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
-    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration);
+    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
     if (result.ok) {
       const expiry = result.expiresAt
         ? `\n期限: <t:${Math.floor(result.expiresAt.getTime() / 1000)}:F>（<t:${Math.floor(result.expiresAt.getTime() / 1000)}:R>に自動削除）`
@@ -730,7 +733,7 @@ function buildShopCommand(
   category: string,
   color: number,
   effectChoices: EffectChoice[] = DEFAULT_EFFECT_CHOICES,
-  options: { licenseSetup?: boolean } = {},
+  options: { licenseSetup?: boolean; vcCategorySetup?: boolean } = {},
 ): Command {
   const listCmdDesc = `${displayName}の購入可能アイテム一覧を表示します`;
 
@@ -793,6 +796,20 @@ function buildShopCommand(
         ),
     );
 
+  if (options.vcCategorySetup) {
+    builder.addSubcommand((sub) =>
+      sub
+        .setName("vc-category")
+        .setDescription("非公開VCを作成するカテゴリを設定します(管理者用)")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("対象カテゴリ（省略すると設定を解除）")
+            .setRequired(false),
+        ),
+    );
+  }
+
   if (options.licenseSetup) {
     builder
       .addSubcommand((sub) =>
@@ -852,7 +869,7 @@ function buildShopCommand(
         const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
         if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
           const member = await interaction.guild!.members.fetch(interaction.user.id);
-          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration);
+          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
           if (result.ok) {
             const expiry = result.expiresAt
               ? `\n期限: <t:${Math.floor(result.expiresAt.getTime() / 1000)}:F>（<t:${Math.floor(result.expiresAt.getTime() / 1000)}:R>に自動削除）`
@@ -1046,6 +1063,22 @@ function buildShopCommand(
         return;
       }
 
+      if (sub === "vc-category" && options.vcCategorySetup) {
+        if (!requireManageGuild(interaction)) {
+          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+          return;
+        }
+        const channel = interaction.options.getChannel("channel");
+        const channelId = channel?.id ?? null;
+        await setVcCategoryId(guildId, channelId);
+        if (channelId) {
+          await interaction.reply(`✅ 非公開VCの作成先カテゴリを <#${channelId}> に設定しました。`);
+        } else {
+          await interaction.reply("✅ 非公開VCのカテゴリ設定を解除しました（Discordのデフォルト位置に作成されます）。");
+        }
+        return;
+      }
+
       if (sub === "sales" && options.licenseSetup) {
         const [summary, treasuries, settings] = await Promise.all([
           getGroupShopSalesSummary(guildId),
@@ -1105,7 +1138,7 @@ function buildShopCommand(
 // The four independent shops
 const shopCommand        = buildShopCommand("shop",      "ショップ",               "🛒", "general", 0xf5a623);
 const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",           "⚔️", "group",   0xe74c3c, DEFAULT_EFFECT_CHOICES, { licenseSetup: true });
-const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",       "🔒", "vc",      0x3498db, VC_EFFECT_CHOICES);
+const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",       "🔒", "vc",      0x3498db, VC_EFFECT_CHOICES, { vcCategorySetup: true });
 const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",     0x9b59b6, VC_EFFECT_CHOICES);
 
 const rewardCommand: Command = {
