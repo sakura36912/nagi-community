@@ -2,6 +2,7 @@ import {
   EmbedBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  type Client,
   type ChatInputCommandInteraction,
   type User,
 } from "discord.js";
@@ -59,6 +60,62 @@ export function buildSheetEmbed(opts: {
     )
     .setFooter({ text: createdByLabel })
     .setTimestamp();
+}
+
+/**
+ * After an eval-period extension purchase, edit the forum thread's first
+ * message so the embed shows the new end date.  Fire-and-forget: call without
+ * await so it doesn't slow down the purchase confirmation reply.
+ */
+export async function applySheetEmbedUpdate(
+  client: Client,
+  guildId: string,
+  info: {
+    newEndDate: Date;
+    channelId: string | null;
+    messageId: string | null;
+    startDate: Date;
+    userId: string;
+  },
+): Promise<void> {
+  const { channelId, messageId, startDate, newEndDate, userId } = info;
+  if (!channelId || !messageId) return;
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.isTextBased()) return;
+
+    const message = await channel.messages.fetch(messageId);
+    const targetUser = await client.users.fetch(userId);
+
+    let displayName = targetUser.displayName;
+    try {
+      const guild = await client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
+      displayName = member.displayName;
+    } catch { /* fallback to user displayName */ }
+
+    const [settings, vcSeconds] = await Promise.all([
+      getEvalSheetSettings(guildId),
+      getSheetVcSeconds(guildId, userId, startDate, newEndDate),
+    ]);
+
+    const embed = buildSheetEmbed({
+      targetUser,
+      displayName,
+      startDate,
+      endDate: newEndDate,
+      vcSeconds,
+      nameboardUrl: settings?.nameboardUrl,
+      createdByLabel: "評価期間延長券により更新",
+    });
+
+    await message.edit({ embeds: [embed] });
+  } catch (err) {
+    // Non-fatal — the DB is already updated; only the embed refresh failed.
+    const { logger } = await import("../lib/logger.js");
+    logger.error(`[sheet] Failed to refresh embed for user=${userId}`, err);
+  }
 }
 
 // ─── Command ─────────────────────────────────────────────────────────────────

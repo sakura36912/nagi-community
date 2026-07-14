@@ -1,4 +1,4 @@
-import { sheetCommand } from "./sheet";
+import { sheetCommand, applySheetEmbedUpdate } from "./sheet";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -314,6 +314,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       await interaction.editReply(
         `✅ **${result.item.name}**を購入しました！\n評価シートの期限を **<t:${ts}:D>** まで延長しました。`,
       );
+      applySheetEmbedUpdate(interaction.client, interaction.guildId, extended).catch(() => {});
     } else {
       await refundPurchase(interaction.guildId, interaction.user.id, result.item);
       await interaction.editReply(
@@ -733,6 +734,7 @@ function buildShopCommand(
             await interaction.editReply(
               `✅ **${result.item.name}**を購入しました！\n評価シートの期限を **<t:${ts}:D>** まで延長しました。`,
             );
+            applySheetEmbedUpdate(interaction.client, guildId, extended).catch(() => {});
           } else {
             await refundPurchase(guildId, interaction.user.id, result.item);
             await interaction.editReply(

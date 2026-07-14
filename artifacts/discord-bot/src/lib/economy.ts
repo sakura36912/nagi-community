@@ -1020,7 +1020,13 @@ export async function extendCommunitySheet(
   guildId: string,
   userId: string,
   days: number,
-): Promise<{ newEndDate: Date } | null> {
+): Promise<{
+  newEndDate: Date;
+  channelId: string | null;
+  messageId: string | null;
+  startDate: Date;
+  userId: string;
+} | null> {
   const [sheet] = await db
     .select()
     .from(communitySheetsTable)
@@ -1041,8 +1047,14 @@ export async function extendCommunitySheet(
 
   await db
     .update(communitySheetsTable)
-    .set({ endDate: newEndDate, needsUpdate: true })
+    .set({ endDate: newEndDate, needsUpdate: false })
     .where(eq(communitySheetsTable.id, sheet.id));
 
-  return { newEndDate };
+  return {
+    newEndDate,
+    channelId: sheet.channelId ?? null,
+    messageId: sheet.messageId ?? null,
+    startDate: sheet.startDate,
+    userId: sheet.userId,
+  };
 }
