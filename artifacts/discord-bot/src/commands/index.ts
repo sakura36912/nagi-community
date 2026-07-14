@@ -221,11 +221,17 @@ async function purchaseAndCreatePrivateVc(
       : "";
     const channelName = label ? `🔒 ${member.displayName}(${label})` : `🔒 ${member.displayName}`;
 
+    // Resolve the category from cache or fetch it so discord.js can set parent_id correctly.
+    const parentCategory = vcCategoryId
+      ? (guild.channels.cache.get(vcCategoryId) ?? await guild.channels.fetch(vcCategoryId).catch(() => null))
+      : null;
+    logger.info(`[privateVC] category=${vcCategoryId ?? "none"} resolved=${parentCategory?.id ?? "null"}`);
+
     const channel = await guild.channels.create({
       name: channelName.slice(0, 100),
       type: ChannelType.GuildVoice,
       userLimit: 2,
-      ...(vcCategoryId ? { parent: vcCategoryId } : {}),
+      ...(parentCategory ? { parent: parentCategory.id } : {}),
       permissionOverwrites: [
         { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         {
@@ -1069,14 +1075,12 @@ function buildShopCommand(
           await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
           return;
         }
-        const channel = interaction.options.getChannel("channel");
-        const channelId = channel?.id ?? null;
+        const channel = interaction.options.getChannel("channel", true);
+        const channelId = channel.id;
+        logger.info(`[vc-category] guild=${guildId} channelId=${channelId}`);
         await setVcCategoryId(guildId, channelId);
-        if (channelId) {
-          await interaction.reply(`✅ 非公開VCの作成先カテゴリを <#${channelId}> に設定しました。`);
-        } else {
-          await interaction.reply("✅ 非公開VCのカテゴリ設定を解除しました（Discordのデフォルト位置に作成されます）。");
-        }
+        logger.info(`[vc-category] saved ok`);
+        await interaction.reply(`✅ 非公開VCの作成先カテゴリを <#${channelId}> に設定しました。`);
         return;
       }
 
