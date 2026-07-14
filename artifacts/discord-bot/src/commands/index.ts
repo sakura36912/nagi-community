@@ -41,6 +41,7 @@ import {
   recordGroupShopSale,
   getGroupShopSalesSummary,
   setVcCategoryId,
+  setUraCategoryId,
   buyItem,
   claimDaily,
   createOrUpdateCurrency,
@@ -328,7 +329,8 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
-    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
+    const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
+    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
     if (result.ok) {
       const expiry = result.expiresAt
         ? `\n期限: <t:${Math.floor(result.expiresAt.getTime() / 1000)}:F>（<t:${Math.floor(result.expiresAt.getTime() / 1000)}:R>に自動削除）`
@@ -739,7 +741,7 @@ function buildShopCommand(
   category: string,
   color: number,
   effectChoices: EffectChoice[] = DEFAULT_EFFECT_CHOICES,
-  options: { licenseSetup?: boolean; vcCategorySetup?: boolean } = {},
+  options: { licenseSetup?: boolean; vcCategorySetup?: boolean; uraCategorySetup?: boolean } = {},
 ): Command {
   const listCmdDesc = `${displayName}の購入可能アイテム一覧を表示します`;
 
@@ -817,6 +819,21 @@ function buildShopCommand(
     );
   }
 
+  if (options.uraCategorySetup) {
+    builder.addSubcommand((sub) =>
+      sub
+        .setName("ura-category")
+        .setDescription("裏フリールームVCを作成するカテゴリを設定します(管理者用)")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("カテゴリチャンネルを選択")
+            .addChannelTypes(ChannelType.GuildCategory)
+            .setRequired(true),
+        ),
+    );
+  }
+
   if (options.licenseSetup) {
     builder
       .addSubcommand((sub) =>
@@ -876,7 +893,8 @@ function buildShopCommand(
         const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
         if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
           const member = await interaction.guild!.members.fetch(interaction.user.id);
-          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
+          const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
+          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
           if (result.ok) {
             const expiry = result.expiresAt
               ? `\n期限: <t:${Math.floor(result.expiresAt.getTime() / 1000)}:F>（<t:${Math.floor(result.expiresAt.getTime() / 1000)}:R>に自動削除）`
@@ -1084,6 +1102,18 @@ function buildShopCommand(
         return;
       }
 
+      if (sub === "ura-category" && options.uraCategorySetup) {
+        if (!requireManageGuild(interaction)) {
+          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+          return;
+        }
+        const channel = interaction.options.getChannel("channel", true);
+        const channelId = channel.id;
+        await setUraCategoryId(guildId, channelId);
+        await interaction.reply(`✅ 裏フリールームVCの作成先カテゴリを <#${channelId}> に設定しました。`);
+        return;
+      }
+
       if (sub === "sales" && options.licenseSetup) {
         const [summary, treasuries, settings] = await Promise.all([
           getGroupShopSalesSummary(guildId),
@@ -1144,7 +1174,7 @@ function buildShopCommand(
 const shopCommand        = buildShopCommand("shop",      "ショップ",               "🛒", "general", 0xf5a623);
 const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",           "⚔️", "group",   0xe74c3c, DEFAULT_EFFECT_CHOICES, { licenseSetup: true });
 const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",       "🔒", "vc",      0x3498db, VC_EFFECT_CHOICES, { vcCategorySetup: true });
-const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",     0x9b59b6, VC_EFFECT_CHOICES);
+const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",     0x9b59b6, VC_EFFECT_CHOICES, { uraCategorySetup: true });
 
 const rewardCommand: Command = {
   data: new SlashCommandBuilder()

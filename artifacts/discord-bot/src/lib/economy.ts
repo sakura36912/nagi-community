@@ -177,6 +177,20 @@ export async function setVcCategoryId(
   return settings;
 }
 
+export async function setUraCategoryId(
+  guildId: string,
+  uraCategoryId: string | null,
+): Promise<GuildSettings> {
+  await getGuildSettings(guildId);
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ uraCategoryId })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+  if (!settings) throw new Error("Failed to update ura_category_id");
+  return settings;
+}
+
 export async function createOrUpdateCurrency(
   guildId: string,
   currencyName: string,
