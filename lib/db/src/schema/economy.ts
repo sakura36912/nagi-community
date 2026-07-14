@@ -174,3 +174,47 @@ export const insertPrivateVcSessionSchema = createInsertSchema(privateVcSessions
 });
 export type InsertPrivateVcSession = z.infer<typeof insertPrivateVcSessionSchema>;
 export type PrivateVcSession = typeof privateVcSessionsTable.$inferSelect;
+
+// ─── Squad Treasuries (隊金庫) ────────────────────────────────────────────────
+
+/**
+ * One row per squad treasury. Linked to a Discord role that identifies
+ * squad membership. leaderRoleId (if set) can withdraw; otherwise only admins can.
+ */
+export const squadTreasuriesTable = pgTable(
+  "squad_treasuries",
+  {
+    id: serial("id").primaryKey(),
+    guildId: text("guild_id").notNull(),
+    /** Discord role whose members belong to this squad. */
+    roleId: text("role_id").notNull(),
+    /** Optional role allowed to withdraw (squad leader). */
+    leaderRoleId: text("leader_role_id"),
+    /** Display name of the treasury (e.g. "桜雅隊"). */
+    name: text("name").notNull(),
+    balance: integer("balance").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [unique().on(table.guildId, table.roleId)],
+);
+
+export type SquadTreasury = typeof squadTreasuriesTable.$inferSelect;
+
+/** Ledger for every deposit/withdrawal. amount > 0 = deposit, < 0 = withdrawal. */
+export const squadTreasuryTxTable = pgTable("squad_treasury_transactions", {
+  id: serial("id").primaryKey(),
+  guildId: text("guild_id").notNull(),
+  treasuryId: integer("treasury_id")
+    .notNull()
+    .references(() => squadTreasuriesTable.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull(),
+  amount: integer("amount").notNull(),
+  reason: text("reason").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type SquadTreasuryTx = typeof squadTreasuryTxTable.$inferSelect;

@@ -8,11 +8,15 @@ import {
   guildSettingsTable,
   roleRewardsTable,
   privateVcSessionsTable,
+  squadTreasuriesTable,
+  squadTreasuryTxTable,
   type Wallet,
   type ShopItem,
   type GuildSettings,
   type RoleReward,
   type PrivateVcSession,
+  type SquadTreasury,
+  type SquadTreasuryTx,
 } from "@workspace/db";
 
 export const DEFAULT_CURRENCY_NAME = "円";
@@ -738,6 +742,147 @@ export async function refundPurchase(
   });
 
   await recordTransaction(guildId, userId, item.price, `refund:${item.name}`);
+}
+
+// ─── Squad Treasuries ────────────────────────────────────────────────────────
+
+export async function setupSquadTreasury(
+  guildId: string,
+  roleId: string,
+  name: string,
+  leaderRoleId: string | null,
+): Promise<SquadTreasury> {
+  const [row] = await db
+    .insert(squadTreasuriesTable)
+    .values({ guildId, roleId, name, leaderRoleId })
+    .onConflictDoUpdate({
+      target: [squadTreasuriesTable.guildId, squadTreasuriesTable.roleId],
+      set: { name, leaderRoleId, updatedAt: new Date() },
+    })
+    .returning();
+  if (!row) throw new Error("Failed to create treasury");
+  return row;
+}
+
+export async function getSquadTreasury(id: number): Promise<SquadTreasury | undefined> {
+  const [row] = await db
+    .select()
+    .from(squadTreasuriesTable)
+    .where(eq(squadTreasuriesTable.id, id));
+  return row;
+}
+
+export async function listSquadTreasuries(guildId: string): Promise<SquadTreasury[]> {
+  return db
+    .select()
+    .from(squadTreasuriesTable)
+    .where(eq(squadTreasuriesTable.guildId, guildId))
+    .orderBy(squadTreasuriesTable.name);
+}
+
+/** Find all treasuries whose roleId is in the given list of role IDs. */
+export async function getTreasuriesByRoles(
+  guildId: string,
+  roleIds: string[],
+): Promise<SquadTreasury[]> {
+  if (roleIds.length === 0) return [];
+  const all = await db
+    .select()
+    .from(squadTreasuriesTable)
+    .where(eq(squadTreasuriesTable.guildId, guildId));
+  return all.filter((t) => roleIds.includes(t.roleId));
+}
+
+export async function depositToTreasury(
+  guildId: string,
+  treasuryId: number,
+  userId: string,
+  amount: number,
+): Promise<{ treasuryBalance: number; walletBalance: number }> {
+  return db.transaction(async (tx) => {
+    // Deduct from wallet
+    const [wallet] = await tx
+      .update(walletsTable)
+      .set({ balance: sql`${walletsTable.balance} - ${amount}` })
+      .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)))
+      .returning();
+    if (!wallet || wallet.balance < 0) throw new Error("残高が不足しています");
+
+    // Add to treasury
+    const [treasury] = await tx
+      .update(squadTreasuriesTable)
+      .set({ balance: sql`${squadTreasuriesTable.balance} + ${amount}` })
+      .where(eq(squadTreasuriesTable.id, treasuryId))
+      .returning();
+    if (!treasury) throw new Error("金庫が見つかりません");
+
+    await tx.insert(squadTreasuryTxTable).values({
+      guildId, treasuryId, userId, amount, reason: "入金",
+    });
+
+    return { treasuryBalance: treasury.balance, walletBalance: wallet.balance };
+  });
+}
+
+export async function withdrawFromTreasury(
+  guildId: string,
+  treasuryId: number,
+  userId: string,
+  amount: number,
+): Promise<{ treasuryBalance: number; walletBalance: number }> {
+  return db.transaction(async (tx) => {
+    // Deduct from treasury
+    const [treasury] = await tx
+      .update(squadTreasuriesTable)
+      .set({ balance: sql`${squadTreasuriesTable.balance} - ${amount}` })
+      .where(eq(squadTreasuriesTable.id, treasuryId))
+      .returning();
+    if (!treasury || treasury.balance < 0) throw new Error("金庫の残高が不足しています");
+
+    // Add to wallet
+    const [wallet] = await tx
+      .update(walletsTable)
+      .set({ balance: sql`${walletsTable.balance} + ${amount}` })
+      .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)))
+      .returning();
+    if (!wallet) throw new Error("ウォレットが見つかりません");
+
+    await tx.insert(squadTreasuryTxTable).values({
+      guildId, treasuryId, userId, amount: -amount, reason: "出金",
+    });
+
+    return { treasuryBalance: treasury.balance, walletBalance: wallet.balance };
+  });
+}
+
+export async function giveToCrunchTreasury(
+  guildId: string,
+  treasuryId: number,
+  userId: string,
+  amount: number,
+): Promise<number> {
+  const [row] = await db
+    .update(squadTreasuriesTable)
+    .set({ balance: sql`${squadTreasuriesTable.balance} + ${amount}` })
+    .where(eq(squadTreasuriesTable.id, treasuryId))
+    .returning();
+  if (!row) throw new Error("金庫が見つかりません");
+  await db.insert(squadTreasuryTxTable).values({
+    guildId, treasuryId, userId, amount, reason: "管理者付与",
+  });
+  return row.balance;
+}
+
+export async function getTreasuryHistory(
+  treasuryId: number,
+  limit = 10,
+): Promise<SquadTreasuryTx[]> {
+  return db
+    .select()
+    .from(squadTreasuryTxTable)
+    .where(eq(squadTreasuryTxTable.treasuryId, treasuryId))
+    .orderBy(desc(squadTreasuryTxTable.createdAt))
+    .limit(limit);
 }
 
 export async function listInventory(

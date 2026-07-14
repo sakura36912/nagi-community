@@ -30,22 +30,30 @@ import {
   claimDaily,
   createOrUpdateCurrency,
   createPrivateVcSession,
+  depositToTreasury,
+  getTreasuriesByRoles,
+  getTreasuryHistory,
+  giveToCrunchTreasury,
   updateShopItemPrice,
   getGuildSettings,
   getLeaderboard,
   getOrCreateWallet,
   getShopItem,
+  getSquadTreasury,
   giveCurrency,
   listInventory,
   listRoleRewards,
   listShopItems,
+  listSquadTreasuries,
   refundPurchase,
   removeRoleReward,
   removeShopItem,
+  setupSquadTreasury,
   setRewardDayOfMonth,
   setRewardInterval,
   setRoleReward,
   transfer,
+  withdrawFromTreasury,
 } from "../lib/economy";
 
 interface Command {
@@ -884,6 +892,275 @@ const rewardCommand: Command = {
 };
 
 
+// ─── /treasury ───────────────────────────────────────────────────────────────
+
+const treasuryCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("treasury")
+    .setDescription("隊の金庫を管理します")
+    .addSubcommand((sub) =>
+      sub
+        .setName("setup")
+        .setDescription("隊の金庫を作成・更新します（管理者）")
+        .addRoleOption((opt) =>
+          opt.setName("role").setDescription("隊員ロール").setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName("name").setDescription("金庫の表示名（例: 桜雅隊）").setRequired(true).setMaxLength(50),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("leader_role").setDescription("出金権限を持つ隊長ロール").setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("deposit")
+        .setDescription("自分のウォレットから金庫に入金します")
+        .addIntegerOption((opt) =>
+          opt.setName("amount").setDescription("入金額").setRequired(true).setMinValue(1),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName("treasury_id").setDescription("複数の隊に所属している場合は金庫IDを指定").setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("withdraw")
+        .setDescription("金庫から自分のウォレットに出金します（隊長・管理者）")
+        .addIntegerOption((opt) =>
+          opt.setName("amount").setDescription("出金額").setRequired(true).setMinValue(1),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName("treasury_id").setDescription("金庫IDを指定").setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("balance")
+        .setDescription("金庫の残高を確認します")
+        .addIntegerOption((opt) =>
+          opt.setName("treasury_id").setDescription("金庫IDを指定（省略時は自隊）").setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("give")
+        .setDescription("金庫に直接通貨を付与します（管理者）")
+        .addIntegerOption((opt) =>
+          opt.setName("treasury_id").setDescription("金庫ID").setRequired(true),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName("amount").setDescription("付与額").setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("history")
+        .setDescription("金庫の入出金履歴を表示します")
+        .addIntegerOption((opt) =>
+          opt.setName("treasury_id").setDescription("金庫IDを指定（省略時は自隊）").setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("すべての隊金庫一覧を表示します"),
+    ),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    const sub = interaction.options.getSubcommand();
+    const settings = await getGuildSettings(guildId);
+    const currencyName = settings?.currencyName ?? "円";
+
+    const member = interaction.member as GuildMember | null;
+    const isAdmin = !!member?.permissions.has("ManageGuild");
+
+    // ── setup ────────────────────────────────────────────────────────────────
+    if (sub === "setup") {
+      if (!isAdmin) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const role       = interaction.options.getRole("role", true);
+      const name       = interaction.options.getString("name", true);
+      const leaderRole = interaction.options.getRole("leader_role");
+      const treasury   = await setupSquadTreasury(guildId, role.id, name, leaderRole?.id ?? null);
+      await interaction.reply({
+        content: `✅ **${name}** の金庫を設定しました（ID: \`${treasury.id}\`）\n` +
+          `隊員ロール: <@&${role.id}>` +
+          (leaderRole ? `\n隊長ロール（出金権限）: <@&${leaderRole.id}>` : ""),
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    // ── list ────────────────────────────────────────────────────────────────
+    if (sub === "list") {
+      const treasuries = await listSquadTreasuries(guildId);
+      if (treasuries.length === 0) {
+        await interaction.reply({ content: "金庫はまだ設定されていません。`/treasury setup` で作成してください。", ephemeral: true });
+        return;
+      }
+      const embed = new EmbedBuilder()
+        .setTitle("🏦 隊金庫一覧")
+        .setColor(0xf5a623)
+        .addFields(
+          treasuries.map((t) => ({
+            name: `[ID:${t.id}] ${t.name}`,
+            value: [
+              `隊員ロール: <@&${t.roleId}>`,
+              t.leaderRoleId ? `隊長ロール: <@&${t.leaderRoleId}>` : null,
+              `残高: **${t.balance.toLocaleString()}${currencyName}**`,
+            ].filter(Boolean).join("\n"),
+            inline: false,
+          })),
+        );
+      await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
+      return;
+    }
+
+    // ── resolve treasury for member-facing subcommands ────────────────────
+    async function resolveTreasury(idOpt: number | null) {
+      if (idOpt !== null) {
+        const t = await getSquadTreasury(idOpt);
+        if (!t || t.guildId !== guildId) return { treasury: null, error: "指定された金庫が見つかりません。" };
+        return { treasury: t, error: null };
+      }
+      const memberRoleIds = member ? [...member.roles.cache.keys()] : [];
+      const matches = await getTreasuriesByRoles(guildId, memberRoleIds);
+      if (matches.length === 0) return { treasury: null, error: "所属している隊の金庫が見つかりません。" };
+      if (matches.length > 1) {
+        const ids = matches.map((t) => `[ID:${t.id}] ${t.name}`).join("\n");
+        return { treasury: null, error: `複数の隊に所属しています。\`treasury_id\` を指定してください:\n${ids}` };
+      }
+      return { treasury: matches[0]!, error: null };
+    }
+
+    // ── balance ──────────────────────────────────────────────────────────────
+    if (sub === "balance") {
+      const { treasury, error } = await resolveTreasury(interaction.options.getInteger("treasury_id"));
+      if (!treasury) { await interaction.reply({ content: error!, ephemeral: true }); return; }
+      const embed = new EmbedBuilder()
+        .setTitle(`🏦 ${treasury.name} — 残高`)
+        .setColor(0xf5a623)
+        .addFields(
+          { name: "残高", value: `**${treasury.balance.toLocaleString()}${currencyName}**`, inline: true },
+          { name: "隊員ロール", value: `<@&${treasury.roleId}>`, inline: true },
+          ...(treasury.leaderRoleId ? [{ name: "隊長ロール", value: `<@&${treasury.leaderRoleId}>`, inline: true }] : []),
+        );
+      await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
+      return;
+    }
+
+    // ── history ──────────────────────────────────────────────────────────────
+    if (sub === "history") {
+      const { treasury, error } = await resolveTreasury(interaction.options.getInteger("treasury_id"));
+      if (!treasury) { await interaction.reply({ content: error!, ephemeral: true }); return; }
+      const txs = await getTreasuryHistory(treasury.id, 10);
+      const lines = txs.map((tx) => {
+        const sign = tx.amount > 0 ? "+" : "";
+        const ts = Math.floor(tx.createdAt.getTime() / 1000);
+        return `<t:${ts}:d> <@${tx.userId}> ${sign}${tx.amount.toLocaleString()}${currencyName} (${tx.reason})`;
+      });
+      const embed = new EmbedBuilder()
+        .setTitle(`🏦 ${treasury.name} — 履歴（直近${txs.length}件）`)
+        .setColor(0xf5a623)
+        .setDescription(lines.length > 0 ? lines.join("\n") : "履歴がありません。");
+      await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
+      return;
+    }
+
+    // ── deposit ──────────────────────────────────────────────────────────────
+    if (sub === "deposit") {
+      const amount = interaction.options.getInteger("amount", true);
+      const { treasury, error } = await resolveTreasury(interaction.options.getInteger("treasury_id"));
+      if (!treasury) { await interaction.reply({ content: error!, ephemeral: true }); return; }
+
+      // Must be a squad member
+      const memberRoleIds = member ? [...member.roles.cache.keys()] : [];
+      if (!memberRoleIds.includes(treasury.roleId)) {
+        await interaction.reply({ content: `この金庫（${treasury.name}）の隊員ロールを持っていません。`, ephemeral: true });
+        return;
+      }
+
+      await interaction.deferReply();
+      try {
+        const result = await depositToTreasury(guildId, treasury.id, interaction.user.id, amount);
+        const embed = new EmbedBuilder()
+          .setTitle(`🏦 ${treasury.name} — 入金完了`)
+          .setColor(0x57f287)
+          .addFields(
+            { name: "入金額", value: `**+${amount.toLocaleString()}${currencyName}**`, inline: true },
+            { name: "金庫残高", value: `${result.treasuryBalance.toLocaleString()}${currencyName}`, inline: true },
+            { name: "あなたの残高", value: `${result.walletBalance.toLocaleString()}${currencyName}`, inline: true },
+          );
+        await interaction.editReply({ embeds: [embed] });
+      } catch (err) {
+        await interaction.editReply(err instanceof Error ? err.message : "入金に失敗しました。");
+      }
+      return;
+    }
+
+    // ── withdraw ─────────────────────────────────────────────────────────────
+    if (sub === "withdraw") {
+      const amount = interaction.options.getInteger("amount", true);
+      const { treasury, error } = await resolveTreasury(interaction.options.getInteger("treasury_id"));
+      if (!treasury) { await interaction.reply({ content: error!, ephemeral: true }); return; }
+
+      // Must be admin or hold the leader role
+      const memberRoleIds = member ? [...member.roles.cache.keys()] : [];
+      const isLeader = treasury.leaderRoleId ? memberRoleIds.includes(treasury.leaderRoleId) : false;
+      if (!isAdmin && !isLeader) {
+        const who = treasury.leaderRoleId ? ` または <@&${treasury.leaderRoleId}>` : "";
+        await interaction.reply({
+          content: `出金は管理者${who} のみ可能です。`,
+          ephemeral: true,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      await interaction.deferReply();
+      // Ensure wallet exists before withdraw
+      await getOrCreateWallet(guildId, interaction.user.id);
+      try {
+        const result = await withdrawFromTreasury(guildId, treasury.id, interaction.user.id, amount);
+        const embed = new EmbedBuilder()
+          .setTitle(`🏦 ${treasury.name} — 出金完了`)
+          .setColor(0xed4245)
+          .addFields(
+            { name: "出金額", value: `**-${amount.toLocaleString()}${currencyName}**`, inline: true },
+            { name: "金庫残高", value: `${result.treasuryBalance.toLocaleString()}${currencyName}`, inline: true },
+            { name: "あなたの残高", value: `${result.walletBalance.toLocaleString()}${currencyName}`, inline: true },
+          );
+        await interaction.editReply({ embeds: [embed] });
+      } catch (err) {
+        await interaction.editReply(err instanceof Error ? err.message : "出金に失敗しました。");
+      }
+      return;
+    }
+
+    // ── give ─────────────────────────────────────────────────────────────────
+    if (sub === "give") {
+      if (!isAdmin) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const treasuryId = interaction.options.getInteger("treasury_id", true);
+      const amount     = interaction.options.getInteger("amount", true);
+      const treasury   = await getSquadTreasury(treasuryId);
+      if (!treasury || treasury.guildId !== guildId) {
+        await interaction.reply({ content: "金庫が見つかりません。", ephemeral: true });
+        return;
+      }
+      const newBalance = await giveToCrunchTreasury(guildId, treasuryId, interaction.user.id, amount);
+      await interaction.reply(
+        `✅ **${treasury.name}** に **${amount.toLocaleString()}${currencyName}** を付与しました。\n金庫残高: ${newBalance.toLocaleString()}${currencyName}`,
+      );
+      return;
+    }
+  },
+};
+
 export { VC_RENAME_BUTTON_PREFIX, durationFromKey, consumePendingRename } from "./vc";
 import { vcCommand } from "./vc";
 
@@ -900,4 +1177,5 @@ export const commands: Command[] = [
   uraShopCommand,
   rewardCommand,
   vcCommand,
+  treasuryCommand,
 ];
