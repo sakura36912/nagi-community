@@ -85,7 +85,7 @@ interface StickerInfo { name: string; animated: boolean }
 
 /** スティッカーの CDN 画像 URL を返す。 */
 function stickerCdnUrl(id: string, animated: boolean): string {
-  return `https://cdn.discordapp.com/stickers/${id}.${animated ? "gif" : "webp"}?size=512`;
+  return `https://cdn.discordapp.com/stickers/${id}.${animated ? "gif" : "png"}?size=512`;
 }
 
 /** sym が sticker ID（純数字）かどうか判定。 */
