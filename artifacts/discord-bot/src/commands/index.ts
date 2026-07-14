@@ -80,6 +80,7 @@ import {
 interface Command {
   data: { name: string; toJSON: () => unknown };
   execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  autocomplete?: (interaction: import("discord.js").AutocompleteInteraction) => Promise<void>;
 }
 
 /** Fire-and-forget: detect the buyer's squad and record the group-shop sale. */

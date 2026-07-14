@@ -501,6 +501,12 @@ client.on(Events.MessageCreate, async (message) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isAutocomplete()) {
+      const command = commandsByName.get(interaction.commandName);
+      if (command?.autocomplete) await command.autocomplete(interaction);
+      return;
+    }
+
     if (interaction.isChatInputCommand()) {
       const command = commandsByName.get(interaction.commandName);
       if (!command) {

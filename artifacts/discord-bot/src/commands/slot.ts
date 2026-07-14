@@ -47,9 +47,12 @@ type Sym = string;
 type Row = [Sym, Sym, Sym];
 type Grid = [Row, Row, Row];
 interface PaylineResult { name: string; won: boolean }
+import { AutocompleteInteraction } from "discord.js";
+
 interface Command {
   data: { name: string; toJSON: () => unknown };
   execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  autocomplete?: (interaction: AutocompleteInteraction) => Promise<void>;
 }
 
 // ─── Emoji utilities ──────────────────────────────────────────────────────────
@@ -597,7 +600,7 @@ export const slotCommand: Command = {
             .setName("add")
             .setDescription("スタンプを絵柄に追加登録します")
             .addStringOption((opt) =>
-              opt.setName("sticker-id").setDescription("スタンプID（開発者モード→右クリック→IDをコピー）").setRequired(true),
+              opt.setName("sticker-id").setDescription("スタンプ名で検索").setRequired(true).setAutocomplete(true),
             ),
         )
         .addSubcommand((sub) =>
@@ -605,7 +608,7 @@ export const slotCommand: Command = {
             .setName("remove")
             .setDescription("スタンプ絵柄を削除します")
             .addStringOption((opt) =>
-              opt.setName("sticker-id").setDescription("スタンプID").setRequired(true),
+              opt.setName("sticker-id").setDescription("スタンプ名で検索").setRequired(true).setAutocomplete(true),
             ),
         )
         .addSubcommand((sub) =>
@@ -613,7 +616,7 @@ export const slotCommand: Command = {
             .setName("weight")
             .setDescription("絵柄の出現重みを設定します（確率調整）")
             .addStringOption((opt) =>
-              opt.setName("sticker-id").setDescription("スタンプID").setRequired(true),
+              opt.setName("sticker-id").setDescription("スタンプ名で検索").setRequired(true).setAutocomplete(true),
             )
             .addIntegerOption((opt) =>
               opt
@@ -678,5 +681,38 @@ export const slotCommand: Command = {
     }
 
     await handlePlay(interaction);
+  },
+
+  async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    if (!interaction.guild) return;
+    const sub = interaction.options.getSubcommand(false);
+    const focused = interaction.options.getFocused().toLowerCase();
+
+    // スティッカーキャッシュを確保
+    const stickers = interaction.guild.stickers.cache.size > 0
+      ? interaction.guild.stickers.cache
+      : await interaction.guild.stickers.fetch().catch(() => interaction.guild!.stickers.cache);
+
+    let choices: { name: string; value: string }[];
+
+    if (sub === "remove" || sub === "weight") {
+      // 登録済みスタンプのみ候補に出す
+      const settings = await getSlotSettings(interaction.guild.id);
+      choices = settings.stickerIds
+        .map((id) => {
+          const s = stickers.get(id);
+          return s ? { name: s.name, value: id } : null;
+        })
+        .filter((c): c is { name: string; value: string } => c !== null)
+        .filter((c) => c.name.toLowerCase().includes(focused));
+    } else {
+      // add: 全スタンプから選ぶ（Lottie除外）
+      choices = [...stickers.values()]
+        .filter((s) => s.format !== StickerFormatType.Lottie)
+        .filter((s) => s.name.toLowerCase().includes(focused))
+        .map((s) => ({ name: s.name, value: s.id }));
+    }
+
+    await interaction.respond(choices.slice(0, 25));
   },
 };
