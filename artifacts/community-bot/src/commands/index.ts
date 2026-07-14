@@ -21,6 +21,7 @@ import {
   createTicket,
   getEvent,
   getParticipants,
+  getRecentTempVcDeletions,
   getSheetSettings,
   getTicketByChannel,
   getTicketSettings,
@@ -185,6 +186,13 @@ const rankingCommand: Command = {
 
 // ─── /tempvc ─────────────────────────────────────────────────────────────────
 
+const TEMPVC_DELETION_REASON_LABEL: Record<string, string> = {
+  empty_leave:        "退室による空VC削除",
+  bot_restart:        "Bot再起動時の空VC削除",
+  stale_guild_gone:   "ギルド消失によるレコード削除",
+  stale_channel_gone: "チャンネル消失によるレコード削除",
+};
+
 const tempvcCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("tempvc")
@@ -205,6 +213,19 @@ const tempvcCommand: Command = {
       sub
         .setName("panel")
         .setDescription("一時VCパネルをこのチャンネルに設置します（管理者）"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("log")
+        .setDescription("一時VCの削除履歴を表示します（管理者）")
+        .addIntegerOption((opt) =>
+          opt
+            .setName("limit")
+            .setDescription("表示する件数（最大20件、デフォルト10件）")
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(20),
+        ),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -235,6 +256,33 @@ const tempvcCommand: Command = {
       );
       await interaction.reply({ content: "パネルを設置しました。", ephemeral: true });
       if (interaction.channel?.isSendable()) await interaction.channel.send({ embeds: [embed], components: [row] });
+      return;
+    }
+
+    if (sub === "log") {
+      await interaction.deferReply({ ephemeral: true });
+      const limit = interaction.options.getInteger("limit") ?? 10;
+      const logs = await getRecentTempVcDeletions(guildId, limit);
+
+      if (logs.length === 0) {
+        await interaction.editReply("一時VCの削除履歴はまだありません。");
+        return;
+      }
+
+      const lines = logs.map((entry) => {
+        const ts = Math.floor(entry.deletedAt.getTime() / 1000);
+        const reason = TEMPVC_DELETION_REASON_LABEL[entry.reason] ?? entry.reason;
+        return `• **${entry.channelName}** — <@${entry.ownerId}> — ${reason} — <t:${ts}:f>`;
+      });
+
+      const embed = new EmbedBuilder()
+        .setTitle("🗑️ 一時VC削除履歴")
+        .setColor(0xed4245)
+        .setDescription(lines.join("\n").slice(0, 4000))
+        .setFooter({ text: `直近 ${logs.length} 件` })
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [embed] });
       return;
     }
   },

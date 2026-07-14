@@ -1,8 +1,9 @@
-import { and, asc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import {
   db,
   communityTempVcSettingsTable,
   communityTempVcsTable,
+  communityTempVcDeletionLogTable,
   communityEventsTable,
   communityEventParticipantsTable,
   communityTicketSettingsTable,
@@ -16,6 +17,8 @@ import {
   type CommunitySheet,
   type CommunitySheetSettings,
   type CommunityTicketSettings,
+  type CommunityTempVcDeletionLog,
+  type TempVcDeletionReason,
 } from "@workspace/db";
 
 // ─── Temp VC ────────────────────────────────────────────────────────────────
@@ -54,8 +57,46 @@ export async function isTempVc(channelId: string): Promise<boolean> {
   return row !== undefined;
 }
 
+export async function getTempVcRecord(
+  channelId: string,
+): Promise<{ guildId: string; channelId: string; ownerId: string } | undefined> {
+  const [row] = await db
+    .select()
+    .from(communityTempVcsTable)
+    .where(eq(communityTempVcsTable.channelId, channelId));
+  return row;
+}
+
 export async function getAllTempVcs(): Promise<{ guildId: string; channelId: string; ownerId: string }[]> {
   return db.select().from(communityTempVcsTable);
+}
+
+export async function logTempVcDeletion(
+  guildId: string,
+  channelId: string,
+  channelName: string,
+  ownerId: string,
+  reason: TempVcDeletionReason,
+): Promise<void> {
+  await db.insert(communityTempVcDeletionLogTable).values({
+    guildId,
+    channelId,
+    channelName,
+    ownerId,
+    reason,
+  });
+}
+
+export async function getRecentTempVcDeletions(
+  guildId: string,
+  limit = 20,
+): Promise<CommunityTempVcDeletionLog[]> {
+  return db
+    .select()
+    .from(communityTempVcDeletionLogTable)
+    .where(eq(communityTempVcDeletionLogTable.guildId, guildId))
+    .orderBy(desc(communityTempVcDeletionLogTable.deletedAt))
+    .limit(limit);
 }
 
 // ─── Events ─────────────────────────────────────────────────────────────────

@@ -14,7 +14,9 @@ import {
   getEventsNeedingReminder,
   getLobbyChannelId,
   getParticipants,
+  getTempVcRecord,
   isTempVc,
+  logTempVcDeletion,
   markReminderSent,
   openSession,
   removeTempVc,
@@ -156,6 +158,7 @@ client.once(Events.ClientReady, async (readyClient) => {
           readyClient.guilds.cache.get(record.guildId) ??
           await readyClient.guilds.fetch(record.guildId).catch(() => null);
         if (!guild) {
+          await logTempVcDeletion(record.guildId, record.channelId, record.channelId, record.ownerId, "stale_guild_gone").catch(() => {});
           await removeTempVc(record.channelId);
           logger.info(`[tempvc] Removed stale temp VC record ${record.channelId} (guild not found)`);
           continue;
@@ -167,6 +170,7 @@ client.once(Events.ClientReady, async (readyClient) => {
 
         if (!channel) {
           // Channel was already deleted — just remove the DB record.
+          await logTempVcDeletion(record.guildId, record.channelId, record.channelId, record.ownerId, "stale_channel_gone").catch(() => {});
           await removeTempVc(record.channelId);
           logger.info(`[tempvc] Removed stale temp VC record ${record.channelId} (channel not found)`);
           continue;
@@ -174,6 +178,7 @@ client.once(Events.ClientReady, async (readyClient) => {
 
         if (channel.type === ChannelType.GuildVoice && channel.members.size === 0) {
           await channel.delete("Bot再起動後の空一時VC削除");
+          await logTempVcDeletion(record.guildId, record.channelId, channel.name, record.ownerId, "bot_restart").catch(() => {});
           await removeTempVc(record.channelId);
           logger.info(`[tempvc] Deleted empty temp VC ${record.channelId} on startup`);
         }
@@ -271,12 +276,22 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const isTemp = await isTempVc(oldChannelId).catch(() => false);
     if (!isTemp) return;
 
+    // Fetch record now (before removal) to capture owner info for the audit log.
+    const tempVcRecord = await getTempVcRecord(oldChannelId).catch(() => undefined);
+
     const guild = oldState.guild;
     const channel =
       guild.channels.cache.get(oldChannelId) ??
       (await guild.channels.fetch(oldChannelId).catch(() => null));
 
     if (!channel) {
+      await logTempVcDeletion(
+        guildId,
+        oldChannelId,
+        oldChannelId,
+        tempVcRecord?.ownerId ?? "unknown",
+        "stale_channel_gone",
+      ).catch(() => {});
       await removeTempVc(oldChannelId).catch(() => {});
       return;
     }
@@ -286,6 +301,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
     try {
       await channel.delete("一時VCが空になりました");
+      await logTempVcDeletion(
+        guildId,
+        oldChannelId,
+        channel.name,
+        tempVcRecord?.ownerId ?? "unknown",
+        "empty_leave",
+      ).catch(() => {});
       await removeTempVc(oldChannelId);
       logger.info(`[tempvc] Deleted empty temp VC ${oldChannelId}`);
     } catch (err) {
