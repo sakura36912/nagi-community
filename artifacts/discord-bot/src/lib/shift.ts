@@ -32,6 +32,45 @@ export async function setShiftSettings(
     });
 }
 
+export async function setShiftRewardAmount(
+  guildId: string,
+  amount: number,
+): Promise<void> {
+  await db
+    .insert(shiftSettingsTable)
+    .values({ guildId, shiftRewardAmount: amount })
+    .onConflictDoUpdate({
+      target: shiftSettingsTable.guildId,
+      set: { shiftRewardAmount: amount, updatedAt: new Date() },
+    });
+}
+
+/**
+ * Returns a map of userId → shift count for all users who have shifts
+ * in [from, to] (inclusive, "YYYY-MM-DD"). Used by the salary scheduler.
+ */
+export async function getShiftCountsByUser(
+  guildId: string,
+  from: string,
+  to: string,
+): Promise<Map<string, number>> {
+  const rows = await db
+    .select({ userId: shiftsTable.userId })
+    .from(shiftsTable)
+    .where(
+      and(
+        eq(shiftsTable.guildId, guildId),
+        gte(shiftsTable.date, from),
+        lte(shiftsTable.date, to),
+      ),
+    );
+  const counts = new Map<string, number>();
+  for (const { userId } of rows) {
+    counts.set(userId, (counts.get(userId) ?? 0) + 1);
+  }
+  return counts;
+}
+
 export async function getAllShiftSettings(): Promise<ShiftSettings[]> {
   return db.select().from(shiftSettingsTable);
 }

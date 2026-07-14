@@ -12,6 +12,7 @@ import {
   getNextWeeklyPostTime,
 } from "./commands";
 import { buildSheetEmbed, findSelfIntro } from "./commands/sheet";
+import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 
 import { logger } from "./lib/logger";
 import {
@@ -27,6 +28,7 @@ import {
   deletePrivateVcSession,
   getGuildSettings,
   getGuildWalletUserIds,
+  giveCurrency,
   isDueCalendarDay,
   markRewardDistributed,
   seedDefaultShopItems,
@@ -108,6 +110,44 @@ async function runRewardScheduler(): Promise<void> {
         settings.currencyName,
         memberRoles,
       );
+
+      // ── シフト出勤報酬 ───────────────────────────────────────────────────────
+      const shiftSettings = await getShiftSettings(guild.id);
+      const rewardPerShift = shiftSettings?.shiftRewardAmount ?? 0;
+      let shiftPaidCount = 0;
+      let shiftTotalPaid = 0;
+      if (rewardPerShift > 0) {
+        // 集計期間: 前回給料日の翌日 〜 今日 (JST "YYYY-MM-DD")
+        const toDate   = now.toISOString().slice(0, 10);
+        const fromDate = settings.lastRewardAt
+          ? new Date(settings.lastRewardAt.getTime() + 24 * 60 * 60 * 1000)
+              .toISOString()
+              .slice(0, 10)
+          : new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000)
+              .toISOString()
+              .slice(0, 10);
+
+        const counts = await getShiftCountsByUser(guild.id, fromDate, toDate);
+        for (const [userId, shiftCount] of counts) {
+          const amount = shiftCount * rewardPerShift;
+          const result = await giveCurrency(
+            guild.id,
+            userId,
+            amount,
+            settings.currencyName,
+            "shift-reward",
+          );
+          if (result.ok) {
+            shiftPaidCount += 1;
+            shiftTotalPaid += amount;
+          }
+        }
+        if (shiftPaidCount > 0) {
+          logger.info(
+            `[reward] ${guild.name}: shift bonus ${shiftTotalPaid}${settings.currencyName} to ${shiftPaidCount} member(s) (${rewardPerShift}/shift).`,
+          );
+        }
+      }
 
       await markRewardDistributed(guild.id, now);
 

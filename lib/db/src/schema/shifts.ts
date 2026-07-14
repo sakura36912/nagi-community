@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
 
 // ─── Shift Settings ───────────────────────────────────────────────────────────
 
@@ -7,6 +7,8 @@ export const shiftSettingsTable = pgTable("shift_settings", {
   guildId: text("guild_id").primaryKey(),
   /** Channel where the weekly schedule is auto-posted every Monday 9:00 JST. */
   channelId: text("channel_id"),
+  /** Currency awarded per shift when a member runs /shift add. 0 = disabled. */
+  shiftRewardAmount: integer("shift_reward_amount").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

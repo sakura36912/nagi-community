@@ -15,6 +15,7 @@ import {
   getShiftSettings,
   getShiftsInRange,
   removeShift,
+  setShiftRewardAmount,
   setShiftSettings,
   type Shift,
 } from "../lib/shift.js";
@@ -355,6 +356,13 @@ export const shiftCommand: Command = {
             .setName("post-now")
             .setDescription("今すぐ今週のシフト表を投稿する")
             .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("reward")
+            .setDescription("シフト1回あたりの報酬額（0で無効化）")
+            .setRequired(false)
+            .setMinValue(0),
         ),
     ),
 
@@ -507,15 +515,26 @@ export const shiftCommand: Command = {
 
       const channelOpt = interaction.options.getChannel("channel");
       const postNow    = interaction.options.getBoolean("post-now") ?? false;
+      const rewardOpt  = interaction.options.getInteger("reward");
 
-      if (!channelOpt && !postNow) {
+      if (!channelOpt && !postNow && rewardOpt === null) {
         await interaction.editReply(
-          "`channel` でチャンネルを指定するか、`post-now: True` で今すぐ投稿してください。",
+          "`channel`・`reward`・`post-now` のいずれかを指定してください。",
         );
         return;
       }
 
       const lines: string[] = [];
+
+      // 報酬額変更
+      if (rewardOpt !== null) {
+        await setShiftRewardAmount(guildId, rewardOpt);
+        lines.push(
+          rewardOpt === 0
+            ? "✅ シフト出勤報酬を**無効化**しました。"
+            : `✅ シフト1回あたりの報酬を **${rewardOpt}** に設定しました。`,
+        );
+      }
 
       // チャンネル変更
       if (channelOpt) {
