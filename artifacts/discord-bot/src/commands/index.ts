@@ -25,6 +25,7 @@ import {
   PRIVATE_VC_1D_EFFECT,
   PRIVATE_VC_1W_EFFECT,
   PRIVATE_VC_1M_EFFECT,
+  VC_RENAME_EFFECT,
   TIMED_VC_DURATIONS,
   EVAL_EXTEND_DAYS,
   PERM_ROLE_EFFECT,
@@ -116,6 +117,8 @@ function formatMs(ms: number): string {
 export const SHOP_BUY_PREFIX = "shop:buy:";
 export const NICKNAME_MODAL_PREFIX = "shop:nickname-modal:";
 const NICKNAME_MODAL_INPUT_ID = "nickname";
+export const VC_RENAME_MODAL_PREFIX = "shop:vc-rename-modal:";
+const VC_RENAME_MODAL_INPUT_ID = "vc-new-name";
 // Discord caps action rows at 5, each holding up to 5 buttons.
 const MAX_SHOP_BUY_BUTTONS = 25;
 
@@ -131,6 +134,23 @@ function buildNicknameModal(itemId: number): ModalBuilder {
           .setStyle(TextInputStyle.Short)
           .setMinLength(1)
           .setMaxLength(32)
+          .setRequired(true),
+      ),
+    );
+}
+
+function buildVcRenameModal(itemId: number): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`${VC_RENAME_MODAL_PREFIX}${itemId}`)
+    .setTitle("VCの新しい名前")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId(VC_RENAME_MODAL_INPUT_ID)
+          .setLabel("新しいチャンネル名")
+          .setStyle(TextInputStyle.Short)
+          .setMinLength(1)
+          .setMaxLength(80)
           .setRequired(true),
       ),
     );
@@ -313,10 +333,13 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     return;
   }
 
-  // Nickname-change items need text input, so show a modal as the initial
-  // response instead of deferring/buying immediately.
+  // Nickname-change / VC-rename items need text input → show modal, no defer.
   if (item.effectType === NICKNAME_CHANGE_EFFECT) {
     await interaction.showModal(buildNicknameModal(item.id));
+    return;
+  }
+  if (item.effectType === VC_RENAME_EFFECT) {
+    await interaction.showModal(buildVcRenameModal(item.id));
     return;
   }
 
@@ -452,6 +475,57 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
   } else {
     await interaction.editReply(result.reason);
+  }
+}
+
+export async function handleVcRenameModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+  if (!interaction.guild) {
+    await interaction.reply({ content: "このフォームはサーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const itemId = Number(interaction.customId.slice(VC_RENAME_MODAL_PREFIX.length));
+  const newName = interaction.fields.getTextInputValue(VC_RENAME_MODAL_INPUT_ID).trim();
+
+  if (!Number.isInteger(itemId) || newName.length === 0) {
+    await interaction.reply({ content: "不正な入力です。", ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const settings = await getGuildSettings(interaction.guild.id);
+
+  // Find the user's private VC: a guild voice channel where they have an
+  // explicit ViewChannel allow overwrite (set by the bot on creation).
+  const userId = interaction.user.id;
+  const privateVc = interaction.guild.channels.cache.find(
+    (ch) =>
+      ch.type === ChannelType.GuildVoice &&
+      ch.name.startsWith("🔒") &&
+      ch.permissionOverwrites.cache.some(
+        (ow) => ow.id === userId && ow.allow.has(PermissionFlagsBits.ViewChannel),
+      ),
+  );
+
+  if (!privateVc) {
+    await interaction.editReply("❌ あなたの非公開VCが見つかりません。先にVCを作成してください。");
+    return;
+  }
+
+  // Charge before renaming.
+  const result = await buyItem(interaction.guild.id, userId, itemId, settings.currencyName);
+  if (!result.ok) {
+    await interaction.editReply(result.reason);
+    return;
+  }
+
+  try {
+    await privateVc.setName(`🔒 ${newName}`.slice(0, 100));
+    await interaction.editReply(`✅ **${result.item.name}**を使用しました！VCを「🔒 ${newName}」にリネームしました。`);
+  } catch {
+    await refundPurchase(interaction.guild.id, userId, result.item);
+    await interaction.editReply("❌ チャンネルのリネームに失敗しました。購入を取り消し、返金しました。");
   }
 }
 
@@ -732,6 +806,7 @@ const VC_EFFECT_CHOICES: EffectChoice[] = [
   { name: "非公開VC（1日）", value: PRIVATE_VC_1D_EFFECT },
   { name: "非公開VC（1週間）", value: PRIVATE_VC_1W_EFFECT },
   { name: "非公開VC（1ヶ月）", value: PRIVATE_VC_1M_EFFECT },
+  { name: "VCリネーム", value: VC_RENAME_EFFECT },
 ];
 
 function buildShopCommand(
@@ -884,6 +959,10 @@ function buildShopCommand(
 
         if (item.effectType === NICKNAME_CHANGE_EFFECT) {
           await interaction.showModal(buildNicknameModal(item.id));
+          return;
+        }
+        if (item.effectType === VC_RENAME_EFFECT) {
+          await interaction.showModal(buildVcRenameModal(item.id));
           return;
         }
 

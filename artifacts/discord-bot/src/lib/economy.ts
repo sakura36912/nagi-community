@@ -35,6 +35,7 @@ export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 // Shop item effect types recognized by the bot.
 export const NICKNAME_CHANGE_EFFECT = "nickname_change";
 export const PRIVATE_VC_EFFECT = "private_vc"; // permanent (no expiry)
+export const VC_RENAME_EFFECT  = "vc_rename";  // rename existing private VC, no duration
 export const PRIVATE_VC_1D_EFFECT = "private_vc_1d";
 export const PRIVATE_VC_1W_EFFECT = "private_vc_1w";
 export const PRIVATE_VC_1M_EFFECT = "private_vc_1m";

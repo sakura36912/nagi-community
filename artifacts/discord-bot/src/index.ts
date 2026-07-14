@@ -3,8 +3,10 @@ import { EmbedBuilder } from "discord.js";
 import {
   commands,
   handleNicknameModalSubmit,
+  handleVcRenameModalSubmit,
   handleShopBuyButton,
   NICKNAME_MODAL_PREFIX,
+  VC_RENAME_MODAL_PREFIX,
   SHOP_BUY_PREFIX,
   VC_RENAME_BUTTON_PREFIX,
   durationFromKey,
@@ -531,6 +533,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith(NICKNAME_MODAL_PREFIX)) {
       await handleNicknameModalSubmit(interaction);
+      return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(VC_RENAME_MODAL_PREFIX)) {
+      await handleVcRenameModalSubmit(interaction);
       return;
     }
   } catch (err) {
