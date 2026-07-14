@@ -18,6 +18,8 @@ import {
   getEventsNeeding24hReminder,
   mark24hReminderSent,
   getParticipants,
+  getPendingSheetUpdates,
+  clearSheetUpdateFlag,
   getSheetSettings,
   getVcRanking,
   getActiveSessionCount,
@@ -283,10 +285,59 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   scheduleDailyRanking();
 
+  // Re-render eval sheet messages when endDate has been extended via the shop.
+  async function processSheetUpdates(): Promise<void> {
+    const sheets = await getPendingSheetUpdates();
+    for (const sheet of sheets) {
+      try {
+        const channel = await client.channels.fetch(sheet.channelId!);
+        if (!channel?.isTextBased()) {
+          await clearSheetUpdateFlag(sheet.id);
+          continue;
+        }
+        const message = await channel.messages.fetch(sheet.messageId!);
+
+        // Re-fetch the user so displayName and avatar are current.
+        const user = await client.users.fetch(sheet.userId);
+        let displayName = user.displayName;
+        try {
+          const member = await message.guild?.members.fetch(sheet.userId);
+          if (member) displayName = member.displayName;
+        } catch { /* ignore — use user fallback */ }
+
+        const [settings, vcSeconds] = await Promise.all([
+          getSheetSettings(sheet.guildId),
+          getVcTimeInPeriod(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
+        ]);
+
+        const embed = buildSheetEmbed({
+          targetUser: user,
+          displayName,
+          startDate: sheet.startDate,
+          endDate: sheet.endDate,
+          vcSeconds,
+          nameboardUrl: settings?.nameboardUrl,
+          selfIntro: null,
+          createdByLabel: "評価期間延長券で自動更新",
+        });
+
+        await message.edit({ embeds: [embed] });
+        logger.info(`[sheet] Updated embed for user=${sheet.userId} guild=${sheet.guildId} newEnd=${sheet.endDate.toISOString()}`);
+      } catch (err) {
+        logger.error(`[sheet] Failed to update sheet id=${sheet.id}`, err);
+      } finally {
+        await clearSheetUpdateFlag(sheet.id);
+      }
+    }
+  }
+
   // Tick every 60 s.
   setInterval(() => {
     runEventReminderScheduler().catch((err) =>
       logger.error("[event] Reminder scheduler error", err),
+    );
+    processSheetUpdates().catch((err) =>
+      logger.error("[sheet] Update processor error", err),
     );
   }, 60 * 1000);
 });

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import {
   db,
   communityEventSettingsTable,
@@ -534,6 +534,29 @@ export async function listSheets(guildId: string): Promise<CommunitySheet[]> {
     .from(communitySheetsTable)
     .where(eq(communitySheetsTable.guildId, guildId))
     .orderBy(asc(communitySheetsTable.createdAt));
+}
+
+/** Returns sheets flagged for a Discord-message re-render (up to 10 per tick). */
+export async function getPendingSheetUpdates(): Promise<CommunitySheet[]> {
+  return db
+    .select()
+    .from(communitySheetsTable)
+    .where(
+      and(
+        eq(communitySheetsTable.needsUpdate, true),
+        isNotNull(communitySheetsTable.channelId),
+        isNotNull(communitySheetsTable.messageId),
+      ),
+    )
+    .limit(10);
+}
+
+/** Clears the needsUpdate flag after the Discord message has been re-rendered. */
+export async function clearSheetUpdateFlag(id: number): Promise<void> {
+  await db
+    .update(communitySheetsTable)
+    .set({ needsUpdate: false })
+    .where(eq(communitySheetsTable.id, id));
 }
 
 // ─── Role Buttons ────────────────────────────────────────────────────────────

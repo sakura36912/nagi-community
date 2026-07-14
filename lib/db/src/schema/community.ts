@@ -3,9 +3,9 @@ import {
   text,
   serial,
   timestamp,
+  boolean,
   integer,
   unique,
-  boolean,
 } from "drizzle-orm/pg-core";
 
 // ─── Events ─────────────────────────────────────────────────────────────────
@@ -171,6 +171,8 @@ export const communitySheetsTable = pgTable("community_sheets", {
   endDate: timestamp("end_date", { withTimezone: true }).notNull(),
   channelId: text("channel_id"),
   messageId: text("message_id"),
+  /** Set to true by the economy bot when endDate is extended; community bot re-renders the embed then resets this. */
+  needsUpdate: boolean("needs_update").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

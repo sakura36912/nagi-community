@@ -939,7 +939,7 @@ export async function extendCommunitySheet(
 
   await db
     .update(communitySheetsTable)
-    .set({ endDate: newEndDate })
+    .set({ endDate: newEndDate, needsUpdate: true })
     .where(eq(communitySheetsTable.id, sheet.id));
 
   return { newEndDate };
