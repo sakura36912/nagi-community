@@ -1,6 +1,5 @@
 import {
   ActionRowBuilder,
-  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -17,7 +16,6 @@ import {
 import { logger } from "../lib/logger.js";
 import {
   addParticipant,
-  addTempVc,
   createEvent,
   deleteEvent,
   editEvent,
@@ -30,9 +28,6 @@ import {
   deleteUserVcSessions,
   getActiveSession,
   getActiveSessionCount,
-  getAllTempVcDeletions,
-  getLobbyChannelId,
-  getRecentTempVcDeletions,
   getRoleButtonById,
   getRoleButtonsByMessage,
   getEventSettings,
@@ -49,7 +44,6 @@ import {
   setEventSettings,
   removeParticipant,
   removeTicket,
-  setLobbyChannel,
   setNameboardUrl,
   setRankingSettings,
   setSheetForumConfig,
@@ -66,7 +60,6 @@ export const COMM_EVENT_JOIN_PREFIX = "comm:event:join:";
 export const COMM_EVENT_CANCEL_PREFIX = "comm:event:cancel:";
 export const COMM_TICKET_CREATE = "comm:ticket:create";
 export const COMM_TICKET_CLOSE_PREFIX = "comm:ticket:close:";
-export const COMM_TEMPVC_CREATE = "comm:tempvc:create";
 export const COMM_PRIVACY_DELETE_CONFIRM = "comm:privacy:delete:confirm";
 export const COMM_PRIVACY_DELETE_CANCEL = "comm:privacy:delete:cancel";
 export const COMM_PRIVACY_OPTOUT_KEEP = "comm:privacy:optout:keep";
@@ -285,152 +278,6 @@ const rankingCommand: Command = {
     if (sub === "disable") {
       await setRankingSettings(guildId, null, "today");
       await interaction.reply({ content: "毎日のランキング自動投稿を停止しました。", ephemeral: true });
-      return;
-    }
-  },
-};
-
-// ─── /tempvc ─────────────────────────────────────────────────────────────────
-
-const TEMPVC_DELETION_REASON_LABEL: Record<string, string> = {
-  empty_leave:        "退室による空VC削除",
-  bot_restart:        "Bot再起動時の空VC削除",
-  stale_guild_gone:   "ギルド消失によるレコード削除",
-  stale_channel_gone: "チャンネル消失によるレコード削除",
-};
-
-const tempvcCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("tempvc")
-    .setDescription("一時VC機能の設定")
-    .addSubcommand((sub) =>
-      sub
-        .setName("setup")
-        .setDescription("ロビーVCを設定します（管理者）")
-        .addChannelOption((opt) =>
-          opt
-            .setName("lobby")
-            .setDescription("ロビーとして使うVCチャンネル")
-            .addChannelTypes(ChannelType.GuildVoice)
-            .setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("panel")
-        .setDescription("一時VCパネルをこのチャンネルに設置します（管理者）"),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("log")
-        .setDescription("一時VCの削除履歴を表示します（管理者）")
-        .addIntegerOption((opt) =>
-          opt
-            .setName("limit")
-            .setDescription("表示する件数（最大20件、デフォルト10件）")
-            .setRequired(false)
-            .setMinValue(1)
-            .setMaxValue(20),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("export")
-        .setDescription("一時VC削除履歴をCSVファイルとしてエクスポートします（管理者）"),
-    ),
-  async execute(interaction) {
-    const guildId = requireGuild(interaction);
-    const sub = interaction.options.getSubcommand();
-
-    if (!requireAdmin(interaction)) {
-      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-      return;
-    }
-
-    if (sub === "setup") {
-      const lobby = interaction.options.getChannel("lobby", true);
-      await setLobbyChannel(guildId, lobby.id);
-      await interaction.reply({ content: `✅ ロビーVCを <#${lobby.id}> に設定しました。このチャンネルに参加すると自動で一時VCが作成されます。`, ephemeral: true });
-      return;
-    }
-
-    if (sub === "panel") {
-      const embed = new EmbedBuilder()
-        .setTitle("🎙️ 一時VCの作成")
-        .setColor(0x57f287)
-        .setDescription("ボタンを押すと、あなた専用の一時VCが作成されます。");
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(COMM_TEMPVC_CREATE)
-          .setLabel("一時VCを作成 🎙️")
-          .setStyle(ButtonStyle.Success),
-      );
-      await interaction.reply({ content: "パネルを設置しました。", ephemeral: true });
-      if (interaction.channel?.isSendable()) await interaction.channel.send({ embeds: [embed], components: [row] });
-      return;
-    }
-
-    if (sub === "log") {
-      await interaction.deferReply({ ephemeral: true });
-      const limit = interaction.options.getInteger("limit") ?? 10;
-      const logs = await getRecentTempVcDeletions(guildId, limit);
-
-      if (logs.length === 0) {
-        await interaction.editReply("一時VCの削除履歴はまだありません。");
-        return;
-      }
-
-      const lines = logs.map((entry) => {
-        const ts = Math.floor(entry.deletedAt.getTime() / 1000);
-        const reason = TEMPVC_DELETION_REASON_LABEL[entry.reason] ?? entry.reason;
-        return `• **${entry.channelName}** — <@${entry.ownerId}> — ${reason} — <t:${ts}:f>`;
-      });
-
-      const embed = new EmbedBuilder()
-        .setTitle("🗑️ 一時VC削除履歴")
-        .setColor(0xed4245)
-        .setDescription(lines.join("\n").slice(0, 4000))
-        .setFooter({ text: `直近 ${logs.length} 件` })
-        .setTimestamp();
-
-      await interaction.editReply({ embeds: [embed] });
-      return;
-    }
-
-    if (sub === "export") {
-      await interaction.deferReply({ ephemeral: true });
-      const logs = await getAllTempVcDeletions(guildId);
-
-      if (logs.length === 0) {
-        await interaction.editReply("エクスポートできる削除履歴がありません。");
-        return;
-      }
-
-      // Build CSV — BOM付きUTF-8でExcelでも文字化けしない
-      const BOM = "\uFEFF";
-      const header = "channelName,ownerId,reason,deletedAt";
-      const rows = logs.map((entry) => {
-        const channelName = `"${entry.channelName.replace(/"/g, '""')}"`;
-        const ownerId = `"${entry.ownerId}"`;
-        const reason = `"${(TEMPVC_DELETION_REASON_LABEL[entry.reason] ?? entry.reason).replace(/"/g, '""')}"`;
-        const deletedAt = entry.deletedAt.toISOString();
-        return `${channelName},${ownerId},${reason},${deletedAt}`;
-      });
-      const csvContent = BOM + [header, ...rows].join("\r\n");
-
-      const now = new Date();
-      const dateStr = now.toISOString().slice(0, 10);
-      const fileName = `tempvc-deletion-log-${guildId}-${dateStr}.csv`;
-
-      const attachment = new AttachmentBuilder(Buffer.from(csvContent, "utf-8"), {
-        name: fileName,
-        description: `一時VC削除履歴 ${logs.length}件 (${dateStr})`,
-      });
-
-      await interaction.editReply({
-        content: `📄 削除履歴 **${logs.length}件** をエクスポートしました。`,
-        files: [attachment],
-      });
       return;
     }
   },
@@ -1418,14 +1265,8 @@ async function buildBotstatusContent(
     ? "✅ GuildMembers intent — 有効"
     : "❌ GuildMembers intent — **無効** (Discord Developer Portal → Bot → Privileged Gateway Intents で有効化してください)";
 
-  // ── Lobby channel ────────────────────────────────────────────────────────────
-  const lobbyId = await getLobbyChannelId(guild.id).catch(() => null);
-  const lobbyLine = lobbyId
-    ? `✅ ロビーVC — <#${lobbyId}>`
-    : "⚠️ ロビーVC — **未設定** (`/tempvc setup` で設定してください)";
-
   // ── Overall status ───────────────────────────────────────────────────────────
-  const allGood = hasManageChannels && hasMoveMembers && hasGuildMembersIntent && !!lobbyId;
+  const allGood = hasManageChannels && hasMoveMembers && hasGuildMembersIntent;
   const statusLine = allGood
     ? "🟢 **すべて正常です**"
     : "🔴 **設定に問題があります** — 上記の項目を確認してください";
@@ -1434,7 +1275,7 @@ async function buildBotstatusContent(
     .setTitle("🤖 Bot セットアップ状況")
     .setColor(allGood ? 0x57f287 : 0xed4245)
     .setDescription(
-      [statusLine, "", manageChannelsLine, moveMembersLine, guildMembersLine, lobbyLine].join("\n"),
+      [statusLine, "", manageChannelsLine, moveMembersLine, guildMembersLine].join("\n"),
     )
     .setFooter({ text: `サーバー: ${guild.name}` })
     .setTimestamp();
@@ -1660,59 +1501,6 @@ export async function handlePrivacyDeleteCancel(interaction: ButtonInteraction):
     .setDescription("VC記録の削除をキャンセルしました。データはそのまま保持されます。")
     .setTimestamp();
   await interaction.editReply({ embeds: [embed], components: [] });
-}
-
-export async function handleTempVcCreate(interaction: ButtonInteraction): Promise<void> {
-  if (!interaction.guild || !interaction.guildId) {
-    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
-    return;
-  }
-  await interaction.deferReply({ ephemeral: true });
-
-  const me = interaction.guild.members.me;
-  if (!me?.permissions.has("ManageChannels")) {
-    await interaction.editReply("BotにManageChannels権限がありません。");
-    return;
-  }
-
-  let member: GuildMember;
-  try {
-    member = await interaction.guild.members.fetch(interaction.user.id);
-  } catch {
-    await interaction.editReply("メンバー情報の取得に失敗しました。");
-    return;
-  }
-
-  const channelName = `🔊 ${member.displayName} の部屋`;
-  const lobbyId = await getLobbyChannelId(interaction.guildId).catch(() => null);
-  const parentId = lobbyId
-    ? (interaction.guild.channels.cache.get(lobbyId)?.parentId ?? undefined)
-    : undefined;
-
-  let channel;
-  try {
-    channel = await interaction.guild.channels.create({
-      name: channelName.slice(0, 100),
-      type: ChannelType.GuildVoice,
-      parent: parentId,
-    });
-  } catch (err) {
-    logger.error("[tempvc] Failed to create VC from panel", err);
-    await interaction.editReply("VCの作成に失敗しました。");
-    return;
-  }
-
-  // Try to move user if they're already in a VC
-  if (member.voice.channelId) {
-    try {
-      await member.voice.setChannel(channel);
-    } catch {
-      // ignore move failure
-    }
-  }
-
-  await addTempVc(interaction.guildId, channel.id, interaction.user.id, parentId ?? null);
-  await interaction.editReply(`✅ 一時VCを作成しました: <#${channel.id}>`);
 }
 
 // ─── /rolebutton ─────────────────────────────────────────────────────────────
@@ -1959,7 +1747,6 @@ export const commands: Command[] = [
   rankingCommand,
   mystatsCommand,
   privacyCommand,
-  tempvcCommand,
   eventCommand,
   ticketCommand,
   sheetCommand,

@@ -8,52 +8,6 @@ import {
   boolean,
 } from "drizzle-orm/pg-core";
 
-// ─── Temp VC ────────────────────────────────────────────────────────────────
-
-/** Which channel is the lobby (joining it auto-creates a temp VC). */
-export const communityTempVcSettingsTable = pgTable("community_tempvc_settings", {
-  guildId: text("guild_id").primaryKey(),
-  lobbyChannelId: text("lobby_channel_id").notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow()
-    .$onUpdate(() => new Date()),
-});
-
-/** Currently live temp VC channels. */
-export const communityTempVcsTable = pgTable("community_temp_vcs", {
-  id: serial("id").primaryKey(),
-  guildId: text("guild_id").notNull(),
-  channelId: text("channel_id").notNull().unique(),
-  ownerId: text("owner_id").notNull(),
-  /** The Discord category (parent) this VC must stay in. Null = no restriction. */
-  categoryId: text("category_id"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-export type CommunityTempVcSettings = typeof communityTempVcSettingsTable.$inferSelect;
-export type CommunityTempVc = typeof communityTempVcsTable.$inferSelect;
-
-/** Reason a temp VC was removed from the DB / deleted from Discord. */
-export type TempVcDeletionReason =
-  | "empty_leave"       // last user left → channel deleted
-  | "bot_restart"       // channel was empty when bot restarted → channel deleted
-  | "stale_guild_gone"  // guild no longer found on restart → DB record cleaned up only
-  | "stale_channel_gone"; // channel already deleted before bot could act → DB record cleaned up only
-
-/** Audit log of every temp VC removal. */
-export const communityTempVcDeletionLogTable = pgTable("community_tempvc_deletion_log", {
-  id: serial("id").primaryKey(),
-  guildId: text("guild_id").notNull(),
-  channelId: text("channel_id").notNull(),
-  channelName: text("channel_name").notNull(),
-  ownerId: text("owner_id").notNull(),
-  reason: text("reason").$type<TempVcDeletionReason>().notNull(),
-  deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-export type CommunityTempVcDeletionLog = typeof communityTempVcDeletionLogTable.$inferSelect;
-
 // ─── Events ─────────────────────────────────────────────────────────────────
 
 /** Per-guild configuration for event notifications. */

@@ -8,30 +8,22 @@ import {
 } from "discord.js";
 import { logger } from "./lib/logger.js";
 import {
-  addTempVc,
   closeAllOpenSessions,
   closeSession,
   createSheet,
-  getAllTempVcs,
   getAllRankingSettings,
   getEvent,
   getEventSettings,
   getEventsNeedingReminder,
   getEventsNeeding24hReminder,
   mark24hReminderSent,
-  getLobbyChannelId,
   getParticipants,
   getSheetSettings,
-  getTempVcRecord,
   getVcRanking,
   getActiveSessionCount,
   getVcTimeInPeriod,
-  isTempVc,
-  logTempVcDeletion,
   markReminderSent,
   openSession,
-  pruneOldTempVcDeletionLogs,
-  removeTempVc,
 } from "./lib/community.js";
 import {
   buildEventEmbed,
@@ -44,7 +36,6 @@ import {
   COMM_EVENT_CANCEL_PREFIX,
   COMM_TICKET_CREATE,
   COMM_TICKET_CLOSE_PREFIX,
-  COMM_TEMPVC_CREATE,
   COMM_PRIVACY_DELETE_CONFIRM,
   COMM_PRIVACY_DELETE_CANCEL,
   COMM_PRIVACY_OPTOUT_KEEP,
@@ -54,7 +45,6 @@ import {
   handleEventCancel,
   handleTicketCreate,
   handleTicketClose,
-  handleTempVcCreate,
   handlePrivacyDeleteConfirm,
   handlePrivacyDeleteCancel,
   handlePrivacyOptoutKeep,
@@ -226,76 +216,15 @@ client.once(Events.ClientReady, async (readyClient) => {
     logger.error("[vc] Failed to close stale sessions", err),
   );
 
-  // Clean up stale temp VCs: delete any that no longer exist on Discord or are empty.
-  try {
-    const tempVcs = await getAllTempVcs();
-    for (const record of tempVcs) {
-      try {
-        const guild =
-          readyClient.guilds.cache.get(record.guildId) ??
-          await readyClient.guilds.fetch(record.guildId).catch(() => null);
-        if (!guild) {
-          await logTempVcDeletion(record.guildId, record.channelId, record.channelId, record.ownerId, "stale_guild_gone").catch(() => {});
-          await removeTempVc(record.channelId);
-          logger.info(`[tempvc] Removed stale temp VC record ${record.channelId} (guild not found)`);
-          continue;
-        }
-
-        const channel =
-          guild.channels.cache.get(record.channelId) ??
-          await guild.channels.fetch(record.channelId).catch(() => null);
-
-        if (!channel) {
-          // Channel was already deleted — just remove the DB record.
-          await logTempVcDeletion(record.guildId, record.channelId, record.channelId, record.ownerId, "stale_channel_gone").catch(() => {});
-          await removeTempVc(record.channelId);
-          logger.info(`[tempvc] Removed stale temp VC record ${record.channelId} (channel not found)`);
-          continue;
-        }
-
-        if (channel.type === ChannelType.GuildVoice && channel.members.size === 0) {
-          await channel.delete("Bot再起動後の空一時VC削除");
-          await logTempVcDeletion(record.guildId, record.channelId, channel.name, record.ownerId, "bot_restart").catch(() => {});
-          await removeTempVc(record.channelId);
-          logger.info(`[tempvc] Deleted empty temp VC ${record.channelId} on startup`);
-        }
-      } catch (err) {
-        logger.error(`[tempvc] Failed to clean up temp VC ${record.channelId}`, err);
-      }
-    }
-  } catch (err) {
-    logger.error("[tempvc] Failed to fetch temp VC list for startup cleanup", err);
-  }
-
   // Re-open sessions for users currently in VCs.
   for (const guild of readyClient.guilds.cache.values()) {
-    const lobbyId = await getLobbyChannelId(guild.id).catch(() => null);
     for (const channel of guild.channels.cache.values()) {
       if (channel.type !== ChannelType.GuildVoice) continue;
-      if (lobbyId && channel.id === lobbyId) continue; // skip lobby
       for (const [userId] of channel.members) {
         await openSession(guild.id, userId, channel.id).catch(() => {});
       }
     }
   }
-
-  // ── Deletion-log pruning ──────────────────────────────────────────────────
-  // Prune entries older than 90 days once on startup, then once every 24 h.
-  const RETENTION_DAYS = 90;
-
-  async function runDeletionLogPrune(): Promise<void> {
-    try {
-      const deleted = await pruneOldTempVcDeletionLogs(RETENTION_DAYS);
-      if (deleted > 0) {
-        logger.info(`[prune] Removed ${deleted} deletion-log entr${deleted === 1 ? "y" : "ies"} older than ${RETENTION_DAYS} days`);
-      }
-    } catch (err) {
-      logger.error("[prune] Failed to prune deletion log", err);
-    }
-  }
-
-  await runDeletionLogPrune();
-  setInterval(runDeletionLogPrune, 24 * 60 * 60 * 1000);
 
   // ── Daily ranking post ────────────────────────────────────────────────────
   // Fires once a day at midnight JST (UTC+9 = 15:00 UTC).
@@ -374,131 +303,17 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // Nothing VC-related changed (mute/deaf/etc.)
   if (oldChannelId === newChannelId) return;
 
-  const lobbyId = await getLobbyChannelId(guildId).catch(() => null);
-
   // ── VC Session tracking ───────────────────────────────────────────────────
-  if (oldChannelId && oldChannelId !== lobbyId) {
+  if (oldChannelId) {
     await closeSession(guildId, userId).catch((err) =>
       logger.error(`[vc] closeSession error user=${userId}`, err),
     );
   }
 
-  if (newChannelId && newChannelId !== lobbyId) {
+  if (newChannelId) {
     await openSession(guildId, userId, newChannelId).catch((err) =>
       logger.error(`[vc] openSession error user=${userId}`, err),
     );
-  }
-
-  // ── Temp VC creation (lobby join) ─────────────────────────────────────────
-  if (newChannelId && newChannelId === lobbyId) {
-    const guild = newState.guild;
-    const me = guild.members.me;
-    if (!me?.permissions.has("ManageChannels") || !me.permissions.has("MoveMembers")) {
-      logger.warn(`[tempvc] Missing permissions in guild ${guildId}`);
-      return;
-    }
-
-    const member = newState.member;
-    if (!member || member.user.bot) return;
-
-    try {
-      const channelName = `🔊 ${member.displayName} の部屋`;
-      // Fetch lobby channel to get its categoryId — fall back to fetch() if not cached
-      const lobbyChannel =
-        guild.channels.cache.get(lobbyId) ??
-        (await guild.channels.fetch(lobbyId).catch(() => null));
-      const parentId = (lobbyChannel && "parentId" in lobbyChannel ? lobbyChannel.parentId : null) ?? null;
-
-      const newVc = await guild.channels.create({
-        name: channelName.slice(0, 100),
-        type: ChannelType.GuildVoice,
-        parent: parentId ?? undefined,
-      });
-
-      await addTempVc(guildId, newVc.id, userId, parentId);
-      await member.voice.setChannel(newVc);
-      logger.info(`[tempvc] Created ${newVc.id} for user ${userId} category=${parentId ?? "none"}`);
-      // Open a session for the moved user.
-      await openSession(guildId, userId, newVc.id).catch(() => {});
-    } catch (err) {
-      logger.error(`[tempvc] Failed to create temp VC for ${userId}`, err);
-    }
-    return;
-  }
-
-  // ── Temp VC deletion (channel emptied) ───────────────────────────────────
-  if (oldChannelId) {
-    const isTemp = await isTempVc(oldChannelId).catch(() => false);
-    if (!isTemp) return;
-
-    // Fetch record now (before removal) to capture owner info for the audit log.
-    const tempVcRecord = await getTempVcRecord(oldChannelId).catch(() => undefined);
-
-    const guild = oldState.guild;
-    const channel =
-      guild.channels.cache.get(oldChannelId) ??
-      (await guild.channels.fetch(oldChannelId).catch(() => null));
-
-    if (!channel) {
-      await logTempVcDeletion(
-        guildId,
-        oldChannelId,
-        oldChannelId,
-        tempVcRecord?.ownerId ?? "unknown",
-        "stale_channel_gone",
-      ).catch(() => {});
-      await removeTempVc(oldChannelId).catch(() => {});
-      return;
-    }
-
-    if (channel.type !== ChannelType.GuildVoice) return;
-    if (channel.members.size > 0) return; // still occupied
-
-    try {
-      await channel.delete("一時VCが空になりました");
-      await logTempVcDeletion(
-        guildId,
-        oldChannelId,
-        channel.name,
-        tempVcRecord?.ownerId ?? "unknown",
-        "empty_leave",
-      ).catch(() => {});
-      await removeTempVc(oldChannelId);
-      logger.info(`[tempvc] Deleted empty temp VC ${oldChannelId}`);
-    } catch (err) {
-      logger.error(`[tempvc] Failed to delete temp VC ${oldChannelId}`, err);
-    }
-  }
-});
-
-// ─── ChannelUpdate — temp VC category lock ────────────────────────────────────
-
-client.on(Events.ChannelUpdate, async (_oldChannel, newChannel) => {
-  try {
-    // Only care about voice channels
-    if (newChannel.type !== ChannelType.GuildVoice) return;
-
-    const record = await getTempVcRecord(newChannel.id).catch(() => undefined);
-    if (!record) return; // not a temp VC
-
-    // Compare current parentId against the locked categoryId (both may be null)
-    const current  = newChannel.parentId ?? null;
-    const expected = record.categoryId ?? null;
-    if (current === expected) return; // already in the right place
-
-    logger.info(
-      `[tempvc] Category mismatch ${newChannel.id}: ` +
-      `current=${current ?? "uncategorized"} expected=${expected ?? "uncategorized"}. Reverting.`,
-    );
-
-    // Cast needed because discord.js types ChannelUpdate as DMChannel | NonThreadGuildBasedChannel
-    const vc = newChannel as import("discord.js").VoiceChannel;
-    await vc.setParent(expected, {
-      lockPermissions: false,
-      reason: "一時VCのカテゴリを固定しています",
-    });
-  } catch (err) {
-    logger.error("[tempvc] Failed to restore temp VC category", err);
   }
 });
 
@@ -678,10 +493,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id === COMM_PRIVACY_DELETE_CANCEL) {
         await handlePrivacyDeleteCancel(interaction);
-        return;
-      }
-      if (id === COMM_TEMPVC_CREATE) {
-        await handleTempVcCreate(interaction);
         return;
       }
       if (id.startsWith(COMM_ROLEBUTTON_PREFIX)) {

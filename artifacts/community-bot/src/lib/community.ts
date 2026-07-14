@@ -1,9 +1,6 @@
 import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import {
   db,
-  communityTempVcSettingsTable,
-  communityTempVcsTable,
-  communityTempVcDeletionLogTable,
   communityEventSettingsTable,
   communityEventsTable,
   communityEventParticipantsTable,
@@ -23,120 +20,8 @@ import {
   type CommunitySheet,
   type CommunitySheetSettings,
   type CommunityTicketSettings,
-  type CommunityTempVcDeletionLog,
-  type TempVcDeletionReason,
   type CommunityRankingSettings,
 } from "@workspace/db";
-
-// ─── Temp VC ────────────────────────────────────────────────────────────────
-
-export async function setLobbyChannel(guildId: string, lobbyChannelId: string) {
-  await db
-    .insert(communityTempVcSettingsTable)
-    .values({ guildId, lobbyChannelId })
-    .onConflictDoUpdate({
-      target: communityTempVcSettingsTable.guildId,
-      set: { lobbyChannelId, updatedAt: new Date() },
-    });
-}
-
-export async function getLobbyChannelId(guildId: string): Promise<string | null> {
-  const [row] = await db
-    .select()
-    .from(communityTempVcSettingsTable)
-    .where(eq(communityTempVcSettingsTable.guildId, guildId));
-  return row?.lobbyChannelId ?? null;
-}
-
-export async function addTempVc(
-  guildId: string,
-  channelId: string,
-  ownerId: string,
-  categoryId?: string | null,
-) {
-  await db
-    .insert(communityTempVcsTable)
-    .values({ guildId, channelId, ownerId, categoryId: categoryId ?? null })
-    .onConflictDoNothing();
-}
-
-export async function removeTempVc(channelId: string) {
-  await db.delete(communityTempVcsTable).where(eq(communityTempVcsTable.channelId, channelId));
-}
-
-export async function isTempVc(channelId: string): Promise<boolean> {
-  const [row] = await db
-    .select()
-    .from(communityTempVcsTable)
-    .where(eq(communityTempVcsTable.channelId, channelId));
-  return row !== undefined;
-}
-
-export async function getTempVcRecord(
-  channelId: string,
-): Promise<{ guildId: string; channelId: string; ownerId: string; categoryId: string | null } | undefined> {
-  const [row] = await db
-    .select()
-    .from(communityTempVcsTable)
-    .where(eq(communityTempVcsTable.channelId, channelId));
-  return row;
-}
-
-export async function getAllTempVcs(): Promise<{ guildId: string; channelId: string; ownerId: string; categoryId: string | null }[]> {
-  return db.select().from(communityTempVcsTable);
-}
-
-export async function logTempVcDeletion(
-  guildId: string,
-  channelId: string,
-  channelName: string,
-  ownerId: string,
-  reason: TempVcDeletionReason,
-): Promise<void> {
-  await db.insert(communityTempVcDeletionLogTable).values({
-    guildId,
-    channelId,
-    channelName,
-    ownerId,
-    reason,
-  });
-}
-
-export async function getRecentTempVcDeletions(
-  guildId: string,
-  limit = 20,
-): Promise<CommunityTempVcDeletionLog[]> {
-  return db
-    .select()
-    .from(communityTempVcDeletionLogTable)
-    .where(eq(communityTempVcDeletionLogTable.guildId, guildId))
-    .orderBy(desc(communityTempVcDeletionLogTable.deletedAt))
-    .limit(limit);
-}
-
-/** Returns every deletion log entry for the guild (no limit), oldest first. */
-export async function getAllTempVcDeletions(
-  guildId: string,
-): Promise<CommunityTempVcDeletionLog[]> {
-  return db
-    .select()
-    .from(communityTempVcDeletionLogTable)
-    .where(eq(communityTempVcDeletionLogTable.guildId, guildId))
-    .orderBy(asc(communityTempVcDeletionLogTable.deletedAt));
-}
-
-/**
- * Deletes deletion-log entries older than `retentionDays` (default 90).
- * Returns the number of rows deleted.
- */
-export async function pruneOldTempVcDeletionLogs(retentionDays = 90): Promise<number> {
-  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-  const result = await db
-    .delete(communityTempVcDeletionLogTable)
-    .where(lt(communityTempVcDeletionLogTable.deletedAt, cutoff))
-    .returning({ id: communityTempVcDeletionLogTable.id });
-  return result.length;
-}
 
 // ─── Event Settings ──────────────────────────────────────────────────────────
 
