@@ -101,6 +101,47 @@ async function runEventReminderScheduler(): Promise<void> {
 client.once(Events.ClientReady, async (readyClient) => {
   logger.info(`Community Bot logged in as ${readyClient.user.tag}`);
 
+  // ── Invite URL & per-guild permission check ───────────────────────────────
+  // Permissions required for full functionality:
+  //   VIEW_CHANNEL      (1024)   — see channels for reminders / ticket threads
+  //   SEND_MESSAGES     (2048)   — send event reminders and ticket messages
+  //   EMBED_LINKS       (16384)  — send rich embeds for events
+  //   READ_MESSAGE_HISTORY (65536) — fetch posted event messages for edits
+  //   MANAGE_CHANNELS   (16)     — create/delete temp VCs and ticket channels
+  //   MOVE_MEMBERS      (16777216) — move users into the new temp VC
+  const REQUIRED_PERMISSIONS = 16862224n; // bigint for PermissionsBitField
+  const inviteUrl =
+    `https://discord.com/api/oauth2/authorize` +
+    `?client_id=${readyClient.user.id}` +
+    `&permissions=${REQUIRED_PERMISSIONS}` +
+    `&scope=bot%20applications.commands`;
+  logger.info(`[invite] Invite URL (ManageChannels + MoveMembers + messaging): ${inviteUrl}`);
+
+  if (readyClient.guilds.cache.size === 0) {
+    logger.warn("[invite] Bot is not in any guild. Use the invite URL above to add it to your server.");
+  } else {
+    for (const guild of readyClient.guilds.cache.values()) {
+      const me = guild.members.me;
+      if (!me) {
+        logger.warn(`[permissions] guild=${guild.name} (${guild.id}): could not fetch bot member`);
+        continue;
+      }
+      const hasManageChannels = me.permissions.has("ManageChannels");
+      const hasMoveMembers   = me.permissions.has("MoveMembers");
+      if (hasManageChannels && hasMoveMembers) {
+        logger.info(
+          `[permissions] guild=${guild.name} (${guild.id}): ✓ ManageChannels ✓ MoveMembers — OK`,
+        );
+      } else {
+        logger.warn(
+          `[permissions] guild=${guild.name} (${guild.id}): ` +
+          `ManageChannels=${hasManageChannels} MoveMembers=${hasMoveMembers} — ` +
+          `MISSING PERMISSIONS. Grant them in Server Settings → Roles → Community Bot.`,
+        );
+      }
+    }
+  }
+
   // Close any VC sessions left open from a previous run.
   await closeAllOpenSessions().catch((err) =>
     logger.error("[vc] Failed to close stale sessions", err),
