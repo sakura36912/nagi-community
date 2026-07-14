@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import {
   db,
   communityEventSettingsTable,
@@ -8,8 +8,6 @@ import {
   communityTicketsTable,
   communityVcSessionsTable,
   communityVcPrivacyTable,
-  communitySheetSettingsTable,
-  communitySheetsTable,
   communityRankingSettingsTable,
   communityRoleButtonsTable,
   type CommunityRoleButton,
@@ -17,8 +15,6 @@ import {
   type CommunityEventSettings,
   type CommunityTicket,
   type CommunityVcSession,
-  type CommunitySheet,
-  type CommunitySheetSettings,
   type CommunityTicketSettings,
   type CommunityRankingSettings,
 } from "@workspace/db";
@@ -470,109 +466,6 @@ export async function getUserVcRank(
 
   if (!rows.rows[0] || rows.rows.length === 0) return null;
   return Number(rows.rows[0]!.rank);
-}
-
-// ─── Eval Sheets ─────────────────────────────────────────────────────────────
-
-export async function setNameboardUrl(guildId: string, nameboardUrl: string | null): Promise<void> {
-  await db
-    .insert(communitySheetSettingsTable)
-    .values({ guildId, nameboardUrl })
-    .onConflictDoUpdate({
-      target: communitySheetSettingsTable.guildId,
-      set: { nameboardUrl, updatedAt: new Date() },
-    });
-}
-
-export async function setSheetForumConfig(
-  guildId: string,
-  forumChannelId: string | null,
-  triggerRoleIds: string[] | null,
-  evalPeriodDays: number,
-): Promise<void> {
-  await db
-    .insert(communitySheetSettingsTable)
-    .values({
-      guildId,
-      forumChannelId,
-      triggerRoleIds: triggerRoleIds ? triggerRoleIds.join(",") : null,
-      evalPeriodDays,
-    })
-    .onConflictDoUpdate({
-      target: communitySheetSettingsTable.guildId,
-      set: { forumChannelId, triggerRoleIds: triggerRoleIds ? triggerRoleIds.join(",") : null, evalPeriodDays, updatedAt: new Date() },
-    });
-}
-
-export async function getSheetSettings(guildId: string): Promise<CommunitySheetSettings | undefined> {
-  const [row] = await db
-    .select()
-    .from(communitySheetSettingsTable)
-    .where(eq(communitySheetSettingsTable.guildId, guildId));
-  return row;
-}
-
-export async function createSheet(
-  guildId: string,
-  userId: string,
-  startDate: Date,
-  endDate: Date,
-  channelId?: string,
-  messageId?: string,
-): Promise<CommunitySheet> {
-  const [row] = await db
-    .insert(communitySheetsTable)
-    .values({ guildId, userId, startDate, endDate, channelId, messageId })
-    .returning();
-  if (!row) throw new Error("Failed to create sheet");
-  return row;
-}
-
-export async function listSheets(guildId: string): Promise<CommunitySheet[]> {
-  return db
-    .select()
-    .from(communitySheetsTable)
-    .where(eq(communitySheetsTable.guildId, guildId))
-    .orderBy(asc(communitySheetsTable.createdAt));
-}
-
-/** Returns the most recent sheet for a given user in a guild, or undefined. */
-export async function getLatestSheet(guildId: string, userId: string): Promise<CommunitySheet | undefined> {
-  const [row] = await db
-    .select()
-    .from(communitySheetsTable)
-    .where(and(eq(communitySheetsTable.guildId, guildId), eq(communitySheetsTable.userId, userId)))
-    .orderBy(desc(communitySheetsTable.createdAt))
-    .limit(1);
-  return row;
-}
-
-/** Deletes a sheet record by primary key. */
-export async function deleteSheet(id: number): Promise<void> {
-  await db.delete(communitySheetsTable).where(eq(communitySheetsTable.id, id));
-}
-
-/** Returns sheets flagged for a Discord-message re-render (up to 10 per tick). */
-export async function getPendingSheetUpdates(): Promise<CommunitySheet[]> {
-  return db
-    .select()
-    .from(communitySheetsTable)
-    .where(
-      and(
-        eq(communitySheetsTable.needsUpdate, true),
-        isNotNull(communitySheetsTable.channelId),
-        isNotNull(communitySheetsTable.messageId),
-      ),
-    )
-    .limit(10);
-}
-
-/** Clears the needsUpdate flag after the Discord message has been re-rendered. */
-export async function clearSheetUpdateFlag(id: number): Promise<void> {
-  await db
-    .update(communitySheetsTable)
-    .set({ needsUpdate: false })
-    .where(eq(communitySheetsTable.id, id));
 }
 
 // ─── Role Buttons ────────────────────────────────────────────────────────────

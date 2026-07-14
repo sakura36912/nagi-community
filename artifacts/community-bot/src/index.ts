@@ -10,7 +10,6 @@ import { logger } from "./lib/logger.js";
 import {
   closeAllOpenSessions,
   closeSession,
-  createSheet,
   getAllRankingSettings,
   getEvent,
   getEventSettings,
@@ -18,12 +17,8 @@ import {
   getEventsNeeding24hReminder,
   mark24hReminderSent,
   getParticipants,
-  getPendingSheetUpdates,
-  clearSheetUpdateFlag,
-  getSheetSettings,
   getVcRanking,
   getActiveSessionCount,
-  getVcTimeInPeriod,
   markReminderSent,
   openSession,
 } from "./lib/community.js";
@@ -31,7 +26,6 @@ import {
   buildEventEmbed,
   buildRankingEmbed,
   buildRankingPeriodStart,
-  buildSheetEmbed,
   commands,
   type RankingPeriod,
   COMM_EVENT_JOIN_PREFIX,
@@ -285,59 +279,10 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   scheduleDailyRanking();
 
-  // Re-render eval sheet messages when endDate has been extended via the shop.
-  async function processSheetUpdates(): Promise<void> {
-    const sheets = await getPendingSheetUpdates();
-    for (const sheet of sheets) {
-      try {
-        const channel = await client.channels.fetch(sheet.channelId!);
-        if (!channel?.isTextBased()) {
-          await clearSheetUpdateFlag(sheet.id);
-          continue;
-        }
-        const message = await channel.messages.fetch(sheet.messageId!);
-
-        // Re-fetch the user so displayName and avatar are current.
-        const user = await client.users.fetch(sheet.userId);
-        let displayName = user.displayName;
-        try {
-          const member = await message.guild?.members.fetch(sheet.userId);
-          if (member) displayName = member.displayName;
-        } catch { /* ignore — use user fallback */ }
-
-        const [settings, vcSeconds] = await Promise.all([
-          getSheetSettings(sheet.guildId),
-          getVcTimeInPeriod(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
-        ]);
-
-        const embed = buildSheetEmbed({
-          targetUser: user,
-          displayName,
-          startDate: sheet.startDate,
-          endDate: sheet.endDate,
-          vcSeconds,
-          nameboardUrl: settings?.nameboardUrl,
-          selfIntro: null,
-          createdByLabel: "評価期間延長券で自動更新",
-        });
-
-        await message.edit({ embeds: [embed] });
-        logger.info(`[sheet] Updated embed for user=${sheet.userId} guild=${sheet.guildId} newEnd=${sheet.endDate.toISOString()}`);
-      } catch (err) {
-        logger.error(`[sheet] Failed to update sheet id=${sheet.id}`, err);
-      } finally {
-        await clearSheetUpdateFlag(sheet.id);
-      }
-    }
-  }
-
   // Tick every 60 s.
   setInterval(() => {
     runEventReminderScheduler().catch((err) =>
       logger.error("[event] Reminder scheduler error", err),
-    );
-    processSheetUpdates().catch((err) =>
-      logger.error("[sheet] Update processor error", err),
     );
   }, 60 * 1000);
 });
@@ -369,129 +314,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ─── Nameboard self-intro lookup ─────────────────────────────────────────────
-
-/**
- * Searches every text channel whose name contains "名簿" for the most recent
- * message posted by the given user (up to 500 messages back per channel).
- * Returns { content, url } of the message, or null if none found.
- */
-async function findNameboMessage(
-  guild: import("discord.js").Guild,
-  userId: string,
-): Promise<{ content: string; url: string } | null> {
-  const candidates = [...guild.channels.cache.values()].filter(
-    (c) => c.name.includes("名簿") && c.isTextBased(),
-  );
-
-  for (const channel of candidates) {
-    if (!channel.isTextBased()) continue;
-    let before: string | undefined;
-    for (let page = 0; page < 5; page++) {
-      const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
-      if (!messages || messages.size === 0) break;
-      const found = messages.find((m) => m.author.id === userId && m.content.trim().length > 0);
-      if (found) return { content: found.content, url: found.url };
-      before = messages.last()?.id;
-    }
-  }
-  return null;
-}
-
-// ─── GuildMemberUpdate — auto eval sheet on role assign ─────────────────────
-
-client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
-  const guildId = newMember.guild.id;
-  logger.info(`[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} partial=${oldMember.partial}`);
-
-  // When oldMember is partial its role cache is empty — treat all current roles
-  // as candidates and rely on settings check to filter. This matches Discord.js
-  // recommended practice for privileged GuildMembers intent events.
-  const addedRoleIds = oldMember.partial
-    ? [...newMember.roles.cache.keys()]
-    : [...newMember.roles.cache.keys()].filter((id) => !oldMember.roles.cache.has(id));
-
-  if (addedRoleIds.length === 0) {
-    logger.info(`[sheet] no added roles — skipping`);
-    return;
-  }
-
-  // Fetch settings and check if forum auto-post is configured
-  const settings = await getSheetSettings(guildId).catch(() => undefined);
-  if (!settings?.forumChannelId || !settings.triggerRoleIds) {
-    logger.info(`[sheet] no forum/role config for guild ${guildId} — skipping`);
-    return;
-  }
-
-  const triggerIds = settings.triggerRoleIds.split(",").filter(Boolean);
-  logger.info(`[sheet] triggerIds=${triggerIds.join(",")} addedRoles=${addedRoleIds.join(",")}`);
-
-  const matchedRole = addedRoleIds.find((id) => triggerIds.includes(id));
-  if (!matchedRole) {
-    logger.info(`[sheet] no trigger role matched — skipping`);
-    return;
-  }
-
-  // Find the forum channel — fetch if not cached
-  const forum =
-    newMember.guild.channels.cache.get(settings.forumChannelId) ??
-    await newMember.guild.channels.fetch(settings.forumChannelId).catch(() => null);
-
-  if (!forum) {
-    logger.error(`[sheet] forum channel ${settings.forumChannelId} not found`);
-    return;
-  }
-  if (forum.type !== ChannelType.GuildForum) {
-    logger.error(`[sheet] channel ${settings.forumChannelId} is type ${forum.type}, expected GuildForum`);
-    return;
-  }
-
-  // Calculate eval period: start = today (role assigned), end = today + evalDays
-  const evalDays = settings.evalPeriodDays ?? 14;
-  const startDate = new Date();
-  const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
-
-  // Fetch the Discord User object (needed for avatar URL etc.)
-  let targetUser;
-  try {
-    targetUser = await newMember.client.users.fetch(newMember.id);
-  } catch {
-    logger.warn(`[sheet] Could not fetch user ${newMember.id}`);
-    return;
-  }
-
-  const displayName = newMember.displayName;
-  const roleName = newMember.guild.roles.cache.get(matchedRole)?.name ?? matchedRole;
-  logger.info(`[sheet] Creating sheet for ${displayName} (${newMember.id}), role=${roleName}`);
-
-  const [vcSeconds, nameboMsg] = await Promise.all([
-    getVcTimeInPeriod(guildId, newMember.id, startDate, endDate).catch(() => 0),
-    findNameboMessage(newMember.guild, newMember.id).catch(() => null),
-  ]);
-
-  logger.info(`[sheet] nameboMsg found=${!!nameboMsg} vcSeconds=${vcSeconds}`);
-
-  const embed = buildSheetEmbed({
-    targetUser,
-    displayName,
-    startDate,
-    endDate,
-    vcSeconds,
-    nameboardUrl: nameboMsg?.url ?? settings.nameboardUrl,
-    selfIntro: nameboMsg?.content ?? null,
-    createdByLabel: `ロール付与により自動生成（${roleName}）`,
-  });
-
-  try {
-    const thread = await forum.threads.create({
-      name: `${displayName} — 評価シート`.slice(0, 100),
-      message: { embeds: [embed] },
-    });
-    await createSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);
-    logger.info(`[sheet] ✅ Created thread ${thread.id} for user ${newMember.id} on role ${roleName}`);
-  } catch (err) {
-    logger.error(`[sheet] Failed to create forum thread for user ${newMember.id}`, err);
-  }
-});
 
 // ─── InteractionCreate ───────────────────────────────────────────────────────
 
