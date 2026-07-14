@@ -172,10 +172,10 @@ async function creditWinnings(
 const BLANK = "⬛";
 
 function buildSpinningEmbed(bet: number, currencyName: string): EmbedBuilder {
-  const b = `${BLANK}  ${BLANK}  ${BLANK}`;
+  const b = `${BLANK}　　${BLANK}　　${BLANK}`;
   return new EmbedBuilder()
     .setTitle("🎰 スロット 3×3")
-    .setDescription(`${b}\n${b}\n${b}\n\n*回転中...*`)
+    .setDescription(`${b}\n\n${b}\n\n${b}\n\n*回転中...*`)
     .setColor(0xfaa61a)
     .setFooter({ text: `賭け: ${bet.toLocaleString()} ${currencyName}` });
 }
@@ -194,11 +194,11 @@ function buildResultEmbed(
   );
   const rowLabels = ["横 上段", "横 中段", "横 下段"];
   const gridLines = grid.map(
-    (row, i) => row.join("  ") + (rowWins.has(rowLabels[i]!) ? "  ✨" : ""),
+    (row, i) => row.join("　　") + (rowWins.has(rowLabels[i]!) ? "　✨" : ""),
   );
   const diagWins = paylines.filter((p) => p.won && p.name.startsWith("斜め"));
   const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("　　");
-  const gridBlock = gridLines.join("\n") + (diagLine ? "\n" + diagLine : "");
+  const gridBlock = gridLines.join("\n\n") + (diagLine ? "\n\n" + diagLine : "");
 
   let resultText: string;
   let title: string;
