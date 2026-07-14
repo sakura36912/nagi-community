@@ -753,10 +753,11 @@ const balanceCommand: Command = {
       getOrCreateWallet(guildId, target.id),
       getGuildSettings(guildId),
     ]);
-    await interaction.reply({
-      content: `${target.id === interaction.user.id ? "あなた" : `<@${target.id}>`}の残高: **${wallet.balance}${settings.currencyName}**`,
-      ephemeral: true,
-    });
+    const embed = new EmbedBuilder()
+      .setColor(0x3498db)
+      .setAuthor({ name: target.displayName ?? target.username, iconURL: target.displayAvatarURL() })
+      .setDescription(`残高: **${wallet.balance.toLocaleString()}${settings.currencyName}**`);
+    await interaction.reply({ embeds: [embed], ephemeral: true });
   },
 };
 
@@ -804,7 +805,12 @@ const payCommand: Command = {
     const settings = await getGuildSettings(guildId);
     const result = await transfer(guildId, interaction.user.id, target.id, amount, settings.currencyName);
     if (result.ok) {
-      await interaction.reply(`<@${target.id}>に**${amount}${settings.currencyName}**送金しました。`);
+      const embed = new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+        .setThumbnail(target.displayAvatarURL())
+        .setDescription(`<@${target.id}> に **${amount.toLocaleString()}${settings.currencyName}** を送金しました`);
+      await interaction.reply({ embeds: [embed] });
     } else {
       await interaction.reply({ content: result.reason, ephemeral: true });
     }
@@ -841,9 +847,11 @@ const giveCommand: Command = {
     const result = await giveCurrency(guildId, target.id, amount, settings.currencyName);
     if (result.ok) {
       const verb = amount >= 0 ? "付与" : "没収";
-      await interaction.reply(
-        `<@${target.id}>から${verb}: ${Math.abs(amount)}${settings.currencyName}。現在の残高: **${result.balance}${settings.currencyName}**`,
-      );
+      const embed = new EmbedBuilder()
+        .setColor(amount >= 0 ? 0x2ecc71 : 0xe74c3c)
+        .setAuthor({ name: target.displayName ?? target.username, iconURL: target.displayAvatarURL() })
+        .setDescription(`${verb}: **${Math.abs(amount).toLocaleString()}${settings.currencyName}**\n残高: **${result.balance.toLocaleString()}${settings.currencyName}**`);
+      await interaction.reply({ embeds: [embed] });
     } else {
       await interaction.reply({ content: result.reason, ephemeral: true });
     }
