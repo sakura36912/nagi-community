@@ -21,6 +21,7 @@ import {
   createTicket,
   getEvent,
   getParticipants,
+  getActiveSession,
   getRecentTempVcDeletions,
   getSheetSettings,
   getTicketByChannel,
@@ -601,13 +602,14 @@ const mystatsCommand: Command = {
 
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    // Fetch all periods in parallel
-    const [todaySeconds, weekSeconds, monthSeconds, allSeconds, allRank] = await Promise.all([
+    // Fetch all periods in parallel, along with any active session
+    const [todaySeconds, weekSeconds, monthSeconds, allSeconds, allRank, activeSession] = await Promise.all([
       getVcTimeInPeriod(guildId, target.id, todayStart, now),
       getVcTimeInPeriod(guildId, target.id, weekStart, now),
       getVcTimeInPeriod(guildId, target.id, monthStart, now),
       getVcTimeInPeriod(guildId, target.id, new Date(0), now),
       getUserVcRank(guildId, target.id),
+      getActiveSession(guildId, target.id),
     ]);
 
     let member: GuildMember | null = null;
@@ -620,9 +622,14 @@ const mystatsCommand: Command = {
 
     const rankText = allRank != null ? `第 **${allRank}** 位` : "記録なし";
 
+    // Calculate live in-progress seconds for display note
+    const liveSeconds = activeSession
+      ? Math.floor((now.getTime() - activeSession.joinedAt.getTime()) / 1000)
+      : 0;
+
     const embed = new EmbedBuilder()
       .setTitle(`🎙️ VCスタッツ — ${displayName}`)
-      .setColor(0x5865f2)
+      .setColor(activeSession ? 0xed4245 : 0x5865f2)
       .setThumbnail(target.displayAvatarURL())
       .addFields(
         { name: "📅 今日", value: formatSeconds(todaySeconds), inline: true },
@@ -632,6 +639,14 @@ const mystatsCommand: Command = {
         { name: "📊 ランキング順位", value: rankText, inline: true },
       )
       .setTimestamp();
+
+    if (activeSession) {
+      embed.addFields({
+        name: "現在VC中 🔴",
+        value: `セッション開始から **${formatSeconds(liveSeconds)}** 経過中（<#${activeSession.channelId}>）`,
+        inline: false,
+      });
+    }
 
     await interaction.editReply({ embeds: [embed] });
   },
