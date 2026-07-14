@@ -93,9 +93,11 @@ function isStickerSym(sym: Sym): boolean {
   return /^\d+$/.test(sym);
 }
 
-/** sym の表示文字列を返す。スティッカー・絵文字どちらも「🎴」統一。 */
-function displaySym(_sym: Sym, _meta: Map<string, StickerInfo>): string {
-  return "🎴";
+/** sym の表示文字列を返す。スティッカーは「🎴」統一、絵文字はそのまま表示。 */
+function displaySym(sym: Sym, meta: Map<string, StickerInfo>): string {
+  if (isStickerSym(sym)) return "🎴";
+  // 絵文字はそのまま（Discord がインライン画像としてレンダリング）
+  return sym;
 }
 
 /** sym に対応する大きな画像 URL を返す（embed の setImage/setThumbnail 用）。 */
@@ -239,18 +241,16 @@ async function creditWinnings(
 
 const BLANK = "⬛";
 
-function buildSpinningEmbed(bet: number, currencyName: string, imageUrl?: string): EmbedBuilder {
-  const b = `${BLANK}　　${BLANK}　　${BLANK}`;
-  const embed = new EmbedBuilder()
+function buildSpinningEmbed(bet: number, currencyName: string): EmbedBuilder {
+  const b = `${BLANK}　　　　${BLANK}　　　　${BLANK}`;
+  return new EmbedBuilder()
     .setTitle("🎰 スロット 3×3")
     .setDescription(`${b}\n\n${b}\n\n${b}\n\n*回転中...*`)
     .setColor(0xfaa61a)
     .setFooter({ text: `賭け: ${bet.toLocaleString()} ${currencyName}` });
-  if (imageUrl) embed.setImage(imageUrl);
-  return embed;
 }
 
-function buildResultEmbed(
+function buildResult(
   grid: Grid,
   paylines: PaylineResult[],
   wins: number,
@@ -259,19 +259,21 @@ function buildResultEmbed(
   bet: number,
   currencyName: string,
   meta: Map<string, StickerInfo>,
-): EmbedBuilder {
+): { content: string; embed: EmbedBuilder } {
   const rowWins = new Set(
     paylines.filter((p) => p.won && p.name.startsWith("横")).map((p) => p.name),
   );
   const rowLabels = ["横 上段", "横 中段", "横 下段"];
+
+  // グリッドを content に（絵文字のみ → Discord がジャンボ表示）
   const gridLines = grid.map(
     (row, i) =>
-      row.map((s) => displaySym(s, meta)).join("　　") +
-      (rowWins.has(rowLabels[i]!) ? "　✨" : ""),
+      row.map((s) => displaySym(s, meta)).join(" ") +
+      (rowWins.has(rowLabels[i]!) ? " ✨" : ""),
   );
   const diagWins = paylines.filter((p) => p.won && p.name.startsWith("斜め"));
-  const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("　　");
-  const gridBlock = gridLines.join("\n\n") + (diagLine ? "\n\n" + diagLine : "");
+  const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("  ");
+  const content = gridLines.join("\n") + (diagLine ? "\n" + diagLine : "");
 
   // 大きく表示する絵柄: 当選時は当選ライン上の絵柄、ハズレ時は中央マス
   let featuredSym: Sym = grid[1]![1]!;
@@ -304,12 +306,12 @@ function buildResultEmbed(
 
   const embed = new EmbedBuilder()
     .setTitle(title)
-    .setDescription(`${gridBlock}\n\n${resultText}`)
+    .setDescription(resultText)
     .setColor(color)
     .setFooter({ text: `残高: ${finalBalance.toLocaleString()} ${currencyName}` });
 
   if (imageUrl) embed.setImage(imageUrl);
-  return embed;
+  return { content, embed };
 }
 
 function buildSetupEmbed(
@@ -395,12 +397,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     getSlotSettings(guildId),
   ]);
 
-  // プールを先に取得してスピニング画像を決定
-  const { symbols, weights, meta } = await pickSymbolPool(interaction);
-  const randomSym = symbols[Math.floor(Math.random() * symbols.length)];
-  const spinningImageUrl = randomSym ? featuredImageUrl(randomSym, meta) ?? undefined : undefined;
-
-  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName, spinningImageUrl)] });
+  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
 
   const afterDeduct = await deductBet(guildId, userId, bet);
   if (!afterDeduct) {
@@ -414,6 +411,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     });
     return;
   }
+
+  const { symbols, weights, meta } = await pickSymbolPool(interaction);
   const pool = buildWeightedPool(symbols, weights);
   const grid = spinGrid(pool);
   const paylines = evaluatePaylines(grid);
@@ -438,9 +437,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   }
 
   await new Promise((res) => setTimeout(res, 1300));
-  await interaction.editReply({
-    embeds: [buildResultEmbed(grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta)],
-  });
+  const { content, embed } = buildResult(grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta);
+  await interaction.editReply({ content, embeds: [embed] });
 }
 
 /** 入力値が絵文字文字列か sticker ID かを判定してキーを返す */
