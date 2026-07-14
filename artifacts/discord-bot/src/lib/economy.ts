@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, lte, sql } from "drizzle-orm";
 import {
   db,
   walletsTable,
@@ -7,10 +7,12 @@ import {
   transactionsTable,
   guildSettingsTable,
   roleRewardsTable,
+  privateVcSessionsTable,
   type Wallet,
   type ShopItem,
   type GuildSettings,
   type RoleReward,
+  type PrivateVcSession,
 } from "@workspace/db";
 
 export const DEFAULT_CURRENCY_NAME = "円";
@@ -19,15 +21,25 @@ export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // Shop item effect types recognized by the bot.
 export const NICKNAME_CHANGE_EFFECT = "nickname_change";
-export const PRIVATE_VC_EFFECT = "private_vc";
+export const PRIVATE_VC_EFFECT = "private_vc"; // permanent (no expiry)
+export const PRIVATE_VC_1D_EFFECT = "private_vc_1d";
+export const PRIVATE_VC_1W_EFFECT = "private_vc_1w";
+export const PRIVATE_VC_1M_EFFECT = "private_vc_1m";
 
-// Inserts the default shop items for a guild if it has none yet.
+// Duration in milliseconds for each timed VC effect type.
+export const TIMED_VC_DURATIONS: Record<string, number> = {
+  [PRIVATE_VC_1D_EFFECT]: 24 * 60 * 60 * 1000,
+  [PRIVATE_VC_1W_EFFECT]: 7 * 24 * 60 * 60 * 1000,
+  [PRIVATE_VC_1M_EFFECT]: 30 * 24 * 60 * 60 * 1000,
+};
+
+// Inserts the default general shop items for a guild if it has none yet.
 // Safe to call multiple times — uses a count guard so it never duplicates.
 export async function seedDefaultShopItems(guildId: string): Promise<void> {
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(shopItemsTable)
-    .where(eq(shopItemsTable.guildId, guildId));
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "general")));
 
   if (count > 0) return;
 
@@ -38,13 +50,45 @@ export async function seedDefaultShopItems(guildId: string): Promise<void> {
       description: "サーバー内のニックネームを自由に変更できます。",
       price: 1000,
       effectType: NICKNAME_CHANGE_EFFECT,
+      category: "general",
+    },
+  ]);
+}
+
+// Inserts the default VC shop items (timed private VCs) for a guild.
+// Safe to call multiple times — uses a count guard so it never duplicates.
+export async function seedDefaultVcShopItems(guildId: string): Promise<void> {
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(shopItemsTable)
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "vc")));
+
+  if (count > 0) return;
+
+  await db.insert(shopItemsTable).values([
+    {
+      guildId,
+      name: "非公開VC（1日）",
+      description: "自分だけが見える専用VCを1日間作成します。期間終了後に自動削除されます。",
+      price: 1000,
+      effectType: PRIVATE_VC_1D_EFFECT,
+      category: "vc",
     },
     {
       guildId,
-      name: "非公開VC転送チャンネル",
-      description: "自分だけが見える専用のボイスチャンネルを作成します。",
-      price: 3000,
-      effectType: PRIVATE_VC_EFFECT,
+      name: "非公開VC（1週間）",
+      description: "自分だけが見える専用VCを1週間作成します。期間終了後に自動削除されます。",
+      price: 5000,
+      effectType: PRIVATE_VC_1W_EFFECT,
+      category: "vc",
+    },
+    {
+      guildId,
+      name: "非公開VC（1ヶ月）",
+      description: "自分だけが見える専用VCを1ヶ月間作成します。期間終了後に自動削除されます。",
+      price: 15000,
+      effectType: PRIVATE_VC_1M_EFFECT,
+      category: "vc",
     },
   ]);
 }
@@ -68,6 +112,7 @@ export async function getGuildSettings(guildId: string): Promise<GuildSettings> 
   if (created) {
     // Seed default shop items for brand-new guilds.
     await seedDefaultShopItems(guildId);
+    await seedDefaultVcShopItems(guildId);
     return created;
   }
 
@@ -426,6 +471,37 @@ export async function distributeRoleRewards(
 
 // Returns all user IDs that have a wallet in this guild (used by the reward
 // scheduler to know who to check roles for — no privileged intent needed).
+// ---------------------------------------------------------------------------
+// Private VC session management (timed channels)
+// ---------------------------------------------------------------------------
+
+export async function createPrivateVcSession(
+  guildId: string,
+  userId: string,
+  channelId: string,
+  expiresAt: Date,
+): Promise<PrivateVcSession> {
+  const [session] = await db
+    .insert(privateVcSessionsTable)
+    .values({ guildId, userId, channelId, expiresAt })
+    .returning();
+
+  if (!session) throw new Error("Failed to create private VC session");
+  return session;
+}
+
+// Returns all sessions whose lease has expired (expiresAt <= now).
+export async function getExpiredPrivateVcSessions(now: Date): Promise<PrivateVcSession[]> {
+  return db
+    .select()
+    .from(privateVcSessionsTable)
+    .where(lte(privateVcSessionsTable.expiresAt, now));
+}
+
+export async function deletePrivateVcSession(id: number): Promise<void> {
+  await db.delete(privateVcSessionsTable).where(eq(privateVcSessionsTable.id, id));
+}
+
 export async function getGuildWalletUserIds(guildId: string): Promise<string[]> {
   const rows = await db
     .select({ userId: walletsTable.userId })

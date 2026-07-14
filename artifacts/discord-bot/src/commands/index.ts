@@ -20,10 +20,15 @@ import {
   DEFAULT_DAILY_AMOUNT,
   NICKNAME_CHANGE_EFFECT,
   PRIVATE_VC_EFFECT,
+  PRIVATE_VC_1D_EFFECT,
+  PRIVATE_VC_1W_EFFECT,
+  PRIVATE_VC_1M_EFFECT,
+  TIMED_VC_DURATIONS,
   addShopItem,
   buyItem,
   claimDaily,
   createOrUpdateCurrency,
+  createPrivateVcSession,
   getGuildSettings,
   getLeaderboard,
   getOrCreateWallet,
@@ -157,7 +162,8 @@ async function purchaseAndCreatePrivateVc(
   member: GuildMember,
   itemId: number,
   currencyName: string,
-): Promise<{ ok: true; item: ShopItem; channelId: string } | { ok: false; reason: string }> {
+  durationMs?: number,
+): Promise<{ ok: true; item: ShopItem; channelId: string; expiresAt?: Date } | { ok: false; reason: string }> {
   const me = guild.members.me;
   if (!me?.permissions.has("ManageChannels")) {
     return { ok: false, reason: "BotにManageChannels権限がないため、VCを作成できません。" };
@@ -167,8 +173,14 @@ async function purchaseAndCreatePrivateVc(
   if (!result.ok) return result;
 
   try {
+    const expiresAt = durationMs !== undefined ? new Date(Date.now() + durationMs) : undefined;
+    const label = durationMs !== undefined
+      ? (durationMs <= 24 * 60 * 60 * 1000 ? "1日" : durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月")
+      : "";
+    const channelName = label ? `🔒 ${member.displayName}(${label})` : `🔒 ${member.displayName}`;
+
     const channel = await guild.channels.create({
-      name: `🔒 ${member.displayName}`,
+      name: channelName.slice(0, 100),
       type: ChannelType.GuildVoice,
       permissionOverwrites: [
         { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -182,7 +194,12 @@ async function purchaseAndCreatePrivateVc(
         },
       ],
     });
-    return { ok: true, item: result.item, channelId: channel.id };
+
+    if (expiresAt) {
+      await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt);
+    }
+
+    return { ok: true, item: result.item, channelId: channel.id, expiresAt };
   } catch (err) {
     try {
       await refundPurchase(guild.id, member.id, result.item);
@@ -258,11 +275,15 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
 
   const settings = await getGuildSettings(interaction.guildId);
 
-  if (item.effectType === PRIVATE_VC_EFFECT) {
+  const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
+  if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
-    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName);
+    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration);
     if (result.ok) {
-      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>`);
+      const expiry = result.expiresAt
+        ? `\n期限: <t:${Math.floor(result.expiresAt.getTime() / 1000)}:F>（<t:${Math.floor(result.expiresAt.getTime() / 1000)}:R>に自動削除）`
+        : "";
+      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
     } else {
       await interaction.editReply(result.reason);
     }
@@ -539,12 +560,28 @@ const leaderboardCommand: Command = {
 // a single `category` in the shopItemsTable. All shops share the same button
 // and modal handlers (items are identified by ID, not category).
 // ---------------------------------------------------------------------------
+
+type EffectChoice = { name: string; value: string };
+
+const DEFAULT_EFFECT_CHOICES: EffectChoice[] = [
+  { name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT },
+  { name: "非公開VC作成(無期限)", value: PRIVATE_VC_EFFECT },
+];
+
+const VC_EFFECT_CHOICES: EffectChoice[] = [
+  { name: "非公開VC作成(無期限)", value: PRIVATE_VC_EFFECT },
+  { name: "非公開VC（1日）", value: PRIVATE_VC_1D_EFFECT },
+  { name: "非公開VC（1週間）", value: PRIVATE_VC_1W_EFFECT },
+  { name: "非公開VC（1ヶ月）", value: PRIVATE_VC_1M_EFFECT },
+];
+
 function buildShopCommand(
   commandName: string,
   displayName: string,
   emoji: string,
   category: string,
   color: number,
+  effectChoices: EffectChoice[] = DEFAULT_EFFECT_CHOICES,
 ): Command {
   const listCmdDesc = `${displayName}の購入可能アイテム一覧を表示します`;
   return {
@@ -578,10 +615,7 @@ function buildShopCommand(
               .setName("effect")
               .setDescription("購入時の特殊効果")
               .setRequired(false)
-              .addChoices(
-                { name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT },
-                { name: "非公開VC作成", value: PRIVATE_VC_EFFECT },
-              ),
+              .addChoices(...effectChoices),
           ),
       )
       .addSubcommand((sub) =>
@@ -629,11 +663,15 @@ function buildShopCommand(
         await interaction.deferReply({ ephemeral: true });
         const settings = await getGuildSettings(guildId);
 
-        if (item.effectType === PRIVATE_VC_EFFECT) {
+        const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
+        if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
           const member = await interaction.guild!.members.fetch(interaction.user.id);
-          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName);
+          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration);
           if (result.ok) {
-            await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>`);
+            const expiry = result.expiresAt
+              ? `\n期限: <t:${Math.floor(result.expiresAt.getTime() / 1000)}:F>（<t:${Math.floor(result.expiresAt.getTime() / 1000)}:R>に自動削除）`
+              : "";
+            await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
           } else {
             await interaction.editReply(result.reason);
           }
@@ -696,10 +734,10 @@ function buildShopCommand(
 }
 
 // The four independent shops
-const shopCommand        = buildShopCommand("shop",      "ショップ",            "🛒", "general", 0xf5a623);
-const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",        "⚔️", "group",   0xe74c3c);
-const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",    "🔒", "vc",      0x3498db);
-const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",  0x9b59b6);
+const shopCommand        = buildShopCommand("shop",      "ショップ",               "🛒", "general", 0xf5a623);
+const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",           "⚔️", "group",   0xe74c3c);
+const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",       "🔒", "vc",      0x3498db, VC_EFFECT_CHOICES);
+const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",     0x9b59b6);
 
 const rewardCommand: Command = {
   data: new SlashCommandBuilder()

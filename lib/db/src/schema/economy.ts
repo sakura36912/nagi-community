@@ -156,3 +156,21 @@ export const insertRoleRewardSchema = createInsertSchema(roleRewardsTable).omit(
 });
 export type InsertRoleReward = z.infer<typeof insertRoleRewardSchema>;
 export type RoleReward = typeof roleRewardsTable.$inferSelect;
+
+// Tracks active time-limited private VC channels so the scheduler can
+// delete them when their lease expires.
+export const privateVcSessionsTable = pgTable("private_vc_sessions", {
+  id: serial("id").primaryKey(),
+  guildId: text("guild_id").notNull(),
+  channelId: text("channel_id").notNull().unique(),
+  userId: text("user_id").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const insertPrivateVcSessionSchema = createInsertSchema(privateVcSessionsTable).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertPrivateVcSession = z.infer<typeof insertPrivateVcSessionSchema>;
+export type PrivateVcSession = typeof privateVcSessionsTable.$inferSelect;

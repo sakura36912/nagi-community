@@ -9,11 +9,14 @@ import {
 import { logger } from "./lib/logger";
 import {
   distributeRoleRewards,
+  getExpiredPrivateVcSessions,
+  deletePrivateVcSession,
   getGuildSettings,
   getGuildWalletUserIds,
   isDueCalendarDay,
   markRewardDistributed,
   seedDefaultShopItems,
+  seedDefaultVcShopItems,
 } from "./lib/economy";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
@@ -80,6 +83,35 @@ async function runRewardScheduler(): Promise<void> {
   }
 }
 
+// Checks every minute for private VC sessions whose lease has expired,
+// deletes the Discord channel, and removes the session record from the DB.
+async function runVcExpiryScheduler(): Promise<void> {
+  const now = new Date();
+  const expired = await getExpiredPrivateVcSessions(now);
+
+  for (const session of expired) {
+    try {
+      const guild = client.guilds.cache.get(session.guildId);
+      if (guild) {
+        const channel = guild.channels.cache.get(session.channelId)
+          ?? await guild.channels.fetch(session.channelId).catch(() => null);
+        if (channel) {
+          await channel.delete("非公開VCの期限切れ");
+          logger.info(`[vc-expiry] Deleted expired VC ${session.channelId} for user ${session.userId} in guild ${session.guildId}`);
+        }
+      }
+    } catch (err) {
+      logger.error(`[vc-expiry] Failed to delete channel ${session.channelId}`, err);
+    }
+
+    // Always remove the session record even if channel deletion failed
+    // (channel may have already been manually deleted).
+    await deletePrivateVcSession(session.id).catch((err) =>
+      logger.error(`[vc-expiry] Failed to delete session ${session.id}`, err),
+    );
+  }
+}
+
 client.once(Events.ClientReady, (readyClient) => {
   logger.info(`Logged in as ${readyClient.user.tag}`);
 
@@ -88,11 +120,15 @@ client.once(Events.ClientReady, (readyClient) => {
     seedDefaultShopItems(guild.id).catch((err) =>
       logger.error(`[seed] Failed to seed default shop items for guild ${guild.id}`, err),
     );
+    seedDefaultVcShopItems(guild.id).catch((err) =>
+      logger.error(`[seed] Failed to seed VC shop items for guild ${guild.id}`, err),
+    );
   }
 
   // Tick every 60 s; actual payout only happens when an interval has elapsed.
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
+    runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
   }, 60 * 1000);
 });
 
