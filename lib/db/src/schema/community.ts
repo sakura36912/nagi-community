@@ -85,10 +85,18 @@ export type CommunityEventParticipant = typeof communityEventParticipantsTable.$
 
 // ─── Tickets ─────────────────────────────────────────────────────────────────
 
-/** Staff role configuration for the ticket system. */
+/** Staff role configuration and custom messages for the ticket system. */
 export const communityTicketSettingsTable = pgTable("community_ticket_settings", {
   guildId: text("guild_id").primaryKey(),
   staffRoleId: text("staff_role_id"),
+  /** Title shown on the panel embed. */
+  panelTitle: text("panel_title"),
+  /** Description shown on the panel embed. */
+  panelDescription: text("panel_description"),
+  /** Label on the "create ticket" button. */
+  panelButtonLabel: text("panel_button_label"),
+  /** First message posted inside the newly created ticket channel. */
+  welcomeMessage: text("welcome_message"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

@@ -237,6 +237,24 @@ export async function setStaffRole(guildId: string, staffRoleId: string | null) 
     });
 }
 
+export async function setTicketMessages(
+  guildId: string,
+  opts: {
+    panelTitle?: string | null;
+    panelDescription?: string | null;
+    panelButtonLabel?: string | null;
+    welcomeMessage?: string | null;
+  },
+) {
+  await db
+    .insert(communityTicketSettingsTable)
+    .values({ guildId, ...opts })
+    .onConflictDoUpdate({
+      target: communityTicketSettingsTable.guildId,
+      set: { ...opts, updatedAt: new Date() },
+    });
+}
+
 export async function getTicketSettings(guildId: string): Promise<CommunityTicketSettings | undefined> {
   const [row] = await db
     .select()
