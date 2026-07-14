@@ -73,8 +73,10 @@ export function buildSheetEmbed(opts: {
   return embed;
 }
 
+const ROSTER_CATEGORY_ID = "1526567112443695277";
+
 /**
- * Searches every text channel whose name contains "名簿" for the most recent
+ * Searches every text channel in the roster category for the most recent
  * message posted by the given user (up to 500 messages back per channel).
  * Returns the message content, or null if none found.
  */
@@ -83,7 +85,7 @@ export async function findSelfIntro(
   userId: string,
 ): Promise<string | null> {
   const candidates = [...guild.channels.cache.values()].filter(
-    (c) => c.name.includes("名簿") && c.isTextBased(),
+    (c) => c.isTextBased() && "parentId" in c && c.parentId === ROSTER_CATEGORY_ID,
   );
   for (const channel of candidates) {
     if (!channel.isTextBased()) continue;
