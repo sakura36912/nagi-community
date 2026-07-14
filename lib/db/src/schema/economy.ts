@@ -51,6 +51,7 @@ export const walletsTable = pgTable(
     userId: text("user_id").notNull(),
     balance: integer("balance").notNull().default(0),
     lastDailyAt: timestamp("last_daily_at", { withTimezone: true }),
+    initialIssuedAt: timestamp("initial_issued_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

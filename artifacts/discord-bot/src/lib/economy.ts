@@ -270,6 +270,46 @@ export async function getOrCreateWallet(
   return wallet;
 }
 
+/**
+ * 初期発行（初回限定）を付与する。
+ * 既に受け取っている場合は { ok: false } を返す。
+ */
+export async function claimInitialIssue(
+  guildId: string,
+  userId: string,
+  amount: number,
+  currencyName: string,
+): Promise<{ ok: true; newBalance: number } | { ok: false }> {
+  const wallet = await getOrCreateWallet(guildId, userId);
+  if (wallet.initialIssuedAt !== null && wallet.initialIssuedAt !== undefined) {
+    return { ok: false };
+  }
+
+  const now = new Date();
+  const [updated] = await db
+    .update(walletsTable)
+    .set({
+      balance: sql`${walletsTable.balance} + ${amount}`,
+      initialIssuedAt: now,
+    })
+    .where(
+      and(
+        eq(walletsTable.guildId, guildId),
+        eq(walletsTable.userId, userId),
+        sql`${walletsTable.initialIssuedAt} IS NULL`,
+      ),
+    )
+    .returning();
+
+  if (!updated) {
+    // 競合：別リクエストが先に付与した
+    return { ok: false };
+  }
+
+  await recordTransaction(guildId, userId, amount, "initial_issue");
+  return { ok: true, newBalance: updated.balance };
+}
+
 export async function recordTransaction(
   guildId: string,
   userId: string,

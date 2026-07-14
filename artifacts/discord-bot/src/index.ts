@@ -1,4 +1,4 @@
-import { ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState } from "discord.js";
+import { ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { EmbedBuilder } from "discord.js";
 import {
   commands,
@@ -37,6 +37,7 @@ import {
   getEvalSheetSettings,
   createEvalSheet,
   getSheetVcSeconds,
+  claimInitialIssue,
 } from "./lib/economy";
 
 import { appendFileSync } from "fs";
@@ -69,6 +70,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildVoiceStates, // required for voiceStateUpdate
+    GatewayIntentBits.GuildMessages,    // required for messageCreate
+    GatewayIntentBits.MessageContent,   // privileged — enable in Developer Portal
   ],
 });
 
@@ -452,6 +455,44 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     logger.info(`[sheet] ✅ Created thread ${thread.id} for user ${newMember.id} on role ${roleName}`);
   } catch (err) {
     logger.error(`[sheet] Failed to create forum thread for user ${newMember.id}`, err);
+  }
+});
+
+// ─── 初期発行 — テキストトリガー ───────────────────────────────────────────────
+
+const INITIAL_ISSUE_TRIGGER = "初期発行お願いします。";
+const INITIAL_ISSUE_AMOUNT  = 1000;
+
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot) return;
+  if (!message.guildId)   return;
+  if (message.content !== INITIAL_ISSUE_TRIGGER) return;
+
+  const guildId = message.guildId;
+  const userId  = message.author.id;
+
+  try {
+    const settings = await getGuildSettings(guildId);
+    const result   = await claimInitialIssue(guildId, userId, INITIAL_ISSUE_AMOUNT, settings.currencyName);
+
+    if (!result.ok) {
+      await message.reply("初期発行は1回のみです。すでに受け取っています。");
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(0xf1c40f)
+      .setAuthor({
+        name:    message.author.displayName ?? message.author.username,
+        iconURL: message.author.displayAvatarURL(),
+      })
+      .setDescription(
+        `🎉 初期発行として **${INITIAL_ISSUE_AMOUNT.toLocaleString()}${settings.currencyName}** を付与しました！\n残高：**${result.newBalance.toLocaleString()}${settings.currencyName}**`,
+      );
+
+    await message.reply({ embeds: [embed] });
+  } catch (err) {
+    logger.error("[initial-issue] Error", err);
   }
 });
 
