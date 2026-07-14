@@ -1163,6 +1163,8 @@ const treasuryCommand: Command = {
 
 export { VC_RENAME_BUTTON_PREFIX, durationFromKey, consumePendingRename } from "./vc";
 import { vcCommand } from "./vc";
+export { shiftCommand, postWeeklyShifts, getNextWeeklyPostTime } from "./shift";
+import { shiftCommand } from "./shift";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -1178,4 +1180,5 @@ export const commands: Command[] = [
   rewardCommand,
   vcCommand,
   treasuryCommand,
+  shiftCommand,
 ];

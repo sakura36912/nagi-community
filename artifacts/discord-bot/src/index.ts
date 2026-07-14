@@ -9,6 +9,8 @@ import {
   VC_RENAME_BUTTON_PREFIX,
   durationFromKey,
   consumePendingRename,
+  postWeeklyShifts,
+  getNextWeeklyPostTime,
 } from "./commands";
 import { saveSchedule, getExpiredSchedules, deleteSchedule } from "./lib/vc";
 import { logger } from "./lib/logger";
@@ -204,6 +206,23 @@ client.once(Events.ClientReady, (readyClient) => {
     runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
     runVcDeleteScheduler().catch((err) => logger.error("[vc-schedule] Scheduler error", err));
   }, 60 * 1000);
+
+  // ── Weekly shift post — every Monday 00:00 UTC (= 09:00 JST) ─────────────
+  const nextWeeklyPost = getNextWeeklyPostTime();
+  const shiftDelay = nextWeeklyPost.getTime() - Date.now();
+  logger.info(
+    `[shift] Next weekly post in ${Math.round(shiftDelay / 60000)} min (${nextWeeklyPost.toISOString()})`,
+  );
+  setTimeout(() => {
+    postWeeklyShifts(readyClient).catch((err) =>
+      logger.error("[shift] Weekly post error", err),
+    );
+    setInterval(() => {
+      postWeeklyShifts(readyClient).catch((err) =>
+        logger.error("[shift] Weekly post error", err),
+      );
+    }, 7 * 24 * 60 * 60 * 1000);
+  }, shiftDelay);
 });
 
 
