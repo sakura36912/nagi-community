@@ -147,23 +147,48 @@ client.once(Events.ClientReady, (readyClient) => {
   }, 60 * 1000);
 });
 
+// Searches the guild for a channel whose name contains "名簿" and returns
+// the URL of the first message posted by the given user (up to 500 messages back).
+async function findNameboMessageUrl(guild: import("discord.js").Guild, userId: string): Promise<string | null> {
+  const channel = guild.channels.cache.find(
+    (c) => c.name.includes("名簿") && c.isTextBased(),
+  );
+  if (!channel || !channel.isTextBased()) return null;
+
+  let before: string | undefined;
+  for (let page = 0; page < 5; page++) {
+    const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
+    if (!messages || messages.size === 0) break;
+    const found = messages.find((m) => m.author.id === userId);
+    if (found) return found.url;
+    before = messages.last()?.id;
+  }
+  return null;
+}
+
 // Builds the evaluation sheet embed posted as the first message in the forum thread.
 function buildEvalSheetEmbed(
   member: { id: string; displayName: string; displayAvatarURL: () => string },
   roleId: string,
+  createdAt: Date,
   expiresAt: Date,
+  nameboUrl: string | null,
 ): EmbedBuilder {
-  const now = Math.floor(Date.now() / 1000);
+  const created = Math.floor(createdAt.getTime() / 1000);
   const exp = Math.floor(expiresAt.getTime() / 1000);
+  const nameboValue = nameboUrl ? `[名簿を見る](${nameboUrl})` : "（名簿に投稿が見つかりませんでした）";
+
   return new EmbedBuilder()
     .setTitle(`📋 評価シート — ${member.displayName}`)
     .setColor(0x2ecc71)
     .setThumbnail(member.displayAvatarURL())
     .addFields(
-      { name: "👤 ユーザー", value: `<@${member.id}>`, inline: true },
+      { name: "👤 名前", value: `${member.displayName}（<@${member.id}>）`, inline: false },
       { name: "🏷️ 対象ロール", value: `<@&${roleId}>`, inline: true },
-      { name: "📅 作成日", value: `<t:${now}:D>`, inline: true },
-      { name: "⏰ 有効期限", value: `<t:${exp}:F>（<t:${exp}:R>）`, inline: false },
+      { name: "📋 名簿", value: nameboValue, inline: true },
+      { name: "\u200b", value: "\u200b", inline: false },
+      { name: "📅 評価開始", value: `<t:${created}:D>`, inline: true },
+      { name: "⏰ 評価終了", value: `<t:${exp}:D>（<t:${exp}:R>）`, inline: true },
       { name: "\u200b", value: "─────────────────────", inline: false },
       { name: "⭐ 総合評価", value: "☆ ☆ ☆ ☆ ☆", inline: false },
       { name: "💬 コミュニケーション", value: "─", inline: true },
@@ -234,8 +259,10 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         continue;
       }
 
-      const expiresAt = new Date(Date.now() + EVAL_SHEET_DEFAULT_DURATION_MS);
-      const embed = buildEvalSheetEmbed(newMember, roleId, expiresAt);
+      const createdAt = new Date();
+      const expiresAt = new Date(createdAt.getTime() + EVAL_SHEET_DEFAULT_DURATION_MS);
+      const nameboUrl = await findNameboMessageUrl(newMember.guild, newMember.id);
+      const embed = buildEvalSheetEmbed(newMember, roleId, createdAt, expiresAt, nameboUrl);
       const threadName = `${newMember.displayName} の評価シート`.slice(0, 100);
 
       logger.info(`[evalsheet] Creating thread "${threadName}" in forum ${config.forumChannelId}`);
