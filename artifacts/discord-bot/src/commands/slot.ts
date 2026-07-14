@@ -275,26 +275,25 @@ function buildResult(
   const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("  ");
   const content = gridLines.join("\n") + (diagLine ? "\n" + diagLine : "");
 
-  // 大きく表示する絵柄: 当選時は当選ライン上の絵柄、ハズレ時は中央マス
-  let featuredSym: Sym = grid[1]![1]!;
-  if (wins > 0) {
-    const wonPayline = paylines.find((p) => p.won);
-    if (wonPayline) {
-      const def = PAYLINE_DEFS.find((d) => d.name === wonPayline.name);
-      if (def) featuredSym = grid[def.coords[0]![0]!]![def.coords[0]![1]!]!;
-    }
-  }
-  const imageUrl = featuredImageUrl(featuredSym, meta);
-
   let resultText: string;
   let title: string;
   let color: number;
+  let thumbnailUrl: string | null = null;
 
   if (wins === 0) {
     title = "🎰 スロット 3×3 — ハズレ";
     color = 0xed4245;
-    resultText = `💸 ハズレ… **-${bet.toLocaleString()} ${currencyName}**`;
+    resultText = `❌ ハズレ… **-${bet.toLocaleString()} ${currencyName}**`;
   } else {
+    // 当選ライン上の絵柄を小さくサムネイル表示
+    const wonPayline = paylines.find((p) => p.won);
+    if (wonPayline) {
+      const def = PAYLINE_DEFS.find((d) => d.name === wonPayline.name);
+      if (def) {
+        const sym = grid[def.coords[0]![0]!]![def.coords[0]![1]!]!;
+        thumbnailUrl = featuredImageUrl(sym, meta);
+      }
+    }
     const wonNames = paylines.filter((p) => p.won).map((p) => p.name);
     const profit = Math.abs(netDelta);
     resultText =
@@ -310,7 +309,7 @@ function buildResult(
     .setColor(color)
     .setFooter({ text: `残高: ${finalBalance.toLocaleString()} ${currencyName}` });
 
-  if (imageUrl) embed.setImage(imageUrl);
+  if (thumbnailUrl) embed.setThumbnail(thumbnailUrl);
   return { content, embed };
 }
 
