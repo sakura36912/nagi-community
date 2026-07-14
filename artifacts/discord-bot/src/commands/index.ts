@@ -791,11 +791,15 @@ const payCommand: Command = {
     )
     .addIntegerOption((opt) =>
       opt.setName("amount").setDescription("送金額").setRequired(true).setMinValue(1),
+    )
+    .addStringOption((opt) =>
+      opt.setName("memo").setDescription("メモ（任意、最大100文字）").setRequired(false).setMaxLength(100),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const target = interaction.options.getUser("user", true);
     const amount = interaction.options.getInteger("amount", true);
+    const memo   = interaction.options.getString("memo");
 
     if (target.bot) {
       await interaction.reply({ content: "Botには送金できません。", ephemeral: true });
@@ -810,6 +814,7 @@ const payCommand: Command = {
         .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
         .setThumbnail(target.displayAvatarURL())
         .setDescription(`<@${target.id}> に **${amount.toLocaleString()}${settings.currencyName}** を送金しました`);
+      if (memo) embed.addFields({ name: "📝 メモ", value: memo });
       await interaction.reply({ embeds: [embed] });
     } else {
       await interaction.reply({ content: result.reason, ephemeral: true });
