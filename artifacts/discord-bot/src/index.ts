@@ -464,9 +464,12 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 const INITIAL_ISSUE_TRIGGER = "初期発行お願いします。";
 const INITIAL_ISSUE_AMOUNT  = 1000;
 
+const INITIAL_ISSUE_CHANNEL_ID = "1526673304327291050";
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   if (!message.guildId)   return;
+  if (message.channelId !== INITIAL_ISSUE_CHANNEL_ID) return;
   if (message.content !== INITIAL_ISSUE_TRIGGER) return;
 
   const guildId = message.guildId;
