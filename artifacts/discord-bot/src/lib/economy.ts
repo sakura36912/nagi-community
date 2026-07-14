@@ -37,6 +37,8 @@ export const PRIVATE_VC_1M_EFFECT = "private_vc_1m";
 export const EVAL_EXTEND_EFFECT    = "eval_extend_1w"; // +7 days
 export const EVAL_EXTEND_2W_EFFECT = "eval_extend_2w"; // +14 days
 export const EVAL_EXTEND_1M_EFFECT = "eval_extend_1m"; // +30 days
+export const PERM_ROLE_EFFECT      = "perm_role";       // assign a role permanently
+export const EVAL_RESURFACE_EFFECT = "eval_resurface";  // create new eval sheet after failure
 
 // Duration in milliseconds for each timed VC effect type.
 export const TIMED_VC_DURATIONS: Record<string, number> = {
@@ -613,10 +615,11 @@ export async function addShopItem(
   description: string | null,
   effectType: string | null = null,
   category = "general",
+  targetRoleId: string | null = null,
 ): Promise<ShopItem> {
   const [item] = await db
     .insert(shopItemsTable)
-    .values({ guildId, name, price, description, effectType, category })
+    .values({ guildId, name, price, description, effectType, category, targetRoleId })
     .returning();
 
   if (!item) {

@@ -1,4 +1,4 @@
-import { sheetCommand, applySheetEmbedUpdate } from "./sheet";
+import { sheetCommand, applySheetEmbedUpdate, buildSheetEmbed, findSelfIntro } from "./sheet";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -27,8 +27,13 @@ import {
   PRIVATE_VC_1M_EFFECT,
   TIMED_VC_DURATIONS,
   EVAL_EXTEND_DAYS,
+  PERM_ROLE_EFFECT,
+  EVAL_RESURFACE_EFFECT,
   extendCommunitySheet,
   addShopItem,
+  createEvalSheet,
+  getEvalSheetSettings,
+  getSheetVcSeconds,
   buyItem,
   claimDaily,
   createOrUpdateCurrency,
@@ -324,6 +329,65 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     return;
   }
 
+  // 永久ロール付与
+  if (item.effectType === PERM_ROLE_EFFECT) {
+    if (!item.targetRoleId) {
+      await interaction.editReply("❌ このアイテムにはロールが設定されていません。管理者に連絡してください。");
+      return;
+    }
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    try {
+      const member = await interaction.guild!.members.fetch(interaction.user.id);
+      await member.roles.add(item.targetRoleId);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
+  // 評価落ち浮上券
+  if (item.effectType === EVAL_RESURFACE_EFFECT) {
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    const sheetSettings = await getEvalSheetSettings(interaction.guildId);
+    if (!sheetSettings?.forumChannelId) {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 評価フォーラムが設定されていません。購入を取り消し、返金しました。");
+      return;
+    }
+    const forum = interaction.guild!.channels.cache.get(sheetSettings.forumChannelId)
+      ?? await interaction.guild!.channels.fetch(sheetSettings.forumChannelId).catch(() => null);
+    if (!forum || forum.type !== ChannelType.GuildForum) {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 評価フォーラムが見つかりません。購入を取り消し、返金しました。");
+      return;
+    }
+    try {
+      const evalDays = sheetSettings.evalPeriodDays ?? 14;
+      const startDate = new Date();
+      const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
+      const targetUser = await interaction.client.users.fetch(interaction.user.id);
+      const member = await interaction.guild!.members.fetch(interaction.user.id);
+      const displayName = member.displayName;
+      const [vcSeconds, selfIntro] = await Promise.all([
+        getSheetVcSeconds(interaction.guildId, interaction.user.id, startDate, endDate).catch(() => 0),
+        findSelfIntro(interaction.guild!, interaction.user.id).catch(() => null),
+      ]);
+      const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
+      const thread = await forum.threads.create({ name: `${displayName} — 評価シート`.slice(0, 100), message: { embeds: [embed] } });
+      await createEvalSheet(interaction.guildId, interaction.user.id, startDate, endDate, forum.id, thread.id);
+      const ts = Math.floor(endDate.getTime() / 1000);
+      await interaction.editReply(`✅ **${result.item.name}**を使用しました！評価シートが新規作成されました。期限: **<t:${ts}:D>**`);
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 評価シートの作成に失敗しました。購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
   const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
 
   if (result.ok) {
@@ -600,6 +664,8 @@ type EffectChoice = { name: string; value: string };
 const DEFAULT_EFFECT_CHOICES: EffectChoice[] = [
   { name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT },
   { name: "非公開VC作成(無期限)", value: PRIVATE_VC_EFFECT },
+  { name: "永久ロール付与", value: PERM_ROLE_EFFECT },
+  { name: "評価落ち浮上券", value: EVAL_RESURFACE_EFFECT },
 ];
 
 const VC_EFFECT_CHOICES: EffectChoice[] = [
@@ -650,6 +716,12 @@ function buildShopCommand(
               .setDescription("購入時の特殊効果")
               .setRequired(false)
               .addChoices(...effectChoices),
+          )
+          .addRoleOption((opt) =>
+            opt
+              .setName("role")
+              .setDescription("付与するロール（永久ロール付与エフェクト使用時）")
+              .setRequired(false),
           ),
       )
       .addSubcommand((sub) =>
@@ -744,6 +816,65 @@ function buildShopCommand(
           return;
         }
 
+        // 永久ロール付与
+        if (item.effectType === PERM_ROLE_EFFECT) {
+          if (!item.targetRoleId) {
+            await interaction.editReply("❌ このアイテムにはロールが設定されていません。管理者に連絡してください。");
+            return;
+          }
+          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
+          if (!result.ok) { await interaction.editReply(result.reason); return; }
+          try {
+            const member = await interaction.guild!.members.fetch(interaction.user.id);
+            await member.roles.add(item.targetRoleId);
+            await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+          } catch {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+          }
+          return;
+        }
+
+        // 評価落ち浮上券
+        if (item.effectType === EVAL_RESURFACE_EFFECT) {
+          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
+          if (!result.ok) { await interaction.editReply(result.reason); return; }
+          const sheetSettings = await getEvalSheetSettings(guildId);
+          if (!sheetSettings?.forumChannelId) {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply("❌ 評価フォーラムが設定されていません。購入を取り消し、返金しました。");
+            return;
+          }
+          const forum = interaction.guild!.channels.cache.get(sheetSettings.forumChannelId)
+            ?? await interaction.guild!.channels.fetch(sheetSettings.forumChannelId).catch(() => null);
+          if (!forum || forum.type !== ChannelType.GuildForum) {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply("❌ 評価フォーラムが見つかりません。購入を取り消し、返金しました。");
+            return;
+          }
+          try {
+            const evalDays = sheetSettings.evalPeriodDays ?? 14;
+            const startDate = new Date();
+            const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
+            const targetUser = await interaction.client.users.fetch(interaction.user.id);
+            const member = await interaction.guild!.members.fetch(interaction.user.id);
+            const displayName = member.displayName;
+            const [vcSeconds, selfIntro] = await Promise.all([
+              getSheetVcSeconds(guildId, interaction.user.id, startDate, endDate).catch(() => 0),
+              findSelfIntro(interaction.guild!, interaction.user.id).catch(() => null),
+            ]);
+            const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
+            const thread = await forum.threads.create({ name: `${displayName} — 評価シート`.slice(0, 100), message: { embeds: [embed] } });
+            await createEvalSheet(guildId, interaction.user.id, startDate, endDate, forum.id, thread.id);
+            const ts = Math.floor(endDate.getTime() / 1000);
+            await interaction.editReply(`✅ **${result.item.name}**を使用しました！評価シートが新規作成されました。期限: **<t:${ts}:D>**`);
+          } catch {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply("❌ 評価シートの作成に失敗しました。購入を取り消し、返金しました。");
+          }
+          return;
+        }
+
         const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
         if (result.ok) {
           await interaction.editReply(`**${result.item.name}**を購入しました!`);
@@ -773,8 +904,13 @@ function buildShopCommand(
         const price = interaction.options.getInteger("price", true);
         const description = interaction.options.getString("description");
         const effect = interaction.options.getString("effect");
+        const role = interaction.options.getRole("role");
+        if (effect === PERM_ROLE_EFFECT && !role) {
+          await interaction.reply({ content: "❌ 永久ロール付与には `role` オプションでロールを指定してください。", ephemeral: true });
+          return;
+        }
         const [item, settings] = await Promise.all([
-          addShopItem(guildId, name, price, description, effect, category),
+          addShopItem(guildId, name, price, description, effect, category, role?.id ?? null),
           getGuildSettings(guildId),
         ]);
         await interaction.reply(
