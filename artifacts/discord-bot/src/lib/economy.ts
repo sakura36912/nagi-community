@@ -113,6 +113,7 @@ export async function getGuildSettings(guildId: string): Promise<GuildSettings> 
     // Seed default shop items for brand-new guilds.
     await seedDefaultShopItems(guildId);
     await seedDefaultVcShopItems(guildId);
+    await seedDefaultUraShopItems(guildId);
     return created;
   }
 
@@ -471,6 +472,44 @@ export async function distributeRoleRewards(
 
 // Returns all user IDs that have a wallet in this guild (used by the reward
 // scheduler to know who to check roles for — no privileged intent needed).
+// Inserts the default ura (裏フリールーム) shop items for a guild.
+// Safe to call multiple times — uses a count guard so it never duplicates.
+export async function seedDefaultUraShopItems(guildId: string): Promise<void> {
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(shopItemsTable)
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "ura")));
+
+  if (count > 0) return;
+
+  await db.insert(shopItemsTable).values([
+    {
+      guildId,
+      name: "裏フリールーム（1日）",
+      description: "自分だけが見える専用VCを1日間作成します。期間終了後に自動削除されます。",
+      price: 1000,
+      effectType: PRIVATE_VC_1D_EFFECT,
+      category: "ura",
+    },
+    {
+      guildId,
+      name: "裏フリールーム（1週間）",
+      description: "自分だけが見える専用VCを1週間作成します。期間終了後に自動削除されます。",
+      price: 5000,
+      effectType: PRIVATE_VC_1W_EFFECT,
+      category: "ura",
+    },
+    {
+      guildId,
+      name: "裏フリールーム（1ヶ月）",
+      description: "自分だけが見える専用VCを1ヶ月間作成します。期間終了後に自動削除されます。",
+      price: 15000,
+      effectType: PRIVATE_VC_1M_EFFECT,
+      category: "ura",
+    },
+  ]);
+}
+
 // ---------------------------------------------------------------------------
 // Private VC session management (timed channels)
 // ---------------------------------------------------------------------------

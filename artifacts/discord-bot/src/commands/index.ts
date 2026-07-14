@@ -770,7 +770,7 @@ function buildShopCommand(
 const shopCommand        = buildShopCommand("shop",      "ショップ",               "🛒", "general", 0xf5a623);
 const groupShopCommand   = buildShopCommand("groupshop", "組別ショップ",           "⚔️", "group",   0xe74c3c);
 const vcShopCommand      = buildShopCommand("vcshop",    "非公開VCショップ",       "🔒", "vc",      0x3498db, VC_EFFECT_CHOICES);
-const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",     0x9b59b6);
+const uraShopCommand     = buildShopCommand("urashop",   "裏フリールームショップ", "🌙", "ura",     0x9b59b6, VC_EFFECT_CHOICES);
 
 const rewardCommand: Command = {
   data: new SlashCommandBuilder()

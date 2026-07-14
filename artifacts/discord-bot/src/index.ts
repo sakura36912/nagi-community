@@ -17,6 +17,7 @@ import {
   markRewardDistributed,
   seedDefaultShopItems,
   seedDefaultVcShopItems,
+  seedDefaultUraShopItems,
 } from "./lib/economy";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
@@ -122,6 +123,9 @@ client.once(Events.ClientReady, (readyClient) => {
     );
     seedDefaultVcShopItems(guild.id).catch((err) =>
       logger.error(`[seed] Failed to seed VC shop items for guild ${guild.id}`, err),
+    );
+    seedDefaultUraShopItems(guild.id).catch((err) =>
+      logger.error(`[seed] Failed to seed ura shop items for guild ${guild.id}`, err),
     );
   }
 
