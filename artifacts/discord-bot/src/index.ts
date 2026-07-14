@@ -39,7 +39,7 @@ const client = new Client({
   // "Server Members Intent" in the Discord Developer Portal.
   // Bot → Privileged Gateway Intents → Server Members Intent → ON
   // After enabling it there, restore GatewayIntentBits.GuildMembers here.
-  intents: [GatewayIntentBits.Guilds /* GatewayIntentBits.GuildMembers */],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
 // Checks every minute whether any guild's reward interval has elapsed and
