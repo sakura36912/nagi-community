@@ -491,6 +491,26 @@ export async function setNameboardUrl(guildId: string, nameboardUrl: string | nu
     });
 }
 
+export async function setSheetForumConfig(
+  guildId: string,
+  forumChannelId: string | null,
+  triggerRoleIds: string[] | null,
+  evalPeriodDays: number,
+): Promise<void> {
+  await db
+    .insert(communitySheetSettingsTable)
+    .values({
+      guildId,
+      forumChannelId,
+      triggerRoleIds: triggerRoleIds ? triggerRoleIds.join(",") : null,
+      evalPeriodDays,
+    })
+    .onConflictDoUpdate({
+      target: communitySheetSettingsTable.guildId,
+      set: { forumChannelId, triggerRoleIds: triggerRoleIds ? triggerRoleIds.join(",") : null, evalPeriodDays, updatedAt: new Date() },
+    });
+}
+
 export async function getSheetSettings(guildId: string): Promise<CommunitySheetSettings | undefined> {
   const [row] = await db
     .select()

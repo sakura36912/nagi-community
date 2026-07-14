@@ -10,11 +10,14 @@ import {
   addTempVc,
   closeAllOpenSessions,
   closeSession,
+  createSheet,
   getAllTempVcs,
   getEventsNeedingReminder,
   getLobbyChannelId,
   getParticipants,
+  getSheetSettings,
   getTempVcRecord,
+  getVcTimeInPeriod,
   isTempVc,
   logTempVcDeletion,
   markReminderSent,
@@ -24,6 +27,7 @@ import {
 } from "./lib/community.js";
 import {
   buildEventEmbed,
+  buildSheetEmbed,
   commands,
   COMM_EVENT_JOIN_PREFIX,
   COMM_EVENT_CANCEL_PREFIX,
@@ -342,6 +346,73 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     } catch (err) {
       logger.error(`[tempvc] Failed to delete temp VC ${oldChannelId}`, err);
     }
+  }
+});
+
+// ─── GuildMemberUpdate — auto eval sheet on role assign ─────────────────────
+
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+  const guildId = newMember.guild.id;
+
+  // Detect newly added roles
+  const addedRoleIds = [...newMember.roles.cache.keys()].filter(
+    (id) => !oldMember.roles.cache.has(id),
+  );
+  if (addedRoleIds.length === 0) return;
+
+  // Fetch settings and check if forum auto-post is configured
+  const settings = await getSheetSettings(guildId).catch(() => undefined);
+  if (!settings?.forumChannelId || !settings.triggerRoleIds) return;
+
+  const triggerIds = settings.triggerRoleIds.split(",").filter(Boolean);
+  const matchedRole = addedRoleIds.find((id) => triggerIds.includes(id));
+  if (!matchedRole) return;
+
+  // Find the forum channel
+  const forum = newMember.guild.channels.cache.get(settings.forumChannelId);
+  if (!forum || forum.type !== ChannelType.GuildForum) {
+    logger.warn(`[sheet] forumChannelId ${settings.forumChannelId} is not a forum channel`);
+    return;
+  }
+
+  // Calculate eval period
+  const evalDays = settings.evalPeriodDays ?? 14;
+  const endDate = new Date();
+  const startDate = new Date(endDate.getTime() - evalDays * 24 * 60 * 60 * 1000);
+
+  // Fetch the Discord User object (needed for avatar URL etc.)
+  let targetUser;
+  try {
+    targetUser = await newMember.client.users.fetch(newMember.id);
+  } catch {
+    logger.warn(`[sheet] Could not fetch user ${newMember.id}`);
+    return;
+  }
+
+  const displayName = newMember.displayName;
+  const roleName = newMember.guild.roles.cache.get(matchedRole)?.name ?? matchedRole;
+
+  const vcSeconds = await getVcTimeInPeriod(guildId, newMember.id, startDate, endDate).catch(() => 0);
+
+  const embed = buildSheetEmbed({
+    targetUser,
+    displayName,
+    startDate,
+    endDate,
+    vcSeconds,
+    nameboardUrl: settings.nameboardUrl,
+    createdByLabel: `ロール付与により自動生成（${roleName}）`,
+  });
+
+  try {
+    const thread = await forum.threads.create({
+      name: `${displayName} — 評価シート`,
+      message: { embeds: [embed] },
+    });
+    await createSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);
+    logger.info(`[sheet] Auto-created eval sheet thread ${thread.id} for user ${newMember.id} on role ${roleName}`);
+  } catch (err) {
+    logger.error(`[sheet] Failed to create forum thread for user ${newMember.id}`, err);
   }
 });
 

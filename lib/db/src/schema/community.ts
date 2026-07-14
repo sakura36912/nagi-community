@@ -154,10 +154,25 @@ export type CommunityVcPrivacy = typeof communityVcPrivacyTable.$inferSelect;
 
 // ─── Eval Sheets ─────────────────────────────────────────────────────────────
 
-/** Per-guild nameboard URL used on eval sheets. */
+/** Per-guild configuration for eval sheets. */
 export const communitySheetSettingsTable = pgTable("community_sheet_settings", {
   guildId: text("guild_id").primaryKey(),
   nameboardUrl: text("nameboard_url"),
+  /**
+   * Forum channel ID where auto-generated eval sheets are posted.
+   * Null means the auto-post feature is disabled.
+   */
+  forumChannelId: text("forum_channel_id"),
+  /**
+   * Comma-separated list of role IDs whose assignment triggers auto sheet creation.
+   * Example: "123456789,987654321"
+   */
+  triggerRoleIds: text("trigger_role_ids"),
+  /**
+   * Number of days the auto-generated eval period covers (counting back from role
+   * assignment date). Defaults to 14 when the feature is enabled.
+   */
+  evalPeriodDays: integer("eval_period_days").notNull().default(14),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

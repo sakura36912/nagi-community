@@ -12,6 +12,7 @@ import {
   type Guild,
   type GuildMember,
   type OverwriteResolvable,
+  type User,
 } from "discord.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -41,6 +42,7 @@ import {
   removeTicket,
   setLobbyChannel,
   setNameboardUrl,
+  setSheetForumConfig,
   setStaffRole,
   setVcPrivacyOptOut,
   updateEventMessageId,
@@ -490,6 +492,38 @@ const ticketCommand: Command = {
 
 // ─── /sheet ──────────────────────────────────────────────────────────────────
 
+/**
+ * Build the eval-sheet embed. Pure function — callers handle async fetching.
+ */
+export function buildSheetEmbed(opts: {
+  targetUser: User;
+  displayName: string;
+  startDate: Date;
+  endDate: Date;
+  vcSeconds: number;
+  nameboardUrl: string | null | undefined;
+  createdByLabel: string;
+}): EmbedBuilder {
+  const { targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl, createdByLabel } = opts;
+  const startTs = Math.floor(startDate.getTime() / 1000);
+  const endTs = Math.floor(endDate.getTime() / 1000);
+  const nameboardValue = nameboardUrl ? `[名簿を見る](${nameboardUrl})` : "未設定";
+
+  return new EmbedBuilder()
+    .setTitle(`📋 評価シート — ${displayName}`)
+    .setColor(0x2ecc71)
+    .setThumbnail(targetUser.displayAvatarURL())
+    .addFields(
+      { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
+      { name: "📋 名簿", value: nameboardValue, inline: false },
+      { name: "📅 評価開始", value: `<t:${startTs}:D>`, inline: true },
+      { name: "⏰ 評価終了", value: `<t:${endTs}:D>`, inline: true },
+      { name: "🎙️ 期間中のVC滞在時間", value: formatSeconds(vcSeconds), inline: false },
+    )
+    .setFooter({ text: createdByLabel })
+    .setTimestamp();
+}
+
 const sheetCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("sheet")
@@ -497,9 +531,33 @@ const sheetCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("settings")
-        .setDescription("名簿リンクURLを設定します（管理者）")
+        .setDescription("評価シートの設定を変更します（管理者）")
         .addStringOption((opt) =>
-          opt.setName("url").setDescription("名簿のURL（省略で削除）").setRequired(false),
+          opt.setName("url").setDescription("名簿のURL（省略で変更なし、クリアするには '-' を入力）").setRequired(false),
+        )
+        .addChannelOption((opt) =>
+          opt
+            .setName("forum")
+            .setDescription("自動投稿先のフォーラムチャンネル（省略で変更なし）")
+            .addChannelTypes(ChannelType.GuildForum)
+            .setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("trigger_role_1").setDescription("自動作成を起動するロール①").setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("trigger_role_2").setDescription("自動作成を起動するロール②").setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("trigger_role_3").setDescription("自動作成を起動するロール③").setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("eval_days")
+            .setDescription("評価期間（日数・デフォルト14）")
+            .setMinValue(1)
+            .setMaxValue(90)
+            .setRequired(false),
         ),
     )
     .addSubcommand((sub) =>
@@ -532,12 +590,62 @@ const sheetCommand: Command = {
         await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
-      const url = interaction.options.getString("url");
-      await setNameboardUrl(guildId, url ?? null);
-      await interaction.reply({
-        content: url ? `✅ 名簿URLを設定しました: ${url}` : "✅ 名簿URLを削除しました。",
-        ephemeral: true,
-      });
+      await interaction.deferReply({ ephemeral: true });
+
+      const current = await getSheetSettings(guildId);
+      const lines: string[] = [];
+
+      // ── Nameboard URL ──────────────────────────────────────────────────────
+      const urlInput = interaction.options.getString("url");
+      if (urlInput !== null) {
+        const newUrl = urlInput === "-" ? null : urlInput;
+        await setNameboardUrl(guildId, newUrl);
+        lines.push(newUrl ? `✅ 名簿URL: ${newUrl}` : "✅ 名簿URLを削除しました。");
+      }
+
+      // ── Forum / Roles / Eval days ──────────────────────────────────────────
+      const forumChannel = interaction.options.getChannel("forum");
+      const role1 = interaction.options.getRole("trigger_role_1");
+      const role2 = interaction.options.getRole("trigger_role_2");
+      const role3 = interaction.options.getRole("trigger_role_3");
+      const evalDaysInput = interaction.options.getInteger("eval_days");
+
+      const hasForumUpdate = forumChannel !== null || role1 !== null || role2 !== null || role3 !== null || evalDaysInput !== null;
+      if (hasForumUpdate) {
+        const newForumId = forumChannel ? forumChannel.id : (current?.forumChannelId ?? null);
+        const newRoles: string[] = role1 || role2 || role3
+          ? [role1?.id, role2?.id, role3?.id].filter((id): id is string => !!id)
+          : (current?.triggerRoleIds?.split(",").filter(Boolean) ?? []);
+        const newDays = evalDaysInput ?? current?.evalPeriodDays ?? 14;
+        await setSheetForumConfig(guildId, newForumId, newRoles.length ? newRoles : null, newDays);
+
+        if (forumChannel) lines.push(`✅ 投稿フォーラム: <#${forumChannel.id}>`);
+        if (role1 || role2 || role3) {
+          const mentions = newRoles.map((id) => `<@&${id}>`).join("、");
+          lines.push(`✅ トリガーロール: ${mentions}`);
+        }
+        if (evalDaysInput !== null) lines.push(`✅ 評価期間: ${evalDaysInput}日`);
+      }
+
+      if (lines.length === 0) {
+        // Show current settings
+        const s = current;
+        const roleList = s?.triggerRoleIds
+          ? s.triggerRoleIds.split(",").filter(Boolean).map((id) => `<@&${id}>`).join("、")
+          : "未設定";
+        const embed = new EmbedBuilder()
+          .setTitle("📋 評価シート設定")
+          .setColor(0x2ecc71)
+          .addFields(
+            { name: "📋 名簿URL", value: s?.nameboardUrl ?? "未設定", inline: false },
+            { name: "📢 投稿フォーラム", value: s?.forumChannelId ? `<#${s.forumChannelId}>` : "未設定", inline: true },
+            { name: "🔔 トリガーロール", value: roleList, inline: true },
+            { name: "📅 評価期間", value: `${s?.evalPeriodDays ?? 14}日`, inline: true },
+          );
+        await interaction.editReply({ embeds: [embed] });
+      } else {
+        await interaction.editReply({ content: lines.join("\n") });
+      }
       return;
     }
 
@@ -567,28 +675,20 @@ const sheetCommand: Command = {
       }
       const displayName = member?.displayName ?? targetUser.displayName;
 
-      const settings = await getSheetSettings(guildId);
-      const vcSeconds = await getVcTimeInPeriod(guildId, targetUser.id, startDate, endDate);
+      const [settings, vcSeconds] = await Promise.all([
+        getSheetSettings(guildId),
+        getVcTimeInPeriod(guildId, targetUser.id, startDate, endDate),
+      ]);
 
-      const startTs = Math.floor(startDate.getTime() / 1000);
-      const endTs = Math.floor(endDate.getTime() / 1000);
-      const nameboardValue = settings?.nameboardUrl
-        ? `[名簿を見る](${settings.nameboardUrl})`
-        : "未設定";
-
-      const embed = new EmbedBuilder()
-        .setTitle(`📋 評価シート — ${displayName}`)
-        .setColor(0x2ecc71)
-        .setThumbnail(targetUser.displayAvatarURL())
-        .addFields(
-          { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
-          { name: "📋 名簿", value: nameboardValue, inline: false },
-          { name: "📅 評価開始", value: `<t:${startTs}:D>`, inline: true },
-          { name: "⏰ 評価終了", value: `<t:${endTs}:D>`, inline: true },
-          { name: "🎙️ 期間中のVC滞在時間", value: formatSeconds(vcSeconds), inline: false },
-        )
-        .setFooter({ text: `作成者: ${interaction.user.displayName}` })
-        .setTimestamp();
+      const embed = buildSheetEmbed({
+        targetUser,
+        displayName,
+        startDate,
+        endDate,
+        vcSeconds,
+        nameboardUrl: settings?.nameboardUrl,
+        createdByLabel: `作成者: ${interaction.user.displayName}`,
+      });
 
       const msg = await interaction.editReply({ embeds: [embed] });
       const msgId = "id" in msg ? (msg as { id: string }).id : undefined;
