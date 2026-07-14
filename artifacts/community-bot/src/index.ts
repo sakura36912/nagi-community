@@ -19,6 +19,7 @@ import {
   logTempVcDeletion,
   markReminderSent,
   openSession,
+  pruneOldTempVcDeletionLogs,
   removeTempVc,
 } from "./lib/community.js";
 import {
@@ -201,6 +202,24 @@ client.once(Events.ClientReady, async (readyClient) => {
       }
     }
   }
+
+  // ── Deletion-log pruning ──────────────────────────────────────────────────
+  // Prune entries older than 90 days once on startup, then once every 24 h.
+  const RETENTION_DAYS = 90;
+
+  async function runDeletionLogPrune(): Promise<void> {
+    try {
+      const deleted = await pruneOldTempVcDeletionLogs(RETENTION_DAYS);
+      if (deleted > 0) {
+        logger.info(`[prune] Removed ${deleted} deletion-log entr${deleted === 1 ? "y" : "ies"} older than ${RETENTION_DAYS} days`);
+      }
+    } catch (err) {
+      logger.error("[prune] Failed to prune deletion log", err);
+    }
+  }
+
+  await runDeletionLogPrune();
+  setInterval(runDeletionLogPrune, 24 * 60 * 60 * 1000);
 
   // Tick every 60 s.
   setInterval(() => {

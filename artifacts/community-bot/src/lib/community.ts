@@ -111,6 +111,19 @@ export async function getAllTempVcDeletions(
     .orderBy(asc(communityTempVcDeletionLogTable.deletedAt));
 }
 
+/**
+ * Deletes deletion-log entries older than `retentionDays` (default 90).
+ * Returns the number of rows deleted.
+ */
+export async function pruneOldTempVcDeletionLogs(retentionDays = 90): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const result = await db
+    .delete(communityTempVcDeletionLogTable)
+    .where(lt(communityTempVcDeletionLogTable.deletedAt, cutoff))
+    .returning({ id: communityTempVcDeletionLogTable.id });
+  return result.length;
+}
+
 // ─── Events ─────────────────────────────────────────────────────────────────
 
 export async function createEvent(
