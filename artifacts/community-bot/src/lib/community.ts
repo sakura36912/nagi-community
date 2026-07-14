@@ -54,6 +54,10 @@ export async function isTempVc(channelId: string): Promise<boolean> {
   return row !== undefined;
 }
 
+export async function getAllTempVcs(): Promise<{ guildId: string; channelId: string; ownerId: string }[]> {
+  return db.select().from(communityTempVcsTable);
+}
+
 // ─── Events ─────────────────────────────────────────────────────────────────
 
 export async function createEvent(

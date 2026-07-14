@@ -10,6 +10,7 @@ import {
   addTempVc,
   closeAllOpenSessions,
   closeSession,
+  getAllTempVcs,
   getEventsNeedingReminder,
   getLobbyChannelId,
   getParticipants,
@@ -104,6 +105,44 @@ client.once(Events.ClientReady, async (readyClient) => {
   await closeAllOpenSessions().catch((err) =>
     logger.error("[vc] Failed to close stale sessions", err),
   );
+
+  // Clean up stale temp VCs: delete any that no longer exist on Discord or are empty.
+  try {
+    const tempVcs = await getAllTempVcs();
+    for (const record of tempVcs) {
+      try {
+        const guild =
+          readyClient.guilds.cache.get(record.guildId) ??
+          await readyClient.guilds.fetch(record.guildId).catch(() => null);
+        if (!guild) {
+          await removeTempVc(record.channelId);
+          logger.info(`[tempvc] Removed stale temp VC record ${record.channelId} (guild not found)`);
+          continue;
+        }
+
+        const channel =
+          guild.channels.cache.get(record.channelId) ??
+          await guild.channels.fetch(record.channelId).catch(() => null);
+
+        if (!channel) {
+          // Channel was already deleted — just remove the DB record.
+          await removeTempVc(record.channelId);
+          logger.info(`[tempvc] Removed stale temp VC record ${record.channelId} (channel not found)`);
+          continue;
+        }
+
+        if (channel.type === ChannelType.GuildVoice && channel.members.size === 0) {
+          await channel.delete("Bot再起動後の空一時VC削除");
+          await removeTempVc(record.channelId);
+          logger.info(`[tempvc] Deleted empty temp VC ${record.channelId} on startup`);
+        }
+      } catch (err) {
+        logger.error(`[tempvc] Failed to clean up temp VC ${record.channelId}`, err);
+      }
+    }
+  } catch (err) {
+    logger.error("[tempvc] Failed to fetch temp VC list for startup cleanup", err);
+  }
 
   // Re-open sessions for users currently in VCs.
   for (const guild of readyClient.guilds.cache.values()) {
