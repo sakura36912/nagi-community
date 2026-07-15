@@ -13,9 +13,11 @@ import {
   SHIFT_TOGGLE_PREFIX,
   SHIFT_CONFIRM_PREFIX,
   SHIFT_CANCEL_PREFIX,
+  SHIFT_TIME_MODAL_PREFIX,
   handleShiftToggle,
   handleShiftConfirm,
   handleShiftCancel,
+  handleShiftTimeModal,
 } from "./commands";
 import { buildSheetEmbed, findSelfIntro } from "./commands/sheet";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
@@ -536,6 +538,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith(VC_RENAME_MODAL_PREFIX)) {
       await handleVcRenameModalSubmit(interaction);
+      return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(SHIFT_TIME_MODAL_PREFIX)) {
+      await handleShiftTimeModal(interaction);
       return;
     }
   } catch (err) {

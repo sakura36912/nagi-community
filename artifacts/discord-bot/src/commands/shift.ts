@@ -4,11 +4,15 @@ import {
   ButtonStyle,
   ChannelType,
   EmbedBuilder,
+  ModalBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Client,
+  type ModalSubmitInteraction,
 } from "discord.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -26,19 +30,24 @@ import {
 
 // ─── Button prefix constants ─────────────────────────────────────────────────
 
-export const SHIFT_TOGGLE_PREFIX  = "shift:toggle:";
-export const SHIFT_CONFIRM_PREFIX = "shift:confirm:";
-export const SHIFT_CANCEL_PREFIX  = "shift:cancel:";
+export const SHIFT_TOGGLE_PREFIX     = "shift:toggle:";
+export const SHIFT_CONFIRM_PREFIX    = "shift:confirm:";
+export const SHIFT_CANCEL_PREFIX     = "shift:cancel:";
+export const SHIFT_TIME_MODAL_PREFIX = "shift:time-modal:";
 
 // ─── In-memory submit sessions ────────────────────────────────────────────────
+
+interface DaySelection {
+  status: "○" | "✕" | null;
+  start?: string;  // "HH:MM"
+  end?: string;    // "HH:MM"
+}
 
 interface SubmitSession {
   guildId: string;
   userId: string;
   dates: string[];                        // Mon→Sun "YYYY-MM-DD"
-  selections: Record<string, "○" | "✕" | null>;
-  startTime: string;
-  endTime: string;
+  selections: Record<string, DaySelection>;
   expiresAt: number;
 }
 
@@ -161,13 +170,15 @@ function buildSubmitComponents(
   const dayButtons = session.dates.map((date) => {
     const d = new Date(`${date}T00:00:00+09:00`);
     const dow = WEEKDAY_JA[d.getDay()]!;
-    const label = `${d.getMonth() + 1}/${d.getDate()}(${dow})`;
-    const sel = session.selections[date];
-    const mark  = sel === "○" ? " ○" : sel === "✕" ? " ✕" : " —";
-    const style = sel === "○" ? ButtonStyle.Success : sel === "✕" ? ButtonStyle.Danger : ButtonStyle.Secondary;
+    const base = `${d.getMonth() + 1}/${d.getDate()}(${dow})`;
+    const sel = session.selections[date]!;
+    const mark  = sel.status === "○" ? " ○" : sel.status === "✕" ? " ✕" : " —";
+    const style = sel.status === "○" ? ButtonStyle.Success
+                : sel.status === "✕" ? ButtonStyle.Danger
+                : ButtonStyle.Secondary;
     return new ButtonBuilder()
       .setCustomId(`${SHIFT_TOGGLE_PREFIX}${sessionId}:${date}`)
-      .setLabel(label + mark)
+      .setLabel(base + mark)
       .setStyle(style);
   });
 
@@ -191,19 +202,22 @@ function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
   const from = session.dates[0]!;
   const to   = session.dates[6]!;
   const lines = session.dates.map((date) => {
-    const sel = session.selections[date];
-    const mark = sel === "○" ? "🟢 ○" : sel === "✕" ? "🔴 ✕" : "⬜ —";
-    return `${mark}  ${formatDateLabel(date)}`;
+    const sel = session.selections[date]!;
+    if (sel.status === "○") {
+      const time = sel.start && sel.end ? ` ${sel.start}〜${sel.end}` : "";
+      return `🟢 ○  ${formatDateLabel(date)}${time}`;
+    }
+    if (sel.status === "✕") return `🔴 ✕  ${formatDateLabel(date)}`;
+    return `⬜ —  ${formatDateLabel(date)}`;
   });
   return new EmbedBuilder()
     .setTitle("📋 シフト提出")
     .setColor(0x5865f2)
     .setDescription(
-      `**${formatDateLabel(from)} 〜 ${formatDateLabel(to)}**\n` +
-      `時間: **${session.startTime}〜${session.endTime}**\n\n` +
+      `**${formatDateLabel(from)} 〜 ${formatDateLabel(to)}**\n\n` +
       lines.join("\n"),
     )
-    .setFooter({ text: "○/✕ ボタンで切り替え → 「提出する」で確定（15分以内）" });
+    .setFooter({ text: "日付ボタンを押して時間を入力 → ○/✕ で切替 → 「提出する」で確定（15分以内）" });
 }
 
 // ─── Embed builders ──────────────────────────────────────────────────────────
@@ -441,19 +455,7 @@ export const shiftCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("submit")
-        .setDescription("○/✕ボタンで週間シフトをまとめて提出する")
-        .addStringOption((opt) =>
-          opt
-            .setName("start")
-            .setDescription("出勤時刻（例: 10:00）")
-            .setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName("end")
-            .setDescription("退勤時刻（例: 18:00）")
-            .setRequired(true),
-        )
+        .setDescription("○/✕ボタンで週間シフトをまとめて提出する（各日の時間はボタン押下後に入力）")
         .addIntegerOption((opt) =>
           opt
             .setName("week")
@@ -560,24 +562,7 @@ export const shiftCommand: Command = {
 
     // ── /shift submit ─────────────────────────────────────────────────────────
     if (sub === "submit") {
-      const startInput = interaction.options.getString("start", true);
-      const endInput   = interaction.options.getString("end",   true);
       const weekOffset = interaction.options.getInteger("week") ?? 0;
-
-      const start = parseTime(startInput);
-      if (!start) {
-        await interaction.reply({ content: "❌ 出勤時刻の形式が正しくありません。例: `10:00`", ephemeral: true });
-        return;
-      }
-      const end = parseTime(endInput);
-      if (!end) {
-        await interaction.reply({ content: "❌ 退勤時刻の形式が正しくありません。例: `18:00`", ephemeral: true });
-        return;
-      }
-      if (calcMinutes(start, end) <= 0) {
-        await interaction.reply({ content: "❌ 退勤時刻は出勤時刻より後にしてください。", ephemeral: true });
-        return;
-      }
 
       cleanExpiredSessions();
 
@@ -587,9 +572,7 @@ export const shiftCommand: Command = {
         guildId,
         userId: interaction.user.id,
         dates,
-        selections: Object.fromEntries(dates.map((d) => [d, null])),
-        startTime: start,
-        endTime: end,
+        selections: Object.fromEntries(dates.map((d) => [d, { status: null }])),
         expiresAt: Date.now() + 15 * 60 * 1000,
       };
       submitSessions.set(sessionId, session);
@@ -744,31 +727,115 @@ export const shiftCommand: Command = {
 
 // ─── /shift submit — button handlers ─────────────────────────────────────────
 
-/** Toggle a day's selection: null → ○ → ✕ → null */
-export async function handleShiftToggle(interaction: ButtonInteraction): Promise<void> {
-  // customId = "shift:toggle:{sessionId}:{date}"
-  const rest = interaction.customId.slice(SHIFT_TOGGLE_PREFIX.length);
+function parseSessionAndDate(customId: string, prefix: string): { sessionId: string; date: string } {
+  const rest = customId.slice(prefix.length);
   const colonIdx = rest.indexOf(":");
-  const sessionId = rest.slice(0, colonIdx);
-  const date = rest.slice(colonIdx + 1);
+  return { sessionId: rest.slice(0, colonIdx), date: rest.slice(colonIdx + 1) };
+}
 
+function checkSession(
+  session: SubmitSession | undefined,
+  userId: string,
+): "ok" | "not_found" | "expired" {
+  if (!session || session.userId !== userId) return "not_found";
+  if (Date.now() > session.expiresAt) return "expired";
+  return "ok";
+}
+
+/**
+ * null → open modal to enter time (→ ○ on submit)
+ * ○   → ✕ (clear time)
+ * ✕   → null
+ */
+export async function handleShiftToggle(interaction: ButtonInteraction): Promise<void> {
+  const { sessionId, date } = parseSessionAndDate(interaction.customId, SHIFT_TOGGLE_PREFIX);
   const session = submitSessions.get(sessionId);
-  if (!session || session.userId !== interaction.user.id) {
+  const check = checkSession(session, interaction.user.id);
+
+  if (check === "not_found") {
     await interaction.reply({ content: "このフォームはあなたのものではないか、期限切れです。", ephemeral: true });
     return;
   }
-  if (Date.now() > session.expiresAt) {
+  if (check === "expired") {
     submitSessions.delete(sessionId);
     await interaction.reply({ content: "フォームの有効期限が切れました。もう一度 `/shift submit` を実行してください。", ephemeral: true });
     return;
   }
 
-  const current = session.selections[date];
-  session.selections[date] = current === null ? "○" : current === "○" ? "✕" : null;
+  const sel = session!.selections[date]!;
+
+  if (sel.status === null) {
+    // 未選択 → モーダルで時間を入力して ○ にする
+    const modal = new ModalBuilder()
+      .setCustomId(`${SHIFT_TIME_MODAL_PREFIX}${sessionId}:${date}`)
+      .setTitle(`${formatDateLabel(date)} の時間を入力`);
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("start")
+          .setLabel("出勤時刻（例: 10:00）")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("10:00")
+          .setRequired(true)
+          .setMaxLength(5),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("end")
+          .setLabel("退勤時刻（例: 18:00）")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("18:00")
+          .setRequired(true)
+          .setMaxLength(5),
+      ),
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (sel.status === "○") {
+    session!.selections[date] = { status: "✕" };
+  } else {
+    session!.selections[date] = { status: null };
+  }
 
   await interaction.update({
-    embeds: [buildSubmitEmbed(session)],
-    components: buildSubmitComponents(sessionId, session),
+    embeds: [buildSubmitEmbed(session!)],
+    components: buildSubmitComponents(sessionId, session!),
+  });
+}
+
+/** モーダル送信 → ○ として時間を保存してフォームを更新 */
+export async function handleShiftTimeModal(interaction: ModalSubmitInteraction): Promise<void> {
+  const { sessionId, date } = parseSessionAndDate(interaction.customId, SHIFT_TIME_MODAL_PREFIX);
+  const session = submitSessions.get(sessionId);
+  const check = checkSession(session, interaction.user.id);
+
+  if (check !== "ok") {
+    await interaction.reply({ content: "フォームが見つからないか期限切れです。もう一度 `/shift submit` を実行してください。", ephemeral: true });
+    return;
+  }
+
+  const startRaw = interaction.fields.getTextInputValue("start");
+  const endRaw   = interaction.fields.getTextInputValue("end");
+  const start = parseTime(startRaw);
+  const end   = parseTime(endRaw);
+
+  if (!start || !end) {
+    await interaction.reply({ content: "❌ 時刻の形式が正しくありません。`HH:MM`（例: 10:00）で入力してください。", ephemeral: true });
+    return;
+  }
+  if (calcMinutes(start, end) <= 0) {
+    await interaction.reply({ content: "❌ 退勤時刻は出勤時刻より後にしてください。", ephemeral: true });
+    return;
+  }
+
+  session!.selections[date] = { status: "○", start, end };
+
+  await interaction.deferUpdate();
+  await interaction.editReply({
+    embeds: [buildSubmitEmbed(session!)],
+    components: buildSubmitComponents(sessionId, session!),
   });
 }
 
@@ -776,11 +843,13 @@ export async function handleShiftToggle(interaction: ButtonInteraction): Promise
 export async function handleShiftConfirm(interaction: ButtonInteraction): Promise<void> {
   const sessionId = interaction.customId.slice(SHIFT_CONFIRM_PREFIX.length);
   const session = submitSessions.get(sessionId);
-  if (!session || session.userId !== interaction.user.id) {
+  const check = checkSession(session, interaction.user.id);
+
+  if (check === "not_found") {
     await interaction.reply({ content: "このフォームはあなたのものではないか、期限切れです。", ephemeral: true });
     return;
   }
-  if (Date.now() > session.expiresAt) {
+  if (check === "expired") {
     submitSessions.delete(sessionId);
     await interaction.reply({ content: "フォームの有効期限が切れました。もう一度 `/shift submit` を実行してください。", ephemeral: true });
     return;
@@ -788,15 +857,18 @@ export async function handleShiftConfirm(interaction: ButtonInteraction): Promis
 
   await interaction.deferUpdate();
 
-  const workDays = session.dates.filter((d) => session.selections[d] === "○");
-  const offDays  = session.dates.filter((d) => session.selections[d] === "✕");
+  const s = session!;
+  const workDays = s.dates.filter((d) => s.selections[d]?.status === "○");
+  const offDays  = s.dates.filter((d) => s.selections[d]?.status === "✕");
+  const unset    = s.dates.filter((d) => s.selections[d]?.status === null);
 
-  // Register all ○ days
-  const saved: string[] = [];
+  const saved: { date: string; start: string; end: string }[] = [];
   for (const date of workDays) {
+    const sel = s.selections[date]!;
+    if (!sel.start || !sel.end) continue;
     try {
-      await addShift(session.guildId, session.userId, date, session.startTime, session.endTime, null);
-      saved.push(date);
+      await addShift(s.guildId, s.userId, date, sel.start, sel.end, null);
+      saved.push({ date, start: sel.start, end: sel.end });
     } catch (err) {
       logger.error(`[shift:submit] Failed to save shift for ${date}`, err);
     }
@@ -804,21 +876,22 @@ export async function handleShiftConfirm(interaction: ButtonInteraction): Promis
 
   submitSessions.delete(sessionId);
 
-  const mins = calcMinutes(session.startTime, session.endTime);
   const lines: string[] = [];
   if (saved.length > 0) {
-    lines.push(`✅ **出勤（${saved.length}日）**: ${saved.map(formatDateLabel).join("、")}`);
-    lines.push(`　 時間: ${session.startTime}〜${session.endTime}（${formatDuration(mins)}）`);
+    const detail = saved.map(({ date, start, end }) => {
+      const mins = calcMinutes(start, end);
+      return `　🟢 ${formatDateLabel(date)} ${start}〜${end}（${formatDuration(mins)}）`;
+    });
+    lines.push(`✅ **出勤（${saved.length}日）**`, ...detail);
   }
   if (offDays.length > 0) {
-    lines.push(`✕ **休み（${offDays.length}日）**: ${offDays.map(formatDateLabel).join("、")}`);
+    lines.push(`🔴 **休み（${offDays.length}日）**: ${offDays.map(formatDateLabel).join("、")}`);
   }
-  const unset = session.dates.filter((d) => session.selections[d] === null);
   if (unset.length > 0) {
-    lines.push(`— **未回答（${unset.length}日）**: ${unset.map(formatDateLabel).join("、")}`);
+    lines.push(`⬜ **未回答（${unset.length}日）**: ${unset.map(formatDateLabel).join("、")}`);
   }
-  if (saved.length === 0) {
-    lines.unshift("出勤日が選択されていないためシフトは登録されませんでした。");
+  if (saved.length === 0 && offDays.length === 0) {
+    lines.unshift("何も選択されていないためシフトは登録されませんでした。");
   }
 
   const resultEmbed = new EmbedBuilder()
