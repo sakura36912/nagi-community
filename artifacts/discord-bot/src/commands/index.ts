@@ -958,7 +958,7 @@ interface ShopGroupConfig {
 
 const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
   general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623, effectChoices: DEFAULT_EFFECT_CHOICES },
-  group:   { displayName: "組別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c, effectChoices: DEFAULT_EFFECT_CHOICES, licenseSetup: true },
+  group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c, effectChoices: DEFAULT_EFFECT_CHOICES, licenseSetup: true },
   vc:      { displayName: "非公開VCショップ",       emoji: "🔒", category: "vc",      color: 0x3498db, effectChoices: VC_EFFECT_CHOICES,     vcCategorySetup: true },
   ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6, effectChoices: VC_EFFECT_CHOICES,     uraCategorySetup: true, uraChannelSetup: true },
 };
