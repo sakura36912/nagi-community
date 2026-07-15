@@ -39,7 +39,7 @@ const SHIFT_TIME_OPTIONS = ["21:00", "22:00", "23:00"];
 // ─── In-memory submit sessions ────────────────────────────────────────────────
 
 interface DaySelection {
-  status: "○" | "✕" | null;
+  status: "○" | null;
   start?: string;  // "HH:MM"
   end?: string;    // "HH:MM"
 }
@@ -175,10 +175,8 @@ function buildSubmitComponents(
     const dow = WEEKDAY_JA[d.getDay()]!;
     const base = `${d.getMonth() + 1}/${d.getDate()}(${dow})`;
     const sel = session.selections[date]!;
-    const mark  = sel.status === "○" ? " ○" : sel.status === "✕" ? " ✕" : " —";
-    const style = sel.status === "○" ? ButtonStyle.Success
-                : sel.status === "✕" ? ButtonStyle.Danger
-                : ButtonStyle.Secondary;
+    const mark  = sel.status === "○" ? " ○" : " —";
+    const style = sel.status === "○" ? ButtonStyle.Success : ButtonStyle.Secondary;
     return new ButtonBuilder()
       .setCustomId(`${SHIFT_TOGGLE_PREFIX}${sessionId}:${date}`)
       .setLabel(base + mark)
@@ -210,7 +208,6 @@ function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
       const time = sel.start && sel.end ? ` ${sel.start}〜${sel.end}` : "";
       return `🟢 ○  ${formatDateLabel(date)}${time}`;
     }
-    if (sel.status === "✕") return `🔴 ✕  ${formatDateLabel(date)}`;
     return `⬜ —  ${formatDateLabel(date)}`;
   });
   return new EmbedBuilder()
@@ -220,7 +217,7 @@ function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
       `**${formatDateLabel(from)} 〜 ${formatDateLabel(to)}**\n\n` +
       lines.join("\n"),
     )
-    .setFooter({ text: "— ボタン → 時間選択 ／ ○ → ✕ ／ ✕ → — ／ 選び終わったら「提出する」（15分以内）" });
+    .setFooter({ text: "— ボタン → 日付・時間を選択 ／ ○ → 取り消し（—に戻る）／ 選び終わったら「提出する」（15分以内）" });
 }
 
 // ─── Embed builders ──────────────────────────────────────────────────────────
@@ -844,11 +841,8 @@ export async function handleShiftToggle(interaction: ButtonInteraction): Promise
     return;
   }
 
-  if (sel.status === "○") {
-    s.selections[date] = { status: "✕" };
-  } else {
-    s.selections[date] = { status: null };
-  }
+  // ○ → 取り消して — に戻る
+  s.selections[date] = { status: null };
   s.picking = undefined;
 
   await interaction.update({
@@ -929,8 +923,6 @@ export async function handleShiftConfirm(interaction: ButtonInteraction): Promis
 
   const s = session!;
   const workDays = s.dates.filter((d) => s.selections[d]?.status === "○");
-  const offDays  = s.dates.filter((d) => s.selections[d]?.status === "✕");
-  const unset    = s.dates.filter((d) => s.selections[d]?.status === null);
 
   const saved: { date: string; start: string; end: string }[] = [];
   for (const date of workDays) {
@@ -953,15 +945,8 @@ export async function handleShiftConfirm(interaction: ButtonInteraction): Promis
       return `　🟢 ${formatDateLabel(date)} ${start}〜${end}（${formatDuration(mins)}）`;
     });
     lines.push(`✅ **出勤（${saved.length}日）**`, ...detail);
-  }
-  if (offDays.length > 0) {
-    lines.push(`🔴 **休み（${offDays.length}日）**: ${offDays.map(formatDateLabel).join("、")}`);
-  }
-  if (unset.length > 0) {
-    lines.push(`⬜ **未回答（${unset.length}日）**: ${unset.map(formatDateLabel).join("、")}`);
-  }
-  if (saved.length === 0 && offDays.length === 0) {
-    lines.unshift("何も選択されていないためシフトは登録されませんでした。");
+  } else {
+    lines.push("出勤日が選択されていないためシフトは登録されませんでした。");
   }
 
   const resultEmbed = new EmbedBuilder()
