@@ -767,13 +767,22 @@ function buildTimePickerComponents(
   sessionId: string,
   date: string,
   picking: "start" | "end",
+  session: SubmitSession,
   selectedStart?: string,
 ): ActionRowBuilder<ButtonBuilder>[] {
   const prefix = picking === "start" ? SHIFT_PICK_START_PREFIX : SHIFT_PICK_END_PREFIX;
-  // 退勤は出勤で選んだ時刻を除外する
-  const times = picking === "end" && selectedStart
-    ? SHIFT_TIME_OPTIONS.filter((t) => t !== selectedStart)
-    : SHIFT_TIME_OPTIONS;
+
+  // 出勤: 他の日ですでに使われている出勤時刻を除外
+  // 退勤: 今日の出勤時刻を除外
+  const usedStarts = new Set(
+    session.dates
+      .filter((d) => d !== date && session.selections[d]?.status === "○")
+      .map((d) => session.selections[d]!.start)
+      .filter(Boolean) as string[],
+  );
+  const times = picking === "start"
+    ? SHIFT_TIME_OPTIONS.filter((t) => !usedStarts.has(t))
+    : SHIFT_TIME_OPTIONS.filter((t) => t !== selectedStart);
   const timeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     times.map((t) =>
       new ButtonBuilder()
@@ -830,7 +839,7 @@ export async function handleShiftToggle(interaction: ButtonInteraction): Promise
     s.picking = { date };
     await interaction.update({
       embeds: [buildTimePickerEmbed(date, "start")],
-      components: buildTimePickerComponents(sessionId, date, "start"),
+      components: buildTimePickerComponents(sessionId, date, "start", s),
     });
     return;
   }
@@ -859,7 +868,7 @@ export async function handleShiftPickStart(interaction: ButtonInteraction): Prom
   session!.picking = { date, start: time };
   await interaction.update({
     embeds: [buildTimePickerEmbed(date, "end", time)],
-    components: buildTimePickerComponents(sessionId, date, "end", time),
+    components: buildTimePickerComponents(sessionId, date, "end", session!, time),
   });
 }
 
