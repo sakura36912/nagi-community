@@ -770,16 +770,16 @@ function buildTimePickerComponents(
   selectedStart?: string,
 ): ActionRowBuilder<ButtonBuilder>[] {
   const prefix = picking === "start" ? SHIFT_PICK_START_PREFIX : SHIFT_PICK_END_PREFIX;
+  // 退勤は出勤で選んだ時刻を除外する
+  const times = picking === "end" && selectedStart
+    ? SHIFT_TIME_OPTIONS.filter((t) => t !== selectedStart)
+    : SHIFT_TIME_OPTIONS;
   const timeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    SHIFT_TIME_OPTIONS.map((t) =>
+    times.map((t) =>
       new ButtonBuilder()
         .setCustomId(`${prefix}${sessionId}:${date}:${t}`)
         .setLabel(t)
-        .setStyle(
-          picking === "end" && selectedStart && calcMinutes(selectedStart, t) <= 0
-            ? ButtonStyle.Secondary  // 選べない時刻はグレーアウト気味
-            : ButtonStyle.Primary,
-        ),
+        .setStyle(ButtonStyle.Primary),
     ),
   );
   const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -875,10 +875,6 @@ export async function handleShiftPickEnd(interaction: ButtonInteraction): Promis
   const start = s.picking?.start;
   if (!start) {
     await interaction.reply({ content: "出勤時刻が選択されていません。もう一度やり直してください。", ephemeral: true });
-    return;
-  }
-  if (calcMinutes(start, end) <= 0) {
-    await interaction.reply({ content: "❌ 退勤時刻は出勤時刻より後にしてください。", ephemeral: true });
     return;
   }
   s.selections[date] = { status: "○", start, end };
