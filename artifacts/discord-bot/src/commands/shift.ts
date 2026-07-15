@@ -26,12 +26,10 @@ import {
 
 // ─── Button prefix constants ─────────────────────────────────────────────────
 
-export const SHIFT_TOGGLE_PREFIX      = "shift:toggle:";
-export const SHIFT_CONFIRM_PREFIX     = "shift:confirm:";
-export const SHIFT_CANCEL_PREFIX      = "shift:cancel:";
-export const SHIFT_PICK_START_PREFIX  = "shift:pick-start:";  // shift:pick-start:{sid}:{date}:{time}
-export const SHIFT_PICK_END_PREFIX    = "shift:pick-end:";    // shift:pick-end:{sid}:{date}:{time}
-export const SHIFT_PICK_BACK_PREFIX   = "shift:pick-back:";   // shift:pick-back:{sid}
+export const SHIFT_TOGGLE_PREFIX = "shift:toggle:";   // shift:toggle:{sid}:{date}
+export const SHIFT_CONFIRM_PREFIX = "shift:confirm:"; // shift:confirm:{sid}
+export const SHIFT_CANCEL_PREFIX  = "shift:cancel:";  // shift:cancel:{sid}
+export const SHIFT_TIME_PREFIX    = "shift:time:";    // shift:time:{sid}:{time}
 
 /** 選択肢として表示する時刻一覧 */
 const SHIFT_TIME_OPTIONS = ["21:00", "22:00", "23:00"];
@@ -50,8 +48,8 @@ interface SubmitSession {
   dates: string[];                        // Mon→Sun "YYYY-MM-DD"
   selections: Record<string, DaySelection>;
   expiresAt: number;
-  /** 現在タイムピッカーで選択中の日・出勤時刻 */
-  picking?: { date: string; start?: string };
+  /** 時間ボタン待ち状態の日付 */
+  activeDate?: string;
 }
 
 const submitSessions = new Map<string, SubmitSession>();
@@ -166,6 +164,12 @@ function getWeekDates(weekOffset = 0): string[] {
   });
 }
 
+/** 次の時刻（1時間後）を返す。23:00 → 00:00 */
+function nextHour(time: string): string {
+  const [h = 0, m = 0] = time.split(":").map(Number);
+  return `${((h + 1) % 24).toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
+}
+
 function buildSubmitComponents(
   sessionId: string,
   session: SubmitSession,
@@ -175,17 +179,38 @@ function buildSubmitComponents(
     const dow = WEEKDAY_JA[d.getDay()]!;
     const base = `${d.getMonth() + 1}/${d.getDate()}(${dow})`;
     const sel = session.selections[date]!;
-    const mark  = sel.status === "○" ? " ○" : " —";
-    const style = sel.status === "○" ? ButtonStyle.Success : ButtonStyle.Secondary;
+    const isActive = session.activeDate === date;
+
+    let label: string;
+    let style: ButtonStyle;
+    if (sel.status === "○") {
+      label = `${base} ${sel.start}`;
+      style = ButtonStyle.Success;
+    } else if (isActive) {
+      label = `${base} ◀`;
+      style = ButtonStyle.Primary;
+    } else {
+      label = base;
+      style = ButtonStyle.Secondary;
+    }
     return new ButtonBuilder()
       .setCustomId(`${SHIFT_TOGGLE_PREFIX}${sessionId}:${date}`)
-      .setLabel(base + mark)
+      .setLabel(label)
       .setStyle(style);
   });
 
+  const timeButtons = SHIFT_TIME_OPTIONS.map((t) =>
+    new ButtonBuilder()
+      .setCustomId(`${SHIFT_TIME_PREFIX}${sessionId}:${t}`)
+      .setLabel(t)
+      .setStyle(session.activeDate ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(!session.activeDate),
+  );
+
   return [
-    new ActionRowBuilder<ButtonBuilder>().addComponents(dayButtons.slice(0, 5)),  // Mon–Fri
-    new ActionRowBuilder<ButtonBuilder>().addComponents(dayButtons.slice(5, 7)),  // Sat, Sun
+    new ActionRowBuilder<ButtonBuilder>().addComponents(dayButtons.slice(0, 5)),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(dayButtons.slice(5, 7)),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(timeButtons),
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`${SHIFT_CONFIRM_PREFIX}${sessionId}`)
@@ -204,11 +229,10 @@ function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
   const to   = session.dates[6]!;
   const lines = session.dates.map((date) => {
     const sel = session.selections[date]!;
-    if (sel.status === "○") {
-      const time = sel.start && sel.end ? ` ${sel.start}〜${sel.end}` : "";
-      return `🟢 ○  ${formatDateLabel(date)}${time}`;
-    }
-    return `⬜ —  ${formatDateLabel(date)}`;
+    const isActive = session.activeDate === date;
+    if (sel.status === "○") return `🟢 ${formatDateLabel(date)}  ${sel.start}〜${sel.end}`;
+    if (isActive)            return `📍 ${formatDateLabel(date)}  ← 時間を選択`;
+    return                          `⬜ ${formatDateLabel(date)}`;
   });
   return new EmbedBuilder()
     .setTitle("📋 シフト提出")
@@ -217,7 +241,7 @@ function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
       `**${formatDateLabel(from)} 〜 ${formatDateLabel(to)}**\n\n` +
       lines.join("\n"),
     )
-    .setFooter({ text: "— ボタン → 日付・時間を選択 ／ ○ → 取り消し（—に戻る）／ 選び終わったら「提出する」（15分以内）" });
+    .setFooter({ text: "① 日付を押す → ② 時間を押す ／ 🟢 を押すと取り消し ／ 選び終わったら「提出する」（15分以内）" });
 }
 
 // ─── Embed builders ──────────────────────────────────────────────────────────
@@ -727,27 +751,21 @@ export const shiftCommand: Command = {
 
 // ─── /shift submit — button handlers ─────────────────────────────────────────
 
+function parseSessionId(customId: string, prefix: string): string {
+  return customId.slice(prefix.length);
+}
+
 function parseSessionDate(customId: string, prefix: string): { sessionId: string; date: string } {
   const rest = customId.slice(prefix.length);
   const idx = rest.indexOf(":");
   return { sessionId: rest.slice(0, idx), date: rest.slice(idx + 1) };
 }
 
-function parseSessionDateTime(
-  customId: string,
-  prefix: string,
-): { sessionId: string; date: string; time: string } {
+function parseSessionTime(customId: string, prefix: string): { sessionId: string; time: string } {
+  // customId = "{prefix}{sessionId}:{time}"  time には : が含まれる (HH:MM)
   const rest = customId.slice(prefix.length);
-  // format: {sessionId}:{date}:{time}  e.g. abc123:2026-07-14:21:00
-  // sessionId has no colon; date is YYYY-MM-DD (has dashes, not colons); time is HH:MM
-  // Split on first two colons: sessionId : YYYY-MM-DD : HH:MM
-  const first = rest.indexOf(":");
-  const sessionId = rest.slice(0, first);
-  const rest2 = rest.slice(first + 1);
-  // date = next 10 chars (YYYY-MM-DD), then colon, then time
-  const date = rest2.slice(0, 10);
-  const time = rest2.slice(11); // skip the colon
-  return { sessionId, date, time };
+  const idx = rest.indexOf(":");
+  return { sessionId: rest.slice(0, idx), time: rest.slice(idx + 1) };
 }
 
 function checkSession(
@@ -759,59 +777,11 @@ function checkSession(
   return "ok";
 }
 
-/** タイムピッカー画面（出勤 or 退勤）のボタン行を生成 */
-function buildTimePickerComponents(
-  sessionId: string,
-  date: string,
-  picking: "start" | "end",
-  session: SubmitSession,
-  selectedStart?: string,
-): ActionRowBuilder<ButtonBuilder>[] {
-  const prefix = picking === "start" ? SHIFT_PICK_START_PREFIX : SHIFT_PICK_END_PREFIX;
-
-  // 出勤: 他の日ですでに使われている出勤時刻を除外
-  // 退勤: 今日の出勤時刻を除外
-  const usedStarts = new Set(
-    session.dates
-      .filter((d) => d !== date && session.selections[d]?.status === "○")
-      .map((d) => session.selections[d]!.start)
-      .filter(Boolean) as string[],
-  );
-  const times = picking === "start"
-    ? SHIFT_TIME_OPTIONS.filter((t) => !usedStarts.has(t))
-    : SHIFT_TIME_OPTIONS.filter((t) => t !== selectedStart);
-  const timeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    times.map((t) =>
-      new ButtonBuilder()
-        .setCustomId(`${prefix}${sessionId}:${date}:${t}`)
-        .setLabel(t)
-        .setStyle(ButtonStyle.Primary),
-    ),
-  );
-  const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`${SHIFT_PICK_BACK_PREFIX}${sessionId}`)
-      .setLabel("← 戻る")
-      .setStyle(ButtonStyle.Secondary),
-  );
-  return [timeRow, backRow];
-}
-
-/** タイムピッカー画面の Embed */
-function buildTimePickerEmbed(date: string, picking: "start" | "end", selectedStart?: string): EmbedBuilder {
-  const title = picking === "start"
-    ? `🕐 ${formatDateLabel(date)} — 出勤時刻を選択`
-    : `🕐 ${formatDateLabel(date)} — 退勤時刻を選択（出勤: ${selectedStart}）`;
-  return new EmbedBuilder()
-    .setTitle(title)
-    .setColor(0xfee75c)
-    .setDescription(SHIFT_TIME_OPTIONS.join("　/　"));
-}
-
 /**
- * — → 出勤時刻ピッカーへ遷移
- * ○ → ✕
- * ✕ → —
+ * 日付ボタン:
+ *   — (非アクティブ) → アクティブ化（時間ボタン待ち）
+ *   — (アクティブ)   → 解除
+ *   ○               → — に戻す（取り消し）
  */
 export async function handleShiftToggle(interaction: ButtonInteraction): Promise<void> {
   const { sessionId, date } = parseSessionDate(interaction.customId, SHIFT_TOGGLE_PREFIX);
@@ -831,19 +801,17 @@ export async function handleShiftToggle(interaction: ButtonInteraction): Promise
   const s = session!;
   const sel = s.selections[date]!;
 
-  if (sel.status === null) {
-    // 未選択 → 出勤時刻ピッカーへ
-    s.picking = { date };
-    await interaction.update({
-      embeds: [buildTimePickerEmbed(date, "start")],
-      components: buildTimePickerComponents(sessionId, date, "start", s),
-    });
-    return;
+  if (sel.status === "○") {
+    // 確定済み → 取り消し
+    s.selections[date] = { status: null };
+    s.activeDate = undefined;
+  } else if (s.activeDate === date) {
+    // すでにアクティブ → 解除
+    s.activeDate = undefined;
+  } else {
+    // → アクティブ化（時間ボタン待ち）
+    s.activeDate = date;
   }
-
-  // ○ → 取り消して — に戻る
-  s.selections[date] = { status: null };
-  s.picking = undefined;
 
   await interaction.update({
     embeds: [buildSubmitEmbed(s)],
@@ -851,55 +819,36 @@ export async function handleShiftToggle(interaction: ButtonInteraction): Promise
   });
 }
 
-/** 出勤時刻を選択 → 退勤時刻ピッカーへ */
-export async function handleShiftPickStart(interaction: ButtonInteraction): Promise<void> {
-  const { sessionId, date, time } = parseSessionDateTime(interaction.customId, SHIFT_PICK_START_PREFIX);
+/**
+ * 時間ボタン: アクティブな日付に時間を割り当てて ○ 確定
+ */
+export async function handleShiftTime(interaction: ButtonInteraction): Promise<void> {
+  const { sessionId, time } = parseSessionTime(interaction.customId, SHIFT_TIME_PREFIX);
   const session = submitSessions.get(sessionId);
-  if (checkSession(session, interaction.user.id) !== "ok") {
-    await interaction.reply({ content: "フォームが期限切れです。もう一度 `/shift submit` を実行してください。", ephemeral: true });
-    return;
-  }
-  session!.picking = { date, start: time };
-  await interaction.update({
-    embeds: [buildTimePickerEmbed(date, "end", time)],
-    components: buildTimePickerComponents(sessionId, date, "end", session!, time),
-  });
-}
+  const check = checkSession(session, interaction.user.id);
 
-/** 退勤時刻を選択 → カレンダーに戻り ○ を確定 */
-export async function handleShiftPickEnd(interaction: ButtonInteraction): Promise<void> {
-  const { sessionId, date, time: end } = parseSessionDateTime(interaction.customId, SHIFT_PICK_END_PREFIX);
-  const session = submitSessions.get(sessionId);
-  if (checkSession(session, interaction.user.id) !== "ok") {
-    await interaction.reply({ content: "フォームが期限切れです。もう一度 `/shift submit` を実行してください。", ephemeral: true });
+  if (check === "not_found") {
+    await interaction.reply({ content: "このフォームはあなたのものではないか、期限切れです。", ephemeral: true });
     return;
   }
+  if (check === "expired") {
+    submitSessions.delete(sessionId);
+    await interaction.reply({ content: "フォームの有効期限が切れました。もう一度 `/shift submit` を実行してください。", ephemeral: true });
+    return;
+  }
+
   const s = session!;
-  const start = s.picking?.start;
-  if (!start) {
-    await interaction.reply({ content: "出勤時刻が選択されていません。もう一度やり直してください。", ephemeral: true });
+  if (!s.activeDate) {
+    await interaction.reply({ content: "先に日付ボタンを押してください。", ephemeral: true });
     return;
   }
-  s.selections[date] = { status: "○", start, end };
-  s.picking = undefined;
+
+  s.selections[s.activeDate] = { status: "○", start: time, end: nextHour(time) };
+  s.activeDate = undefined;
+
   await interaction.update({
     embeds: [buildSubmitEmbed(s)],
     components: buildSubmitComponents(sessionId, s),
-  });
-}
-
-/** 戻るボタン → カレンダーに戻る（選択をリセットせずそのまま） */
-export async function handleShiftPickBack(interaction: ButtonInteraction): Promise<void> {
-  const sessionId = interaction.customId.slice(SHIFT_PICK_BACK_PREFIX.length);
-  const session = submitSessions.get(sessionId);
-  if (checkSession(session, interaction.user.id) !== "ok") {
-    await interaction.reply({ content: "フォームが期限切れです。もう一度 `/shift submit` を実行してください。", ephemeral: true });
-    return;
-  }
-  session!.picking = undefined;
-  await interaction.update({
-    embeds: [buildSubmitEmbed(session!)],
-    components: buildSubmitComponents(sessionId, session!),
   });
 }
 

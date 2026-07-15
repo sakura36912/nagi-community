@@ -13,15 +13,11 @@ import {
   SHIFT_TOGGLE_PREFIX,
   SHIFT_CONFIRM_PREFIX,
   SHIFT_CANCEL_PREFIX,
-  SHIFT_PICK_START_PREFIX,
-  SHIFT_PICK_END_PREFIX,
-  SHIFT_PICK_BACK_PREFIX,
+  SHIFT_TIME_PREFIX,
   handleShiftToggle,
   handleShiftConfirm,
   handleShiftCancel,
-  handleShiftPickStart,
-  handleShiftPickEnd,
-  handleShiftPickBack,
+  handleShiftTime,
 } from "./commands";
 import { buildSheetEmbed, findSelfIntro } from "./commands/sheet";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
@@ -527,16 +523,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleShiftToggle(interaction);
       return;
     }
-    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_PICK_START_PREFIX)) {
-      await handleShiftPickStart(interaction);
-      return;
-    }
-    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_PICK_END_PREFIX)) {
-      await handleShiftPickEnd(interaction);
-      return;
-    }
-    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_PICK_BACK_PREFIX)) {
-      await handleShiftPickBack(interaction);
+    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_TIME_PREFIX)) {
+      await handleShiftTime(interaction);
       return;
     }
     if (interaction.isButton() && interaction.customId.startsWith(SHIFT_CONFIRM_PREFIX)) {

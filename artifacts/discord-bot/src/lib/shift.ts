@@ -139,7 +139,8 @@ export async function getShiftsInRange(
 export function calcMinutes(start: string, end: string): number {
   const [sh = 0, sm = 0] = start.split(":").map(Number);
   const [eh = 0, em = 0] = end.split(":").map(Number);
-  return (eh * 60 + em) - (sh * 60 + sm);
+  const diff = (eh * 60 + em) - (sh * 60 + sm);
+  return diff < 0 ? diff + 24 * 60 : diff; // 深夜またぎ対応
 }
 
 export function formatDuration(minutes: number): string {

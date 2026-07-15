@@ -1784,15 +1784,11 @@ export {
   SHIFT_TOGGLE_PREFIX,
   SHIFT_CONFIRM_PREFIX,
   SHIFT_CANCEL_PREFIX,
-  SHIFT_PICK_START_PREFIX,
-  SHIFT_PICK_END_PREFIX,
-  SHIFT_PICK_BACK_PREFIX,
+  SHIFT_TIME_PREFIX,
   handleShiftToggle,
   handleShiftConfirm,
   handleShiftCancel,
-  handleShiftPickStart,
-  handleShiftPickEnd,
-  handleShiftPickBack,
+  handleShiftTime,
 } from "./shift";
 import { shiftCommand } from "./shift";
 import { vcsalaryCommand } from "./vcsalary";
