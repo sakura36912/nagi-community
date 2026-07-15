@@ -284,9 +284,8 @@ export function buildShiftEmbeds(
   const fields: { name: string; value: string }[] = [];
   for (const [date, dayShifts] of [...byDate.entries()].sort()) {
     const lines = dayShifts.map((s) => {
-      const mins = calcMinutes(s.startTime, s.endTime);
       const note = s.note ? ` — ${s.note}` : "";
-      return `• <@${s.userId}> ${s.startTime}〜${s.endTime}（${formatDuration(mins)}）${note}`;
+      return `• <@${s.userId}> ${s.startTime}${note}`;
     });
     fields.push({
       name: `📅 ${formatDateLabel(date)}`,
