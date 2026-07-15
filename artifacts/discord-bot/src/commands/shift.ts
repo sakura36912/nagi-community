@@ -238,8 +238,7 @@ function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
     const sel = session.selections[date]!;
     const isActive = session.activeDate === date;
     if (sel.times.length > 0) {
-      const slots = sel.times.map((t) => `${t}〜${nextHour(t)}`).join("  ");
-      return `🟢 ${formatDateLabel(date)}  ${slots}`;
+      return `🟢 ${formatDateLabel(date)}  ${sel.times.join("  ")}`;
     }
     if (isActive) return `📍 ${formatDateLabel(date)}  ← 時間を選択`;
     return               `⬜ ${formatDateLabel(date)}`;
@@ -909,7 +908,7 @@ export async function handleShiftConfirm(interaction: ButtonInteraction): Promis
       byDate.get(entry.date)!.push(entry);
     }
     for (const [date, slots] of byDate) {
-      const slotStr = slots.map(({ start, end }) => `${start}〜${end}`).join("  ");
+      const slotStr = slots.map(({ start }) => start).join("  ");
       lines.push(`　🟢 ${formatDateLabel(date)}  ${slotStr}`);
     }
     lines.unshift(`✅ **${workDays.length}日・計${saved.length}スロット登録**`);
