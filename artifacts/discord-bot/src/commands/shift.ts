@@ -37,9 +37,7 @@ const SHIFT_TIME_OPTIONS = ["21:00", "22:00", "23:00"];
 // ─── In-memory submit sessions ────────────────────────────────────────────────
 
 interface DaySelection {
-  status: "○" | null;
-  start?: string;  // "HH:MM"
-  end?: string;    // "HH:MM"
+  times: string[];  // 選択済み時刻スロット ["21:00", "22:00"] など
 }
 
 interface SubmitSession {
@@ -180,11 +178,15 @@ function buildSubmitComponents(
     const base = `${d.getMonth() + 1}/${d.getDate()}(${dow})`;
     const sel = session.selections[date]!;
     const isActive = session.activeDate === date;
+    const hasTimes = sel.times.length > 0;
 
     let label: string;
     let style: ButtonStyle;
-    if (sel.status === "○") {
-      label = `${base} ${sel.start}`;
+    if (hasTimes && isActive) {
+      label = `${base} ${sel.times.join(" ")} ◀`;
+      style = ButtonStyle.Success;
+    } else if (hasTimes) {
+      label = `${base} ${sel.times.join(" ")}`;
       style = ButtonStyle.Success;
     } else if (isActive) {
       label = `${base} ◀`;
@@ -199,11 +201,16 @@ function buildSubmitComponents(
       .setStyle(style);
   });
 
+  const activeTimes = session.activeDate ? session.selections[session.activeDate]!.times : [];
   const timeButtons = SHIFT_TIME_OPTIONS.map((t) =>
     new ButtonBuilder()
       .setCustomId(`${SHIFT_TIME_PREFIX}${sessionId}:${t}`)
       .setLabel(t)
-      .setStyle(session.activeDate ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setStyle(
+        !session.activeDate ? ButtonStyle.Secondary
+        : activeTimes.includes(t) ? ButtonStyle.Success
+        : ButtonStyle.Primary,
+      )
       .setDisabled(!session.activeDate),
   );
 
@@ -230,9 +237,12 @@ function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
   const lines = session.dates.map((date) => {
     const sel = session.selections[date]!;
     const isActive = session.activeDate === date;
-    if (sel.status === "○") return `🟢 ${formatDateLabel(date)}  ${sel.start}〜${sel.end}`;
-    if (isActive)            return `📍 ${formatDateLabel(date)}  ← 時間を選択`;
-    return                          `⬜ ${formatDateLabel(date)}`;
+    if (sel.times.length > 0) {
+      const slots = sel.times.map((t) => `${t}〜${nextHour(t)}`).join("  ");
+      return `🟢 ${formatDateLabel(date)}  ${slots}`;
+    }
+    if (isActive) return `📍 ${formatDateLabel(date)}  ← 時間を選択`;
+    return               `⬜ ${formatDateLabel(date)}`;
   });
   return new EmbedBuilder()
     .setTitle("📋 シフト提出")
@@ -596,7 +606,7 @@ export const shiftCommand: Command = {
         guildId,
         userId: interaction.user.id,
         dates,
-        selections: Object.fromEntries(dates.map((d) => [d, { status: null }])),
+        selections: Object.fromEntries(dates.map((d) => [d, { times: [] }])),
         expiresAt: Date.now() + 15 * 60 * 1000,
       };
       submitSessions.set(sessionId, session);
@@ -799,17 +809,12 @@ export async function handleShiftToggle(interaction: ButtonInteraction): Promise
   }
 
   const s = session!;
-  const sel = s.selections[date]!;
 
-  if (sel.status === "○") {
-    // 確定済み → 取り消し
-    s.selections[date] = { status: null };
-    s.activeDate = undefined;
-  } else if (s.activeDate === date) {
-    // すでにアクティブ → 解除
+  if (s.activeDate === date) {
+    // アクティブ中 → 解除
     s.activeDate = undefined;
   } else {
-    // → アクティブ化（時間ボタン待ち）
+    // 非アクティブ → アクティブ化（時間ボタン待ち／編集）
     s.activeDate = date;
   }
 
@@ -843,8 +848,15 @@ export async function handleShiftTime(interaction: ButtonInteraction): Promise<v
     return;
   }
 
-  s.selections[s.activeDate] = { status: "○", start: time, end: nextHour(time) };
-  s.activeDate = undefined;
+  const times = s.selections[s.activeDate]!.times;
+  const idx = times.indexOf(time);
+  if (idx === -1) {
+    times.push(time);
+    times.sort(); // 昇順に保つ
+  } else {
+    times.splice(idx, 1);
+  }
+  // activeDate はそのまま保持（続けて他の時間を追加・削除できる）
 
   await interaction.update({
     embeds: [buildSubmitEmbed(s)],
@@ -871,17 +883,18 @@ export async function handleShiftConfirm(interaction: ButtonInteraction): Promis
   await interaction.deferUpdate();
 
   const s = session!;
-  const workDays = s.dates.filter((d) => s.selections[d]?.status === "○");
+  const workDays = s.dates.filter((d) => s.selections[d]!.times.length > 0);
 
   const saved: { date: string; start: string; end: string }[] = [];
   for (const date of workDays) {
-    const sel = s.selections[date]!;
-    if (!sel.start || !sel.end) continue;
-    try {
-      await addShift(s.guildId, s.userId, date, sel.start, sel.end, null);
-      saved.push({ date, start: sel.start, end: sel.end });
-    } catch (err) {
-      logger.error(`[shift:submit] Failed to save shift for ${date}`, err);
+    for (const start of s.selections[date]!.times) {
+      const end = nextHour(start);
+      try {
+        await addShift(s.guildId, s.userId, date, start, end, null);
+        saved.push({ date, start, end });
+      } catch (err) {
+        logger.error(`[shift:submit] Failed to save shift for ${date} ${start}`, err);
+      }
     }
   }
 
@@ -889,11 +902,17 @@ export async function handleShiftConfirm(interaction: ButtonInteraction): Promis
 
   const lines: string[] = [];
   if (saved.length > 0) {
-    const detail = saved.map(({ date, start, end }) => {
-      const mins = calcMinutes(start, end);
-      return `　🟢 ${formatDateLabel(date)} ${start}〜${end}（${formatDuration(mins)}）`;
-    });
-    lines.push(`✅ **出勤（${saved.length}日）**`, ...detail);
+    // 日付ごとにグループ化して表示
+    const byDate = new Map<string, { start: string; end: string }[]>();
+    for (const entry of saved) {
+      if (!byDate.has(entry.date)) byDate.set(entry.date, []);
+      byDate.get(entry.date)!.push(entry);
+    }
+    for (const [date, slots] of byDate) {
+      const slotStr = slots.map(({ start, end }) => `${start}〜${end}`).join("  ");
+      lines.push(`　🟢 ${formatDateLabel(date)}  ${slotStr}`);
+    }
+    lines.unshift(`✅ **${workDays.length}日・計${saved.length}スロット登録**`);
   } else {
     lines.push("出勤日が選択されていないためシフトは登録されませんでした。");
   }
