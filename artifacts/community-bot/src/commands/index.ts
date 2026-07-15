@@ -41,6 +41,7 @@ import {
   setEventSettings,
   removeParticipant,
   removeTicket,
+  setLeaveLogChannel,
   setRankingSettings,
   setStaffRole,
   setTicketMessages,
@@ -1489,6 +1490,51 @@ export async function handleRoleButton(interaction: ButtonInteraction): Promise<
   }
 }
 
+// ─── /leavelog ────────────────────────────────────────────────────────────────
+
+const leavelogCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("leavelog")
+    .setDescription("メンバー退出ログの設定をします（管理者用）")
+    .addSubcommand((sub) =>
+      sub
+        .setName("setup")
+        .setDescription("退出ログを送信するチャンネルを設定します")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("ログ送信先チャンネル")
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("disable").setDescription("退出ログを無効化します"),
+    ),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    if (!requireAdmin(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "setup") {
+      const channel = interaction.options.getChannel("channel", true);
+      await setLeaveLogChannel(guildId, channel.id);
+      await interaction.reply({ content: `✅ 退出ログを <#${channel.id}> に送信します。`, ephemeral: true });
+      return;
+    }
+
+    if (sub === "disable") {
+      await setLeaveLogChannel(guildId, null);
+      await interaction.reply({ content: "退出ログを無効化しました。", ephemeral: true });
+      return;
+    }
+  },
+};
+
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 export const commands: Command[] = [
@@ -1499,4 +1545,5 @@ export const commands: Command[] = [
   ticketCommand,
   botstatusCommand,
   roleButtonCommand,
+  leavelogCommand,
 ];

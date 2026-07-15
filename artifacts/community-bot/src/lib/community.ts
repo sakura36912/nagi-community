@@ -535,3 +535,26 @@ export async function getAllRankingSettings(): Promise<CommunityRankingSettings[
     .from(communityRankingSettingsTable)
     .where(sql`${communityRankingSettingsTable.channelId} IS NOT NULL`);
 }
+
+// ─── Leave Log Settings ───────────────────────────────────────────────────────
+
+export async function getLeaveLogChannel(guildId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ leaveLogChannelId: communityRankingSettingsTable.leaveLogChannelId })
+    .from(communityRankingSettingsTable)
+    .where(eq(communityRankingSettingsTable.guildId, guildId));
+  return row?.leaveLogChannelId ?? null;
+}
+
+export async function setLeaveLogChannel(
+  guildId: string,
+  channelId: string | null,
+): Promise<void> {
+  await db
+    .insert(communityRankingSettingsTable)
+    .values({ guildId, channelId: null, period: "all", leaveLogChannelId: channelId })
+    .onConflictDoUpdate({
+      target: communityRankingSettingsTable.guildId,
+      set: { leaveLogChannelId: channelId, updatedAt: new Date() },
+    });
+}

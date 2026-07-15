@@ -210,6 +210,8 @@ export const communityRankingSettingsTable = pgTable("community_ranking_settings
   channelId: text("channel_id"),
   /** Aggregation period: "today" | "week" | "month" | "all". */
   period: text("period").notNull().default("all"),
+  /** Channel where member-leave log embeds are posted. Null = disabled. */
+  leaveLogChannelId: text("leave_log_channel_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

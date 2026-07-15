@@ -19,6 +19,7 @@ import {
   getParticipants,
   getVcRanking,
   getActiveSessionCount,
+  getLeaveLogChannel,
   markReminderSent,
   openSession,
 } from "./lib/community.js";
@@ -285,6 +286,43 @@ client.once(Events.ClientReady, async (readyClient) => {
       logger.error("[event] Reminder scheduler error", err),
     );
   }, 60 * 1000);
+});
+
+// ─── GuildMemberRemove ───────────────────────────────────────────────────────
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  try {
+    const channelId = await getLeaveLogChannel(member.guild.id);
+    if (!channelId) return;
+
+    const ch = member.guild.channels.cache.get(channelId)
+      ?? await member.guild.channels.fetch(channelId).catch(() => null);
+    if (!ch?.isTextBased()) return;
+
+    const user = member.user;
+    const joinedAt = member.joinedAt;
+    const roles = member.roles.cache
+      .filter((r) => r.id !== member.guild.id)
+      .map((r) => `<@&${r.id}>`)
+      .join(" ") || "なし";
+
+    const embed = new EmbedBuilder()
+      .setTitle("👋 メンバー退出")
+      .setColor(0x95a5a6)
+      .setThumbnail(user.displayAvatarURL())
+      .addFields(
+        { name: "ユーザー", value: `<@${user.id}> (${user.tag})`, inline: false },
+        { name: "アカウント作成", value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
+        { name: "参加日", value: joinedAt ? `<t:${Math.floor(joinedAt.getTime() / 1000)}:R>` : "不明", inline: true },
+        { name: "ロール", value: roles, inline: false },
+      )
+      .setFooter({ text: `ID: ${user.id}` })
+      .setTimestamp();
+
+    await ch.send({ embeds: [embed] });
+  } catch (err) {
+    logger.error(`[leavelog] Failed for guild ${member.guild.id}`, err);
+  }
 });
 
 // ─── VoiceStateUpdate ────────────────────────────────────────────────────────
