@@ -19,7 +19,7 @@ import {
   handleShiftCancel,
   handleShiftTime,
 } from "./commands";
-import { buildSheetEmbed, findSelfIntro } from "./commands/sheet";
+import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./commands/sheet";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 
 import { logger } from "./lib/logger";
@@ -457,7 +457,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
   try {
     const thread = await forum.threads.create({
-      name: `${displayName} — 評価シート`.slice(0, 100),
+      name: buildSheetThreadName(displayName, endDate),
       message: { embeds: [embed] },
     });
     await createEvalSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);

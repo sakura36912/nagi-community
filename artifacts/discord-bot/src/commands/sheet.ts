@@ -20,6 +20,14 @@ import { logger } from "../lib/logger";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** 評価シートのフォームスレッド名を生成する（最大100文字） */
+export function buildSheetThreadName(displayName: string, endDate: Date): string {
+  const d = new Date(endDate.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+  const mm = d.getMonth() + 1;
+  const dd = d.getDate();
+  return `${displayName} — 評価シート（〜${mm}/${dd}）`.slice(0, 100);
+}
+
 function parseDate(s: string): Date | null {
   const d = new Date(`${s}T00:00:00Z`);
   return isNaN(d.getTime()) ? null : d;
@@ -127,6 +135,20 @@ export async function applySheetEmbedUpdate(
     const thread = await client.channels.fetch(messageId);
     logger.info(`[sheet] thread fetched: ${thread?.id} isTextBased=${thread?.isTextBased()}`);
     if (!thread?.isTextBased()) return;
+
+    // スレッド名も新しい終了日に合わせて更新する
+    if ("setName" in thread && typeof thread.setName === "function") {
+      const targetUserForName = await client.users.fetch(info.userId).catch(() => null);
+      if (targetUserForName) {
+        let dn = targetUserForName.displayName;
+        try {
+          const guildObj = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
+          const mem = await guildObj.members.fetch(info.userId).catch(() => null);
+          if (mem) dn = mem.displayName;
+        } catch { /* fallback */ }
+        await (thread as import("discord.js").ThreadChannel).setName(buildSheetThreadName(dn, info.newEndDate)).catch(() => {});
+      }
+    }
 
     const message = await thread.messages.fetch(messageId);
     logger.info(`[sheet] starter message fetched: ${message.id}`);

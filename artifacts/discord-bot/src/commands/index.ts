@@ -1,4 +1,4 @@
-import { sheetCommand, applySheetEmbedUpdate, buildSheetEmbed, findSelfIntro } from "./sheet";
+import { sheetCommand, applySheetEmbedUpdate, buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./sheet";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -552,7 +552,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
         findSelfIntro(interaction.guild!, interaction.user.id).catch(() => null),
       ]);
       const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
-      const thread = await forum.threads.create({ name: `${displayName} — 評価シート`.slice(0, 100), message: { embeds: [embed] } });
+      const thread = await forum.threads.create({ name: buildSheetThreadName(displayName, endDate), message: { embeds: [embed] } });
       await createEvalSheet(interaction.guildId, interaction.user.id, startDate, endDate, forum.id, thread.id);
       const ts = Math.floor(endDate.getTime() / 1000);
       await interaction.editReply(`✅ **${result.item.name}**を使用しました！評価シートが新規作成されました。期限: **<t:${ts}:D>**`);
@@ -1191,7 +1191,7 @@ const shopCommand: Command = {
               findSelfIntro(interaction.guild!, interaction.user.id).catch(() => null),
             ]);
             const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
-            const thread = await forum.threads.create({ name: `${displayName} — 評価シート`.slice(0, 100), message: { embeds: [embed] } });
+            const thread = await forum.threads.create({ name: buildSheetThreadName(displayName, endDate), message: { embeds: [embed] } });
             await createEvalSheet(guildId, interaction.user.id, startDate, endDate, forum.id, thread.id);
             const ts = Math.floor(endDate.getTime() / 1000);
             await interaction.editReply(`✅ **${result.item.name}**を使用しました！評価シートが新規作成されました。期限: **<t:${ts}:D>**`);
