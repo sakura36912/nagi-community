@@ -344,7 +344,7 @@ async function purchaseAndCreateUraVc(
       ...(parentCategory ? { parent: parentCategory.id } : {}),
       permissionOverwrites: [
         { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-        { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] },
+        { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak, PermissionFlagsBits.Stream, PermissionFlagsBits.SendMessages] },
       ],
     });
 
@@ -1376,6 +1376,8 @@ const shopCommand: Command = {
           ViewChannel: true,
           Connect: true,
           Speak: true,
+          Stream: true,
+          SendMessages: true,
         });
         await interaction.editReply(`✅ <@${targetUser.id}> を裏フリールームに招待しました。`);
         return;
