@@ -306,11 +306,8 @@ async function grantUraChannelAccess(guild: Guild, userId: string, uraChannelId:
   }
 }
 
-/**
- * 裏フリールーム専用: 既存セッションがあれば期間延長、なければ新規作成。
- * Returns the same shape as purchaseAndCreatePrivateVc, plus an `extended` flag.
- */
-async function purchaseExtendOrCreateUraVc(
+/** 裏フリールーム専用: 購入のたびに必ず新規VCを作成する。 */
+async function purchaseAndCreateUraVc(
   guild: Guild,
   member: GuildMember,
   itemId: number,
@@ -319,84 +316,46 @@ async function purchaseExtendOrCreateUraVc(
   vcCategoryId?: string | null,
   uraChannelId?: string | null,
 ): Promise<
-  | { ok: true; item: ShopItem; channelId: string; expiresAt: Date; extended: boolean }
+  | { ok: true; item: ShopItem; channelId: string; expiresAt: Date }
   | { ok: false; reason: string }
 > {
-  // Check for an existing active session for this user.
-  const existingSession = await getActivePrivateVcSession(guild.id, member.id, "ura");
-
-  if (!existingSession) {
-    // No session → create a new VC, record with category="ura".
-    const me = guild.members.me;
-    if (!me?.permissions.has("ManageChannels")) {
-      return { ok: false, reason: "BotにManageChannels権限がないため、VCを作成できません。" };
-    }
-    const result = await buyItem(guild.id, member.id, itemId, currencyName);
-    if (!result.ok) return result;
-
-    try {
-      const expiresAt = new Date(Date.now() + durationMs);
-      const label =
-        durationMs <= 24 * 60 * 60 * 1000 ? "1日" :
-        durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月";
-      const channelName = `🔒 ${member.displayName}(${label})`;
-
-      const parentCategory = vcCategoryId
-        ? (guild.channels.cache.get(vcCategoryId) ?? await guild.channels.fetch(vcCategoryId).catch(() => null))
-        : null;
-
-      const channel = await guild.channels.create({
-        name: channelName.slice(0, 100),
-        type: ChannelType.GuildVoice,
-        // 人数制限なし（0 = unlimited）
-        userLimit: 0,
-        ...(parentCategory ? { parent: parentCategory.id } : {}),
-        permissionOverwrites: [
-          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] },
-        ],
-      });
-
-      await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, "ura");
-
-      // Grant access to the ura text channel.
-      if (uraChannelId) await grantUraChannelAccess(guild, member.id, uraChannelId);
-
-      return { ok: true, item: result.item, channelId: channel.id, expiresAt, extended: false };
-    } catch (err) {
-      try { await refundPurchase(guild.id, member.id, result.item); } catch { /* best-effort */ }
-      logger.error("[ura] Failed to create VC", err);
-      return { ok: false, reason: "VCの作成に失敗したため、購入を取り消し、返金しました。" };
-    }
+  const me = guild.members.me;
+  if (!me?.permissions.has("ManageChannels")) {
+    return { ok: false, reason: "BotにManageChannels権限がないため、VCを作成できません。" };
   }
 
-  // Session exists → extend it.
-  const buyResult = await buyItem(guild.id, member.id, itemId, currencyName);
-  if (!buyResult.ok) return buyResult;
+  const result = await buyItem(guild.id, member.id, itemId, currencyName);
+  if (!result.ok) return result;
 
   try {
-    const updated = await extendPrivateVcSession(existingSession.id, durationMs);
+    const expiresAt = new Date(Date.now() + durationMs);
+    const label =
+      durationMs <= 24 * 60 * 60 * 1000 ? "1日" :
+      durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月";
 
-    // Rename the channel to reflect the new expiry period (non-fatal).
-    try {
-      const label =
-        durationMs <= 24 * 60 * 60 * 1000 ? "1日" :
-        durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月";
-      const ch = guild.channels.cache.get(existingSession.channelId)
-        ?? await guild.channels.fetch(existingSession.channelId).catch(() => null);
-      if (ch && ch.type === ChannelType.GuildVoice) {
-        await ch.setName(`🔒 ${member.displayName}(${label})`.slice(0, 100));
-      }
-    } catch { /* non-fatal */ }
+    const parentCategory = vcCategoryId
+      ? (guild.channels.cache.get(vcCategoryId) ?? await guild.channels.fetch(vcCategoryId).catch(() => null))
+      : null;
 
-    // Re-grant channel access in case it was somehow revoked.
+    const channel = await guild.channels.create({
+      name: `🔒 ${member.displayName}(${label})`.slice(0, 100),
+      type: ChannelType.GuildVoice,
+      userLimit: 0,
+      ...(parentCategory ? { parent: parentCategory.id } : {}),
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] },
+      ],
+    });
+
+    await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, "ura");
     if (uraChannelId) await grantUraChannelAccess(guild, member.id, uraChannelId);
 
-    return { ok: true, item: buyResult.item, channelId: existingSession.channelId, expiresAt: updated.expiresAt, extended: true };
+    return { ok: true, item: result.item, channelId: channel.id, expiresAt };
   } catch (err) {
-    await refundPurchase(guild.id, member.id, buyResult.item);
-    logger.error("[ura] Failed to extend session", err);
-    return { ok: false, reason: "期間の延長に失敗したため、購入を取り消し、返金しました。" };
+    try { await refundPurchase(guild.id, member.id, result.item); } catch { /* best-effort */ }
+    logger.error("[ura] Failed to create VC", err);
+    return { ok: false, reason: "VCの作成に失敗したため、購入を取り消し、返金しました。" };
   }
 }
 
@@ -473,13 +432,12 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
     const isUra = item.category === "ura" && vcDuration !== undefined;
     const result = isUra
-      ? await purchaseExtendOrCreateUraVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration!, vcCatId, settings.uraChannelId)
+      ? await purchaseAndCreateUraVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration!, vcCatId, settings.uraChannelId)
       : await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
-      const action = "extended" in result && result.extended ? "期間を延長しました！" : "購入しました!";
-      await interaction.editReply(`**${result.item.name}**を${action} あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
+      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
     } else {
       await interaction.editReply(result.reason);
     }
@@ -1164,13 +1122,12 @@ const shopCommand: Command = {
           const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
           const isUra = item.category === "ura" && vcDuration !== undefined;
           const result = isUra
-            ? await purchaseExtendOrCreateUraVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration!, vcCatId, settings.uraChannelId)
+            ? await purchaseAndCreateUraVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration!, vcCatId, settings.uraChannelId)
             : await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
           if (result.ok) {
             const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
             const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
-            const action = "extended" in result && result.extended ? "期間を延長しました！" : "購入しました!";
-            await interaction.editReply(`**${result.item.name}**を${action} あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
+            await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
           } else {
             await interaction.editReply(result.reason);
           }
