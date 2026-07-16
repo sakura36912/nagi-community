@@ -1115,7 +1115,8 @@ export async function listSheetsNeedingReminder(): Promise<CommunitySheet[]> {
     .from(communitySheetsTable)
     .where(
       and(
-        lte(communitySheetsTable.endDate, sql`now()`),
+        // 終了日のJST日付が「今日のJST日付」と一致する行を対象にする
+        sql`(${communitySheetsTable.endDate} AT TIME ZONE 'Asia/Tokyo')::date = (now() AT TIME ZONE 'Asia/Tokyo')::date`,
         sql`${communitySheetsTable.reminderSentAt} IS NULL`,
       ),
     );
