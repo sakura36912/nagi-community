@@ -1105,6 +1105,30 @@ export async function deleteEvalSheet(id: number): Promise<void> {
   await db.delete(communitySheetsTable).where(eq(communitySheetsTable.id, id));
 }
 
+/**
+ * Returns sheets whose endDate has passed and whose reminder has not yet been sent.
+ * Used by the reminder scheduler to detect newly-expired eval periods.
+ */
+export async function listSheetsNeedingReminder(): Promise<CommunitySheet[]> {
+  return db
+    .select()
+    .from(communitySheetsTable)
+    .where(
+      and(
+        lte(communitySheetsTable.endDate, sql`now()`),
+        sql`${communitySheetsTable.reminderSentAt} IS NULL`,
+      ),
+    );
+}
+
+/** Mark the reminder as sent so we don't fire it twice. */
+export async function markSheetReminderSent(id: number): Promise<void> {
+  await db
+    .update(communitySheetsTable)
+    .set({ reminderSentAt: sql`now()` })
+    .where(eq(communitySheetsTable.id, id));
+}
+
 /** Total VC seconds for a user between two dates (mirrors community bot's getVcTimeInPeriod). */
 export async function getSheetVcSeconds(
   guildId: string,

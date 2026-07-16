@@ -46,6 +46,8 @@ import {
   createEvalSheet,
   getSheetVcSeconds,
   claimInitialIssue,
+  listSheetsNeedingReminder,
+  markSheetReminderSent,
 } from "./lib/economy";
 
 import { appendFileSync } from "fs";
@@ -222,6 +224,51 @@ async function runVcExpiryScheduler(): Promise<void> {
 }
 
 
+// ─── Eval-sheet end-of-period reminder ───────────────────────────────────────
+
+async function runSheetReminderScheduler(bot: Client<true>): Promise<void> {
+  const sheets = await listSheetsNeedingReminder();
+  for (const sheet of sheets) {
+    try {
+      // messageId holds the forum thread ID (thread.id == starterMessage.id).
+      if (!sheet.messageId) {
+        await markSheetReminderSent(sheet.id);
+        continue;
+      }
+
+      const thread = await bot.channels.fetch(sheet.messageId).catch(() => null);
+      if (!thread?.isTextBased()) {
+        await markSheetReminderSent(sheet.id);
+        continue;
+      }
+
+      const endTs = Math.floor(sheet.endDate.getTime() / 1000);
+      const embed = new EmbedBuilder()
+        .setTitle("⏰ 評価期間が終了しました")
+        .setColor(0xe74c3c)
+        .setDescription(
+          `<@${sheet.userId}> さんの評価期間（〜<t:${endTs}:D>）が終了しました。\n` +
+          `評価を締めくくって結果を記録してください。`,
+        )
+        .setTimestamp();
+
+      if (!("send" in thread) || typeof thread.send !== "function") {
+        await markSheetReminderSent(sheet.id);
+        continue;
+      }
+      await (thread as import("discord.js").TextChannel).send({ content: `<@${sheet.userId}>`, embeds: [embed] });
+      logger.info(`[sheet-reminder] Sent reminder for sheet ${sheet.id} (user ${sheet.userId})`);
+    } catch (err) {
+      logger.error(`[sheet-reminder] Failed to send reminder for sheet ${sheet.id}`, err);
+    }
+    // Always mark as sent (even on error) to avoid retry-spamming.
+    await markSheetReminderSent(sheet.id).catch((e) =>
+      logger.error(`[sheet-reminder] Failed to mark sheet ${sheet.id} as reminded`, e),
+    );
+  }
+}
+
+
 client.once(Events.ClientReady, (readyClient) => {
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
@@ -254,6 +301,7 @@ client.once(Events.ClientReady, (readyClient) => {
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
     runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
+    runSheetReminderScheduler(readyClient).catch((err) => logger.error("[sheet-reminder] Scheduler error", err));
   }, 60 * 1000);
 
   // ── Weekly shift post — every Monday 00:00 UTC (= 09:00 JST) ─────────────

@@ -173,6 +173,8 @@ export const communitySheetsTable = pgTable("community_sheets", {
   messageId: text("message_id"),
   /** Set to true by the economy bot when endDate is extended; community bot re-renders the embed then resets this. */
   needsUpdate: boolean("needs_update").notNull().default(false),
+  /** Set when the end-of-period reminder has been posted in the forum thread. */
+  reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
