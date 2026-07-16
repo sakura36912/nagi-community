@@ -651,6 +651,7 @@ export async function createPrivateVcSession(
 export async function getActivePrivateVcSession(
   guildId: string,
   userId: string,
+  category?: string,
 ): Promise<PrivateVcSession | null> {
   const now = new Date();
   const [session] = await db
@@ -661,6 +662,9 @@ export async function getActivePrivateVcSession(
         eq(privateVcSessionsTable.guildId, guildId),
         eq(privateVcSessionsTable.userId, userId),
         gt(privateVcSessionsTable.expiresAt, now),
+        category !== undefined
+          ? eq(privateVcSessionsTable.category, category)
+          : undefined,
       ),
     )
     .limit(1);

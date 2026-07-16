@@ -321,7 +321,7 @@ async function purchaseExtendOrCreateUraVc(
   | { ok: false; reason: string }
 > {
   // Check for an existing active session for this user.
-  const existingSession = await getActivePrivateVcSession(guild.id, member.id);
+  const existingSession = await getActivePrivateVcSession(guild.id, member.id, "ura");
 
   if (!existingSession) {
     // No session → create a new VC, record with category="ura".
