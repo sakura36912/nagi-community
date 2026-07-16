@@ -186,6 +186,65 @@ export async function applySheetEmbedUpdate(
   }
 }
 
+/**
+ * ニックネーム変更後にフォーラムスレッドのタイトルとEmbedを新しい表示名に更新する。
+ * Fire-and-forget で呼び出してください（awaitしない）。
+ */
+export async function refreshSheetEmbedForUser(
+  client: Client,
+  guildId: string,
+  userId: string,
+  newDisplayName: string,
+): Promise<void> {
+  try {
+    const sheet = await getLatestEvalSheet(guildId, userId);
+    if (!sheet?.messageId) return;
+
+    const thread = await client.channels.fetch(sheet.messageId).catch(() => null);
+    if (!thread?.isTextBased()) return;
+
+    // スレッド名を新しい表示名に更新
+    if ("setName" in thread && typeof thread.setName === "function") {
+      await (thread as import("discord.js").ThreadChannel)
+        .setName(buildSheetThreadName(newDisplayName, sheet.endDate))
+        .catch(() => {});
+    }
+
+    const message = await thread.messages.fetch(sheet.messageId).catch(() => null);
+    if (!message) return;
+
+    const targetUser = await client.users.fetch(userId).catch(() => null);
+    if (!targetUser) return;
+
+    const [settings, vcSeconds, selfIntro] = await Promise.all([
+      getEvalSheetSettings(guildId),
+      getSheetVcSeconds(guildId, userId, sheet.startDate, sheet.endDate),
+      (async () => {
+        try {
+          const guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
+          return findSelfIntro(guild, userId);
+        } catch { return null; }
+      })(),
+    ]);
+
+    const embed = buildSheetEmbed({
+      targetUser,
+      displayName: newDisplayName,
+      startDate: sheet.startDate,
+      endDate: sheet.endDate,
+      vcSeconds,
+      nameboardUrl: settings?.nameboardUrl,
+      selfIntro,
+      createdByLabel: "ニックネーム変更により更新",
+    });
+
+    await message.edit({ embeds: [embed] });
+    logger.info(`[sheet] ✅ embed refreshed for user=${userId} newName=${newDisplayName}`);
+  } catch (err) {
+    logger.error(`[sheet] refreshSheetEmbedForUser failed for user=${userId}`, err);
+  }
+}
+
 // ─── Command ─────────────────────────────────────────────────────────────────
 
 export const sheetCommand = {

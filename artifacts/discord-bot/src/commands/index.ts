@@ -1,4 +1,4 @@
-import { sheetCommand, applySheetEmbedUpdate, buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./sheet";
+import { sheetCommand, applySheetEmbedUpdate, buildSheetEmbed, buildSheetThreadName, findSelfIntro, refreshSheetEmbedForUser } from "./sheet";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -677,6 +677,9 @@ export async function handleNicknameModalSubmit(interaction: ModalSubmitInteract
 
   if (result.ok) {
     await interaction.editReply(`**${result.item.name}**を購入し、ニックネームを「${nickname}」に変更しました!`);
+    // 評価シートのスレッド名とEmbedを新しい表示名に更新（fire-and-forget）
+    refreshSheetEmbedForUser(interaction.client, interaction.guild.id, interaction.user.id, nickname)
+      .catch((err) => logger.error("[sheet] refreshSheetEmbedForUser error", err));
   } else {
     await interaction.editReply(result.reason);
   }
