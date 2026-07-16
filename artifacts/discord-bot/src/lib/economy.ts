@@ -45,12 +45,18 @@ export const EVAL_EXTEND_1M_EFFECT = "eval_extend_1m"; // +30 days
 export const PERM_ROLE_EFFECT      = "perm_role";       // assign a role permanently
 export const EVAL_RESURFACE_EFFECT = "eval_resurface";  // create new eval sheet after failure
 export const SHOP_LICENSE_EFFECT   = "shop_license";    // assign squad-specific shop-license role
+export const URA_EXTEND_1D_EFFECT  = "ura_extend_1d";   // extend existing ura VC by 1 day (no create)
 
 // Duration in milliseconds for each timed VC effect type.
 export const TIMED_VC_DURATIONS: Record<string, number> = {
   [PRIVATE_VC_1D_EFFECT]: 24 * 60 * 60 * 1000,
   [PRIVATE_VC_1W_EFFECT]: 7 * 24 * 60 * 60 * 1000,
   [PRIVATE_VC_1M_EFFECT]: 30 * 24 * 60 * 60 * 1000,
+};
+
+/** 裏フリールーム延長専用。既存セッションがある場合のみ延長（新規作成なし）。 */
+export const URA_EXTEND_DURATIONS: Record<string, number> = {
+  [URA_EXTEND_1D_EFFECT]: 24 * 60 * 60 * 1000,
 };
 
 /** Maps eval-extend effect type → number of days to add to endDate. */
@@ -606,6 +612,14 @@ export async function seedDefaultUraShopItems(guildId: string): Promise<void> {
       description: "自分だけが見える専用VCを1日間作成します。期間終了後に自動削除されます。",
       price: 1000,
       effectType: PRIVATE_VC_1D_EFFECT,
+      category: "ura",
+    },
+    {
+      guildId,
+      name: "裏フリールーム延長（1日）",
+      description: "既存の裏フリールームの期限を1日延長します。部屋がない場合は使用できません。",
+      price: 800,
+      effectType: URA_EXTEND_1D_EFFECT,
       category: "ura",
     },
     {

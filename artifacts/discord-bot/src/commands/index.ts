@@ -28,6 +28,8 @@ import {
   PRIVATE_VC_1M_EFFECT,
   VC_RENAME_EFFECT,
   TIMED_VC_DURATIONS,
+  URA_EXTEND_DURATIONS,
+  URA_EXTEND_1D_EFFECT,
   EVAL_EXTEND_DAYS,
   PERM_ROLE_EFFECT,
   EVAL_RESURFACE_EFFECT,
@@ -944,6 +946,13 @@ const VC_EFFECT_CHOICES: EffectChoice[] = [
   { name: "VCリネーム", value: VC_RENAME_EFFECT },
 ];
 
+const URA_EFFECT_CHOICES: EffectChoice[] = [
+  { name: "裏フリールーム（1日）", value: PRIVATE_VC_1D_EFFECT },
+  { name: "裏フリールーム（1週間）", value: PRIVATE_VC_1W_EFFECT },
+  { name: "裏フリールーム（1ヶ月）", value: PRIVATE_VC_1M_EFFECT },
+  { name: "裏フリールーム延長（1日）", value: URA_EXTEND_1D_EFFECT },
+];
+
 // ─────────────────────────────────────────────────────────────
 // Unified /shop command  (subcommand-group per category)
 // Usage: /shop <general|group|vc|ura> <list|buy|add|…>
@@ -965,7 +974,7 @@ const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
   general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623, effectChoices: DEFAULT_EFFECT_CHOICES },
   group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c, effectChoices: DEFAULT_EFFECT_CHOICES, licenseSetup: true },
   vc:      { displayName: "非公開VCショップ",       emoji: "🔒", category: "vc",      color: 0x3498db, effectChoices: VC_EFFECT_CHOICES,     vcCategorySetup: true },
-  ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6, effectChoices: VC_EFFECT_CHOICES,     uraCategorySetup: true, uraChannelSetup: true, uraInvite: true },
+  ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6, effectChoices: URA_EFFECT_CHOICES,    uraCategorySetup: true, uraChannelSetup: true, uraInvite: true },
 };
 
 function buildShopGroup(groupName: string, cfg: ShopGroupConfig): SlashCommandSubcommandGroupBuilder {
@@ -1125,6 +1134,29 @@ const shopCommand: Command = {
 
         await interaction.deferReply({ ephemeral: true });
         const settings = await getGuildSettings(guildId);
+
+        // 裏フリールーム延長専用（既存セッションがある場合のみ、新規作成なし）
+        const uraExtendDuration = URA_EXTEND_DURATIONS[item.effectType ?? ""];
+        if (uraExtendDuration !== undefined) {
+          const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+          if (!session) {
+            await interaction.editReply("❌ 有効な裏フリールームがありません。先に購入してください。");
+            return;
+          }
+          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
+          if (!result.ok) { await interaction.editReply(result.reason); return; }
+          try {
+            const updated = await extendPrivateVcSession(session.id, uraExtendDuration);
+            const ts = Math.floor(updated.expiresAt.getTime() / 1000);
+            await interaction.editReply(
+              `✅ **${result.item.name}**を購入しました！\n裏フリールームの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`,
+            );
+          } catch {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
+          }
+          return;
+        }
 
         const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
         if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
