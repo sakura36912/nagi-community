@@ -346,7 +346,8 @@ async function purchaseExtendOrCreateUraVc(
       const channel = await guild.channels.create({
         name: channelName.slice(0, 100),
         type: ChannelType.GuildVoice,
-        userLimit: 2,
+        // 人数制限なし（0 = unlimited）
+        userLimit: 0,
         ...(parentCategory ? { parent: parentCategory.id } : {}),
         permissionOverwrites: [
           { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -957,13 +958,14 @@ interface ShopGroupConfig {
   vcCategorySetup?: boolean;
   uraCategorySetup?: boolean;
   uraChannelSetup?: boolean;
+  uraInvite?: boolean;
 }
 
 const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
   general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623, effectChoices: DEFAULT_EFFECT_CHOICES },
   group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c, effectChoices: DEFAULT_EFFECT_CHOICES, licenseSetup: true },
   vc:      { displayName: "非公開VCショップ",       emoji: "🔒", category: "vc",      color: 0x3498db, effectChoices: VC_EFFECT_CHOICES,     vcCategorySetup: true },
-  ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6, effectChoices: VC_EFFECT_CHOICES,     uraCategorySetup: true, uraChannelSetup: true },
+  ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6, effectChoices: VC_EFFECT_CHOICES,     uraCategorySetup: true, uraChannelSetup: true, uraInvite: true },
 };
 
 function buildShopGroup(groupName: string, cfg: ShopGroupConfig): SlashCommandSubcommandGroupBuilder {
@@ -1035,6 +1037,24 @@ function buildShopGroup(groupName: string, cfg: ShopGroupConfig): SlashCommandSu
         .setDescription("裏フリールーム購入者にアクセス権を付与するチャンネルを設定します(管理者用)")
         .addChannelOption((opt) =>
           opt.setName("channel").setDescription("テキスト・ボイスチャンネルを選択").setRequired(true),
+        ),
+    );
+  }
+  if (cfg.uraInvite) {
+    g.addSubcommand((sub) =>
+      sub
+        .setName("invite")
+        .setDescription("裏フリールームに別のメンバーを招待します")
+        .addUserOption((opt) =>
+          opt.setName("member").setDescription("招待するメンバー").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("kick")
+        .setDescription("裏フリールームからメンバーのアクセスを取り消します")
+        .addUserOption((opt) =>
+          opt.setName("member").setDescription("取り消すメンバー").setRequired(true),
         ),
     );
   }
@@ -1341,6 +1361,63 @@ const shopCommand: Command = {
         const channel = interaction.options.getChannel("channel", true);
         await setUraChannelId(guildId, channel.id);
         await interaction.reply(`✅ 裏フリールーム購入者のアクセス先チャンネルを <#${channel.id}> に設定しました。`);
+        return;
+      }
+
+      if (sub === "invite" && cfg.uraInvite) {
+        await interaction.deferReply({ ephemeral: true });
+        const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+        if (!session) {
+          await interaction.editReply("❌ 有効な裏フリールームが見つかりません。先に購入してください。");
+          return;
+        }
+        const targetUser = interaction.options.getUser("member", true);
+        if (targetUser.id === interaction.user.id) {
+          await interaction.editReply("❌ 自分自身を招待することはできません。");
+          return;
+        }
+        const ch = interaction.guild!.channels.cache.get(session.channelId)
+          ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
+        if (!ch || !("permissionOverwrites" in ch)) {
+          await interaction.editReply("❌ VCチャンネルが見つかりませんでした。");
+          return;
+        }
+        await ch.permissionOverwrites.edit(targetUser.id, {
+          ViewChannel: true,
+          Connect: true,
+          Speak: true,
+        });
+        await interaction.editReply(`✅ <@${targetUser.id}> を裏フリールームに招待しました。`);
+        return;
+      }
+
+      if (sub === "kick" && cfg.uraInvite) {
+        await interaction.deferReply({ ephemeral: true });
+        const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+        if (!session) {
+          await interaction.editReply("❌ 有効な裏フリールームが見つかりません。");
+          return;
+        }
+        const targetUser = interaction.options.getUser("member", true);
+        if (targetUser.id === interaction.user.id) {
+          await interaction.editReply("❌ 自分自身のアクセスは取り消せません。");
+          return;
+        }
+        const ch = interaction.guild!.channels.cache.get(session.channelId)
+          ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
+        if (!ch || !("permissionOverwrites" in ch)) {
+          await interaction.editReply("❌ VCチャンネルが見つかりませんでした。");
+          return;
+        }
+        await ch.permissionOverwrites.delete(targetUser.id);
+        // VC内にいれば強制切断
+        try {
+          const kicked = await interaction.guild!.members.fetch(targetUser.id);
+          if (kicked.voice.channelId === session.channelId) {
+            await kicked.voice.disconnect();
+          }
+        } catch { /* non-fatal */ }
+        await interaction.editReply(`✅ <@${targetUser.id}> のアクセスを取り消しました。`);
         return;
       }
 
