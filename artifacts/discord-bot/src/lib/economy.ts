@@ -598,47 +598,52 @@ export async function distributeRoleRewards(
 // Inserts the default ura (裏フリールーム) shop items for a guild.
 // Safe to call multiple times — uses a count guard so it never duplicates.
 export async function seedDefaultUraShopItems(guildId: string): Promise<void> {
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(shopItemsTable)
-    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "ura")));
-
-  if (count > 0) return;
-
-  await db.insert(shopItemsTable).values([
+  // effectType 単位で存在確認し、なければ挿入する（既存ギルドにも追加アイテムを自動追加）
+  const defaults: Array<{ name: string; description: string; price: number; effectType: string }> = [
     {
-      guildId,
       name: "裏フリールーム（1日）",
       description: "自分だけが見える専用VCを1日間作成します。期間終了後に自動削除されます。",
       price: 1000,
       effectType: PRIVATE_VC_1D_EFFECT,
-      category: "ura",
     },
     {
-      guildId,
-      name: "裏フリールーム延長（1日）",
-      description: "既存の裏フリールームの期限を1日延長します。部屋がない場合は使用できません。",
-      price: 800,
-      effectType: URA_EXTEND_1D_EFFECT,
-      category: "ura",
-    },
-    {
-      guildId,
       name: "裏フリールーム（1週間）",
       description: "自分だけが見える専用VCを1週間作成します。期間終了後に自動削除されます。",
       price: 5000,
       effectType: PRIVATE_VC_1W_EFFECT,
-      category: "ura",
     },
     {
-      guildId,
       name: "裏フリールーム（1ヶ月）",
       description: "自分だけが見える専用VCを1ヶ月間作成します。期間終了後に自動削除されます。",
       price: 15000,
       effectType: PRIVATE_VC_1M_EFFECT,
-      category: "ura",
     },
-  ]);
+    {
+      name: "裏フリールーム延長（1日）",
+      description: "既存の裏フリールームの期限を1日延長します。部屋がない場合は使用できません。",
+      price: 800,
+      effectType: URA_EXTEND_1D_EFFECT,
+    },
+    {
+      name: "裏フリールーム名前変更",
+      description: "自分の裏フリールームの名前を変更します。",
+      price: 500,
+      effectType: VC_RENAME_EFFECT,
+    },
+  ];
+
+  const existing = await db
+    .select({ effectType: shopItemsTable.effectType })
+    .from(shopItemsTable)
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "ura")));
+  const existingEffects = new Set(existing.map((r) => r.effectType));
+
+  const toInsert = defaults.filter((d) => !existingEffects.has(d.effectType));
+  if (toInsert.length === 0) return;
+
+  await db.insert(shopItemsTable).values(
+    toInsert.map((d) => ({ ...d, guildId, category: "ura" })),
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -909,6 +909,7 @@ const URA_EFFECT_CHOICES: EffectChoice[] = [
   { name: "裏フリールーム（1週間）", value: PRIVATE_VC_1W_EFFECT },
   { name: "裏フリールーム（1ヶ月）", value: PRIVATE_VC_1M_EFFECT },
   { name: "裏フリールーム延長（1日）", value: URA_EXTEND_1D_EFFECT },
+  { name: "裏フリールーム名前変更", value: VC_RENAME_EFFECT },
 ];
 
 // ─────────────────────────────────────────────────────────────
