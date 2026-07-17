@@ -261,13 +261,13 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
         if (mem) displayName = mem.displayName;
       } catch { /* use user displayName */ }
 
-      const [settings, vcSeconds, selfIntro] = await Promise.all([
-        getEvalSheetSettings(sheet.guildId),
+      const settings = await getEvalSheetSettings(sheet.guildId);
+      const [vcSeconds, selfIntro] = await Promise.all([
         getSheetVcSeconds(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
         (async () => {
           try {
             const guild = bot.guilds.cache.get(sheet.guildId) ?? await bot.guilds.fetch(sheet.guildId);
-            return findSelfIntro(guild, sheet.userId);
+            return findSelfIntro(guild, sheet.userId, settings?.rosterCategoryId);
           } catch { return null; }
         })(),
       ]);
@@ -603,7 +603,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
   const [vcSeconds, selfIntro] = await Promise.all([
     getSheetVcSeconds(guildId, newMember.id, startDate, endDate).catch(() => 0),
-    findSelfIntro(newMember.guild, newMember.id).catch(() => null),
+    findSelfIntro(newMember.guild, newMember.id, settings.rosterCategoryId).catch(() => null),
   ]);
 
   const embed = buildSheetEmbed({

@@ -156,6 +156,12 @@ export const communitySheetSettingsTable = pgTable("community_sheet_settings", {
    * assignment date). Defaults to 14 when the feature is enabled.
    */
   evalPeriodDays: integer("eval_period_days").notNull().default(14),
+  /**
+   * Discord category channel ID whose text channels are searched for
+   * self-introduction messages when building an eval sheet.
+   * Null means the self-intro field is omitted.
+   */
+  rosterCategoryId: text("roster_category_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

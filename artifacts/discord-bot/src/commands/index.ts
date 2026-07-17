@@ -510,7 +510,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       const displayName = member.displayName;
       const [vcSeconds, selfIntro] = await Promise.all([
         getSheetVcSeconds(interaction.guildId, interaction.user.id, startDate, endDate).catch(() => 0),
-        findSelfIntro(interaction.guild!, interaction.user.id).catch(() => null),
+        findSelfIntro(interaction.guild!, interaction.user.id, sheetSettings.rosterCategoryId).catch(() => null),
       ]);
       const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
       const thread = await forum.threads.create({ name: buildSheetThreadName(displayName, endDate), message: { embeds: [embed] } });
@@ -1201,7 +1201,7 @@ const shopCommand: Command = {
             const displayName = member.displayName;
             const [vcSeconds, selfIntro] = await Promise.all([
               getSheetVcSeconds(guildId, interaction.user.id, startDate, endDate).catch(() => 0),
-              findSelfIntro(interaction.guild!, interaction.user.id).catch(() => null),
+              findSelfIntro(interaction.guild!, interaction.user.id, sheetSettings.rosterCategoryId).catch(() => null),
             ]);
             const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
             const thread = await forum.threads.create({ name: buildSheetThreadName(displayName, endDate), message: { embeds: [embed] } });

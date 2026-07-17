@@ -1091,6 +1091,16 @@ export async function setEvalNameboardUrl(guildId: string, nameboardUrl: string 
     });
 }
 
+export async function setRosterCategoryId(guildId: string, rosterCategoryId: string | null): Promise<void> {
+  await db
+    .insert(communitySheetSettingsTable)
+    .values({ guildId, rosterCategoryId, evalPeriodDays: 14 })
+    .onConflictDoUpdate({
+      target: communitySheetSettingsTable.guildId,
+      set: { rosterCategoryId, updatedAt: new Date() },
+    });
+}
+
 export async function createEvalSheet(
   guildId: string,
   userId: string,

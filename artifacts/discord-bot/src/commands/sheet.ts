@@ -16,6 +16,7 @@ import {
   listActiveSheets,
   setEvalSheetForumConfig,
   setEvalNameboardUrl,
+  setRosterCategoryId,
 } from "../lib/economy";
 import { logger } from "../lib/logger";
 
@@ -82,19 +83,19 @@ export function buildSheetEmbed(opts: {
   return embed;
 }
 
-const ROSTER_CATEGORY_ID = "1526567112443695277";
-
 /**
- * Searches every text channel in the roster category for the most recent
- * message posted by the given user (up to 500 messages back per channel).
- * Returns the message content, or null if none found.
+ * Searches every text channel in the given category for the most recent
+ * message posted by the user (up to 500 messages back per channel).
+ * Returns the message content, or null if categoryId is not set / not found.
  */
 export async function findSelfIntro(
   guild: import("discord.js").Guild,
   userId: string,
+  rosterCategoryId: string | null | undefined,
 ): Promise<string | null> {
+  if (!rosterCategoryId) return null;
   const candidates = [...guild.channels.cache.values()].filter(
-    (c) => c.isTextBased() && "parentId" in c && c.parentId === ROSTER_CATEGORY_ID,
+    (c) => c.isTextBased() && "parentId" in c && c.parentId === rosterCategoryId,
   );
   for (const channel of candidates) {
     if (!channel.isTextBased()) continue;
@@ -163,10 +164,10 @@ export async function applySheetEmbedUpdate(
       displayName = member.displayName;
     } catch { /* fallback to user displayName */ }
 
-    const [settings, vcSeconds, selfIntro] = await Promise.all([
-      getEvalSheetSettings(guildId),
+    const settings = await getEvalSheetSettings(guildId);
+    const [vcSeconds, selfIntro] = await Promise.all([
       getSheetVcSeconds(guildId, userId, startDate, newEndDate),
-      guild ? findSelfIntro(guild, userId) : Promise.resolve(null),
+      guild ? findSelfIntro(guild, userId, settings?.rosterCategoryId) : Promise.resolve(null),
     ]);
 
     const embed = buildSheetEmbed({
@@ -217,13 +218,13 @@ export async function refreshSheetEmbedForUser(
     const targetUser = await client.users.fetch(userId).catch(() => null);
     if (!targetUser) return;
 
-    const [settings, vcSeconds, selfIntro] = await Promise.all([
-      getEvalSheetSettings(guildId),
+    const settings = await getEvalSheetSettings(guildId);
+    const [vcSeconds, selfIntro] = await Promise.all([
       getSheetVcSeconds(guildId, userId, sheet.startDate, sheet.endDate),
       (async () => {
         try {
           const guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
-          return findSelfIntro(guild, userId);
+          return findSelfIntro(guild, userId, settings?.rosterCategoryId);
         } catch { return null; }
       })(),
     ]);
@@ -299,6 +300,19 @@ export const sheetCommand = {
             .setName("url")
             .setDescription("名簿URL（クリアするには '-' を入力）")
             .setRequired(false),
+        )
+        .addChannelOption((opt) =>
+          opt
+            .setName("roster_category")
+            .setDescription("自己紹介を検索するカテゴリー（クリアするには設定なしで送信）")
+            .addChannelTypes(4) // ChannelType.GuildCategory = 4
+            .setRequired(false),
+        )
+        .addBooleanOption((opt) =>
+          opt
+            .setName("clear_roster_category")
+            .setDescription("自己紹介カテゴリーの設定を削除する")
+            .setRequired(false),
         ),
     )
     .addSubcommand((sub) =>
@@ -350,6 +364,15 @@ export const sheetCommand = {
         lines.push(newUrl ? `✅ 名簿URL: ${newUrl}` : "✅ 名簿URLを削除しました。");
       }
 
+      // Roster category
+      const rosterCategoryInput = interaction.options.getChannel("roster_category");
+      const clearRosterCategory = interaction.options.getBoolean("clear_roster_category") ?? false;
+      if (rosterCategoryInput !== null || clearRosterCategory) {
+        const newCatId = clearRosterCategory ? null : rosterCategoryInput!.id;
+        await setRosterCategoryId(guildId, newCatId);
+        lines.push(newCatId ? `✅ 自己紹介カテゴリー: <#${newCatId}>` : "✅ 自己紹介カテゴリーを削除しました。");
+      }
+
       // Forum / roles / eval days
       const forumChannel = interaction.options.getChannel("forum");
       const role1 = interaction.options.getRole("trigger_role_1");
@@ -386,6 +409,7 @@ export const sheetCommand = {
           .setColor(0x2ecc71)
           .addFields(
             { name: "📋 名簿URL", value: s?.nameboardUrl ?? "未設定", inline: false },
+            { name: "📁 自己紹介カテゴリー", value: s?.rosterCategoryId ? `<#${s.rosterCategoryId}>` : "未設定", inline: false },
             { name: "📢 投稿フォーラム", value: s?.forumChannelId ? `<#${s.forumChannelId}>` : "未設定", inline: true },
             { name: "🔔 トリガーロール", value: roleList, inline: true },
             { name: "📅 評価期間", value: `${s?.evalPeriodDays ?? 14}日`, inline: true },
@@ -427,7 +451,9 @@ export const sheetCommand = {
       const [settings, vcSeconds, selfIntro] = await Promise.all([
         getEvalSheetSettings(guildId),
         getSheetVcSeconds(guildId, targetUser.id, startDate, endDate),
-        findSelfIntro(interaction.guild!, targetUser.id),
+        getEvalSheetSettings(guildId).then((s) =>
+          findSelfIntro(interaction.guild!, targetUser.id, s?.rosterCategoryId)
+        ),
       ]);
 
       const embed = buildSheetEmbed({
@@ -516,10 +542,10 @@ export const sheetCommand = {
             if (mem) displayName = mem.displayName;
           } catch { /* fallback */ }
 
-          const [settings, vcSeconds, selfIntro] = await Promise.all([
-            getEvalSheetSettings(guildId),
+          const settings = await getEvalSheetSettings(guildId);
+          const [vcSeconds, selfIntro] = await Promise.all([
             getSheetVcSeconds(guildId, sheet.userId, sheet.startDate, sheet.endDate),
-            findSelfIntro(interaction.guild!, sheet.userId).catch(() => null),
+            findSelfIntro(interaction.guild!, sheet.userId, settings?.rosterCategoryId).catch(() => null),
           ]);
 
           const embed = buildSheetEmbed({
