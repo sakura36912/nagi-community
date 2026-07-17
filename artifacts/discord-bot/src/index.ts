@@ -650,7 +650,11 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     const settings = await getGuildSettings(guildId);
     const result = await claimInitialIssue(guildId, userId, INITIAL_ISSUE_AMOUNT, settings.currencyName);
-    if (!result.ok) return;   // すでに受け取り済み — 無視
+    if (!result.ok) {
+      // すでに受け取り済み
+      await message.react("📭");
+      return;
+    }
 
     await message.react("✅");
   } catch (err) {
