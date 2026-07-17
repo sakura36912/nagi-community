@@ -1,4 +1,4 @@
-import { ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
+import { AuditLogEvent, ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { EmbedBuilder } from "discord.js";
 import {
   commands,
@@ -52,6 +52,7 @@ import {
   claimInitialIssue,
   listSheetsNeedingReminder,
   markSheetReminderSent,
+  setBanLogChannelId,
 } from "./lib/economy";
 
 import { appendFileSync } from "fs";
@@ -87,6 +88,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,         // required for messageCreate
     GatewayIntentBits.MessageContent,        // privileged — enable in Developer Portal
     GatewayIntentBits.GuildEmojisAndStickers, // required for emoji cache (slot setup)
+    GatewayIntentBits.GuildModeration,        // required for guildBanAdd
   ],
 });
 
@@ -653,6 +655,68 @@ client.on(Events.MessageCreate, async (message) => {
     await message.react("✅");
   } catch (err) {
     logger.error("[initial-issue] Error", err);
+  }
+});
+
+// ─── GuildBanAdd — BAN通知 ────────────────────────────────────────────────────
+
+client.on(Events.GuildBanAdd, async (ban) => {
+  const guildId = ban.guild.id;
+
+  const settings = await getGuildSettings(guildId).catch(() => null);
+  if (!settings?.banLogChannelId) return;
+
+  const logChannel = ban.guild.channels.cache.get(settings.banLogChannelId)
+    ?? await ban.guild.channels.fetch(settings.banLogChannelId).catch(() => null);
+
+  if (!logChannel || !logChannel.isTextBased()) {
+    logger.warn(`[bannotify] log channel ${settings.banLogChannelId} not found or not text-based`);
+    return;
+  }
+
+  // Fetch full user object and ban reason
+  const user = await ban.user.fetch().catch(() => ban.user);
+
+  // Fetch audit log to identify the moderator who performed the ban
+  let moderator: string = "不明";
+  let auditReason: string | null = null;
+  try {
+    if (ban.guild.members.me?.permissions.has(PermissionFlagsBits.ViewAuditLog)) {
+      const auditLogs = await ban.guild.fetchAuditLogs({
+        type: AuditLogEvent.MemberBanAdd,
+        limit: 5,
+      });
+      const entry = auditLogs.entries.find((e) => e.target?.id === user.id);
+      if (entry) {
+        moderator = entry.executor ? `<@${entry.executor.id}> (${entry.executor.tag})` : "不明";
+        auditReason = entry.reason ?? null;
+      }
+    }
+  } catch (err) {
+    logger.warn("[bannotify] Failed to fetch audit log", err);
+  }
+
+  const reason = auditReason ?? ban.reason ?? "理由なし";
+  const createdAt = Math.floor(user.createdTimestamp / 1000);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🔨 メンバーがBANされました")
+    .setColor(0xe74c3c)
+    .setThumbnail(user.displayAvatarURL({ size: 256 }))
+    .addFields(
+      { name: "ユーザー", value: `${user.tag}\n<@${user.id}>`, inline: true },
+      { name: "ユーザーID", value: user.id, inline: true },
+      { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
+      { name: "実行者", value: moderator, inline: true },
+      { name: "理由", value: reason, inline: false },
+    )
+    .setTimestamp()
+    .setFooter({ text: ban.guild.name, iconURL: ban.guild.iconURL() ?? undefined });
+
+  try {
+    await (logChannel as TextChannel).send({ embeds: [embed] });
+  } catch (err) {
+    logger.error("[bannotify] Failed to send ban notification", err);
   }
 });
 

@@ -28,6 +28,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   uraCategoryId: text("ura_category_id"),
   // Discord text/voice channel ID that urashop buyers get ViewChannel access to.
   uraChannelId: text("ura_channel_id"),
+  // Discord text channel ID where ban notifications are posted.
+  banLogChannelId: text("ban_log_channel_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

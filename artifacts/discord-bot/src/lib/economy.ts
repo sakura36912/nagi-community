@@ -212,6 +212,20 @@ export async function setUraChannelId(
   return settings;
 }
 
+export async function setBanLogChannelId(
+  guildId: string,
+  banLogChannelId: string | null,
+): Promise<GuildSettings> {
+  await getGuildSettings(guildId);
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ banLogChannelId })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+  if (!settings) throw new Error("Failed to update ban_log_channel_id");
+  return settings;
+}
+
 export async function createOrUpdateCurrency(
   guildId: string,
   currencyName: string,
