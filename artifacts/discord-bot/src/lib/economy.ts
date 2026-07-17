@@ -1153,6 +1153,17 @@ export async function markSheetReminderSent(id: number): Promise<void> {
     .where(eq(communitySheetsTable.id, id));
 }
 
+/**
+ * Returns all sheets whose end_date has not yet passed (still active).
+ * Used by the periodic VC-time refresh scheduler.
+ */
+export async function listActiveSheets(): Promise<CommunitySheet[]> {
+  return db
+    .select()
+    .from(communitySheetsTable)
+    .where(sql`${communitySheetsTable.endDate} > now()`);
+}
+
 /** Total VC seconds for a user between two dates (mirrors community bot's getVcTimeInPeriod). */
 export async function getSheetVcSeconds(
   guildId: string,

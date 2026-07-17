@@ -48,6 +48,7 @@ import {
   getEvalSheetSettings,
   createEvalSheet,
   getSheetVcSeconds,
+  listActiveSheets,
   claimInitialIssue,
   listSheetsNeedingReminder,
   markSheetReminderSent,
@@ -227,6 +228,70 @@ async function runVcExpiryScheduler(): Promise<void> {
 }
 
 
+// ─── Eval-sheet VC-time periodic refresh ─────────────────────────────────────
+
+let lastSheetVcRefresh = 0;
+const SHEET_VC_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
+  const now = Date.now();
+  if (now - lastSheetVcRefresh < SHEET_VC_REFRESH_INTERVAL_MS) return;
+  lastSheetVcRefresh = now;
+
+  const sheets = await listActiveSheets();
+  if (sheets.length === 0) return;
+
+  logger.info(`[sheet-vc] Refreshing VC time for ${sheets.length} active sheet(s)`);
+
+  for (const sheet of sheets) {
+    if (!sheet.messageId) continue;
+    try {
+      const thread = await bot.channels.fetch(sheet.messageId).catch(() => null);
+      if (!thread?.isTextBased()) continue;
+      const message = await thread.messages.fetch(sheet.messageId).catch(() => null);
+      if (!message) continue;
+
+      const targetUser = await bot.users.fetch(sheet.userId).catch(() => null);
+      if (!targetUser) continue;
+
+      let displayName = targetUser.displayName;
+      try {
+        const guild = bot.guilds.cache.get(sheet.guildId) ?? await bot.guilds.fetch(sheet.guildId);
+        const mem = await guild.members.fetch(sheet.userId).catch(() => null);
+        if (mem) displayName = mem.displayName;
+      } catch { /* use user displayName */ }
+
+      const [settings, vcSeconds, selfIntro] = await Promise.all([
+        getEvalSheetSettings(sheet.guildId),
+        getSheetVcSeconds(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
+        (async () => {
+          try {
+            const guild = bot.guilds.cache.get(sheet.guildId) ?? await bot.guilds.fetch(sheet.guildId);
+            return findSelfIntro(guild, sheet.userId);
+          } catch { return null; }
+        })(),
+      ]);
+
+      const embed = buildSheetEmbed({
+        targetUser,
+        displayName,
+        startDate: sheet.startDate,
+        endDate: sheet.endDate,
+        vcSeconds,
+        nameboardUrl: settings?.nameboardUrl,
+        selfIntro,
+        createdByLabel: "自動更新（定期集計）",
+      });
+
+      await message.edit({ embeds: [embed] });
+      logger.info(`[sheet-vc] Updated sheet ${sheet.id} for user ${sheet.userId}: ${vcSeconds}s`);
+    } catch (err) {
+      logger.error(`[sheet-vc] Failed to refresh sheet ${sheet.id}`, err);
+    }
+  }
+}
+
+
 // ─── Eval-sheet end-of-period reminder ───────────────────────────────────────
 
 async function runSheetReminderScheduler(bot: Client<true>): Promise<void> {
@@ -305,6 +370,7 @@ client.once(Events.ClientReady, (readyClient) => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
     runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
     runSheetReminderScheduler(readyClient).catch((err) => logger.error("[sheet-reminder] Scheduler error", err));
+    runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Scheduler error", err));
   }, 60 * 1000);
 
   // ── Weekly shift post — every Monday 00:00 UTC (= 09:00 JST) ─────────────

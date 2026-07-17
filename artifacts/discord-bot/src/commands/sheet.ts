@@ -13,6 +13,7 @@ import {
   getEvalSheetSettings,
   getSheetVcSeconds,
   listEvalSheets,
+  listActiveSheets,
   setEvalSheetForumConfig,
   setEvalNameboardUrl,
 } from "../lib/economy";
@@ -310,6 +311,14 @@ export const sheetCommand = {
         .addUserOption((opt) =>
           opt.setName("member").setDescription("削除対象のメンバー").setRequired(true),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("refresh")
+        .setDescription("評価シートのVC滞在時間をいますぐ再集計してEmbedを更新します（管理者）")
+        .addUserOption((opt) =>
+          opt.setName("member").setDescription("対象メンバー（省略すると全員）").setRequired(false),
+        ),
     ),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -467,6 +476,74 @@ export const sheetCommand = {
         .setColor(0x2ecc71)
         .setDescription(lines.join("\n").slice(0, 4000));
       await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    // ── refresh ─────────────────────────────────────────────────────────────
+    if (sub === "refresh") {
+      if (!isAdmin) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true });
+
+      const targetOption = interaction.options.getUser("member");
+      const sheets = targetOption
+        ? [await getLatestEvalSheet(guildId, targetOption.id)].filter(Boolean) as Awaited<ReturnType<typeof getLatestEvalSheet>>[]
+        : (await listActiveSheets()).filter((s) => s.guildId === guildId);
+
+      if (sheets.length === 0) {
+        await interaction.editReply("対象の有効な評価シートが見つかりませんでした。");
+        return;
+      }
+
+      let updated = 0;
+      let failed = 0;
+      for (const sheet of sheets) {
+        if (!sheet || !sheet.messageId) continue;
+        try {
+          const thread = await interaction.client.channels.fetch(sheet.messageId).catch(() => null);
+          if (!thread?.isTextBased()) continue;
+          const message = await thread.messages.fetch(sheet.messageId).catch(() => null);
+          if (!message) continue;
+
+          const targetUser = await interaction.client.users.fetch(sheet.userId).catch(() => null);
+          if (!targetUser) continue;
+
+          let displayName = targetUser.displayName;
+          try {
+            const mem = await interaction.guild!.members.fetch(sheet.userId).catch(() => null);
+            if (mem) displayName = mem.displayName;
+          } catch { /* fallback */ }
+
+          const [settings, vcSeconds, selfIntro] = await Promise.all([
+            getEvalSheetSettings(guildId),
+            getSheetVcSeconds(guildId, sheet.userId, sheet.startDate, sheet.endDate),
+            findSelfIntro(interaction.guild!, sheet.userId).catch(() => null),
+          ]);
+
+          const embed = buildSheetEmbed({
+            targetUser,
+            displayName,
+            startDate: sheet.startDate,
+            endDate: sheet.endDate,
+            vcSeconds,
+            nameboardUrl: settings?.nameboardUrl,
+            selfIntro,
+            createdByLabel: `手動更新（${interaction.user.displayName}）`,
+          });
+
+          await message.edit({ embeds: [embed] });
+          updated++;
+        } catch (err) {
+          logger.error(`[sheet] refresh failed for sheet ${sheet?.id}`, err);
+          failed++;
+        }
+      }
+
+      await interaction.editReply(
+        `✅ ${updated}件のシートを更新しました。${failed > 0 ? `（失敗: ${failed}件）` : ""}`,
+      );
       return;
     }
 
