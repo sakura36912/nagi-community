@@ -231,7 +231,7 @@ async function runVcExpiryScheduler(): Promise<void> {
 // ─── Eval-sheet VC-time periodic refresh ─────────────────────────────────────
 
 let lastSheetVcRefresh = 0;
-const SHEET_VC_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const SHEET_VC_REFRESH_INTERVAL_MS = 60 * 1000; // 1 minute
 
 async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
   const now = Date.now();
