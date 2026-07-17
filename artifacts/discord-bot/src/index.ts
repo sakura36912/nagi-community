@@ -29,6 +29,9 @@ import {
   clearVcPresence,
   getAllVcPresences,
   payVcReward,
+  getVcLogSettings,
+  recordVcLogJoin,
+  recordVcLogLeave,
 } from "./lib/vcReward";
 import {
   distributeRoleRewards,
@@ -385,6 +388,14 @@ async function handleVcLeave(
   }
 }
 
+/** Returns the category ID if the channel is in the log category list, else null. */
+function getLogCategoryId(channelId: string, categoryIds: string[], guild: VoiceState["guild"]): string | null {
+  if (categoryIds.length === 0) return null; // empty = disabled
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel || !channel.parentId) return null;
+  return categoryIds.includes(channel.parentId) ? channel.parentId : null;
+}
+
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // Ignore bots.
   const userId = newState.member?.id ?? oldState.member?.id;
@@ -401,51 +412,88 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   // ── Joined VC (from nothing or from AFK) ─────────────────────────────────
   if (isInVc && !isInAfk && (!wasInVc || wasInAfk)) {
-    try {
-      const settings = await getVcRewardSettings(guild.id);
-      if (settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild)) {
-        await recordVcJoin(guild.id, userId, newState.channelId!);
-      }
-    } catch (err) {
-      logger.error(`[vcsalary] recordVcJoin error for ${userId}`, err);
-    }
+    await Promise.all([
+      // Reward tracking
+      (async () => {
+        try {
+          const settings = await getVcRewardSettings(guild.id);
+          if (settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild)) {
+            await recordVcJoin(guild.id, userId, newState.channelId!);
+          }
+        } catch (err) {
+          logger.error(`[vcsalary] recordVcJoin error for ${userId}`, err);
+        }
+      })(),
+      // Session log tracking
+      (async () => {
+        try {
+          const logSettings = await getVcLogSettings(guild.id);
+          const catId = getLogCategoryId(newState.channelId!, logSettings.categoryIds, guild);
+          if (catId) await recordVcLogJoin(guild.id, userId, newState.channelId!, catId);
+        } catch (err) {
+          logger.error(`[vclog] recordVcLogJoin error for ${userId}`, err);
+        }
+      })(),
+    ]);
     return;
   }
 
   // ── Left VC (to nothing or to AFK) ───────────────────────────────────────
   if (wasInVc && !wasInAfk && (!isInVc || isInAfk)) {
-    const presence = await clearVcPresence(guild.id, userId).catch((err) => {
-      logger.error(`[vcsalary] clearVcPresence error for ${userId}`, err);
-      return undefined;
-    });
-    if (presence) {
-      await handleVcLeave(guild, userId, presence.joinedAt);
-    }
+    await Promise.all([
+      // Reward payout
+      (async () => {
+        const presence = await clearVcPresence(guild.id, userId).catch((err) => {
+          logger.error(`[vcsalary] clearVcPresence error for ${userId}`, err);
+          return undefined;
+        });
+        if (presence) await handleVcLeave(guild, userId, presence.joinedAt);
+      })(),
+      // Session log
+      recordVcLogLeave(guild.id, userId).catch((err) =>
+        logger.error(`[vclog] recordVcLogLeave error for ${userId}`, err),
+      ),
+    ]);
     return;
   }
 
   // ── Moved between two non-AFK VCs ────────────────────────────────────────
-  // Check whether the category eligibility changed.
   if (wasInVc && !wasInAfk && isInVc && !isInAfk && oldState.channelId !== newState.channelId) {
-    try {
-      const settings = await getVcRewardSettings(guild.id);
-      if (settings.ratePerHour <= 0) return;
-
-      const wasEligible = isEligibleChannel(oldState.channelId!, settings.includedCategoryIds, guild);
-      const nowEligible = isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild);
-
-      if (wasEligible && !nowEligible) {
-        // Moved out of an eligible category → pay out and stop tracking.
-        const presence = await clearVcPresence(guild.id, userId).catch(() => undefined);
-        if (presence) await handleVcLeave(guild, userId, presence.joinedAt);
-      } else if (!wasEligible && nowEligible) {
-        // Moved into an eligible category → start tracking from now.
-        await recordVcJoin(guild.id, userId, newState.channelId!);
-      }
-      // Both eligible or both ineligible → joinedAt stays, no action needed.
-    } catch (err) {
-      logger.error(`[vcsalary] channel-move handling error for ${userId}`, err);
-    }
+    await Promise.all([
+      // Reward tracking – category eligibility may have changed
+      (async () => {
+        try {
+          const settings = await getVcRewardSettings(guild.id);
+          if (settings.ratePerHour <= 0) return;
+          const wasEligible = isEligibleChannel(oldState.channelId!, settings.includedCategoryIds, guild);
+          const nowEligible = isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild);
+          if (wasEligible && !nowEligible) {
+            const presence = await clearVcPresence(guild.id, userId).catch(() => undefined);
+            if (presence) await handleVcLeave(guild, userId, presence.joinedAt);
+          } else if (!wasEligible && nowEligible) {
+            await recordVcJoin(guild.id, userId, newState.channelId!);
+          }
+        } catch (err) {
+          logger.error(`[vcsalary] channel-move handling error for ${userId}`, err);
+        }
+      })(),
+      // Session log – category eligibility may have changed
+      (async () => {
+        try {
+          const logSettings = await getVcLogSettings(guild.id);
+          const wasLogCat = getLogCategoryId(oldState.channelId!, logSettings.categoryIds, guild);
+          const nowLogCat = getLogCategoryId(newState.channelId!, logSettings.categoryIds, guild);
+          if (wasLogCat && !nowLogCat) {
+            await recordVcLogLeave(guild.id, userId);
+          } else if (!wasLogCat && nowLogCat) {
+            await recordVcLogJoin(guild.id, userId, newState.channelId!, nowLogCat);
+          }
+          // Both in or both out → no change needed
+        } catch (err) {
+          logger.error(`[vclog] channel-move log error for ${userId}`, err);
+        }
+      })(),
+    ]);
   }
 });
 

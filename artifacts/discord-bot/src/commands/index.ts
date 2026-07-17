@@ -1864,6 +1864,7 @@ export {
 } from "./shift";
 import { shiftCommand } from "./shift";
 import { vcsalaryCommand } from "./vcsalary";
+import { vclogCommand } from "./vclog";
 import { slotCommand } from "./slot";
 
 export const commands: Command[] = [
@@ -1879,6 +1880,7 @@ export const commands: Command[] = [
   treasuryCommand,
   shiftCommand,
   vcsalaryCommand,
+  vclogCommand,
   slotCommand,
   sheetCommand,
 ];

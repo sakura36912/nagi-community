@@ -3,10 +3,14 @@ import {
   db,
   vcPresenceTable,
   vcRewardSettingsTable,
+  vcSessionLogSettingsTable,
+  vcLogPresenceTable,
+  vcSessionLogsTable,
   walletsTable,
   transactionsTable,
   type VcPresence,
   type VcRewardSettings,
+  type VcSessionLogSettings,
 } from "@workspace/db";
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -157,4 +161,93 @@ export async function payVcReward(
     .values({ guildId, userId, amount: reward, reason });
 
   return reward;
+}
+
+// ─── VC Session Log Settings ──────────────────────────────────────────────────
+
+export async function getVcLogSettings(guildId: string): Promise<VcSessionLogSettings> {
+  const [row] = await db
+    .select()
+    .from(vcSessionLogSettingsTable)
+    .where(eq(vcSessionLogSettingsTable.guildId, guildId));
+  if (row) return row;
+  const [created] = await db
+    .insert(vcSessionLogSettingsTable)
+    .values({ guildId })
+    .returning();
+  return created!;
+}
+
+export async function addVcLogCategory(
+  guildId: string,
+  categoryId: string,
+): Promise<VcSessionLogSettings> {
+  await getVcLogSettings(guildId);
+  const [row] = await db
+    .update(vcSessionLogSettingsTable)
+    .set({
+      categoryIds: sql`
+        CASE WHEN ${categoryId} = ANY(category_ids)
+          THEN category_ids
+          ELSE array_append(category_ids, ${categoryId})
+        END`,
+    })
+    .where(eq(vcSessionLogSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
+export async function removeVcLogCategory(
+  guildId: string,
+  categoryId: string,
+): Promise<VcSessionLogSettings> {
+  await getVcLogSettings(guildId);
+  const [row] = await db
+    .update(vcSessionLogSettingsTable)
+    .set({ categoryIds: sql`array_remove(category_ids, ${categoryId})` })
+    .where(eq(vcSessionLogSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
+// ─── VC Log Presence ──────────────────────────────────────────────────────────
+
+export async function recordVcLogJoin(
+  guildId: string,
+  userId: string,
+  channelId: string,
+  categoryId: string,
+): Promise<void> {
+  await db
+    .insert(vcLogPresenceTable)
+    .values({ guildId, userId, channelId, categoryId, joinedAt: new Date() })
+    .onConflictDoUpdate({
+      target: [vcLogPresenceTable.guildId, vcLogPresenceTable.userId],
+      set: { channelId, categoryId, joinedAt: new Date() },
+    });
+}
+
+export async function recordVcLogLeave(
+  guildId: string,
+  userId: string,
+): Promise<void> {
+  const [presence] = await db
+    .delete(vcLogPresenceTable)
+    .where(and(eq(vcLogPresenceTable.guildId, guildId), eq(vcLogPresenceTable.userId, userId)))
+    .returning();
+  if (!presence) return;
+
+  const leftAt = new Date();
+  const durationSeconds = Math.floor((leftAt.getTime() - presence.joinedAt.getTime()) / 1000);
+  if (durationSeconds <= 0) return;
+
+  await db.insert(vcSessionLogsTable).values({
+    guildId,
+    userId,
+    channelId: presence.channelId,
+    categoryId: presence.categoryId,
+    joinedAt: presence.joinedAt,
+    leftAt,
+    durationSeconds,
+  });
 }
