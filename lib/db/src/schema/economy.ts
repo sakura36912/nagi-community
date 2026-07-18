@@ -34,6 +34,10 @@ export const guildSettingsTable = pgTable("guild_settings", {
   returnLogChannelId: text("return_log_channel_id"),
   // Comma-separated role IDs excluded from returnee counting.
   returnLogExcludedRoleIds: text("return_log_excluded_role_ids"),
+  // Channel where promotion notifications are posted (入門前 → 正規ロール).
+  promotionLogChannelId: text("promotion_log_channel_id"),
+  // The "入門前" role ID to watch for removal as a promotion trigger.
+  promotionWatchRoleId: text("promotion_watch_role_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

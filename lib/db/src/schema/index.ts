@@ -24,3 +24,4 @@ export * from "./vc";
 export * from "./shifts";
 export * from "./vcRewards";
 export * from "./slots";
+export * from "./triggers";

@@ -229,6 +229,15 @@ export async function setReturnLogChannelId(
 
 // ─── 出戻り履歴 ──────────────────────────────────────────────────────────────
 
+/** excluded = false の参加回数を返す（昇格通知での出戻り判定用）。 */
+export async function countRealJoins(guildId: string, userId: string): Promise<number> {
+  const result = await db.execute(
+    sql`SELECT COUNT(*)::int AS cnt FROM member_join_history
+        WHERE guild_id = ${guildId} AND user_id = ${userId} AND excluded = 'false'`,
+  );
+  return Number((result.rows[0] as { cnt: number }).cnt);
+}
+
 export async function setReturnLogExcludedRoleIds(
   guildId: string,
   roleIds: string[],
@@ -299,6 +308,21 @@ export async function recordMemberLeave(
       )
     `,
   );
+}
+
+export async function setPromotionLogSettings(
+  guildId: string,
+  promotionLogChannelId: string | null,
+  promotionWatchRoleId: string | null,
+): Promise<GuildSettings> {
+  await getGuildSettings(guildId);
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ promotionLogChannelId, promotionWatchRoleId })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+  if (!settings) throw new Error("Failed to update promotion_log settings");
+  return settings;
 }
 
 export async function setBanLogChannelId(

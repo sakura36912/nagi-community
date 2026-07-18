@@ -57,6 +57,7 @@ import {
   recordMemberLeave,
   getOrCreateWallet,
   findWallet,
+  countRealJoins,
 } from "./lib/economy";
 
 import { appendFileSync } from "fs";
@@ -569,7 +570,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 });
 
-// ─── GuildMemberUpdate — eval sheet auto-creation on role assign ─────────────
+// ─── GuildMemberUpdate — 昇格通知 ＆ eval sheet ───────────────────────────────
 
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const guildId = newMember.guild.id;
@@ -577,6 +578,63 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const addedRoleIds = oldMember.partial
     ? [...newMember.roles.cache.keys()]
     : [...newMember.roles.cache.keys()].filter((id) => !oldMember.roles.cache.has(id));
+
+  const removedRoleIds = oldMember.partial
+    ? []
+    : [...oldMember.roles.cache.keys()].filter((id) => !newMember.roles.cache.has(id));
+
+  // ── 昇格通知（入門前ロールが外れたとき） ─────────────────────────────────
+  if (removedRoleIds.length > 0) {
+    const guildSettings = await getGuildSettings(guildId).catch(() => null);
+    const watchRoleId = guildSettings?.promotionWatchRoleId;
+    const promotionChannelId = guildSettings?.promotionLogChannelId;
+
+    if (watchRoleId && promotionChannelId && removedRoleIds.includes(watchRoleId)) {
+      const promoChannel = newMember.guild.channels.cache.get(promotionChannelId)
+        ?? await newMember.guild.channels.fetch(promotionChannelId).catch(() => null);
+
+      if (promoChannel?.isTextBased()) {
+        // ウォレット在籍歴で出戻り判定
+        const wallet = await findWallet(guildId, newMember.id).catch(() => null);
+        const countResult = await countRealJoins(guildId, newMember.id).catch(() => 0);
+
+        const isReturnee = countResult > 1 || (countResult <= 1 && wallet !== null && wallet.balance > 0);
+        const balance = wallet ? wallet.balance.toLocaleString("ja-JP") : "0";
+        const currencyName = guildSettings.currencyName;
+
+        const newRoles = [...newMember.roles.cache.values()]
+          .filter((r) => r.id !== newMember.guild.id && r.id !== watchRoleId)
+          .sort((a, b) => b.position - a.position);
+        const roleDisplay = newRoles.length === 0
+          ? "なし"
+          : newRoles.length <= 5
+            ? newRoles.map((r) => `<@&${r.id}>`).join(" ")
+            : newRoles.slice(0, 5).map((r) => `<@&${r.id}>`).join(" ") + ` … 他 ${newRoles.length - 5} 件`;
+
+        const createdAt = Math.floor(newMember.user.createdTimestamp / 1000);
+        const returnLabel = isReturnee ? "🔄 出戻りメンバーが昇格しました" : "🎉 新規メンバーが昇格しました";
+
+        const embed = new EmbedBuilder()
+          .setTitle(returnLabel)
+          .setColor(isReturnee ? 0xf39c12 : 0x2ecc71)
+          .setThumbnail(newMember.user.displayAvatarURL({ size: 256 }))
+          .addFields(
+            { name: "ユーザー", value: `${newMember.user.tag}\n<@${newMember.id}>`, inline: true },
+            { name: "ユーザーID", value: newMember.id, inline: true },
+            ...(isReturnee ? [{ name: "出戻り", value: "✅ 在籍歴あり", inline: true }] : []),
+            { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
+            { name: "所持金", value: `${balance} ${currencyName}`, inline: true },
+            { name: "付与されたロール", value: roleDisplay, inline: false },
+          )
+          .setTimestamp()
+          .setFooter({ text: newMember.guild.name, iconURL: newMember.guild.iconURL() ?? undefined });
+
+        await (promoChannel as TextChannel).send({ embeds: [embed] }).catch((err) =>
+          logger.error("[returnlog] Failed to send promotion embed", err),
+        );
+      }
+    }
+  }
 
   if (addedRoleIds.length === 0) return;
 
