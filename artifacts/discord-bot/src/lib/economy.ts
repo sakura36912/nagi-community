@@ -318,6 +318,18 @@ export async function createOrUpdateCurrency(
   return settings;
 }
 
+/** ウォレットを SELECT のみで返す。存在しなければ null（INSERT しない）。 */
+export async function findWallet(
+  guildId: string,
+  userId: string,
+): Promise<Wallet | null> {
+  const [row] = await db
+    .select()
+    .from(walletsTable)
+    .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)));
+  return row ?? null;
+}
+
 export async function getOrCreateWallet(
   guildId: string,
   userId: string,

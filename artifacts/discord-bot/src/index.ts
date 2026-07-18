@@ -56,6 +56,7 @@ import {
   recordMemberJoin,
   recordMemberLeave,
   getOrCreateWallet,
+  findWallet,
 } from "./lib/economy";
 
 import { appendFileSync } from "fs";
@@ -670,6 +671,9 @@ client.on(Events.MessageCreate, async (message) => {
 client.on(Events.GuildMemberAdd, async (member) => {
   const guildId = member.guild.id;
 
+  // 参加記録の前にウォレット在籍歴を確認（ボット導入前メンバーの検知に使う）
+  const existingWallet = await findWallet(guildId, member.id).catch(() => null);
+
   let previousJoinCount: number;
   try {
     ({ previousJoinCount } = await recordMemberJoin(guildId, member.id));
@@ -678,8 +682,9 @@ client.on(Events.GuildMemberAdd, async (member) => {
     return;
   }
 
-  // 初回参加は通知しない
-  if (previousJoinCount === 0) return;
+  // 履歴なし・ウォレットなし → 真の初回参加。通知不要
+  const isLegacyReturnee = previousJoinCount === 0 && existingWallet !== null;
+  if (previousJoinCount === 0 && !isLegacyReturnee) return;
 
   const settings = await getGuildSettings(guildId).catch(() => null);
   if (!settings?.returnLogChannelId) return;
@@ -688,10 +693,15 @@ client.on(Events.GuildMemberAdd, async (member) => {
     ?? await member.guild.channels.fetch(settings.returnLogChannelId).catch(() => null);
   if (!logChannel || !logChannel.isTextBased()) return;
 
-  // 所持金
-  const wallet = await getOrCreateWallet(guildId, member.id).catch(() => null);
+  // 所持金（ウォレットがあれば既存残高、なければ新規作成して 0）
+  const wallet = existingWallet ?? await getOrCreateWallet(guildId, member.id).catch(() => null);
   const balance = wallet ? wallet.balance.toLocaleString("ja-JP") : "不明";
   const currencyName = settings.currencyName;
+
+  // 出戻り回数の表示
+  const returnCountDisplay = isLegacyReturnee
+    ? "不明（ボット導入前の在籍履歴あり）"
+    : `**${previousJoinCount}** 回目の参加`;
 
   // ロール（@everyone 除く、上位5件 + 残り件数）
   const roles = [...member.roles.cache.values()]
@@ -714,9 +724,9 @@ client.on(Events.GuildMemberAdd, async (member) => {
     .addFields(
       { name: "ユーザー", value: `${member.user.tag}\n<@${member.id}>`, inline: true },
       { name: "ユーザーID", value: member.id, inline: true },
-      { name: "出戻り回数", value: `**${previousJoinCount}** 回目の参加`, inline: true },
+      { name: "出戻り回数", value: returnCountDisplay, inline: true },
       { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
-      { name: `所持金`, value: `${balance} ${currencyName}`, inline: true },
+      { name: "所持金", value: `${balance} ${currencyName}`, inline: true },
       { name: "ロール", value: roleDisplay, inline: false },
     )
     .setTimestamp()
