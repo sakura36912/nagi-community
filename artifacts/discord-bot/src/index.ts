@@ -583,25 +583,34 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     ? []
     : [...oldMember.roles.cache.keys()].filter((id) => !newMember.roles.cache.has(id));
 
-  // ── 昇格通知（入門前ロールが外れたとき） ─────────────────────────────────
+  // ── 昇格通知（入門前ロールが外れたとき）→ 出戻り通知として送信 ──────────
   if (removedRoleIds.length > 0) {
     const guildSettings = await getGuildSettings(guildId).catch(() => null);
     const watchRoleId = guildSettings?.promotionWatchRoleId;
-    const promotionChannelId = guildSettings?.promotionLogChannelId;
+    // 再加入通知チャンネルを優先し、なければ昇格用チャンネルにフォールバック
+    const notifyChannelId = guildSettings?.returnLogChannelId ?? guildSettings?.promotionLogChannelId;
 
-    if (watchRoleId && promotionChannelId && removedRoleIds.includes(watchRoleId)) {
-      const promoChannel = newMember.guild.channels.cache.get(promotionChannelId)
-        ?? await newMember.guild.channels.fetch(promotionChannelId).catch(() => null);
+    if (watchRoleId && notifyChannelId && removedRoleIds.includes(watchRoleId)) {
+      const notifyChannel = newMember.guild.channels.cache.get(notifyChannelId)
+        ?? await newMember.guild.channels.fetch(notifyChannelId).catch(() => null);
 
-      if (promoChannel?.isTextBased()) {
-        // ウォレット在籍歴で出戻り判定
-        const wallet = await findWallet(guildId, newMember.id).catch(() => null);
-        const countResult = await countRealJoins(guildId, newMember.id).catch(() => 0);
+      if (notifyChannel?.isTextBased()) {
+        const [wallet, joinCount] = await Promise.all([
+          findWallet(guildId, newMember.id).catch(() => null),
+          countRealJoins(guildId, newMember.id).catch(() => 0),
+        ]);
 
-        const isReturnee = countResult > 1 || (countResult <= 1 && wallet !== null && wallet.balance > 0);
+        const isLegacyReturnee = joinCount === 0 && wallet !== null;
+        const returnCountDisplay = isLegacyReturnee
+          ? "不明（ボット導入前の在籍履歴あり）"
+          : joinCount > 0
+            ? `**${joinCount}** 回目の参加`
+            : "初回";
+
         const balance = wallet ? wallet.balance.toLocaleString("ja-JP") : "0";
         const currencyName = guildSettings.currencyName;
 
+        // 入門前ロールを除いた現在のロール
         const newRoles = [...newMember.roles.cache.values()]
           .filter((r) => r.id !== newMember.guild.id && r.id !== watchRoleId)
           .sort((a, b) => b.position - a.position);
@@ -612,25 +621,24 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
             : newRoles.slice(0, 5).map((r) => `<@&${r.id}>`).join(" ") + ` … 他 ${newRoles.length - 5} 件`;
 
         const createdAt = Math.floor(newMember.user.createdTimestamp / 1000);
-        const returnLabel = isReturnee ? "🔄 出戻りメンバーが昇格しました" : "🎉 新規メンバーが昇格しました";
 
         const embed = new EmbedBuilder()
-          .setTitle(returnLabel)
-          .setColor(isReturnee ? 0xf39c12 : 0x2ecc71)
+          .setTitle("🔄 出戻りメンバーが参加しました")
+          .setColor(0xf39c12)
           .setThumbnail(newMember.user.displayAvatarURL({ size: 256 }))
           .addFields(
             { name: "ユーザー", value: `${newMember.user.tag}\n<@${newMember.id}>`, inline: true },
             { name: "ユーザーID", value: newMember.id, inline: true },
-            ...(isReturnee ? [{ name: "出戻り", value: "✅ 在籍歴あり", inline: true }] : []),
+            { name: "出戻り回数", value: returnCountDisplay, inline: true },
             { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
             { name: "所持金", value: `${balance} ${currencyName}`, inline: true },
-            { name: "付与されたロール", value: roleDisplay, inline: false },
+            { name: "ロール", value: roleDisplay, inline: false },
           )
           .setTimestamp()
           .setFooter({ text: newMember.guild.name, iconURL: newMember.guild.iconURL() ?? undefined });
 
-        await (promoChannel as TextChannel).send({ embeds: [embed] }).catch((err) =>
-          logger.error("[returnlog] Failed to send promotion embed", err),
+        await (notifyChannel as TextChannel).send({ embeds: [embed] }).catch((err) =>
+          logger.error("[returnlog] Failed to send promotion-as-returnee embed", err),
         );
       }
     }
