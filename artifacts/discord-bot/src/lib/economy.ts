@@ -15,6 +15,7 @@ import {
   communityVcSessionsTable,
   shopLicenseConfigTable,
   groupShopSalesTable,
+  memberJoinHistoryTable,
   type Wallet,
   type ShopItem,
   type GuildSettings,
@@ -210,6 +211,69 @@ export async function setUraChannelId(
     .returning();
   if (!settings) throw new Error("Failed to update ura_channel_id");
   return settings;
+}
+
+export async function setReturnLogChannelId(
+  guildId: string,
+  returnLogChannelId: string | null,
+): Promise<GuildSettings> {
+  await getGuildSettings(guildId);
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ returnLogChannelId })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+  if (!settings) throw new Error("Failed to update return_log_channel_id");
+  return settings;
+}
+
+// ─── 出戻り履歴 ──────────────────────────────────────────────────────────────
+
+/**
+ * メンバー参加を記録し、過去の参加回数（出戻り回数 = 今回参加前の記録件数）を返す。
+ * 返り値: { joinId, previousJoinCount }
+ *   previousJoinCount === 0 → 初回参加
+ *   previousJoinCount >= 1 → 出戻り
+ */
+export async function recordMemberJoin(
+  guildId: string,
+  userId: string,
+): Promise<{ joinId: number; previousJoinCount: number }> {
+  const countResult = await db.execute(
+    sql`SELECT COUNT(*)::int AS cnt FROM member_join_history WHERE guild_id = ${guildId} AND user_id = ${userId}`,
+  );
+  const previousJoinCount = Number((countResult.rows[0] as { cnt: number }).cnt);
+
+  const [row] = await db
+    .insert(memberJoinHistoryTable)
+    .values({ guildId, userId })
+    .returning();
+  if (!row) throw new Error("Failed to insert member_join_history");
+
+  return { joinId: row.id, previousJoinCount };
+}
+
+/**
+ * 最も新しい未退出の参加レコードに left_at を設定する。
+ */
+export async function recordMemberLeave(
+  guildId: string,
+  userId: string,
+): Promise<void> {
+  await db.execute(
+    sql`
+      UPDATE member_join_history
+      SET left_at = now()
+      WHERE id = (
+        SELECT id FROM member_join_history
+        WHERE guild_id = ${guildId}
+          AND user_id  = ${userId}
+          AND left_at IS NULL
+        ORDER BY joined_at DESC
+        LIMIT 1
+      )
+    `,
+  );
 }
 
 export async function setBanLogChannelId(

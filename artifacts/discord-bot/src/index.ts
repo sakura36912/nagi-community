@@ -53,6 +53,9 @@ import {
   listSheetsNeedingReminder,
   markSheetReminderSent,
   setBanLogChannelId,
+  recordMemberJoin,
+  recordMemberLeave,
+  getOrCreateWallet,
 } from "./lib/economy";
 
 import { appendFileSync } from "fs";
@@ -659,6 +662,80 @@ client.on(Events.MessageCreate, async (message) => {
     await message.react("✅");
   } catch (err) {
     logger.error("[initial-issue] Error", err);
+  }
+});
+
+// ─── GuildMemberAdd — 出戻りログ ──────────────────────────────────────────────
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  const guildId = member.guild.id;
+
+  let previousJoinCount: number;
+  try {
+    ({ previousJoinCount } = await recordMemberJoin(guildId, member.id));
+  } catch (err) {
+    logger.error("[returnlog] Failed to record member join", err);
+    return;
+  }
+
+  // 初回参加は通知しない
+  if (previousJoinCount === 0) return;
+
+  const settings = await getGuildSettings(guildId).catch(() => null);
+  if (!settings?.returnLogChannelId) return;
+
+  const logChannel = member.guild.channels.cache.get(settings.returnLogChannelId)
+    ?? await member.guild.channels.fetch(settings.returnLogChannelId).catch(() => null);
+  if (!logChannel || !logChannel.isTextBased()) return;
+
+  // 所持金
+  const wallet = await getOrCreateWallet(guildId, member.id).catch(() => null);
+  const balance = wallet ? wallet.balance.toLocaleString("ja-JP") : "不明";
+  const currencyName = settings.currencyName;
+
+  // ロール（@everyone 除く、上位5件 + 残り件数）
+  const roles = [...member.roles.cache.values()]
+    .filter((r) => r.id !== member.guild.id)
+    .sort((a, b) => b.position - a.position);
+  const roleDisplay =
+    roles.length === 0
+      ? "なし"
+      : roles.length <= 5
+        ? roles.map((r) => `<@&${r.id}>`).join(" ")
+        : roles.slice(0, 5).map((r) => `<@&${r.id}>`).join(" ") +
+          ` … 他 ${roles.length - 5} 件`;
+
+  const createdAt = Math.floor(member.user.createdTimestamp / 1000);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🔄 出戻りメンバーが参加しました")
+    .setColor(0xf39c12)
+    .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+    .addFields(
+      { name: "ユーザー", value: `${member.user.tag}\n<@${member.id}>`, inline: true },
+      { name: "ユーザーID", value: member.id, inline: true },
+      { name: "出戻り回数", value: `**${previousJoinCount}** 回目の参加`, inline: true },
+      { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
+      { name: `所持金`, value: `${balance} ${currencyName}`, inline: true },
+      { name: "ロール", value: roleDisplay, inline: false },
+    )
+    .setTimestamp()
+    .setFooter({ text: member.guild.name, iconURL: member.guild.iconURL() ?? undefined });
+
+  try {
+    await (logChannel as TextChannel).send({ embeds: [embed] });
+  } catch (err) {
+    logger.error("[returnlog] Failed to send return log", err);
+  }
+});
+
+// ─── GuildMemberRemove — 退出記録 ─────────────────────────────────────────────
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  try {
+    await recordMemberLeave(member.guild.id, member.id);
+  } catch (err) {
+    logger.error("[returnlog] Failed to record member leave", err);
   }
 });
 

@@ -30,6 +30,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   uraChannelId: text("ura_channel_id"),
   // Discord text channel ID where ban notifications are posted.
   banLogChannelId: text("ban_log_channel_id"),
+  // Discord text channel ID where returnee (出戻り) notifications are posted.
+  returnLogChannelId: text("return_log_channel_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -38,6 +40,19 @@ export const guildSettingsTable = pgTable("guild_settings", {
     .defaultNow()
     .$onUpdate(() => new Date()),
 });
+
+// Tracks every join event per member per guild, enabling returnee detection.
+export const memberJoinHistoryTable = pgTable(
+  "member_join_history",
+  {
+    id: serial("id").primaryKey(),
+    guildId: text("guild_id").notNull(),
+    userId: text("user_id").notNull(),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+    leftAt: timestamp("left_at", { withTimezone: true }),
+  },
+);
+export type MemberJoinHistory = typeof memberJoinHistoryTable.$inferSelect;
 
 export const insertGuildSettingsSchema = createInsertSchema(
   guildSettingsTable,

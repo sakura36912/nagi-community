@@ -1867,6 +1867,7 @@ import { vcsalaryCommand } from "./vcsalary";
 import { vclogCommand } from "./vclog";
 import { slotCommand } from "./slot";
 import { bannotifyCommand } from "./bannotify";
+import { returnlogCommand } from "./returnlog";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -1885,4 +1886,5 @@ export const commands: Command[] = [
   slotCommand,
   sheetCommand,
   bannotifyCommand,
+  returnlogCommand,
 ];
