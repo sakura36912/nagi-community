@@ -35,6 +35,7 @@ import {
   EVAL_RESURFACE_EFFECT,
   SHOP_LICENSE_EFFECT,
   extendCommunitySheet,
+  getLatestEvalSheet,
   addShopItem,
   createEvalSheet,
   getEvalSheetSettings,
@@ -447,6 +448,22 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   // Eval-sheet extension券: buy first, then extend the community eval sheet.
   const extendDays = EVAL_EXTEND_DAYS[item.effectType ?? ""];
   if (extendDays !== undefined) {
+    // ① 評価中ロールを持っていない人は購入不可
+    const sheetSettingsForExt = await getEvalSheetSettings(interaction.guildId);
+    const triggerRoleIdsForExt = sheetSettingsForExt?.triggerRoleIds?.split(",").map((r) => r.trim()).filter(Boolean) ?? [];
+    if (triggerRoleIdsForExt.length > 0) {
+      const memberForExt = await interaction.guild!.members.fetch(interaction.user.id);
+      if (!memberForExt.roles.cache.hasAny(...triggerRoleIdsForExt)) {
+        await interaction.editReply("❌ この商品は評価中のメンバーのみ購入できます。");
+        return;
+      }
+    }
+    // ② 評価中ロールを持っている人は1回のみ購入可
+    const currentSheetForExt = await getLatestEvalSheet(interaction.guildId, interaction.user.id);
+    if ((currentSheetForExt?.extensionCount ?? 0) >= 1) {
+      await interaction.editReply("❌ 評価延長券は評価シート1枚につき1回しか購入できません。");
+      return;
+    }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
     if (!result.ok) { await interaction.editReply(result.reason); return; }
     const extended = await extendCommunitySheet(interaction.guildId, interaction.user.id, extendDays);
@@ -1138,6 +1155,22 @@ const shopCommand: Command = {
         // Eval-sheet extension券
         const extendDays = EVAL_EXTEND_DAYS[item.effectType ?? ""];
         if (extendDays !== undefined) {
+          // ① 評価中ロールを持っていない人は購入不可
+          const sheetSettingsForExt = await getEvalSheetSettings(guildId);
+          const triggerRoleIdsForExt = sheetSettingsForExt?.triggerRoleIds?.split(",").map((r) => r.trim()).filter(Boolean) ?? [];
+          if (triggerRoleIdsForExt.length > 0) {
+            const memberForExt = await interaction.guild!.members.fetch(interaction.user.id);
+            if (!memberForExt.roles.cache.hasAny(...triggerRoleIdsForExt)) {
+              await interaction.editReply("❌ この商品は評価中のメンバーのみ購入できます。");
+              return;
+            }
+          }
+          // ② 評価中ロールを持っている人は1回のみ購入可
+          const currentSheetForExt = await getLatestEvalSheet(guildId, interaction.user.id);
+          if ((currentSheetForExt?.extensionCount ?? 0) >= 1) {
+            await interaction.editReply("❌ 評価延長券は評価シート1枚につき1回しか購入できません。");
+            return;
+          }
           const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
           if (!result.ok) { await interaction.editReply(result.reason); return; }
           const extended = await extendCommunitySheet(guildId, interaction.user.id, extendDays);

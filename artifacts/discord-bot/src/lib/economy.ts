@@ -1384,7 +1384,7 @@ export async function extendCommunitySheet(
 
   await db
     .update(communitySheetsTable)
-    .set({ endDate: newEndDate, needsUpdate: false })
+    .set({ endDate: newEndDate, needsUpdate: false, extensionCount: sheet.extensionCount + 1 })
     .where(eq(communitySheetsTable.id, sheet.id));
 
   return {

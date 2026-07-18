@@ -181,6 +181,8 @@ export const communitySheetsTable = pgTable("community_sheets", {
   needsUpdate: boolean("needs_update").notNull().default(false),
   /** Set when the end-of-period reminder has been posted in the forum thread. */
   reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
+  /** Number of times the eval period has been extended via a purchase. Resets when a new sheet is created. */
+  extensionCount: integer("extension_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
