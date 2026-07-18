@@ -1,4 +1,4 @@
-import { sheetCommand, applySheetEmbedUpdate, buildSheetEmbed, buildSheetThreadName, findSelfIntro, refreshSheetEmbedForUser } from "./sheet";
+import { applySheetEmbedUpdate, buildSheetEmbed, buildSheetThreadName, findSelfIntro, refreshSheetEmbedForUser } from "../lib/sheet";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -1884,7 +1884,6 @@ export const commands: Command[] = [
   vcsalaryCommand,
   vclogCommand,
   slotCommand,
-  sheetCommand,
   bannotifyCommand,
   returnlogCommand,
 ];

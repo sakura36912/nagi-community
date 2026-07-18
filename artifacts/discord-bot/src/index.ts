@@ -19,7 +19,7 @@ import {
   handleShiftCancel,
   handleShiftTime,
 } from "./commands";
-import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./commands/sheet";
+import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 
 import { logger } from "./lib/logger";
