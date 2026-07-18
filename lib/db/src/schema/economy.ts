@@ -32,6 +32,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   banLogChannelId: text("ban_log_channel_id"),
   // Discord text channel ID where returnee (出戻り) notifications are posted.
   returnLogChannelId: text("return_log_channel_id"),
+  // Comma-separated role IDs excluded from returnee counting.
+  returnLogExcludedRoleIds: text("return_log_excluded_role_ids"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -50,6 +52,8 @@ export const memberJoinHistoryTable = pgTable(
     userId: text("user_id").notNull(),
     joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
     leftAt: timestamp("left_at", { withTimezone: true }),
+    // true when the member left holding only excluded roles → not counted as a real stay
+    excluded: text("excluded").notNull().default("false"),
   },
 );
 export type MemberJoinHistory = typeof memberJoinHistoryTable.$inferSelect;

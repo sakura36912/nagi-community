@@ -5,7 +5,11 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { getGuildSettings, setReturnLogChannelId } from "../lib/economy";
+import {
+  getGuildSettings,
+  setReturnLogChannelId,
+  setReturnLogExcludedRoleIds,
+} from "../lib/economy";
 
 interface Command {
   data: SlashCommandBuilder;
@@ -15,7 +19,7 @@ interface Command {
 export const returnlogCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("returnlog")
-    .setDescription("出戻りログチャンネルの設定")
+    .setDescription("出戻りログの設定")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
@@ -34,6 +38,25 @@ export const returnlogCommand: Command = {
     )
     .addSubcommand((sub) =>
       sub.setName("status").setDescription("現在の出戻りログ設定を確認する"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("exclude_add")
+        .setDescription("このロールを持っているだけでは出戻りにカウントしない")
+        .addRoleOption((opt) =>
+          opt.setName("role").setDescription("除外するロール").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("exclude_remove")
+        .setDescription("除外ロールの設定を解除する")
+        .addRoleOption((opt) =>
+          opt.setName("role").setDescription("解除するロール").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("exclude_list").setDescription("現在の除外ロール一覧を表示する"),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction) {
@@ -59,16 +82,72 @@ export const returnlogCommand: Command = {
       return;
     }
 
+    if (sub === "exclude_add") {
+      const role = interaction.options.getRole("role", true);
+      const settings = await getGuildSettings(interaction.guildId);
+      const current = settings.returnLogExcludedRoleIds
+        ? settings.returnLogExcludedRoleIds.split(",").filter(Boolean)
+        : [];
+      if (current.includes(role.id)) {
+        await interaction.editReply(`ℹ️ <@&${role.id}> はすでに除外リストに含まれています。`);
+        return;
+      }
+      await setReturnLogExcludedRoleIds(interaction.guildId, [...current, role.id]);
+      await interaction.editReply(`✅ <@&${role.id}> を除外ロールに追加しました。\nこのロールのみを持つメンバーが退出→再参加しても出戻りにカウントされません。`);
+      return;
+    }
+
+    if (sub === "exclude_remove") {
+      const role = interaction.options.getRole("role", true);
+      const settings = await getGuildSettings(interaction.guildId);
+      const current = settings.returnLogExcludedRoleIds
+        ? settings.returnLogExcludedRoleIds.split(",").filter(Boolean)
+        : [];
+      const next = current.filter((id) => id !== role.id);
+      if (next.length === current.length) {
+        await interaction.editReply(`ℹ️ <@&${role.id}> は除外リストに含まれていません。`);
+        return;
+      }
+      await setReturnLogExcludedRoleIds(interaction.guildId, next);
+      await interaction.editReply(`✅ <@&${role.id}> を除外ロールから解除しました。`);
+      return;
+    }
+
+    if (sub === "exclude_list") {
+      const settings = await getGuildSettings(interaction.guildId);
+      const ids = settings.returnLogExcludedRoleIds
+        ? settings.returnLogExcludedRoleIds.split(",").filter(Boolean)
+        : [];
+      const embed = new EmbedBuilder()
+        .setTitle("🔄 出戻りログ — 除外ロール一覧")
+        .addFields({
+          name: "除外ロール",
+          value: ids.length === 0 ? "なし" : ids.map((id) => `<@&${id}>`).join("\n"),
+        })
+        .setColor(0x3498db);
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
     // status
     const settings = await getGuildSettings(interaction.guildId);
+    const ids = settings.returnLogExcludedRoleIds
+      ? settings.returnLogExcludedRoleIds.split(",").filter(Boolean)
+      : [];
     const embed = new EmbedBuilder()
       .setTitle("🔄 出戻りログ設定")
-      .addFields({
-        name: "通知チャンネル",
-        value: settings.returnLogChannelId
-          ? `<#${settings.returnLogChannelId}>`
-          : "未設定",
-      })
+      .addFields(
+        {
+          name: "通知チャンネル",
+          value: settings.returnLogChannelId
+            ? `<#${settings.returnLogChannelId}>`
+            : "未設定",
+        },
+        {
+          name: "除外ロール",
+          value: ids.length === 0 ? "なし" : ids.map((id) => `<@&${id}>`).join("\n"),
+        },
+      )
       .setColor(settings.returnLogChannelId ? 0x3498db : 0x95a5a6);
     await interaction.editReply({ embeds: [embed] });
   },

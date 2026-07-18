@@ -743,7 +743,14 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
 client.on(Events.GuildMemberRemove, async (member) => {
   try {
-    await recordMemberLeave(member.guild.id, member.id);
+    const settings = await getGuildSettings(member.guild.id).catch(() => null);
+    const excludedRoleIds = settings?.returnLogExcludedRoleIds
+      ? settings.returnLogExcludedRoleIds.split(",").filter(Boolean)
+      : [];
+    const memberRoleIds = member.roles.cache
+      ? [...member.roles.cache.keys()].filter((id) => id !== member.guild.id)
+      : [];
+    await recordMemberLeave(member.guild.id, member.id, memberRoleIds, excludedRoleIds);
   } catch (err) {
     logger.error("[returnlog] Failed to record member leave", err);
   }
