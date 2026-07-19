@@ -8,7 +8,6 @@ import {
   ModalBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  SlashCommandSubcommandGroupBuilder,
   TextInputBuilder,
   TextInputStyle,
   type ButtonInteraction,
@@ -718,19 +717,43 @@ const currencyCommand: Command = {
 const balanceCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("balance")
-    .setDescription("自分または指定したユーザーの残高を表示します")
+    .setDescription("残高を表示します（ウォレットまたは金庫）")
     .addUserOption((opt) =>
-      opt.setName("user").setDescription("確認したいユーザー").setRequired(false),
+      opt.setName("user").setDescription("確認したいユーザー（省略時は自分）").setRequired(false),
+    )
+    .addIntegerOption((opt) =>
+      opt.setName("treasury_id").setDescription("金庫IDを指定すると金庫の残高を表示します").setRequired(false),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    const target = interaction.options.getUser("user") ?? interaction.user;
+    const treasuryId = interaction.options.getInteger("treasury_id");
 
+    // ── 金庫残高 ──
+    if (treasuryId !== null) {
+      const treasury = await getSquadTreasury(treasuryId);
+      if (!treasury || treasury.guildId !== guildId) {
+        await interaction.reply({ content: "指定された金庫が見つかりません。", ephemeral: true });
+        return;
+      }
+      const settings = await getGuildSettings(guildId);
+      const embed = new EmbedBuilder()
+        .setTitle(`🏦 ${treasury.name} — 残高`)
+        .setColor(0xf5a623)
+        .addFields(
+          { name: "残高", value: `**${treasury.balance.toLocaleString()}${settings.currencyName}**`, inline: true },
+          { name: "隊員ロール", value: `<@&${treasury.roleId}>`, inline: true },
+          ...(treasury.leaderRoleId ? [{ name: "隊長ロール", value: `<@&${treasury.leaderRoleId}>`, inline: true }] : []),
+        );
+      await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
+      return;
+    }
+
+    // ── ウォレット残高 ──
+    const target = interaction.options.getUser("user") ?? interaction.user;
     if (target.id !== interaction.user.id && !requireManageGuild(interaction)) {
       await interaction.reply({ content: "他のユーザーの残高を確認できるのは管理者のみです。", ephemeral: true });
       return;
     }
-
     const [wallet, settings] = await Promise.all([
       getOrCreateWallet(guildId, target.id),
       getGuildSettings(guildId),
@@ -807,40 +830,133 @@ const payCommand: Command = {
 const giveCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("give")
-    .setDescription("ユーザーに通貨を付与します(管理者用)")
-    .addUserOption((opt) =>
-      opt.setName("user").setDescription("付与先のユーザー").setRequired(true),
+    .setDescription("通貨の付与・金庫への入金")
+    .addSubcommand((sub) =>
+      sub
+        .setName("wallet")
+        .setDescription("ユーザーのウォレットに通貨を付与します（管理者）")
+        .addUserOption((opt) =>
+          opt.setName("user").setDescription("付与先のユーザー").setRequired(true),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName("amount").setDescription("付与額（マイナスで没収）").setRequired(true),
+        ),
     )
-    .addIntegerOption((opt) =>
-      opt.setName("amount").setDescription("付与額(マイナスで没収)").setRequired(true),
+    .addSubcommand((sub) =>
+      sub
+        .setName("treasury")
+        .setDescription("金庫に直接通貨を付与します（管理者）")
+        .addIntegerOption((opt) =>
+          opt.setName("treasury_id").setDescription("金庫ID").setRequired(true),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName("amount").setDescription("付与額").setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("deposit")
+        .setDescription("自分のウォレットから金庫に入金します")
+        .addIntegerOption((opt) =>
+          opt.setName("amount").setDescription("入金額").setRequired(true).setMinValue(1),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName("treasury_id").setDescription("複数の隊に所属している場合は金庫IDを指定").setRequired(false),
+        ),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-
-    if (!requireManageGuild(interaction)) {
-      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-      return;
-    }
-
-    const target = interaction.options.getUser("user", true);
-    const amount = interaction.options.getInteger("amount", true);
-
-    if (target.bot) {
-      await interaction.reply({ content: "Botには付与できません。", ephemeral: true });
-      return;
-    }
-
+    const sub = interaction.options.getSubcommand();
     const settings = await getGuildSettings(guildId);
-    const result = await giveCurrency(guildId, target.id, amount, settings.currencyName);
-    if (result.ok) {
-      const verb = amount >= 0 ? "付与" : "没収";
-      const embed = new EmbedBuilder()
-        .setColor(amount >= 0 ? 0x2ecc71 : 0xe74c3c)
-        .setAuthor({ name: target.displayName ?? target.username, iconURL: target.displayAvatarURL() })
-        .setDescription(`${verb}: **${Math.abs(amount).toLocaleString()}${settings.currencyName}**\n残高: **${result.balance.toLocaleString()}${settings.currencyName}**`);
-      await interaction.reply({ embeds: [embed] });
-    } else {
-      await interaction.reply({ content: result.reason, ephemeral: true });
+    const member = interaction.member as GuildMember | null;
+
+    // ── wallet ──
+    if (sub === "wallet") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const target = interaction.options.getUser("user", true);
+      const amount = interaction.options.getInteger("amount", true);
+      if (target.bot) {
+        await interaction.reply({ content: "Botには付与できません。", ephemeral: true });
+        return;
+      }
+      const result = await giveCurrency(guildId, target.id, amount, settings.currencyName);
+      if (result.ok) {
+        const verb = amount >= 0 ? "付与" : "没収";
+        const embed = new EmbedBuilder()
+          .setColor(amount >= 0 ? 0x2ecc71 : 0xe74c3c)
+          .setAuthor({ name: target.displayName ?? target.username, iconURL: target.displayAvatarURL() })
+          .setDescription(`${verb}: **${Math.abs(amount).toLocaleString()}${settings.currencyName}**\n残高: **${result.balance.toLocaleString()}${settings.currencyName}**`);
+        await interaction.reply({ embeds: [embed] });
+      } else {
+        await interaction.reply({ content: result.reason, ephemeral: true });
+      }
+      return;
+    }
+
+    // ── treasury ──
+    if (sub === "treasury") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const treasuryId = interaction.options.getInteger("treasury_id", true);
+      const amount     = interaction.options.getInteger("amount", true);
+      const treasury   = await getSquadTreasury(treasuryId);
+      if (!treasury || treasury.guildId !== guildId) {
+        await interaction.reply({ content: "金庫が見つかりません。", ephemeral: true });
+        return;
+      }
+      const newBalance = await giveToCrunchTreasury(guildId, treasuryId, interaction.user.id, amount);
+      await interaction.reply(
+        `✅ **${treasury.name}** に **${amount.toLocaleString()}${settings.currencyName}** を付与しました。\n金庫残高: ${newBalance.toLocaleString()}${settings.currencyName}`,
+      );
+      return;
+    }
+
+    // ── deposit ──
+    if (sub === "deposit") {
+      const amount = interaction.options.getInteger("amount", true);
+      const idOpt  = interaction.options.getInteger("treasury_id");
+      let treasury: Awaited<ReturnType<typeof getSquadTreasury>> | null = null;
+      let resolveError: string | null = null;
+      if (idOpt !== null) {
+        const t = await getSquadTreasury(idOpt);
+        if (!t || t.guildId !== guildId) { resolveError = "指定された金庫が見つかりません。"; }
+        else { treasury = t; }
+      } else {
+        const memberRoleIds = member ? [...member.roles.cache.keys()] : [];
+        const matches = await getTreasuriesByRoles(guildId, memberRoleIds);
+        if (matches.length === 0) { resolveError = "所属している隊の金庫が見つかりません。"; }
+        else if (matches.length > 1) {
+          const ids = matches.map((t) => `[ID:${t.id}] ${t.name}`).join("\n");
+          resolveError = `複数の隊に所属しています。\`treasury_id\` を指定してください:\n${ids}`;
+        } else { treasury = matches[0]!; }
+      }
+      if (!treasury) { await interaction.reply({ content: resolveError!, ephemeral: true }); return; }
+      const memberRoleIds = member ? [...member.roles.cache.keys()] : [];
+      if (!memberRoleIds.includes(treasury.roleId)) {
+        await interaction.reply({ content: `この金庫（${treasury.name}）の隊員ロールを持っていません。`, ephemeral: true });
+        return;
+      }
+      await interaction.deferReply();
+      try {
+        const result = await depositToTreasury(guildId, treasury.id, interaction.user.id, amount);
+        const embed = new EmbedBuilder()
+          .setTitle(`🏦 ${treasury.name} — 入金完了`)
+          .setColor(0x57f287)
+          .addFields(
+            { name: "入金額", value: `**+${amount.toLocaleString()}${settings.currencyName}**`, inline: true },
+            { name: "金庫残高", value: `${result.treasuryBalance.toLocaleString()}${settings.currencyName}`, inline: true },
+            { name: "あなたの残高", value: `${result.walletBalance.toLocaleString()}${settings.currencyName}`, inline: true },
+          );
+        await interaction.editReply({ embeds: [embed] });
+      } catch (err) {
+        await interaction.editReply(err instanceof Error ? err.message : "入金に失敗しました。");
+      }
+      return;
     }
   },
 };
@@ -898,218 +1014,160 @@ const leaderboardCommand: Command = {
 };
 
 // ---------------------------------------------------------------------------
-// Shop command factory — creates an independent /shop-style command scoped to
-// a single `category` in the shopItemsTable. All shops share the same button
-// and modal handlers (items are identified by ID, not category).
+// /shop — flat subcommands with category choice option
 // ---------------------------------------------------------------------------
 
 type EffectChoice = { name: string; value: string };
 
-const DEFAULT_EFFECT_CHOICES: EffectChoice[] = [
-  { name: "ニックネーム変更権", value: NICKNAME_CHANGE_EFFECT },
-  { name: "非公開VC作成(無期限)", value: PRIVATE_VC_EFFECT },
-  { name: "永久ロール付与", value: PERM_ROLE_EFFECT },
-  { name: "評価落ち浮上券", value: EVAL_RESURFACE_EFFECT },
-  { name: "個人ショップ開業券", value: SHOP_LICENSE_EFFECT },
+const COMBINED_EFFECT_CHOICES: EffectChoice[] = [
+  { name: "ニックネーム変更権",        value: NICKNAME_CHANGE_EFFECT   },
+  { name: "非公開VC作成(無期限)",      value: PRIVATE_VC_EFFECT        },
+  { name: "永久ロール付与",             value: PERM_ROLE_EFFECT         },
+  { name: "評価落ち浮上券",             value: EVAL_RESURFACE_EFFECT    },
+  { name: "個人ショップ開業券",         value: SHOP_LICENSE_EFFECT      },
+  { name: "非公開VC/裏部屋（1日）",    value: PRIVATE_VC_1D_EFFECT     },
+  { name: "非公開VC/裏部屋（1週間）",  value: PRIVATE_VC_1W_EFFECT     },
+  { name: "非公開VC/裏部屋（1ヶ月）",  value: PRIVATE_VC_1M_EFFECT     },
+  { name: "VCリネーム",                 value: VC_RENAME_EFFECT         },
+  { name: "裏フリールーム延長（1日）", value: URA_EXTEND_1D_EFFECT     },
 ];
 
-const VC_EFFECT_CHOICES: EffectChoice[] = [
-  { name: "非公開VC作成(無期限)", value: PRIVATE_VC_EFFECT },
-  { name: "非公開VC（1日）", value: PRIVATE_VC_1D_EFFECT },
-  { name: "非公開VC（1週間）", value: PRIVATE_VC_1W_EFFECT },
-  { name: "非公開VC（1ヶ月）", value: PRIVATE_VC_1M_EFFECT },
-  { name: "VCリネーム", value: VC_RENAME_EFFECT },
+const CATEGORY_CHOICES = [
+  { name: "🛒 ショップ",               value: "general" },
+  { name: "⚔️ 隊別ショップ",          value: "group"   },
+  { name: "🔒 非公開VCショップ",       value: "vc"      },
+  { name: "🌙 裏フリールームショップ", value: "ura"     },
 ];
 
-const URA_EFFECT_CHOICES: EffectChoice[] = [
-  { name: "裏フリールーム（1日）", value: PRIVATE_VC_1D_EFFECT },
-  { name: "裏フリールーム（1週間）", value: PRIVATE_VC_1W_EFFECT },
-  { name: "裏フリールーム（1ヶ月）", value: PRIVATE_VC_1M_EFFECT },
-  { name: "裏フリールーム延長（1日）", value: URA_EXTEND_1D_EFFECT },
-  { name: "裏フリールーム名前変更", value: VC_RENAME_EFFECT },
-];
-
-// ─────────────────────────────────────────────────────────────
-// Unified /shop command  (subcommand-group per category)
-// Usage: /shop <general|group|vc|ura> <list|buy|add|…>
-// ─────────────────────────────────────────────────────────────
 interface ShopGroupConfig {
   displayName: string;
   emoji: string;
   category: string;
   color: number;
-  effectChoices: EffectChoice[];
-  licenseSetup?: boolean;
-  vcCategorySetup?: boolean;
-  uraCategorySetup?: boolean;
-  uraChannelSetup?: boolean;
-  uraInvite?: boolean;
 }
 
 const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
-  general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623, effectChoices: DEFAULT_EFFECT_CHOICES },
-  group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c, effectChoices: DEFAULT_EFFECT_CHOICES, licenseSetup: true },
-  vc:      { displayName: "非公開VCショップ",       emoji: "🔒", category: "vc",      color: 0x3498db, effectChoices: VC_EFFECT_CHOICES,     vcCategorySetup: true },
-  ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6, effectChoices: URA_EFFECT_CHOICES,    uraCategorySetup: true, uraChannelSetup: true, uraInvite: true },
+  general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623 },
+  group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c },
+  vc:      { displayName: "非公開VCショップ",       emoji: "🔒", category: "vc",      color: 0x3498db },
+  ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6 },
 };
 
-function buildShopGroup(groupName: string, cfg: ShopGroupConfig): SlashCommandSubcommandGroupBuilder {
-  const g = new SlashCommandSubcommandGroupBuilder()
-    .setName(groupName)
-    .setDescription(cfg.displayName)
-    .addSubcommand((sub) => sub.setName("list").setDescription(`${cfg.displayName}の購入可能アイテム一覧を表示します`))
+const shopCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("shop")
+    .setDescription("ショップを操作します")
     .addSubcommand((sub) =>
-      sub
-        .setName("buy")
-        .setDescription("アイテムを購入します")
+      sub.setName("list").setDescription("購入可能アイテムを表示します")
+        .addStringOption((opt) =>
+          opt.setName("category").setDescription("ショップカテゴリ").setRequired(true).addChoices(...CATEGORY_CHOICES),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("buy").setDescription("アイテムを購入します")
         .addIntegerOption((opt) =>
-          opt.setName("item_id").setDescription(`アイテムID(/shop ${groupName} list で確認)`).setRequired(true),
+          opt.setName("item_id").setDescription("アイテムID（/shop list で確認）").setRequired(true),
         ),
     )
     .addSubcommand((sub) => sub.setName("inventory").setDescription("自分の所持アイテムを表示します"))
     .addSubcommand((sub) =>
-      sub
-        .setName("add")
-        .setDescription(`${cfg.displayName}にアイテムを追加します(管理者用)`)
+      sub.setName("add").setDescription("アイテムを追加します（管理者）")
+        .addStringOption((opt) =>
+          opt.setName("category").setDescription("追加先ショップ").setRequired(true).addChoices(...CATEGORY_CHOICES),
+        )
         .addStringOption((opt) => opt.setName("name").setDescription("アイテム名").setRequired(true))
         .addIntegerOption((opt) => opt.setName("price").setDescription("価格").setRequired(true).setMinValue(1))
         .addStringOption((opt) => opt.setName("description").setDescription("説明").setRequired(false))
         .addStringOption((opt) =>
-          opt.setName("effect").setDescription("購入時の特殊効果").setRequired(false).addChoices(...cfg.effectChoices),
+          opt.setName("effect").setDescription("購入時の特殊効果").setRequired(false).addChoices(...COMBINED_EFFECT_CHOICES),
         )
         .addRoleOption((opt) =>
           opt.setName("role").setDescription("付与するロール（永久ロール付与エフェクト使用時）").setRequired(false),
         ),
     )
     .addSubcommand((sub) =>
-      sub
-        .setName("price")
-        .setDescription("アイテムの価格を変更します(管理者用)")
+      sub.setName("price").setDescription("アイテムの価格を変更します（管理者）")
         .addIntegerOption((opt) => opt.setName("item_id").setDescription("アイテムID").setRequired(true))
         .addIntegerOption((opt) => opt.setName("price").setDescription("新しい価格").setRequired(true).setMinValue(1)),
     )
     .addSubcommand((sub) =>
-      sub
-        .setName("remove")
-        .setDescription(`${cfg.displayName}からアイテムを削除します(管理者用)`)
+      sub.setName("remove").setDescription("アイテムを削除します（管理者）")
         .addIntegerOption((opt) => opt.setName("item_id").setDescription("アイテムID").setRequired(true)),
-    );
-
-  if (cfg.vcCategorySetup) {
-    g.addSubcommand((sub) =>
-      sub
-        .setName("vc-category")
-        .setDescription("非公開VCを作成するカテゴリを設定します(管理者用)")
+    )
+    .addSubcommand((sub) =>
+      sub.setName("vc-category").setDescription("非公開VCを作成するカテゴリを設定します（管理者）")
         .addChannelOption((opt) =>
           opt.setName("channel").setDescription("カテゴリチャンネルを選択").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
-        ),
-    );
-  }
-  if (cfg.uraCategorySetup) {
-    g.addSubcommand((sub) =>
-      sub
-        .setName("ura-category")
-        .setDescription("裏フリールームVCを作成するカテゴリを設定します(管理者用)")
-        .addChannelOption((opt) =>
-          opt.setName("channel").setDescription("カテゴリチャンネルを選択").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
-        ),
-    );
-  }
-  if (cfg.uraChannelSetup) {
-    g.addSubcommand((sub) =>
-      sub
-        .setName("ura-channel")
-        .setDescription("裏フリールーム購入者にアクセス権を付与するチャンネルを設定します(管理者用)")
-        .addChannelOption((opt) =>
-          opt.setName("channel").setDescription("テキスト・ボイスチャンネルを選択").setRequired(true),
-        ),
-    );
-  }
-  if (cfg.uraInvite) {
-    g.addSubcommand((sub) =>
-      sub
-        .setName("invite")
-        .setDescription("裏フリールームに別のメンバーを招待します")
-        .addUserOption((opt) =>
-          opt.setName("member").setDescription("招待するメンバー").setRequired(true),
         ),
     )
     .addSubcommand((sub) =>
-      sub
-        .setName("kick")
-        .setDescription("裏フリールームからメンバーのアクセスを取り消します")
-        .addUserOption((opt) =>
-          opt.setName("member").setDescription("取り消すメンバー").setRequired(true),
+      sub.setName("ura-category").setDescription("裏フリールームVCを作成するカテゴリを設定します（管理者）")
+        .addChannelOption((opt) =>
+          opt.setName("channel").setDescription("カテゴリチャンネルを選択").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
         ),
-    );
-  }
-  if (cfg.licenseSetup) {
-    g
-      .addSubcommand((sub) =>
-        sub
-          .setName("license-setup")
-          .setDescription("隊ロール→ショップ開業ロールのマッピングを設定します(管理者用)")
-          .addRoleOption((opt) => opt.setName("squad_role").setDescription("隊ロール").setRequired(true))
-          .addRoleOption((opt) => opt.setName("shop_role").setDescription("付与するショップ開業ロール").setRequired(true)),
-      )
-      .addSubcommand((sub) => sub.setName("license-list").setDescription("現在の隊→開業ロールのマッピング一覧を表示します(管理者用)"))
-      .addSubcommand((sub) => sub.setName("sales").setDescription("隊ごとの売上を表示します"));
-  }
-
-  return g;
-}
-
-const shopCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("shop")
-    .setDescription("ショップを操作します")
-    .addSubcommandGroup(buildShopGroup("general", SHOP_GROUPS.general))
-    .addSubcommandGroup(buildShopGroup("group",   SHOP_GROUPS.group))
-    .addSubcommandGroup(buildShopGroup("vc",      SHOP_GROUPS.vc))
-    .addSubcommandGroup(buildShopGroup("ura",     SHOP_GROUPS.ura)),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("ura-channel").setDescription("裏フリールーム購入者にアクセス権を付与するチャンネルを設定します（管理者）")
+        .addChannelOption((opt) =>
+          opt.setName("channel").setDescription("テキスト・ボイスチャンネルを選択").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("invite").setDescription("裏フリールームに別のメンバーを招待します")
+        .addUserOption((opt) => opt.setName("member").setDescription("招待するメンバー").setRequired(true)),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("kick").setDescription("裏フリールームからメンバーのアクセスを取り消します")
+        .addUserOption((opt) => opt.setName("member").setDescription("取り消すメンバー").setRequired(true)),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("license-setup").setDescription("隊ロール→ショップ開業ロールのマッピングを設定します（管理者）")
+        .addRoleOption((opt) => opt.setName("squad_role").setDescription("隊ロール").setRequired(true))
+        .addRoleOption((opt) => opt.setName("shop_role").setDescription("付与するショップ開業ロール").setRequired(true)),
+    )
+    .addSubcommand((sub) => sub.setName("license-list").setDescription("隊→開業ロールのマッピング一覧を表示します（管理者）"))
+    .addSubcommand((sub) => sub.setName("sales").setDescription("隊ごとの売上を表示します")),
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    const groupName = interaction.options.getSubcommandGroup(true);
-    const sub = interaction.options.getSubcommand();
-    const cfg = SHOP_GROUPS[groupName];
-    const { displayName, emoji, category, color } = cfg;
-    const panelTitle = `${emoji} ${displayName}`;
+    const sub     = interaction.options.getSubcommand();
 
-      if (sub === "list") {
-        const [items, settings] = await Promise.all([
-          listShopItems(guildId, category),
-          getGuildSettings(guildId),
-        ]);
-        const panel = buildShopPanel(items, settings.currencyName, panelTitle, color);
-        await interaction.reply(panel);
+    // Resolve cfg for subcommands that carry a category option
+    function getCfg(): ShopGroupConfig {
+      const cat = interaction.options.getString("category", true);
+      return SHOP_GROUPS[cat] ?? SHOP_GROUPS.general;
+    }
+
+    if (sub === "list") {
+      const cfg = getCfg();
+      const [items, settings] = await Promise.all([
+        listShopItems(guildId, cfg.category),
+        getGuildSettings(guildId),
+      ]);
+      const panel = buildShopPanel(items, settings.currencyName, `${cfg.emoji} ${cfg.displayName}`, cfg.color);
+      await interaction.reply(panel);
+      return;
+    }
+
+    if (sub === "buy") {
+      const itemId = interaction.options.getInteger("item_id", true);
+      const item = await getShopItem(guildId, itemId);
+      if (!item) {
+        await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
         return;
       }
 
-      if (sub === "buy") {
-        const itemId = interaction.options.getInteger("item_id", true);
-        const item = await getShopItem(guildId, itemId);
-        if (!item) {
-          await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
-          return;
-        }
-        // Guard: prevent buying items from a different shop via this command
-        if (item.category !== category) {
-          await interaction.reply({ content: "そのアイテムはこのショップでは購入できません。", ephemeral: true });
-          return;
-        }
+      if (item.effectType === NICKNAME_CHANGE_EFFECT) {
+        await interaction.showModal(buildNicknameModal(item.id));
+        return;
+      }
+      if (item.effectType === VC_RENAME_EFFECT) {
+        await interaction.showModal(buildVcRenameModal(item.id));
+        return;
+      }
 
-        if (item.effectType === NICKNAME_CHANGE_EFFECT) {
-          await interaction.showModal(buildNicknameModal(item.id));
-          return;
-        }
-        if (item.effectType === VC_RENAME_EFFECT) {
-          await interaction.showModal(buildVcRenameModal(item.id));
-          return;
-        }
-
-        await interaction.deferReply({ ephemeral: true });
-        const settings = await getGuildSettings(guildId);
+      await interaction.deferReply({ ephemeral: true });
+      const settings = await getGuildSettings(guildId);
 
         // 裏フリールーム延長専用（既存セッションがある場合のみ、新規作成なし）
         const uraExtendDuration = URA_EXTEND_DURATIONS[item.effectType ?? ""];
@@ -1271,234 +1329,234 @@ const shopCommand: Command = {
           return;
         }
 
-        const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-        if (result.ok) {
-          await interaction.editReply(`**${result.item.name}**を購入しました!`);
-          if (category === "group") tryRecordGroupSale(interaction.guild!, guildId, interaction.user.id, result.item).catch(() => {});
-        } else {
-          await interaction.editReply(result.reason);
-        }
-        return;
+      const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
+      if (result.ok) {
+        await interaction.editReply(`**${result.item.name}**を購入しました!`);
+        if (item.category === "group") tryRecordGroupSale(interaction.guild!, guildId, interaction.user.id, result.item).catch(() => {});
+      } else {
+        await interaction.editReply(result.reason);
       }
+      return;
+    }
 
-      if (sub === "inventory") {
-        const items = await listInventory(guildId, interaction.user.id);
-        if (items.length === 0) {
-          await interaction.reply({ content: "所持アイテムはありません。", ephemeral: true });
-          return;
-        }
-        const lines = items.map((row) => `**${row.item.name}** x${row.quantity}`);
-        await interaction.reply({ content: `## 🎒 所持アイテム\n${lines.join("\n")}`, ephemeral: true });
+    if (sub === "inventory") {
+      const items = await listInventory(guildId, interaction.user.id);
+      if (items.length === 0) {
+        await interaction.reply({ content: "所持アイテムはありません。", ephemeral: true });
         return;
       }
+      const lines = items.map((row) => `**${row.item.name}** x${row.quantity}`);
+      await interaction.reply({ content: `## 🎒 所持アイテム\n${lines.join("\n")}`, ephemeral: true });
+      return;
+    }
 
-      if (sub === "add") {
-        if (!requireManageGuild(interaction)) {
-          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-          return;
-        }
-        const name = interaction.options.getString("name", true);
-        const price = interaction.options.getInteger("price", true);
-        const description = interaction.options.getString("description");
-        const effect = interaction.options.getString("effect");
-        const role = interaction.options.getRole("role");
-        if (effect === PERM_ROLE_EFFECT && !role) {
-          await interaction.reply({ content: "❌ 永久ロール付与には `role` オプションでロールを指定してください。", ephemeral: true });
-          return;
-        }
-        const [item, settings] = await Promise.all([
-          addShopItem(guildId, name, price, description, effect, category, role?.id ?? null),
-          getGuildSettings(guildId),
-        ]);
-        await interaction.reply(
-          `アイテム **#${item.id} ${item.name}**(${item.price}${settings.currencyName})を${displayName}に追加しました。`,
-        );
+    if (sub === "add") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
+      const cfg         = getCfg();
+      const name        = interaction.options.getString("name", true);
+      const price       = interaction.options.getInteger("price", true);
+      const description = interaction.options.getString("description");
+      const effect      = interaction.options.getString("effect");
+      const role        = interaction.options.getRole("role");
+      if (effect === PERM_ROLE_EFFECT && !role) {
+        await interaction.reply({ content: "❌ 永久ロール付与には `role` オプションでロールを指定してください。", ephemeral: true });
+        return;
+      }
+      const [item, settings] = await Promise.all([
+        addShopItem(guildId, name, price, description, effect, cfg.category, role?.id ?? null),
+        getGuildSettings(guildId),
+      ]);
+      await interaction.reply(
+        `アイテム **#${item.id} ${item.name}**(${item.price}${settings.currencyName})を${cfg.displayName}に追加しました。`,
+      );
+      return;
+    }
 
-      if (sub === "price") {
-        if (!requireManageGuild(interaction)) {
-          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-          return;
-        }
-        const itemId = interaction.options.getInteger("item_id", true);
-        const newPrice = interaction.options.getInteger("price", true);
-        const [updated, settings] = await Promise.all([
-          updateShopItemPrice(guildId, itemId, newPrice),
-          getGuildSettings(guildId),
-        ]);
-        if (!updated) {
-          await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
-          return;
-        }
-        await interaction.reply(
-          `**#${updated.id} ${updated.name}** の価格を **${newPrice}${settings.currencyName}** に変更しました。`,
-        );
+    if (sub === "price") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
+      const itemId   = interaction.options.getInteger("item_id", true);
+      const newPrice = interaction.options.getInteger("price", true);
+      const [updated, settings] = await Promise.all([
+        updateShopItemPrice(guildId, itemId, newPrice),
+        getGuildSettings(guildId),
+      ]);
+      if (!updated) {
+        await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+        return;
+      }
+      await interaction.reply(
+        `**#${updated.id} ${updated.name}** の価格を **${newPrice}${settings.currencyName}** に変更しました。`,
+      );
+      return;
+    }
 
-      if (sub === "remove") {
-        if (!requireManageGuild(interaction)) {
-          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-          return;
-        }
-        const itemId = interaction.options.getInteger("item_id", true);
-        const removed = await removeShopItem(guildId, itemId);
-        await interaction.reply(
-          removed ? `アイテム#${itemId}を削除しました。` : "そのアイテムは見つかりませんでした。",
-        );
+    if (sub === "remove") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
+      const itemId  = interaction.options.getInteger("item_id", true);
+      const removed = await removeShopItem(guildId, itemId);
+      await interaction.reply(
+        removed ? `アイテム#${itemId}を削除しました。` : "そのアイテムは見つかりませんでした。",
+      );
+      return;
+    }
 
-      if (sub === "vc-category" && cfg.vcCategorySetup) {
-        if (!requireManageGuild(interaction)) {
-          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-          return;
-        }
-        const channel = interaction.options.getChannel("channel", true);
-        const channelId = channel.id;
-        logger.info(`[vc-category] guild=${guildId} channelId=${channelId}`);
-        await setVcCategoryId(guildId, channelId);
-        logger.info(`[vc-category] saved ok`);
-        await interaction.reply(`✅ 非公開VCの作成先カテゴリを <#${channelId}> に設定しました。`);
+    if (sub === "vc-category") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
+      const channel   = interaction.options.getChannel("channel", true);
+      const channelId = channel.id;
+      logger.info(`[vc-category] guild=${guildId} channelId=${channelId}`);
+      await setVcCategoryId(guildId, channelId);
+      logger.info(`[vc-category] saved ok`);
+      await interaction.reply(`✅ 非公開VCの作成先カテゴリを <#${channelId}> に設定しました。`);
+      return;
+    }
 
-      if (sub === "ura-category" && cfg.uraCategorySetup) {
-        if (!requireManageGuild(interaction)) {
-          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-          return;
-        }
-        const channel = interaction.options.getChannel("channel", true);
-        const channelId = channel.id;
-        await setUraCategoryId(guildId, channelId);
-        await interaction.reply(`✅ 裏フリールームVCの作成先カテゴリを <#${channelId}> に設定しました。`);
+    if (sub === "ura-category") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
+      const channel   = interaction.options.getChannel("channel", true);
+      const channelId = channel.id;
+      await setUraCategoryId(guildId, channelId);
+      await interaction.reply(`✅ 裏フリールームVCの作成先カテゴリを <#${channelId}> に設定しました。`);
+      return;
+    }
 
-      if (sub === "ura-channel" && cfg.uraChannelSetup) {
-        if (!requireManageGuild(interaction)) {
-          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-          return;
-        }
-        const channel = interaction.options.getChannel("channel", true);
-        await setUraChannelId(guildId, channel.id);
-        await interaction.reply(`✅ 裏フリールーム購入者のアクセス先チャンネルを <#${channel.id}> に設定しました。`);
+    if (sub === "ura-channel") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
+      const channel = interaction.options.getChannel("channel", true);
+      await setUraChannelId(guildId, channel.id);
+      await interaction.reply(`✅ 裏フリールーム購入者のアクセス先チャンネルを <#${channel.id}> に設定しました。`);
+      return;
+    }
 
-      if (sub === "invite" && cfg.uraInvite) {
-        await interaction.deferReply({ ephemeral: true });
-        const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
-        if (!session) {
-          await interaction.editReply("❌ 有効な裏フリールームが見つかりません。先に購入してください。");
-          return;
-        }
-        const targetUser = interaction.options.getUser("member", true);
-        if (targetUser.id === interaction.user.id) {
-          await interaction.editReply("❌ 自分自身を招待することはできません。");
-          return;
-        }
-        const ch = interaction.guild!.channels.cache.get(session.channelId)
-          ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
-        if (!ch || !("permissionOverwrites" in ch)) {
-          await interaction.editReply("❌ VCチャンネルが見つかりませんでした。");
-          return;
-        }
-        await ch.permissionOverwrites.edit(targetUser.id, {
-          ViewChannel: true,
-          Connect: true,
-          Speak: true,
-          Stream: true,
-          SendMessages: true,
-        });
-        await interaction.editReply(`✅ <@${targetUser.id}> を裏フリールームに招待しました。`);
+    if (sub === "invite") {
+      await interaction.deferReply({ ephemeral: true });
+      const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+      if (!session) {
+        await interaction.editReply("❌ 有効な裏フリールームが見つかりません。先に購入してください。");
         return;
       }
+      const targetUser = interaction.options.getUser("member", true);
+      if (targetUser.id === interaction.user.id) {
+        await interaction.editReply("❌ 自分自身を招待することはできません。");
+        return;
+      }
+      const ch = interaction.guild!.channels.cache.get(session.channelId)
+        ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
+      if (!ch || !("permissionOverwrites" in ch)) {
+        await interaction.editReply("❌ VCチャンネルが見つかりませんでした。");
+        return;
+      }
+      await ch.permissionOverwrites.edit(targetUser.id, {
+        ViewChannel: true,
+        Connect: true,
+        Speak: true,
+        Stream: true,
+        SendMessages: true,
+      });
+      await interaction.editReply(`✅ <@${targetUser.id}> を裏フリールームに招待しました。`);
+      return;
+    }
 
-      if (sub === "kick" && cfg.uraInvite) {
-        await interaction.deferReply({ ephemeral: true });
-        const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
-        if (!session) {
-          await interaction.editReply("❌ 有効な裏フリールームが見つかりません。");
-          return;
-        }
-        const targetUser = interaction.options.getUser("member", true);
-        if (targetUser.id === interaction.user.id) {
-          await interaction.editReply("❌ 自分自身のアクセスは取り消せません。");
-          return;
-        }
-        const ch = interaction.guild!.channels.cache.get(session.channelId)
-          ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
-        if (!ch || !("permissionOverwrites" in ch)) {
-          await interaction.editReply("❌ VCチャンネルが見つかりませんでした。");
-          return;
-        }
-        await ch.permissionOverwrites.delete(targetUser.id);
-        // VC内にいれば強制切断
-        try {
-          const kicked = await interaction.guild!.members.fetch(targetUser.id);
-          if (kicked.voice.channelId === session.channelId) {
-            await kicked.voice.disconnect();
-          }
-        } catch { /* non-fatal */ }
-        await interaction.editReply(`✅ <@${targetUser.id}> のアクセスを取り消しました。`);
+    if (sub === "kick") {
+      await interaction.deferReply({ ephemeral: true });
+      const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+      if (!session) {
+        await interaction.editReply("❌ 有効な裏フリールームが見つかりません。");
         return;
       }
+      const targetUser = interaction.options.getUser("member", true);
+      if (targetUser.id === interaction.user.id) {
+        await interaction.editReply("❌ 自分自身のアクセスは取り消せません。");
+        return;
+      }
+      const ch = interaction.guild!.channels.cache.get(session.channelId)
+        ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
+      if (!ch || !("permissionOverwrites" in ch)) {
+        await interaction.editReply("❌ VCチャンネルが見つかりませんでした。");
+        return;
+      }
+      await ch.permissionOverwrites.delete(targetUser.id);
+      try {
+        const kicked = await interaction.guild!.members.fetch(targetUser.id);
+        if (kicked.voice.channelId === session.channelId) {
+          await kicked.voice.disconnect();
+        }
+      } catch { /* non-fatal */ }
+      await interaction.editReply(`✅ <@${targetUser.id}> のアクセスを取り消しました。`);
+      return;
+    }
 
-      if (sub === "sales" && cfg.licenseSetup) {
-        const [summary, treasuries, settings] = await Promise.all([
-          getGroupShopSalesSummary(guildId),
-          listSquadTreasuries(guildId),
-          getGuildSettings(guildId),
-        ]);
-        if (summary.length === 0) {
-          await interaction.reply({ content: "まだ売上データがありません。", ephemeral: false });
-          return;
-        }
-        const medals = ["🥇", "🥈", "🥉"];
-        const lines = summary.map((row, i) => {
-          const treasury = treasuries.find(t => t.roleId === row.squadRoleId);
-          const name = treasury ? treasury.name : `<@&${row.squadRoleId}>`;
-          const rank = medals[i] ?? `${i + 1}位`;
-          return `${rank} **${name}**: ${row.totalAmount.toLocaleString()}${settings.currencyName}（${row.purchaseCount}件）`;
-        });
-        const total = summary.reduce((s, r) => s + r.totalAmount, 0);
-        const totalCount = summary.reduce((s, r) => s + r.purchaseCount, 0);
-        lines.push(`\n合計: **${total.toLocaleString()}${settings.currencyName}**（${totalCount}件）`);
-        await interaction.reply({ content: `## ⚔️ 隊別売上\n${lines.join("\n")}` });
+    if (sub === "sales") {
+      const [summary, treasuries, settings] = await Promise.all([
+        getGroupShopSalesSummary(guildId),
+        listSquadTreasuries(guildId),
+        getGuildSettings(guildId),
+      ]);
+      if (summary.length === 0) {
+        await interaction.reply({ content: "まだ売上データがありません。", ephemeral: false });
         return;
       }
+      const medals = ["🥇", "🥈", "🥉"];
+      const lines = summary.map((row, i) => {
+        const treasury = treasuries.find(t => t.roleId === row.squadRoleId);
+        const name = treasury ? treasury.name : `<@&${row.squadRoleId}>`;
+        const rank = medals[i] ?? `${i + 1}位`;
+        return `${rank} **${name}**: ${row.totalAmount.toLocaleString()}${settings.currencyName}（${row.purchaseCount}件）`;
+      });
+      const total = summary.reduce((s, r) => s + r.totalAmount, 0);
+      const totalCount = summary.reduce((s, r) => s + r.purchaseCount, 0);
+      lines.push(`\n合計: **${total.toLocaleString()}${settings.currencyName}**（${totalCount}件）`);
+      await interaction.reply({ content: `## ⚔️ 隊別売上\n${lines.join("\n")}` });
+      return;
+    }
 
-      if (sub === "license-setup" && cfg.licenseSetup) {
-        if (!requireManageGuild(interaction)) {
-          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-          return;
-        }
-        const squadRole = interaction.options.getRole("squad_role", true);
-        const shopRole  = interaction.options.getRole("shop_role", true);
-        await setShopLicenseConfig(guildId, squadRole.id, shopRole.id);
-        await interaction.reply(
-          `✅ 隊ロール <@&${squadRole.id}> → 開業ロール <@&${shopRole.id}> のマッピングを設定しました。`,
-        );
+    if (sub === "license-setup") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
+      const squadRole = interaction.options.getRole("squad_role", true);
+      const shopRole  = interaction.options.getRole("shop_role", true);
+      await setShopLicenseConfig(guildId, squadRole.id, shopRole.id);
+      await interaction.reply(
+        `✅ 隊ロール <@&${squadRole.id}> → 開業ロール <@&${shopRole.id}> のマッピングを設定しました。`,
+      );
+      return;
+    }
 
-      if (sub === "license-list" && cfg.licenseSetup) {
-        if (!requireManageGuild(interaction)) {
-          await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-          return;
-        }
-        const configs = await listShopLicenseConfigs(guildId);
-        if (configs.length === 0) {
-          await interaction.reply({ content: "開業ロールの設定がまだありません。`/shop group license-setup` で設定してください。", ephemeral: true });
-          return;
-        }
-        const lines = configs.map((c) => `<@&${c.squadRoleId}> → <@&${c.licenseRoleId}>`);
-        await interaction.reply({ content: `## ⚔️ 隊別ショップ開業ロール設定\n${lines.join("\n")}`, ephemeral: true });
+    if (sub === "license-list") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
         return;
       }
-    },
+      const configs = await listShopLicenseConfigs(guildId);
+      if (configs.length === 0) {
+        await interaction.reply({ content: "開業ロールの設定がまだありません。`/shop license-setup` で設定してください。", ephemeral: true });
+        return;
+      }
+      const lines = configs.map((c) => `<@&${c.squadRoleId}> → <@&${c.licenseRoleId}>`);
+      await interaction.reply({ content: `## ⚔️ 隊別ショップ開業ロール設定\n${lines.join("\n")}`, ephemeral: true });
+      return;
+    }
+  },
 };
 
 const rewardCommand: Command = {
@@ -1634,17 +1692,6 @@ const treasuryCommand: Command = {
     )
     .addSubcommand((sub) =>
       sub
-        .setName("deposit")
-        .setDescription("自分のウォレットから金庫に入金します")
-        .addIntegerOption((opt) =>
-          opt.setName("amount").setDescription("入金額").setRequired(true).setMinValue(1),
-        )
-        .addIntegerOption((opt) =>
-          opt.setName("treasury_id").setDescription("複数の隊に所属している場合は金庫IDを指定").setRequired(false),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
         .setName("withdraw")
         .setDescription("金庫から自分のウォレットに出金します（隊長・管理者）")
         .addIntegerOption((opt) =>
@@ -1652,25 +1699,6 @@ const treasuryCommand: Command = {
         )
         .addIntegerOption((opt) =>
           opt.setName("treasury_id").setDescription("金庫IDを指定").setRequired(false),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("balance")
-        .setDescription("金庫の残高を確認します")
-        .addIntegerOption((opt) =>
-          opt.setName("treasury_id").setDescription("金庫IDを指定（省略時は自隊）").setRequired(false),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("give")
-        .setDescription("金庫に直接通貨を付与します（管理者）")
-        .addIntegerOption((opt) =>
-          opt.setName("treasury_id").setDescription("金庫ID").setRequired(true),
-        )
-        .addIntegerOption((opt) =>
-          opt.setName("amount").setDescription("付与額").setRequired(true).setMinValue(1),
         ),
     )
     .addSubcommand((sub) =>
@@ -1755,22 +1783,6 @@ const treasuryCommand: Command = {
       return { treasury: matches[0]!, error: null };
     }
 
-    // ── balance ──────────────────────────────────────────────────────────────
-    if (sub === "balance") {
-      const { treasury, error } = await resolveTreasury(interaction.options.getInteger("treasury_id"));
-      if (!treasury) { await interaction.reply({ content: error!, ephemeral: true }); return; }
-      const embed = new EmbedBuilder()
-        .setTitle(`🏦 ${treasury.name} — 残高`)
-        .setColor(0xf5a623)
-        .addFields(
-          { name: "残高", value: `**${treasury.balance.toLocaleString()}${currencyName}**`, inline: true },
-          { name: "隊員ロール", value: `<@&${treasury.roleId}>`, inline: true },
-          ...(treasury.leaderRoleId ? [{ name: "隊長ロール", value: `<@&${treasury.leaderRoleId}>`, inline: true }] : []),
-        );
-      await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
-      return;
-    }
-
     // ── history ──────────────────────────────────────────────────────────────
     if (sub === "history") {
       const { treasury, error } = await resolveTreasury(interaction.options.getInteger("treasury_id"));
@@ -1786,37 +1798,6 @@ const treasuryCommand: Command = {
         .setColor(0xf5a623)
         .setDescription(lines.length > 0 ? lines.join("\n") : "履歴がありません。");
       await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
-      return;
-    }
-
-    // ── deposit ──────────────────────────────────────────────────────────────
-    if (sub === "deposit") {
-      const amount = interaction.options.getInteger("amount", true);
-      const { treasury, error } = await resolveTreasury(interaction.options.getInteger("treasury_id"));
-      if (!treasury) { await interaction.reply({ content: error!, ephemeral: true }); return; }
-
-      // Must be a squad member
-      const memberRoleIds = member ? [...member.roles.cache.keys()] : [];
-      if (!memberRoleIds.includes(treasury.roleId)) {
-        await interaction.reply({ content: `この金庫（${treasury.name}）の隊員ロールを持っていません。`, ephemeral: true });
-        return;
-      }
-
-      await interaction.deferReply();
-      try {
-        const result = await depositToTreasury(guildId, treasury.id, interaction.user.id, amount);
-        const embed = new EmbedBuilder()
-          .setTitle(`🏦 ${treasury.name} — 入金完了`)
-          .setColor(0x57f287)
-          .addFields(
-            { name: "入金額", value: `**+${amount.toLocaleString()}${currencyName}**`, inline: true },
-            { name: "金庫残高", value: `${result.treasuryBalance.toLocaleString()}${currencyName}`, inline: true },
-            { name: "あなたの残高", value: `${result.walletBalance.toLocaleString()}${currencyName}`, inline: true },
-          );
-        await interaction.editReply({ embeds: [embed] });
-      } catch (err) {
-        await interaction.editReply(err instanceof Error ? err.message : "入金に失敗しました。");
-      }
       return;
     }
 
@@ -1859,25 +1840,6 @@ const treasuryCommand: Command = {
       return;
     }
 
-    // ── give ─────────────────────────────────────────────────────────────────
-    if (sub === "give") {
-      if (!isAdmin) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-        return;
-      }
-      const treasuryId = interaction.options.getInteger("treasury_id", true);
-      const amount     = interaction.options.getInteger("amount", true);
-      const treasury   = await getSquadTreasury(treasuryId);
-      if (!treasury || treasury.guildId !== guildId) {
-        await interaction.reply({ content: "金庫が見つかりません。", ephemeral: true });
-        return;
-      }
-      const newBalance = await giveToCrunchTreasury(guildId, treasuryId, interaction.user.id, amount);
-      await interaction.reply(
-        `✅ **${treasury.name}** に **${amount.toLocaleString()}${currencyName}** を付与しました。\n金庫残高: ${newBalance.toLocaleString()}${currencyName}`,
-      );
-      return;
-    }
   },
 };
 
