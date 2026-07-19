@@ -1844,6 +1844,7 @@ const treasuryCommand: Command = {
 };
 
 import { vcCommand } from "./vc";
+import { evalsheetCommand } from "./evalsheet";
 export {
   shiftCommand,
   postWeeklyShifts,
@@ -1881,4 +1882,5 @@ export const commands: Command[] = [
   slotCommand,
   bannotifyCommand,
   returnlogCommand,
+  evalsheetCommand,
 ];
