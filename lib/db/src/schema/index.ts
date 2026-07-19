@@ -25,3 +25,4 @@ export * from "./shifts";
 export * from "./vcRewards";
 export * from "./slots";
 export * from "./triggers";
+export * from "./vcHub";

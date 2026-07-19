@@ -19,6 +19,7 @@ import {
   handleShiftCancel,
   handleShiftTime,
 } from "./commands";
+import { handleHubJoin, handleHubLeave } from "./commands/vc";
 import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 
@@ -507,6 +508,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           logger.error(`[vclog] recordVcLogJoin error for ${userId}`, err);
         }
       })(),
+      // Hub: メンバーが Hub チャンネルに参加した場合は新VCを作成して転送
+      handleHubJoin(newState).catch((err) =>
+        logger.error(`[vcHub] handleHubJoin error for ${userId}`, err),
+      ),
     ]);
     return;
   }
@@ -525,6 +530,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       // Session log
       recordVcLogLeave(guild.id, userId).catch((err) =>
         logger.error(`[vclog] recordVcLogLeave error for ${userId}`, err),
+      ),
+      // Hub: Hub が生成したVCが空になった場合は自動削除
+      handleHubLeave(oldState).catch((err) =>
+        logger.error(`[vcHub] handleHubLeave error for ${userId}`, err),
       ),
     ]);
     return;
@@ -566,6 +575,14 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           logger.error(`[vclog] channel-move log error for ${userId}`, err);
         }
       })(),
+      // Hub: 別VCから Hub に移動してきた場合 → 新VC作成＆転送
+      handleHubJoin(newState).catch((err) =>
+        logger.error(`[vcHub] handleHubJoin (move) error for ${userId}`, err),
+      ),
+      // Hub: Hub 生成VCから別VCに移動した場合 → 空なら自動削除
+      handleHubLeave(oldState).catch((err) =>
+        logger.error(`[vcHub] handleHubLeave (move) error for ${userId}`, err),
+      ),
     ]);
   }
 });
