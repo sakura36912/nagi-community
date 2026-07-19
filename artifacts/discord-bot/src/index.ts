@@ -60,6 +60,7 @@ import {
   findWallet,
   countRealJoins,
 } from "./lib/economy";
+import { getEvalSheetConfigsForRoles } from "@workspace/db";
 
 import { appendFileSync } from "fs";
 const DEBUG_LOG = "/tmp/bot-debug.log";
@@ -663,58 +664,59 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
   if (addedRoleIds.length === 0) return;
 
-  const settings = await getEvalSheetSettings(guildId).catch(() => undefined);
-  if (!settings?.forumChannelId || !settings.triggerRoleIds) return;
+  // ── 複数フォーラム × ロール マッピングで一致するものをすべて処理 ─────────
+  const matchedConfigs = await getEvalSheetConfigsForRoles(guildId, addedRoleIds).catch(() => []);
+  if (matchedConfigs.length === 0) return;
 
-  const triggerIds = settings.triggerRoleIds.split(",").filter(Boolean);
-  const matchedRoleId = addedRoleIds.find((id) => triggerIds.includes(id));
-  if (!matchedRoleId) return;
-
-  const forum =
-    newMember.guild.channels.cache.get(settings.forumChannelId) ??
-    await newMember.guild.channels.fetch(settings.forumChannelId).catch(() => null);
-
-  if (!forum || forum.type !== ChannelType.GuildForum) {
-    logger.error(`[sheet] forum channel ${settings.forumChannelId} not found or wrong type`);
-    return;
-  }
-
-  const evalDays = settings.evalPeriodDays ?? 14;
-  const startDate = new Date();
-  const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
+  // 共通設定（nameboard・rosterCategory）は community_sheet_settings から取得
+  const globalSettings = await getEvalSheetSettings(guildId).catch(() => undefined);
 
   let targetUser;
   try { targetUser = await newMember.client.users.fetch(newMember.id); }
   catch { logger.warn(`[sheet] Could not fetch user ${newMember.id}`); return; }
 
   const displayName = newMember.displayName;
-  const roleName = newMember.guild.roles.cache.get(matchedRoleId)?.name ?? matchedRoleId;
 
-  const [vcSeconds, selfIntro] = await Promise.all([
-    getSheetVcSeconds(guildId, newMember.id, startDate, endDate).catch(() => 0),
-    findSelfIntro(newMember.guild, newMember.id, settings.rosterCategoryId).catch(() => null),
-  ]);
+  for (const cfg of matchedConfigs) {
+    const forum =
+      newMember.guild.channels.cache.get(cfg.forumChannelId) ??
+      await newMember.guild.channels.fetch(cfg.forumChannelId).catch(() => null);
 
-  const embed = buildSheetEmbed({
-    targetUser,
-    displayName,
-    startDate,
-    endDate,
-    vcSeconds,
-    nameboardUrl: settings.nameboardUrl,
-    selfIntro,
-    createdByLabel: `ロール付与により自動生成（${roleName}）`,
-  });
+    if (!forum || forum.type !== ChannelType.GuildForum) {
+      logger.error(`[sheet] forum channel ${cfg.forumChannelId} not found or wrong type (roleId=${cfg.roleId})`);
+      continue;
+    }
 
-  try {
-    const thread = await forum.threads.create({
-      name: buildSheetThreadName(displayName, endDate),
-      message: { embeds: [embed] },
+    const roleName = newMember.guild.roles.cache.get(cfg.roleId)?.name ?? cfg.roleId;
+    const startDate = new Date();
+    const endDate = new Date(startDate.getTime() + cfg.evalPeriodDays * 24 * 60 * 60 * 1000);
+
+    const [vcSeconds, selfIntro] = await Promise.all([
+      getSheetVcSeconds(guildId, newMember.id, startDate, endDate).catch(() => 0),
+      findSelfIntro(newMember.guild, newMember.id, globalSettings?.rosterCategoryId ?? null).catch(() => null),
+    ]);
+
+    const embed = buildSheetEmbed({
+      targetUser,
+      displayName,
+      startDate,
+      endDate,
+      vcSeconds,
+      nameboardUrl: globalSettings?.nameboardUrl ?? null,
+      selfIntro,
+      createdByLabel: `ロール付与により自動生成（${roleName}）`,
     });
-    await createEvalSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);
-    logger.info(`[sheet] ✅ Created thread ${thread.id} for user ${newMember.id} on role ${roleName}`);
-  } catch (err) {
-    logger.error(`[sheet] Failed to create forum thread for user ${newMember.id}`, err);
+
+    try {
+      const thread = await forum.threads.create({
+        name: buildSheetThreadName(displayName, endDate),
+        message: { embeds: [embed] },
+      });
+      await createEvalSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);
+      logger.info(`[sheet] ✅ Created thread ${thread.id} for user ${newMember.id} role=${roleName} forum=${cfg.forumChannelId}`);
+    } catch (err) {
+      logger.error(`[sheet] Failed to create forum thread for user ${newMember.id} role=${cfg.roleId}`, err);
+    }
   }
 });
 

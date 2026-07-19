@@ -1,9 +1,11 @@
-import { pgTable, text, serial, timestamp, unique } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, serial, timestamp, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-// Configures which role triggers automatic eval sheet creation,
-// and into which forum channel the sheet should be posted.
+/**
+ * Per-role eval sheet config: maps one Discord role to one forum channel.
+ * Multiple rows per guild = multiple forum-role bindings.
+ */
 export const evalSheetConfigTable = pgTable(
   "eval_sheet_configs",
   {
@@ -11,6 +13,8 @@ export const evalSheetConfigTable = pgTable(
     guildId: text("guild_id").notNull(),
     roleId: text("role_id").notNull(),
     forumChannelId: text("forum_channel_id").notNull(),
+    /** Number of days the eval period covers when this role triggers a sheet. */
+    evalPeriodDays: integer("eval_period_days").notNull().default(14),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [unique().on(table.guildId, table.roleId)],

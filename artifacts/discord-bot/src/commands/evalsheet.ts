@@ -1,10 +1,11 @@
 /**
  * /evalsheet — 評価シート設定コマンド（管理者専用）
  *
- *   setup           : フォーラム・トリガーロール・評価期間日数を設定
+ *   setup           : ロール → フォーラムの紐付けを追加・更新（繰り返し呼ぶことで複数登録可）
+ *   remove          : 指定ロールの紐付けを解除
  *   roster-category : 自己紹介検索カテゴリを設定（省略で解除）
  *   nameboard       : 名簿URLを設定（省略で解除）
- *   info            : 現在の設定を表示
+ *   info            : 現在の全紐付けと共通設定を表示
  */
 
 import {
@@ -15,8 +16,12 @@ import {
   type ChatInputCommandInteraction,
 } from "discord.js";
 import {
+  upsertEvalSheetConfig,
+  listEvalSheetConfigs,
+  deleteEvalSheetConfig,
+} from "@workspace/db";
+import {
   getEvalSheetSettings,
-  setEvalSheetForumConfig,
   setEvalNameboardUrl,
   setRosterCategoryId,
 } from "../lib/economy";
@@ -32,7 +37,13 @@ export const evalsheetCommand = {
       sub
         .setName("setup")
         .setDescription(
-          "評価シートのフォーラム・トリガーロール・評価期間を設定します",
+          "ロールとフォーラムを紐づけます（同じロールで再実行すると上書き）",
+        )
+        .addRoleOption((opt) =>
+          opt
+            .setName("role")
+            .setDescription("評価シートを自動作成するトリガーロール")
+            .setRequired(true),
         )
         .addChannelOption((opt) =>
           opt
@@ -41,36 +52,6 @@ export const evalsheetCommand = {
             .addChannelTypes(ChannelType.GuildForum)
             .setRequired(true),
         )
-        .addRoleOption((opt) =>
-          opt
-            .setName("role1")
-            .setDescription("評価シートを自動作成するトリガーロール（1つ目）")
-            .setRequired(true),
-        )
-        .addRoleOption((opt) =>
-          opt
-            .setName("role2")
-            .setDescription("トリガーロール（2つ目）")
-            .setRequired(false),
-        )
-        .addRoleOption((opt) =>
-          opt
-            .setName("role3")
-            .setDescription("トリガーロール（3つ目）")
-            .setRequired(false),
-        )
-        .addRoleOption((opt) =>
-          opt
-            .setName("role4")
-            .setDescription("トリガーロール（4つ目）")
-            .setRequired(false),
-        )
-        .addRoleOption((opt) =>
-          opt
-            .setName("role5")
-            .setDescription("トリガーロール（5つ目）")
-            .setRequired(false),
-        )
         .addIntegerOption((opt) =>
           opt
             .setName("period_days")
@@ -78,6 +59,19 @@ export const evalsheetCommand = {
             .setMinValue(1)
             .setMaxValue(365)
             .setRequired(false),
+        ),
+    )
+
+    // ── remove ──────────────────────────────────────────────────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("指定したロールの紐付けを解除します")
+        .addRoleOption((opt) =>
+          opt
+            .setName("role")
+            .setDescription("紐付けを解除するロール")
+            .setRequired(true),
         ),
     )
 
@@ -115,7 +109,7 @@ export const evalsheetCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("info")
-        .setDescription("現在の評価シート設定を表示します"),
+        .setDescription("現在の全紐付けと共通設定を表示します"),
     ),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -139,37 +133,47 @@ export const evalsheetCommand = {
 
     // ── setup ─────────────────────────────────────────────────────────────
     if (sub === "setup") {
+      const role       = interaction.options.getRole("role", true);
       const forum      = interaction.options.getChannel("forum", true);
-      const role1      = interaction.options.getRole("role1", true);
-      const role2      = interaction.options.getRole("role2");
-      const role3      = interaction.options.getRole("role3");
-      const role4      = interaction.options.getRole("role4");
-      const role5      = interaction.options.getRole("role5");
       const periodDays = interaction.options.getInteger("period_days") ?? 14;
 
-      const roleIds = [role1, role2, role3, role4, role5]
-        .filter((r): r is NonNullable<typeof r> => r !== null)
-        .map((r) => r.id);
-
-      await setEvalSheetForumConfig(
+      await upsertEvalSheetConfig(
         interaction.guildId,
+        role.id,
         forum.id,
-        roleIds,
         periodDays,
       );
 
-      const roleDisplay = roleIds.map((id) => `<@&${id}>`).join("、");
       await interaction.reply({
         embeds: [
           new EmbedBuilder()
-            .setTitle("✅ 評価シート設定を更新しました")
+            .setTitle("✅ 紐付けを登録しました")
             .setColor(0x57f287)
             .addFields(
+              { name: "ロール", value: `<@&${role.id}>`, inline: true },
               { name: "フォーラム", value: `<#${forum.id}>`, inline: true },
               { name: "評価期間", value: `${periodDays} 日`, inline: true },
-              { name: "トリガーロール", value: roleDisplay, inline: false },
-            ),
+            )
+            .setFooter({ text: "同じロールで再実行すると上書きされます" }),
         ],
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // ── remove ────────────────────────────────────────────────────────────
+    if (sub === "remove") {
+      const role    = interaction.options.getRole("role", true);
+      const removed = await deleteEvalSheetConfig(interaction.guildId, role.id);
+      if (!removed) {
+        await interaction.reply({
+          content: `<@&${role.id}> は評価シートのトリガーロールとして登録されていません。`,
+          ephemeral: true,
+        });
+        return;
+      }
+      await interaction.reply({
+        content: `✅ <@&${role.id}> の紐付けを解除しました。`,
         ephemeral: true,
       });
       return;
@@ -203,63 +207,57 @@ export const evalsheetCommand = {
 
     // ── info ──────────────────────────────────────────────────────────────
     if (sub === "info") {
-      const settings = await getEvalSheetSettings(interaction.guildId);
-      if (!settings) {
-        await interaction.reply({
-          content:
-            "評価シートの設定がまだありません。`/evalsheet setup` で設定してください。",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const triggerIds = settings.triggerRoleIds
-        ?.split(",")
-        .map((r) => r.trim())
-        .filter(Boolean) ?? [];
-
-      const roleDisplay =
-        triggerIds.length > 0
-          ? triggerIds.map((id) => `<@&${id}>`).join("、")
-          : "未設定";
+      const [configs, globalSettings] = await Promise.all([
+        listEvalSheetConfigs(interaction.guildId),
+        getEvalSheetSettings(interaction.guildId),
+      ]);
 
       const embed = new EmbedBuilder()
         .setTitle("📋 評価シート設定")
-        .setColor(0x5865f2)
-        .addFields(
-          {
-            name: "フォーラム",
-            value: settings.forumChannelId
-              ? `<#${settings.forumChannelId}>`
-              : "未設定",
-            inline: true,
-          },
-          {
-            name: "評価期間",
-            value: `${settings.evalPeriodDays ?? 14} 日`,
-            inline: true,
-          },
-          {
-            name: "トリガーロール",
-            value: roleDisplay,
-            inline: false,
-          },
-          {
-            name: "自己紹介カテゴリ",
-            value: settings.rosterCategoryId
-              ? `<#${settings.rosterCategoryId}>`
-              : "未設定",
-            inline: true,
-          },
-          {
-            name: "名簿URL",
-            value: settings.nameboardUrl
-              ? `[リンク](${settings.nameboardUrl})`
-              : "未設定",
-            inline: true,
-          },
-        )
-        .setTimestamp(settings.updatedAt);
+        .setColor(0x5865f2);
+
+      // ロール → フォーラム マッピング一覧
+      if (configs.length === 0) {
+        embed.addFields({
+          name: "ロール × フォーラム 紐付け",
+          value:
+            "未設定です。`/evalsheet setup` でロールとフォーラムを紐づけてください。",
+          inline: false,
+        });
+      } else {
+        embed.addFields({
+          name: `ロール × フォーラム 紐付け（${configs.length} 件）`,
+          value: configs
+            .map(
+              (c) =>
+                `<@&${c.roleId}> → <#${c.forumChannelId}>（${c.evalPeriodDays} 日）`,
+            )
+            .join("\n"),
+          inline: false,
+        });
+      }
+
+      // 共通設定
+      embed.addFields(
+        {
+          name: "自己紹介カテゴリ",
+          value: globalSettings?.rosterCategoryId
+            ? `<#${globalSettings.rosterCategoryId}>`
+            : "未設定",
+          inline: true,
+        },
+        {
+          name: "名簿URL",
+          value: globalSettings?.nameboardUrl
+            ? `[リンク](${globalSettings.nameboardUrl})`
+            : "未設定",
+          inline: true,
+        },
+      );
+
+      if (globalSettings?.updatedAt) {
+        embed.setTimestamp(globalSettings.updatedAt);
+      }
 
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
