@@ -1485,8 +1485,15 @@ export async function handleRoleButton(interaction: ButtonInteraction): Promise<
       await member.roles.add(role, "ロールボタンによる付与");
       await interaction.reply({ content: `✅ **${role.name}** を付与しました。`, ephemeral: true });
     }
-  } catch {
-    await interaction.reply({ content: "ロールの変更に失敗しました。Botに権限があるか確認してください。", ephemeral: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[role-btn] role change failed guildId=${interaction.guildId} userId=${member.id} roleId=${role.id}:`, msg);
+
+    let hint = "Botに「ロールの管理」権限があるか、またBotのロールが対象ロールより上位か確認してください。";
+    if (msg.includes("Missing Permissions")) hint = "Botの「ロールの管理」権限が不足しています。";
+    if (msg.includes("Invalid Form Body") || msg.includes("50013")) hint = "BotのロールがDiscordサーバーのロール一覧で対象ロールより下にあります。Botのロールを上に移動してください。";
+
+    await interaction.reply({ content: `ロールの変更に失敗しました。\n> ${hint}`, ephemeral: true });
   }
 }
 
