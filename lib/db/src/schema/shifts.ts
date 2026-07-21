@@ -1,4 +1,5 @@
 import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ─── Shift Settings ───────────────────────────────────────────────────────────
 
@@ -9,6 +10,8 @@ export const shiftSettingsTable = pgTable("shift_settings", {
   channelId: text("channel_id"),
   /** Currency awarded per shift when a member runs /shift add. 0 = disabled. */
   shiftRewardAmount: integer("shift_reward_amount").notNull().default(0),
+  /** Role IDs allowed to use /shift submit. Empty = everyone. */
+  submitRoleIds: text("submit_role_ids").array().notNull().default(sql`'{}'::text[]`),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

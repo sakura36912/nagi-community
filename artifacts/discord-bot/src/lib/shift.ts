@@ -32,6 +32,19 @@ export async function setShiftSettings(
     });
 }
 
+export async function setShiftSubmitRoles(
+  guildId: string,
+  roleIds: string[],
+): Promise<void> {
+  await db
+    .insert(shiftSettingsTable)
+    .values({ guildId, submitRoleIds: roleIds })
+    .onConflictDoUpdate({
+      target: shiftSettingsTable.guildId,
+      set: { submitRoleIds: roleIds, updatedAt: new Date() },
+    });
+}
+
 export async function setShiftRewardAmount(
   guildId: string,
   amount: number,
