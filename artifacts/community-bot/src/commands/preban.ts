@@ -84,6 +84,19 @@ export const prebanCommand: Command = {
         return;
       }
 
+      // Discord の BAN リストに即登録（招待リンクを踏んだ時点で弾かれる）
+      try {
+        await interaction.guild.bans.create(userId, {
+          reason: reason ?? `事前BAN by ${interaction.user.tag}`,
+        });
+      } catch {
+        await interaction.reply({
+          content: "❌ BANに失敗しました。Botに「メンバーをBANする」権限があるか確認してください。",
+          ephemeral: true,
+        });
+        return;
+      }
+
       await addPreban(interaction.guildId, userId, interaction.user.id, reason);
 
       // ユーザー名を取得（失敗してもIDで表示）
@@ -94,8 +107,8 @@ export const prebanCommand: Command = {
         embeds: [
           new EmbedBuilder()
             .setColor(0xe74c3c)
-            .setTitle("🚫 事前BAN登録完了")
-            .setDescription(`${label} を事前BANリストに追加しました。\nこのユーザーがサーバーに参加した瞬間、自動的にBANされます。`)
+            .setTitle("🚫 事前BAN完了")
+            .setDescription(`${label} をDiscordのBANリストに登録しました。\n招待リンクを踏んだ時点で入室できなくなります。`)
             .addFields(
               { name: "理由", value: reason ?? "（なし）", inline: true },
               { name: "登録者", value: `<@${interaction.user.id}>`, inline: true },
