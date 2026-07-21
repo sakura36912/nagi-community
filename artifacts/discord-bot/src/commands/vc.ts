@@ -31,7 +31,6 @@ export const vcCommand = {
   data: new SlashCommandBuilder()
     .setName("vc")
     .setDescription("VCを管理します")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     // ── rename ────────────────────────────────────────────────────────────
     .addSubcommand((sub) =>
       sub
@@ -115,19 +114,20 @@ export const vcCommand = {
       return;
     }
 
-    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
-      await interaction.reply({
-        content: "このコマンドを使用するには ManageChannels 権限が必要です。",
-        ephemeral: true,
-      });
-      return;
-    }
-
     const sub = interaction.options.getSubcommand();
 
     // ── rename ────────────────────────────────────────────────────────────
     if (sub === "rename") {
       await handleRename(interaction);
+      return;
+    }
+
+    // hub-* subcommands require ManageChannels
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
+      await interaction.reply({
+        content: "このコマンドを使用するには ManageChannels 権限が必要です。",
+        ephemeral: true,
+      });
       return;
     }
 
