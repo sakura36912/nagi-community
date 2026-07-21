@@ -306,8 +306,7 @@ function buildResult(
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription(resultText)
-    .setColor(color)
-    .setFooter({ text: `残高: ${finalBalance.toLocaleString()} ${currencyName}` });
+    .setColor(color);
 
   if (thumbnailUrl) embed.setThumbnail(thumbnailUrl);
   return { content, embed };
