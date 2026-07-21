@@ -56,10 +56,7 @@ export const pointCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("balance")
-        .setDescription("ポイント残高を確認します")
-        .addUserOption((opt) =>
-          opt.setName("user").setDescription("確認するメンバー（省略時は自分）"),
-        ),
+        .setDescription("自分のポイント残高を確認します"),
     )
 
     // ── ranking ──────────────────────────────────────────────────────────────
@@ -185,7 +182,7 @@ export const pointCommand: Command = {
     // ── balance ──────────────────────────────────────────────────────────────
     if (sub === "balance" && !group) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const target = interaction.options.getUser("user") ?? interaction.user;
+      const target = interaction.user;
       const balance = await getPointBalance(guildId, target.id);
       const embed = new EmbedBuilder()
         .setTitle("🏆 ポイント残高")
