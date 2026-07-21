@@ -243,7 +243,7 @@ export const vcsalaryCommand: Command = {
             ),
         ),
     )
-    .setDefaultMemberPermissions(null) as SlashCommandBuilder,
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const group = interaction.options.getSubcommandGroup(false);

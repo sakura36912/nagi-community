@@ -398,6 +398,7 @@ export const shiftCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("shift")
     .setDescription("シフト管理")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
         .setName("add")

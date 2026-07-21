@@ -655,7 +655,7 @@ export const slotCommand: Command = {
           sub.setName("clear").setDescription("絵柄設定をリセットします（配当倍率は保持）"),
         ),
     )
-    .setDefaultMemberPermissions(null) as SlashCommandBuilder,
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guildId || !interaction.guild) {

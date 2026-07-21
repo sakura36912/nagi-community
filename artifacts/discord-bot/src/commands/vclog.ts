@@ -78,7 +78,7 @@ export const vclogCommand: Command = {
             ),
         ),
     )
-    .setDefaultMemberPermissions(null) as SlashCommandBuilder,
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guildId) {

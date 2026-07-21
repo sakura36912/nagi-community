@@ -31,7 +31,7 @@ export const vcCommand = {
   data: new SlashCommandBuilder()
     .setName("vc")
     .setDescription("VCを管理します")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     // ── rename ────────────────────────────────────────────────────────────
     .addSubcommand((sub) =>
       sub

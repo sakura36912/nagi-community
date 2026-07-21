@@ -30,7 +30,7 @@ export const evalsheetCommand = {
   data: new SlashCommandBuilder()
     .setName("evalsheet")
     .setDescription("評価シートの設定を管理します（管理者）")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 
     // ── setup ───────────────────────────────────────────────────────────────
     .addSubcommand((sub) =>

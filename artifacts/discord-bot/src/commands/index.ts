@@ -666,6 +666,7 @@ const currencyCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("currency")
     .setDescription("このサーバー専用の通貨を設定します")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
         .setName("create")
@@ -769,7 +770,8 @@ const balanceCommand: Command = {
 const dailyCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("daily")
-    .setDescription("毎日受け取れる通貨を受け取ります"),
+    .setDescription("毎日受け取れる通貨を受け取ります")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const settings = await getGuildSettings(guildId);
@@ -831,6 +833,7 @@ const giveCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("give")
     .setDescription("通貨の付与・金庫への入金")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
         .setName("wallet")
@@ -967,6 +970,7 @@ const leaderboardCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("leaderboard")
     .setDescription("サーバー内の資産ランキングを表示します")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addBooleanOption((opt) =>
       opt.setName("all").setDescription("全員分の所持通貨を表示します(管理者用)").setRequired(false),
     ),
@@ -1057,6 +1061,7 @@ const shopCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("shop")
     .setDescription("ショップを操作します")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub.setName("list").setDescription("購入可能アイテムを表示します")
         .addStringOption((opt) =>
@@ -1563,6 +1568,7 @@ const rewardCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("reward")
     .setDescription("ロールごとの自動報酬を設定します(管理者用)")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
         .setName("set")
@@ -1676,6 +1682,7 @@ const treasuryCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("treasury")
     .setDescription("隊の金庫を管理します")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
         .setName("setup")
