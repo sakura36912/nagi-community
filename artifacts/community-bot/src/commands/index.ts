@@ -46,8 +46,10 @@ import {
   setStaffRole,
   setTicketMessages,
   setTicketRenameRole,
+  upsertTicketSettings,
   setVcPrivacyOptOut,
   updateEventMessageId,
+  type CommunityTicketSettings,
 } from "../lib/community.js";
 
 // ─── Prefix constants ────────────────────────────────────────────────────────
@@ -538,52 +540,152 @@ const eventCommand: Command = {
 
 // ─── /ticket ─────────────────────────────────────────────────────────────────
 
-/** チケットチャンネルを作成後に移動するカテゴリー */
-const TICKET_CATEGORY_ID = "1526691329805910016";
+/** Fallback category when none is configured. */
+const TICKET_CATEGORY_FALLBACK = "1526691329805910016";
 
-// Defaults used when no custom message is configured
 const TICKET_DEFAULTS = {
   panelTitle: "🎫 サポートチケット",
   panelDescription: "ボタンを押すと、スタッフとのプライベートチャンネルが作成されます。",
   panelButtonLabel: "チケットを作成 🎫",
+  panelButtonStyle: ButtonStyle.Primary,
   welcomeMessage: "用件をお書きください。スタッフが対応します。",
+  welcomeEmbedTitle: "🎫 サポートチケット",
+  welcomeEmbedColor: 0xfee75c,
+  channelNamePrefix: "ticket",
+  closeButtonLabel: "チケットを閉じる 🔒",
+  closeButtonStyle: ButtonStyle.Danger,
 } as const;
+
+const BUTTON_STYLE_MAP: Record<string, ButtonStyle> = {
+  primary: ButtonStyle.Primary,
+  secondary: ButtonStyle.Secondary,
+  success: ButtonStyle.Success,
+  danger: ButtonStyle.Danger,
+};
+const BUTTON_STYLE_LABELS: Record<string, string> = {
+  primary: "青（Primary）",
+  secondary: "灰（Secondary）",
+  success: "緑（Success）",
+  danger: "赤（Danger）",
+};
+
+function resolveButtonStyle(stored: number | null | undefined, fallback: ButtonStyle): ButtonStyle {
+  if (stored != null && stored >= 1 && stored <= 4) return stored as ButtonStyle;
+  return fallback;
+}
+
+function hexToInt(hex: string): number {
+  return parseInt(hex.replace(/^#/, ""), 16);
+}
+
+function buildPanelButton(settings: CommunityTicketSettings | undefined) {
+  const btn = new ButtonBuilder()
+    .setCustomId(COMM_TICKET_CREATE)
+    .setLabel(settings?.panelButtonLabel ?? TICKET_DEFAULTS.panelButtonLabel)
+    .setStyle(resolveButtonStyle(settings?.panelButtonStyle, TICKET_DEFAULTS.panelButtonStyle));
+  const emoji = settings?.panelButtonEmoji;
+  if (emoji) btn.setEmoji(emoji);
+  return btn;
+}
 
 const ticketCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("ticket")
     .setDescription("チケットシステムの管理")
     .addSubcommand((sub) =>
-      sub
-        .setName("panel")
-        .setDescription("チケット作成パネルをこのチャンネルに設置します（管理者）"),
+      sub.setName("panel").setDescription("チケット作成パネルをこのチャンネルに設置します（管理者）"),
     )
     .addSubcommand((sub) =>
       sub
         .setName("settings")
-        .setDescription("スタッフロールと権限ロールを設定します（管理者）")
+        .setDescription("ロール・カテゴリー・メンション等を設定します（管理者）")
         .addRoleOption((opt) =>
           opt.setName("staff_role").setDescription("チケット対応スタッフのロール").setRequired(false),
         )
         .addRoleOption((opt) =>
           opt.setName("rename_role").setDescription("チャンネル名を変更できるロール").setRequired(false),
+        )
+        .addChannelOption((opt) =>
+          opt
+            .setName("category")
+            .setDescription("チケットチャンネルを作成するカテゴリー")
+            .addChannelTypes(ChannelType.GuildCategory)
+            .setRequired(false),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("channel_prefix")
+            .setDescription("チャンネル名のプレフィックス（例: support → support-ユーザー名）")
+            .setRequired(false)
+            .setMaxLength(20),
+        )
+        .addBooleanOption((opt) =>
+          opt.setName("mention_user").setDescription("チケット作成者をメンションするか（デフォルト: オン）").setRequired(false),
+        )
+        .addBooleanOption((opt) =>
+          opt.setName("mention_staff").setDescription("スタッフロールをメンションするか（デフォルト: オン）").setRequired(false),
         ),
     )
     .addSubcommand((sub) =>
       sub
         .setName("message")
-        .setDescription("チケットパネル・チャンネルのメッセージを変更します（管理者）")
+        .setDescription("パネル・ウェルカムメッセージのテキストを変更します（管理者）")
         .addStringOption((opt) =>
-          opt.setName("panel_title").setDescription(`パネルのタイトル（デフォルト: ${TICKET_DEFAULTS.panelTitle}）`).setRequired(false).setMaxLength(256),
+          opt.setName("panel_title").setDescription("パネルのタイトル").setRequired(false).setMaxLength(256),
         )
         .addStringOption((opt) =>
           opt.setName("panel_description").setDescription("パネルの説明文").setRequired(false).setMaxLength(4096),
         )
         .addStringOption((opt) =>
-          opt.setName("panel_button").setDescription(`ボタンのラベル（デフォルト: ${TICKET_DEFAULTS.panelButtonLabel}）`).setRequired(false).setMaxLength(80),
+          opt.setName("welcome_message").setDescription("チケット作成時に送るメッセージ本文").setRequired(false).setMaxLength(2000),
         )
         .addStringOption((opt) =>
-          opt.setName("welcome_message").setDescription("チケット作成時にチャンネルへ送るメッセージ").setRequired(false).setMaxLength(2000),
+          opt.setName("welcome_embed_title").setDescription("ウェルカムEmbedの見出し").setRequired(false).setMaxLength(256),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("welcome_embed_color")
+            .setDescription("ウェルカムEmbedの色（例: #5865F2）")
+            .setRequired(false)
+            .setMaxLength(7),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("button")
+        .setDescription("パネルボタン・クローズボタンの外観を設定します（管理者）")
+        .addStringOption((opt) =>
+          opt.setName("panel_label").setDescription("パネルボタンのラベル").setRequired(false).setMaxLength(80),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("panel_style")
+            .setDescription("パネルボタンの色")
+            .setRequired(false)
+            .addChoices(
+              { name: "青（Primary）", value: "primary" },
+              { name: "灰（Secondary）", value: "secondary" },
+              { name: "緑（Success）", value: "success" },
+              { name: "赤（Danger）", value: "danger" },
+            ),
+        )
+        .addStringOption((opt) =>
+          opt.setName("panel_emoji").setDescription("パネルボタンの絵文字（例: 🎫 または <:name:id>）").setRequired(false).setMaxLength(100),
+        )
+        .addStringOption((opt) =>
+          opt.setName("close_label").setDescription("クローズボタンのラベル").setRequired(false).setMaxLength(80),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("close_style")
+            .setDescription("クローズボタンの色")
+            .setRequired(false)
+            .addChoices(
+              { name: "青（Primary）", value: "primary" },
+              { name: "灰（Secondary）", value: "secondary" },
+              { name: "緑（Success）", value: "success" },
+              { name: "赤（Danger）", value: "danger" },
+            ),
         ),
     )
     .addSubcommand((sub) =>
@@ -591,11 +693,7 @@ const ticketCommand: Command = {
         .setName("rename")
         .setDescription("チケットチャンネルの名前を変更します")
         .addStringOption((opt) =>
-          opt
-            .setName("name")
-            .setDescription("新しいチャンネル名（英数字・ハイフン・日本語）")
-            .setRequired(true)
-            .setMaxLength(100),
+          opt.setName("name").setDescription("新しいチャンネル名").setRequired(true).setMaxLength(100),
         ),
     ),
 
@@ -603,36 +701,26 @@ const ticketCommand: Command = {
     const guildId = requireGuild(interaction);
     const sub = interaction.options.getSubcommand();
 
-    // ── rename — ticket channel only, admin or rename_role ────────────────────
+    // ── rename ────────────────────────────────────────────────────────────────
     if (sub === "rename") {
       if (!interaction.channelId) {
         await interaction.reply({ content: "チャンネル内でのみ使用できます。", ephemeral: true });
         return;
       }
-
       const ticket = await getTicketByChannel(interaction.channelId);
       if (!ticket) {
         await interaction.reply({ content: "このチャンネルはチケットではありません。", ephemeral: true });
         return;
       }
-
       const settings = await getTicketSettings(guildId);
       const member = interaction.member as import("discord.js").GuildMember | null;
       const isAdmin = requireAdmin(interaction);
-      const hasRenameRole = settings?.renameRoleId
-        ? member?.roles.cache.has(settings.renameRoleId) ?? false
-        : false;
-
+      const hasRenameRole = settings?.renameRoleId ? member?.roles.cache.has(settings.renameRoleId) ?? false : false;
       if (!isAdmin && !hasRenameRole) {
         const mention = settings?.renameRoleId ? ` または <@&${settings.renameRoleId}>` : "";
-        await interaction.reply({
-          content: `チャンネル名の変更は管理者${mention} のみ可能です。`,
-          ephemeral: true,
-          allowedMentions: { parse: [] },
-        });
+        await interaction.reply({ content: `チャンネル名の変更は管理者${mention} のみ可能です。`, ephemeral: true, allowedMentions: { parse: [] } });
         return;
       }
-
       const newName = interaction.options.getString("name", true).slice(0, 100);
       try {
         const ch = interaction.channel;
@@ -650,96 +738,163 @@ const ticketCommand: Command = {
       return;
     }
 
+    // ── settings ──────────────────────────────────────────────────────────────
     if (sub === "settings") {
-      const staffRole  = interaction.options.getRole("staff_role");
-      const renameRole = interaction.options.getRole("rename_role");
+      const staffRole     = interaction.options.getRole("staff_role");
+      const renameRole    = interaction.options.getRole("rename_role");
+      const category      = interaction.options.getChannel("category");
+      const channelPrefix = interaction.options.getString("channel_prefix");
+      const mentionUser   = interaction.options.getBoolean("mention_user");
+      const mentionStaff  = interaction.options.getBoolean("mention_staff");
 
-      if (!staffRole && !renameRole) {
-        const settings = await getTicketSettings(guildId);
+      const hasAny = staffRole || renameRole || category || channelPrefix !== null || mentionUser !== null || mentionStaff !== null;
+      if (!hasAny) {
+        const s = await getTicketSettings(guildId);
         const embed = new EmbedBuilder()
           .setTitle("🎫 チケット設定")
           .setColor(0xfee75c)
           .addFields(
-            { name: "スタッフロール", value: settings?.staffRoleId ? `<@&${settings.staffRoleId}>` : "未設定", inline: true },
-            { name: "名前変更可能ロール", value: settings?.renameRoleId ? `<@&${settings.renameRoleId}>` : "未設定（管理者のみ）", inline: true },
+            { name: "スタッフロール",           value: s?.staffRoleId          ? `<@&${s.staffRoleId}>` : "未設定", inline: true },
+            { name: "名前変更ロール",           value: s?.renameRoleId         ? `<@&${s.renameRoleId}>` : "未設定", inline: true },
+            { name: "チケットカテゴリー",       value: s?.categoryId           ? `<#${s.categoryId}>` : "未設定（デフォルト使用）", inline: true },
+            { name: "チャンネルプレフィックス", value: s?.channelNamePrefix ?? TICKET_DEFAULTS.channelNamePrefix, inline: true },
+            { name: "ユーザーメンション",       value: s?.mentionUser !== false ? "オン ✅" : "オフ ❌", inline: true },
+            { name: "スタッフメンション",       value: s?.mentionStaff !== false ? "オン ✅" : "オフ ❌", inline: true },
           );
         await interaction.reply({ embeds: [embed], ephemeral: true, allowedMentions: { parse: [] } });
         return;
       }
 
-      const replies: string[] = [];
-      if (staffRole) {
-        await setStaffRole(guildId, staffRole.id);
-        replies.push(`スタッフロール: <@&${staffRole.id}>`);
-      }
-      if (renameRole) {
-        await setTicketRenameRole(guildId, renameRole.id);
-        replies.push(`名前変更可能ロール: <@&${renameRole.id}>`);
-      }
-      await interaction.reply({
-        content: `✅ 設定しました。\n${replies.join("\n")}`,
-        ephemeral: true,
-        allowedMentions: { parse: [] },
-      });
+      const updates: Parameters<typeof upsertTicketSettings>[1] = {};
+      if (staffRole)             updates.staffRoleId = staffRole.id;
+      if (renameRole)            updates.renameRoleId = renameRole.id;
+      if (category)              updates.categoryId = category.id;
+      if (channelPrefix)         updates.channelNamePrefix = channelPrefix;
+      if (mentionUser !== null)  updates.mentionUser = mentionUser;
+      if (mentionStaff !== null) updates.mentionStaff = mentionStaff;
+
+      await upsertTicketSettings(guildId, updates);
+      const lines = [
+        staffRole            && `スタッフロール: <@&${staffRole.id}>`,
+        renameRole           && `名前変更ロール: <@&${renameRole.id}>`,
+        category             && `カテゴリー: <#${category.id}>`,
+        channelPrefix        && `チャンネルプレフィックス: **${channelPrefix}**`,
+        mentionUser !== null  && `ユーザーメンション: ${mentionUser ? "オン" : "オフ"}`,
+        mentionStaff !== null && `スタッフメンション: ${mentionStaff ? "オン" : "オフ"}`,
+      ].filter(Boolean).join("\n");
+      await interaction.reply({ content: `✅ 設定しました。\n${lines}`, ephemeral: true, allowedMentions: { parse: [] } });
       return;
     }
 
+    // ── message ───────────────────────────────────────────────────────────────
     if (sub === "message") {
-      const panelTitle       = interaction.options.getString("panel_title");
-      const panelDescription = interaction.options.getString("panel_description");
-      const panelButtonLabel = interaction.options.getString("panel_button");
-      const welcomeMessage   = interaction.options.getString("welcome_message");
+      const panelTitle        = interaction.options.getString("panel_title");
+      const panelDescription  = interaction.options.getString("panel_description");
+      const welcomeMessage    = interaction.options.getString("welcome_message");
+      const welcomeEmbedTitle = interaction.options.getString("welcome_embed_title");
+      const welcomeEmbedColor = interaction.options.getString("welcome_embed_color");
 
-      if (!panelTitle && !panelDescription && !panelButtonLabel && !welcomeMessage) {
-        // Show current settings
-        const settings = await getTicketSettings(guildId);
+      const hasAny = panelTitle || panelDescription || welcomeMessage || welcomeEmbedTitle || welcomeEmbedColor;
+      if (!hasAny) {
+        const s = await getTicketSettings(guildId);
         const embed = new EmbedBuilder()
           .setTitle("🎫 チケットメッセージ設定")
           .setColor(0xfee75c)
           .addFields(
-            { name: "パネルタイトル", value: settings?.panelTitle ?? `（デフォルト）${TICKET_DEFAULTS.panelTitle}`, inline: false },
-            { name: "パネル説明文",   value: settings?.panelDescription ?? `（デフォルト）${TICKET_DEFAULTS.panelDescription}`, inline: false },
-            { name: "ボタンラベル",   value: settings?.panelButtonLabel ?? `（デフォルト）${TICKET_DEFAULTS.panelButtonLabel}`, inline: false },
-            { name: "ウェルカムメッセージ", value: settings?.welcomeMessage ?? `（デフォルト）${TICKET_DEFAULTS.welcomeMessage}`, inline: false },
+            { name: "パネルタイトル",   value: s?.panelTitle        ?? `（デフォルト）${TICKET_DEFAULTS.panelTitle}`, inline: false },
+            { name: "パネル説明文",     value: s?.panelDescription  ?? `（デフォルト）${TICKET_DEFAULTS.panelDescription}`, inline: false },
+            { name: "ウェルカム本文",   value: s?.welcomeMessage    ?? `（デフォルト）${TICKET_DEFAULTS.welcomeMessage}`, inline: false },
+            { name: "ウェルカム見出し", value: s?.welcomeEmbedTitle ?? `（デフォルト）${TICKET_DEFAULTS.welcomeEmbedTitle}`, inline: false },
+            { name: "ウェルカム色",     value: s?.welcomeEmbedColor ?? "（デフォルト）#fee75c", inline: false },
           )
           .setFooter({ text: "各オプションを指定して再実行すると上書きされます。" });
         await interaction.reply({ embeds: [embed], ephemeral: true });
         return;
       }
 
-      await setTicketMessages(guildId, {
-        panelTitle:       panelTitle       ?? undefined,
-        panelDescription: panelDescription ?? undefined,
-        panelButtonLabel: panelButtonLabel ?? undefined,
-        welcomeMessage:   welcomeMessage   ?? undefined,
-      });
+      if (welcomeEmbedColor && !/^#?[0-9a-fA-F]{6}$/.test(welcomeEmbedColor)) {
+        await interaction.reply({ content: "❌ 色は `#5865F2` のような6桁の16進数で指定してください。", ephemeral: true });
+        return;
+      }
 
+      const updates: Parameters<typeof upsertTicketSettings>[1] = {};
+      if (panelTitle)        updates.panelTitle = panelTitle;
+      if (panelDescription)  updates.panelDescription = panelDescription;
+      if (welcomeMessage)    updates.welcomeMessage = welcomeMessage;
+      if (welcomeEmbedTitle) updates.welcomeEmbedTitle = welcomeEmbedTitle;
+      if (welcomeEmbedColor) updates.welcomeEmbedColor = welcomeEmbedColor.startsWith("#") ? welcomeEmbedColor : `#${welcomeEmbedColor}`;
+
+      await upsertTicketSettings(guildId, updates);
       const changed = [
-        panelTitle       && `パネルタイトル: **${panelTitle}**`,
-        panelDescription && `パネル説明文: **${panelDescription}**`,
-        panelButtonLabel && `ボタンラベル: **${panelButtonLabel}**`,
-        welcomeMessage   && `ウェルカムメッセージ: **${welcomeMessage}**`,
+        panelTitle        && `パネルタイトル: **${panelTitle}**`,
+        panelDescription  && "パネル説明文: 更新しました",
+        welcomeMessage    && "ウェルカム本文: 更新しました",
+        welcomeEmbedTitle && `ウェルカム見出し: **${welcomeEmbedTitle}**`,
+        welcomeEmbedColor && `ウェルカム色: **${welcomeEmbedColor}**`,
       ].filter(Boolean).join("\n");
-
       await interaction.reply({ content: `✅ メッセージを更新しました。\n${changed}\n\n次回 \`/ticket panel\` を実行するとパネルに反映されます。`, ephemeral: true });
       return;
     }
 
+    // ── button ────────────────────────────────────────────────────────────────
+    if (sub === "button") {
+      const panelLabel = interaction.options.getString("panel_label");
+      const panelStyle = interaction.options.getString("panel_style");
+      const panelEmoji = interaction.options.getString("panel_emoji");
+      const closeLabel = interaction.options.getString("close_label");
+      const closeStyle = interaction.options.getString("close_style");
+
+      const hasAny = panelLabel || panelStyle || panelEmoji || closeLabel || closeStyle;
+      if (!hasAny) {
+        const s = await getTicketSettings(guildId);
+        const styleLabel = (n: number | null | undefined, fb: string) => {
+          const entry = Object.entries(BUTTON_STYLE_MAP).find(([, v]) => v === n);
+          return entry ? BUTTON_STYLE_LABELS[entry[0]] : `（デフォルト）${fb}`;
+        };
+        const embed = new EmbedBuilder()
+          .setTitle("🎫 チケットボタン設定")
+          .setColor(0xfee75c)
+          .addFields(
+            { name: "パネルボタン ラベル",   value: s?.panelButtonLabel ?? `（デフォルト）${TICKET_DEFAULTS.panelButtonLabel}`, inline: false },
+            { name: "パネルボタン 色",       value: styleLabel(s?.panelButtonStyle, "青（Primary）"), inline: true },
+            { name: "パネルボタン 絵文字",   value: s?.panelButtonEmoji ?? "（なし）", inline: true },
+            { name: "クローズボタン ラベル", value: s?.closeButtonLabel ?? `（デフォルト）${TICKET_DEFAULTS.closeButtonLabel}`, inline: false },
+            { name: "クローズボタン 色",     value: styleLabel(s?.closeButtonStyle, "赤（Danger）"), inline: true },
+          );
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+        return;
+      }
+
+      const updates: Parameters<typeof upsertTicketSettings>[1] = {};
+      if (panelLabel) updates.panelButtonLabel = panelLabel;
+      if (panelStyle) updates.panelButtonStyle = BUTTON_STYLE_MAP[panelStyle] as number;
+      if (panelEmoji) updates.panelButtonEmoji = panelEmoji;
+      if (closeLabel) updates.closeButtonLabel = closeLabel;
+      if (closeStyle) updates.closeButtonStyle = BUTTON_STYLE_MAP[closeStyle] as number;
+
+      await upsertTicketSettings(guildId, updates);
+      const changed = [
+        panelLabel && `パネルボタン ラベル: **${panelLabel}**`,
+        panelStyle && `パネルボタン 色: **${BUTTON_STYLE_LABELS[panelStyle]}**`,
+        panelEmoji && `パネルボタン 絵文字: ${panelEmoji}`,
+        closeLabel && `クローズボタン ラベル: **${closeLabel}**`,
+        closeStyle && `クローズボタン 色: **${BUTTON_STYLE_LABELS[closeStyle]}**`,
+      ].filter(Boolean).join("\n");
+      await interaction.reply({ content: `✅ ボタン設定を更新しました。\n${changed}\n\n次回 \`/ticket panel\` を実行するとパネルに反映されます。`, ephemeral: true });
+      return;
+    }
+
+    // ── panel ─────────────────────────────────────────────────────────────────
     if (sub === "panel") {
       const settings = await getTicketSettings(guildId);
+      const colorInt = settings?.welcomeEmbedColor ? hexToInt(settings.welcomeEmbedColor) : TICKET_DEFAULTS.welcomeEmbedColor;
       const embed = new EmbedBuilder()
         .setTitle(settings?.panelTitle ?? TICKET_DEFAULTS.panelTitle)
-        .setColor(0xfee75c)
+        .setColor(colorInt)
         .setDescription(settings?.panelDescription ?? TICKET_DEFAULTS.panelDescription);
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(COMM_TICKET_CREATE)
-          .setLabel(settings?.panelButtonLabel ?? TICKET_DEFAULTS.panelButtonLabel)
-          .setStyle(ButtonStyle.Primary),
-      );
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(buildPanelButton(settings));
       await interaction.reply({ content: "パネルを設置しました。", ephemeral: true });
       if (interaction.channel?.isSendable()) await interaction.channel.send({ embeds: [embed], components: [row] });
-      return;
     }
   },
 };
@@ -1100,9 +1255,10 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
     return;
   }
 
-  // Unique channel name
+  // ── Channel name: configurable prefix ────────────────────────────────────
+  const prefix = settings?.channelNamePrefix ?? TICKET_DEFAULTS.channelNamePrefix;
   const suffix = Date.now().toString(36).slice(-4);
-  const channelName = `ticket-${interaction.user.username.slice(0, 20)}-${suffix}`;
+  const channelName = `${prefix}-${interaction.user.username.slice(0, 20)}-${suffix}`;
 
   const overwrites: OverwriteResolvable[] = [
     { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -1116,12 +1272,15 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
     });
   }
 
+  // ── Category: configurable, fallback to hardcoded ─────────────────────────
+  const categoryId = settings?.categoryId ?? TICKET_CATEGORY_FALLBACK;
+
   let channel;
   try {
     channel = await interaction.guild.channels.create({
       name: channelName,
       type: ChannelType.GuildText,
-      parent: TICKET_CATEGORY_ID,
+      parent: categoryId,
       permissionOverwrites: overwrites,
     });
   } catch (err) {
@@ -1132,19 +1291,35 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
 
   const ticket = await createTicket(guildId, channel.id, interaction.user.id);
 
-  const welcome = settings?.welcomeMessage ?? TICKET_DEFAULTS.welcomeMessage;
+  // ── Welcome embed: configurable color, title, body ────────────────────────
+  const welcome   = settings?.welcomeMessage   ?? TICKET_DEFAULTS.welcomeMessage;
+  const embedTitle = settings?.welcomeEmbedTitle ?? TICKET_DEFAULTS.welcomeEmbedTitle;
+  const colorInt  = settings?.welcomeEmbedColor ? hexToInt(settings.welcomeEmbedColor) : TICKET_DEFAULTS.welcomeEmbedColor;
   const embed = new EmbedBuilder()
-    .setTitle("🎫 サポートチケット")
-    .setColor(0xfee75c)
+    .setTitle(embedTitle)
+    .setColor(colorInt)
     .setDescription(`<@${interaction.user.id}> からのチケットです。\n${welcome}`)
     .setTimestamp();
+
+  // ── Close button: configurable label, style ───────────────────────────────
+  const closeLabel = settings?.closeButtonLabel ?? TICKET_DEFAULTS.closeButtonLabel;
+  const closeStyle = resolveButtonStyle(settings?.closeButtonStyle, TICKET_DEFAULTS.closeButtonStyle);
   const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${COMM_TICKET_CLOSE_PREFIX}${ticket.id}`)
-      .setLabel("チケットを閉じる 🔒")
-      .setStyle(ButtonStyle.Danger),
+      .setLabel(closeLabel)
+      .setStyle(closeStyle),
   );
-  await channel.send({ content: `<@${interaction.user.id}>${settings?.staffRoleId ? ` <@&${settings.staffRoleId}>` : ""}`, embeds: [embed], components: [closeRow] });
+
+  // ── Mention content: configurable per-guild ───────────────────────────────
+  const mentionUser  = settings?.mentionUser  !== false;
+  const mentionStaff = settings?.mentionStaff !== false;
+  const contentParts: string[] = [];
+  if (mentionUser)  contentParts.push(`<@${interaction.user.id}>`);
+  if (mentionStaff && settings?.staffRoleId) contentParts.push(`<@&${settings.staffRoleId}>`);
+  const content = contentParts.join(" ") || undefined;
+
+  await channel.send({ content, embeds: [embed], components: [closeRow] });
   await interaction.editReply(`✅ チケットを作成しました: <#${channel.id}>`);
 }
 

@@ -68,10 +68,30 @@ export const communityTicketSettingsTable = pgTable("community_ticket_settings",
   panelDescription: text("panel_description"),
   /** Label on the "create ticket" button. */
   panelButtonLabel: text("panel_button_label"),
+  /** ButtonStyle value for the panel button: 1=Primary 2=Secondary 3=Success 4=Danger */
+  panelButtonStyle: integer("panel_button_style"),
+  /** Emoji shown on the panel button (unicode or <:name:id>). */
+  panelButtonEmoji: text("panel_button_emoji"),
   /** First message posted inside the newly created ticket channel. */
   welcomeMessage: text("welcome_message"),
+  /** Title of the welcome embed inside the ticket channel. */
+  welcomeEmbedTitle: text("welcome_embed_title"),
+  /** Hex color of the welcome embed, e.g. "#5865F2". */
+  welcomeEmbedColor: text("welcome_embed_color"),
   /** Role allowed to rename ticket channels (in addition to admins). */
   renameRoleId: text("rename_role_id"),
+  /** Discord category channel ID where ticket channels are created. */
+  categoryId: text("category_id"),
+  /** Prefix for ticket channel names, e.g. "ticket" → ticket-username. */
+  channelNamePrefix: text("channel_name_prefix"),
+  /** Whether to mention the ticket creator in the welcome message. Default true. */
+  mentionUser: boolean("mention_user").notNull().default(true),
+  /** Whether to mention the staff role in the welcome message. Default true. */
+  mentionStaff: boolean("mention_staff").notNull().default(true),
+  /** Label on the close button. */
+  closeButtonLabel: text("close_button_label"),
+  /** ButtonStyle value for the close button: 1=Primary 2=Secondary 3=Success 4=Danger */
+  closeButtonStyle: integer("close_button_style"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

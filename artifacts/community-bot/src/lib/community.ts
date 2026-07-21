@@ -19,6 +19,8 @@ import {
   type CommunityRankingSettings,
 } from "@workspace/db";
 
+export type { CommunityTicketSettings };
+
 // ─── Event Settings ──────────────────────────────────────────────────────────
 
 export async function getEventSettings(guildId: string): Promise<CommunityEventSettings | undefined> {
@@ -204,6 +206,14 @@ export async function setTicketMessages(
     panelButtonLabel?: string | null;
     welcomeMessage?: string | null;
   },
+) {
+  await upsertTicketSettings(guildId, opts);
+}
+
+/** Generic upsert for any subset of ticket settings columns. */
+export async function upsertTicketSettings(
+  guildId: string,
+  opts: Partial<Omit<CommunityTicketSettings, "guildId" | "updatedAt">>,
 ) {
   await db
     .insert(communityTicketSettingsTable)
