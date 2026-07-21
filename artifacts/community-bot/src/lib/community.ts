@@ -6,6 +6,7 @@ import {
   communityEventParticipantsTable,
   communityTicketSettingsTable,
   communityTicketsTable,
+  communityTicketPanelsTable,
   communityVcSessionsTable,
   communityVcPrivacyTable,
   communityRankingSettingsTable,
@@ -16,8 +17,11 @@ import {
   type CommunityTicket,
   type CommunityVcSession,
   type CommunityTicketSettings,
+  type CommunityTicketPanel,
   type CommunityRankingSettings,
 } from "@workspace/db";
+
+export type { CommunityTicketPanel };
 
 export type { CommunityTicketSettings };
 
@@ -233,6 +237,62 @@ export async function setTicketRenameRole(guildId: string, renameRoleId: string 
       set: { renameRoleId, updatedAt: new Date() },
     });
 }
+
+// ─── Ticket Panels ───────────────────────────────────────────────────────────
+
+type PanelOpts = Partial<Omit<CommunityTicketPanel, "id" | "guildId" | "createdAt">>;
+
+export async function createTicketPanel(
+  guildId: string,
+  name: string,
+  opts: Omit<PanelOpts, "name"> = {},
+): Promise<CommunityTicketPanel> {
+  const [row] = await db
+    .insert(communityTicketPanelsTable)
+    .values({ guildId, name, ...opts })
+    .returning();
+  if (!row) throw new Error("Failed to create ticket panel");
+  return row;
+}
+
+export async function getTicketPanel(id: number): Promise<CommunityTicketPanel | undefined> {
+  const [row] = await db
+    .select()
+    .from(communityTicketPanelsTable)
+    .where(eq(communityTicketPanelsTable.id, id));
+  return row;
+}
+
+export async function updateTicketPanel(
+  id: number,
+  guildId: string,
+  opts: PanelOpts,
+): Promise<boolean> {
+  const result = await db
+    .update(communityTicketPanelsTable)
+    .set(opts)
+    .where(and(eq(communityTicketPanelsTable.id, id), eq(communityTicketPanelsTable.guildId, guildId)))
+    .returning({ id: communityTicketPanelsTable.id });
+  return result.length > 0;
+}
+
+export async function listTicketPanels(guildId: string): Promise<CommunityTicketPanel[]> {
+  return db
+    .select()
+    .from(communityTicketPanelsTable)
+    .where(eq(communityTicketPanelsTable.guildId, guildId))
+    .orderBy(communityTicketPanelsTable.id);
+}
+
+export async function deleteTicketPanel(id: number, guildId: string): Promise<boolean> {
+  const result = await db
+    .delete(communityTicketPanelsTable)
+    .where(and(eq(communityTicketPanelsTable.id, id), eq(communityTicketPanelsTable.guildId, guildId)))
+    .returning({ id: communityTicketPanelsTable.id });
+  return result.length > 0;
+}
+
+// ─── Ticket Settings ─────────────────────────────────────────────────────────
 
 export async function getTicketSettings(guildId: string): Promise<CommunityTicketSettings | undefined> {
   const [row] = await db

@@ -34,6 +34,7 @@ import {
   COMM_EVENT_CANCEL_PREFIX,
   COMM_TICKET_CREATE,
   COMM_TICKET_CLOSE_PREFIX,
+  COMM_TICKET_PANEL_PREFIX,
   COMM_PRIVACY_DELETE_CONFIRM,
   COMM_PRIVACY_DELETE_CANCEL,
   COMM_PRIVACY_OPTOUT_KEEP,
@@ -394,7 +395,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await handleEventCancel(interaction);
         return;
       }
-      if (id === COMM_TICKET_CREATE) {
+      if (id === COMM_TICKET_CREATE || id.startsWith(COMM_TICKET_PANEL_PREFIX)) {
         await handleTicketCreate(interaction);
         return;
       }

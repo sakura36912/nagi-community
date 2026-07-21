@@ -250,6 +250,35 @@ export const communityRankingSettingsTable = pgTable("community_ranking_settings
 
 export type CommunityRankingSettings = typeof communityRankingSettingsTable.$inferSelect;
 
+// ─── Ticket Panels ───────────────────────────────────────────────────────────
+
+/**
+ * Per-panel visual configuration.
+ * One guild can have multiple panels, each with its own appearance.
+ * Structural settings (staff role, category, channel prefix, mentions) stay in
+ * community_ticket_settings.
+ */
+export const communityTicketPanelsTable = pgTable("community_ticket_panels", {
+  id: serial("id").primaryKey(),
+  guildId: text("guild_id").notNull(),
+  /** Admin-visible name to identify this panel. */
+  name: text("name").notNull(),
+  panelTitle: text("panel_title"),
+  panelDescription: text("panel_description"),
+  panelButtonLabel: text("panel_button_label"),
+  /** ButtonStyle value: 1=Primary 2=Secondary 3=Success 4=Danger */
+  panelButtonStyle: integer("panel_button_style"),
+  panelButtonEmoji: text("panel_button_emoji"),
+  welcomeMessage: text("welcome_message"),
+  welcomeEmbedTitle: text("welcome_embed_title"),
+  welcomeEmbedColor: text("welcome_embed_color"),
+  closeButtonLabel: text("close_button_label"),
+  closeButtonStyle: integer("close_button_style"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type CommunityTicketPanel = typeof communityTicketPanelsTable.$inferSelect;
+
 // ─── Pre-ban ─────────────────────────────────────────────────────────────────
 
 /**
