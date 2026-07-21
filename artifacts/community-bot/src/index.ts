@@ -210,6 +210,44 @@ client.once(Events.ClientReady, async (readyClient) => {
     }
   }
 
+  // ── GuildMembers privileged intent check ─────────────────────────────────
+  // The bot requests GuildMembers, but Discord only honours it when the toggle
+  // is enabled in the Developer Portal.  We detect a silent failure by fetching
+  // a small member batch from the first available guild: if the guild has more
+  // than one member but the fetch returns only the bot itself, the intent is
+  // almost certainly inactive.
+  {
+    const checkGuild = readyClient.guilds.cache.first();
+    if (checkGuild) {
+      try {
+        const fetched = await checkGuild.members.fetch({ limit: 10 });
+        // guild.memberCount is the authoritative Discord-reported count.
+        // If it is > 1 but we can only see ≤ 1 member, the intent was ignored.
+        const reportedCount = checkGuild.memberCount ?? 0;
+        if (reportedCount > 1 && fetched.size <= 1) {
+          logger.warn(
+            "[intent] GuildMembers privileged intent does not appear to be active. " +
+            "Member-related features (temp VC names, ticket attribution, leaderboard display) " +
+            "will not work correctly. " +
+            "Enable it at: Discord Developer Portal → Your App → Bot → Privileged Gateway Intents → Server Members Intent.",
+          );
+        } else {
+          logger.info(
+            `[intent] GuildMembers intent check passed (fetched ${fetched.size} member(s), guild reports ${reportedCount}).`,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          "[intent] Could not verify GuildMembers intent — member fetch failed. " +
+          "Ensure the Server Members Intent is enabled in the Discord Developer Portal.",
+          err,
+        );
+      }
+    } else {
+      logger.info("[intent] Skipping GuildMembers intent check — bot is not in any guild yet.");
+    }
+  }
+
   // Close any VC sessions left open from a previous run.
   await closeAllOpenSessions().catch((err) =>
     logger.error("[vc] Failed to close stale sessions", err),
