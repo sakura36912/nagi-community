@@ -835,7 +835,11 @@ const giveCommand: Command = {
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    const sub = interaction.options.getSubcommand();
+    const sub = interaction.options.getSubcommand(false);
+    if (!sub) {
+      await interaction.reply({ content: "サブコマンドを選択してください: `wallet` / `treasury` / `deposit`", ephemeral: true });
+      return;
+    }
     const settings = await getGuildSettings(guildId);
     const member = interaction.member as GuildMember | null;
 
