@@ -616,8 +616,11 @@ function panelEmbed(panel: CommunityTicketPanel): EmbedBuilder {
 }
 
 // ─ helper to add shared panel-appearance options to a subcommand ─────────────
+/** Max number of mention-role slots per panel. */
+const MAX_MENTION_ROLES = 5;
+
 function addPanelOpts<T extends import("discord.js").SlashCommandSubcommandBuilder>(sub: T): T {
-  return sub
+  let s = sub
     .addStringOption((o) => o.setName("title").setDescription("パネルの見出し").setRequired(false).setMaxLength(256))
     .addStringOption((o) => o.setName("description").setDescription("パネルの説明文").setRequired(false).setMaxLength(4096))
     .addStringOption((o) => o.setName("button_label").setDescription("ボタンのラベル").setRequired(false).setMaxLength(80))
@@ -627,7 +630,13 @@ function addPanelOpts<T extends import("discord.js").SlashCommandSubcommandBuild
     .addStringOption((o) => o.setName("embed_title").setDescription("ウェルカムEmbedの見出し").setRequired(false).setMaxLength(256))
     .addStringOption((o) => o.setName("embed_color").setDescription("ウェルカムEmbedの色（例: #5865F2）").setRequired(false).setMaxLength(7))
     .addStringOption((o) => o.setName("close_label").setDescription("クローズボタンのラベル").setRequired(false).setMaxLength(80))
-    .addStringOption((o) => o.setName("close_style").setDescription("クローズボタンの色").setRequired(false).addChoices(...STYLE_CHOICES)) as T;
+    .addStringOption((o) => o.setName("close_style").setDescription("クローズボタンの色").setRequired(false).addChoices(...STYLE_CHOICES));
+  for (let i = 1; i <= MAX_MENTION_ROLES; i++) {
+    s = s.addRoleOption((o) =>
+      o.setName(`mention_role_${i}`).setDescription(`チケット開設時にpingするロール ${i}`).setRequired(false),
+    );
+  }
+  return s as T;
 }
 
 function collectPanelOpts(interaction: ChatInputCommandInteraction) {
@@ -636,19 +645,32 @@ function collectPanelOpts(interaction: ChatInputCommandInteraction) {
 
   const buttonStyle = interaction.options.getString("button_style");
   const closeStyle  = interaction.options.getString("close_style");
+
+  // Collect mention roles; keep only non-null, deduplicate
+  const mentionRoleIds = Array.from(
+    new Set(
+      Array.from({ length: MAX_MENTION_ROLES }, (_, i) =>
+        interaction.options.getRole(`mention_role_${i + 1}`)?.id,
+      ).filter((id): id is string => id != null),
+    ),
+  );
+
   return {
-    panelTitle:       interaction.options.getString("title")        ?? undefined,
-    panelDescription: interaction.options.getString("description")  ?? undefined,
-    panelButtonLabel: interaction.options.getString("button_label") ?? undefined,
-    panelButtonStyle: buttonStyle ? (BUTTON_STYLE_MAP[buttonStyle] as number) : undefined,
-    panelButtonEmoji: interaction.options.getString("button_emoji") ?? undefined,
-    welcomeMessage:   interaction.options.getString("welcome")      ?? undefined,
-    welcomeEmbedTitle: interaction.options.getString("embed_title") ?? undefined,
+    panelTitle:        interaction.options.getString("title")        ?? undefined,
+    panelDescription:  interaction.options.getString("description")  ?? undefined,
+    panelButtonLabel:  interaction.options.getString("button_label") ?? undefined,
+    panelButtonStyle:  buttonStyle ? (BUTTON_STYLE_MAP[buttonStyle] as number) : undefined,
+    panelButtonEmoji:  interaction.options.getString("button_emoji") ?? undefined,
+    welcomeMessage:    interaction.options.getString("welcome")      ?? undefined,
+    welcomeEmbedTitle: interaction.options.getString("embed_title")  ?? undefined,
     welcomeEmbedColor: embedColor
       ? (embedColor.startsWith("#") ? embedColor : `#${embedColor}`)
       : undefined,
-    closeButtonLabel: interaction.options.getString("close_label")  ?? undefined,
-    closeButtonStyle: closeStyle ? (BUTTON_STYLE_MAP[closeStyle] as number) : undefined,
+    closeButtonLabel:  interaction.options.getString("close_label")  ?? undefined,
+    closeButtonStyle:  closeStyle ? (BUTTON_STYLE_MAP[closeStyle] as number) : undefined,
+    // Only include if at least one role was specified (so edit without touching
+    // roles does not overwrite existing ones)
+    ...(mentionRoleIds.length > 0 ? { mentionRoleIds } : {}),
   };
 }
 
@@ -862,6 +884,9 @@ const ticketCommand: Command = {
           value: [
             `タイトル: ${p.panelTitle ?? TICKET_DEFAULTS.panelTitle}`,
             `ボタン: ${p.panelButtonLabel ?? TICKET_DEFAULTS.panelButtonLabel} | ${styleLabel(p.panelButtonStyle, "青")}`,
+            p.mentionRoleIds && p.mentionRoleIds.length > 0
+              ? `メンション: ${p.mentionRoleIds.map((id) => `<@&${id}>`).join(" ")}`
+              : "メンション: （未設定 — グローバル設定を使用）",
           ].join("\n"),
           inline: false,
         }));
@@ -1325,12 +1350,21 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
       .setStyle(closeStyle),
   );
 
-  // ── Mention content: configurable per-guild ───────────────────────────────
-  const mentionUser  = settings?.mentionUser  !== false;
-  const mentionStaff = settings?.mentionStaff !== false;
+  // ── Mention content ───────────────────────────────────────────────────────
+  // Priority: per-panel mentionRoleIds → global mentionStaff+staffRoleId fallback
+  const mentionUser = settings?.mentionUser !== false;
   const contentParts: string[] = [];
-  if (mentionUser)  contentParts.push(`<@${interaction.user.id}>`);
-  if (mentionStaff && settings?.staffRoleId) contentParts.push(`<@&${settings.staffRoleId}>`);
+  if (mentionUser) contentParts.push(`<@${interaction.user.id}>`);
+
+  if (panel?.mentionRoleIds && panel.mentionRoleIds.length > 0) {
+    // Use per-panel role list
+    for (const roleId of panel.mentionRoleIds) contentParts.push(`<@&${roleId}>`);
+  } else {
+    // Legacy fallback: global mentionStaff + staffRoleId
+    if (settings?.mentionStaff !== false && settings?.staffRoleId) {
+      contentParts.push(`<@&${settings.staffRoleId}>`);
+    }
+  }
   const content = contentParts.join(" ") || undefined;
 
   await channel.send({ content, embeds: [embed], components: [closeRow] });

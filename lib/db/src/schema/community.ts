@@ -274,6 +274,8 @@ export const communityTicketPanelsTable = pgTable("community_ticket_panels", {
   welcomeEmbedColor: text("welcome_embed_color"),
   closeButtonLabel: text("close_button_label"),
   closeButtonStyle: integer("close_button_style"),
+  /** Role IDs to mention when a ticket is opened from this panel. */
+  mentionRoleIds: text("mention_role_ids").array(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
