@@ -23,6 +23,7 @@ import {
   markReminderSent,
   openSession,
 } from "./lib/community.js";
+import { getPreban } from "@workspace/db";
 import {
   buildEventEmbed,
   buildRankingEmbed,
@@ -286,6 +287,21 @@ client.once(Events.ClientReady, async (readyClient) => {
       logger.error("[event] Reminder scheduler error", err),
     );
   }, 60 * 1000);
+});
+
+// ─── GuildMemberAdd（事前BAN自動実行）────────────────────────────────────────
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  try {
+    const preban = await getPreban(member.guild.id, member.id);
+    if (!preban) return;
+
+    const reason = preban.reason ?? "事前BANリストによる自動BAN";
+    await member.ban({ reason });
+    logger.info(`[preban] ✅ Auto-banned ${member.id} on join in guild ${member.guild.id} — ${reason}`);
+  } catch (err) {
+    logger.error(`[preban] Failed to auto-ban ${member.id} in guild ${member.guild.id}`, err);
+  }
 });
 
 // ─── GuildMemberRemove ───────────────────────────────────────────────────────

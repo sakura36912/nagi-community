@@ -1544,6 +1544,8 @@ const leavelogCommand: Command = {
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
+import { prebanCommand } from "./preban.js";
+
 export const commands: Command[] = [
   rankingCommand,
   mystatsCommand,
@@ -1553,4 +1555,5 @@ export const commands: Command[] = [
   botstatusCommand,
   roleButtonCommand,
   leavelogCommand,
+  prebanCommand,
 ];

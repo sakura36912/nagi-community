@@ -229,3 +229,27 @@ export const communityRankingSettingsTable = pgTable("community_ranking_settings
 });
 
 export type CommunityRankingSettings = typeof communityRankingSettingsTable.$inferSelect;
+
+// ─── Pre-ban ─────────────────────────────────────────────────────────────────
+
+/**
+ * Users pre-banned per guild.
+ * When a pre-banned user joins, the bot automatically bans them.
+ */
+export const communityPrebansTable = pgTable(
+  "community_prebans",
+  {
+    id: serial("id").primaryKey(),
+    guildId: text("guild_id").notNull(),
+    /** Discord user ID to ban on join. */
+    userId: text("user_id").notNull(),
+    /** Optional reason shown in the Discord ban log. */
+    reason: text("reason"),
+    /** Staff member who issued this pre-ban. */
+    addedBy: text("added_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique().on(table.guildId, table.userId)],
+);
+
+export type CommunityPreban = typeof communityPrebansTable.$inferSelect;
