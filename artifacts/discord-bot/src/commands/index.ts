@@ -718,50 +718,16 @@ const currencyCommand: Command = {
 const balanceCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("balance")
-    .setDescription("残高を表示します（ウォレットまたは金庫）")
-    .addUserOption((opt) =>
-      opt.setName("user").setDescription("確認したいユーザー（省略時は自分）").setRequired(false),
-    )
-    .addIntegerOption((opt) =>
-      opt.setName("treasury_id").setDescription("金庫IDを指定すると金庫の残高を表示します").setRequired(false),
-    ),
+    .setDescription("自分の残高を表示します"),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    const treasuryId = interaction.options.getInteger("treasury_id");
-
-    // ── 金庫残高 ──
-    if (treasuryId !== null) {
-      const treasury = await getSquadTreasury(treasuryId);
-      if (!treasury || treasury.guildId !== guildId) {
-        await interaction.reply({ content: "指定された金庫が見つかりません。", ephemeral: true });
-        return;
-      }
-      const settings = await getGuildSettings(guildId);
-      const embed = new EmbedBuilder()
-        .setTitle(`🏦 ${treasury.name} — 残高`)
-        .setColor(0xf5a623)
-        .addFields(
-          { name: "残高", value: `**${treasury.balance.toLocaleString()}${settings.currencyName}**`, inline: true },
-          { name: "隊員ロール", value: `<@&${treasury.roleId}>`, inline: true },
-          ...(treasury.leaderRoleId ? [{ name: "隊長ロール", value: `<@&${treasury.leaderRoleId}>`, inline: true }] : []),
-        );
-      await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
-      return;
-    }
-
-    // ── ウォレット残高 ──
-    const target = interaction.options.getUser("user") ?? interaction.user;
-    if (target.id !== interaction.user.id && !requireManageGuild(interaction)) {
-      await interaction.reply({ content: "他のユーザーの残高を確認できるのは管理者のみです。", ephemeral: true });
-      return;
-    }
     const [wallet, settings] = await Promise.all([
-      getOrCreateWallet(guildId, target.id),
+      getOrCreateWallet(guildId, interaction.user.id),
       getGuildSettings(guildId),
     ]);
     const embed = new EmbedBuilder()
       .setColor(0x3498db)
-      .setAuthor({ name: target.displayName ?? target.username, iconURL: target.displayAvatarURL() })
+      .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
       .setDescription(`残高: **${wallet.balance.toLocaleString()}${settings.currencyName}**`);
     await interaction.reply({ embeds: [embed], ephemeral: true });
   },
