@@ -94,6 +94,31 @@ export async function listUpcomingEvents(guildId: string): Promise<CommunityEven
     .orderBy(asc(communityEventsTable.scheduledAt));
 }
 
+/**
+ * Returns events across all guilds whose scheduledAt has passed but have not
+ * yet had participation points awarded.
+ */
+export async function getEventsNeedingParticipationPoints(): Promise<CommunityEvent[]> {
+  const now = new Date();
+  return db
+    .select()
+    .from(communityEventsTable)
+    .where(
+      and(
+        lt(communityEventsTable.scheduledAt, now),
+        isNull(communityEventsTable.participationPointsAwardedAt),
+      ),
+    );
+}
+
+/** Mark an event as having had participation points awarded. */
+export async function markParticipationPointsAwarded(eventId: number): Promise<void> {
+  await db
+    .update(communityEventsTable)
+    .set({ participationPointsAwardedAt: new Date() })
+    .where(eq(communityEventsTable.id, eventId));
+}
+
 export async function addParticipant(eventId: number, userId: string): Promise<boolean> {
   const result = await db
     .insert(communityEventParticipantsTable)
@@ -383,6 +408,20 @@ export async function closeSession(guildId: string, userId: string): Promise<voi
         isNull(communityVcSessionsTable.leftAt),
       ),
     );
+}
+
+/**
+ * Closes the active VC session and returns the duration in seconds.
+ * Returns null if the user had no active session.
+ */
+export async function closeSessionAndGetDuration(
+  guildId: string,
+  userId: string,
+): Promise<number | null> {
+  const session = await getActiveSession(guildId, userId);
+  if (!session) return null;
+  await closeSession(guildId, userId);
+  return Math.floor((Date.now() - session.joinedAt.getTime()) / 1000);
 }
 
 export async function closeAllOpenSessions(): Promise<void> {

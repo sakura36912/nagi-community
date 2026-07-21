@@ -1835,6 +1835,7 @@ const leavelogCommand: Command = {
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 import { prebanCommand } from "./preban.js";
+import { pointCommand } from "./point.js";
 
 export const commands: Command[] = [
   rankingCommand,
@@ -1846,4 +1847,5 @@ export const commands: Command[] = [
   roleButtonCommand,
   leavelogCommand,
   prebanCommand,
+  pointCommand,
 ];
