@@ -917,6 +917,19 @@ export async function addShopItem(
   return item;
 }
 
+export async function updateShopItemRole(
+  guildId: string,
+  itemId: number,
+  roleId: string | null,
+): Promise<ShopItem | null> {
+  const [updated] = await db
+    .update(shopItemsTable)
+    .set({ targetRoleId: roleId })
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.id, itemId)))
+    .returning();
+  return updated ?? null;
+}
+
 export async function updateShopItemPrice(
   guildId: string,
   itemId: number,

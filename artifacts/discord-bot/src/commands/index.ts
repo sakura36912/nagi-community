@@ -58,6 +58,7 @@ import {
   getTreasuryHistory,
   giveToCrunchTreasury,
   updateShopItemPrice,
+  updateShopItemRole,
   getGuildSettings,
   getLeaderboard,
   getOrCreateWallet,
@@ -1101,7 +1102,16 @@ const shopCommand: Command = {
         .addRoleOption((opt) => opt.setName("shop_role").setDescription("付与するショップ開業ロール").setRequired(true)),
     )
     .addSubcommand((sub) => sub.setName("license-list").setDescription("隊→開業ロールのマッピング一覧を表示します（管理者）"))
-    .addSubcommand((sub) => sub.setName("sales").setDescription("隊ごとの売上を表示します")),
+    .addSubcommand((sub) => sub.setName("sales").setDescription("隊ごとの売上を表示します"))
+    .addSubcommand((sub) =>
+      sub.setName("set-role").setDescription("アイテムの付与ロールを設定・変更します（管理者）")
+        .addIntegerOption((opt) =>
+          opt.setName("item_id").setDescription("アイテムID（/shop list で確認）").setRequired(true),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("role").setDescription("付与するロール（省略で解除）").setRequired(false),
+        ),
+    ),
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -1336,10 +1346,7 @@ const shopCommand: Command = {
       const description = interaction.options.getString("description");
       const effect      = interaction.options.getString("effect");
       const role        = interaction.options.getRole("role");
-      if (effect === PERM_ROLE_EFFECT && !role) {
-        await interaction.reply({ content: "❌ 永久ロール付与には `role` オプションでロールを指定してください。", ephemeral: true });
-        return;
-      }
+      // role は後から /shop set-role で設定可能なため、省略を許容する
       const [item, settings] = await Promise.all([
         addShopItem(guildId, name, price, description, effect, cfg.category, role?.id ?? null),
         getGuildSettings(guildId),
@@ -1529,6 +1536,32 @@ const shopCommand: Command = {
       }
       const lines = configs.map((c) => `<@&${c.squadRoleId}> → <@&${c.licenseRoleId}>`);
       await interaction.reply({ content: `## ⚔️ 隊別ショップ開業ロール設定\n${lines.join("\n")}`, ephemeral: true });
+      return;
+    }
+
+    if (sub === "set-role") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const itemId = interaction.options.getInteger("item_id", true);
+      const role   = interaction.options.getRole("role");
+      const updated = await updateShopItemRole(guildId, itemId, role?.id ?? null);
+      if (!updated) {
+        await interaction.reply({ content: `❌ アイテム ID **${itemId}** が見つかりません。`, ephemeral: true });
+        return;
+      }
+      if (role) {
+        await interaction.reply({
+          content: `✅ **${updated.name}** の付与ロールを <@&${role.id}> に設定しました。`,
+          ephemeral: true,
+        });
+      } else {
+        await interaction.reply({
+          content: `✅ **${updated.name}** の付与ロール設定を解除しました。`,
+          ephemeral: true,
+        });
+      }
       return;
     }
   },
