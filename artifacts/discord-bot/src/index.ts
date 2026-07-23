@@ -5,6 +5,8 @@ import {
   handleNicknameModalSubmit,
   handleVcRenameModalSubmit,
   handleShopBuyButton,
+  handleShopSelectMenu,
+  SHOP_SELECT_ID,
   NICKNAME_MODAL_PREFIX,
   VC_RENAME_MODAL_PREFIX,
   SHOP_BUY_PREFIX,
@@ -925,6 +927,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(SHOP_BUY_PREFIX)) {
       await handleShopBuyButton(interaction);
+      return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === SHOP_SELECT_ID) {
+      await handleShopSelectMenu(interaction);
       return;
     }
 

@@ -8,12 +8,15 @@ import {
   ModalBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   TextInputBuilder,
   TextInputStyle,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type GuildMember,
   type ModalSubmitInteraction,
+  type StringSelectMenuInteraction,
 } from "discord.js";
 import type { ShopItem } from "@workspace/db";
 import type { Guild } from "discord.js";
@@ -123,12 +126,11 @@ function formatMs(ms: number): string {
 }
 
 export const SHOP_BUY_PREFIX = "shop:buy:";
+export const SHOP_SELECT_ID = "shop:select";
 export const NICKNAME_MODAL_PREFIX = "shop:nickname-modal:";
 const NICKNAME_MODAL_INPUT_ID = "nickname";
 export const VC_RENAME_MODAL_PREFIX = "shop:vc-rename-modal:";
 const VC_RENAME_MODAL_INPUT_ID = "vc-new-name";
-// Discord caps action rows at 5, each holding up to 5 buttons.
-const MAX_SHOP_BUY_BUTTONS = 25;
 
 function buildNicknameModal(itemId: number): ModalBuilder {
   return new ModalBuilder()
@@ -376,21 +378,22 @@ function buildShopPanel(items: ShopItem[], currencyName: string, title = "🛒 �
       .join("\n\n"),
   );
 
-  const buyable = items.slice(0, MAX_SHOP_BUY_BUTTONS);
-  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
-  for (let i = 0; i < buyable.length; i += 5) {
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      buyable.slice(i, i + 5).map((item) =>
-        new ButtonBuilder()
-          .setCustomId(`${SHOP_BUY_PREFIX}${item.id}`)
-          .setLabel(`購入: ${item.name}`.slice(0, 80))
-          .setStyle(ButtonStyle.Primary),
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(SHOP_SELECT_ID)
+    .setPlaceholder("購入するアイテムを選んでください")
+    .addOptions(
+      items.slice(0, 25).map((item) =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(item.name.slice(0, 100))
+          .setValue(String(item.id))
+          .setDescription(
+            `${item.price}${currencyName}${item.description ? ` — ${item.description}` : ""}`.slice(0, 100),
+          ),
       ),
     );
-    rows.push(row);
-  }
 
-  return { embeds: [embed], components: rows };
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+  return { embeds: [embed], components: [row] };
 }
 
 export async function handleShopBuyButton(interaction: ButtonInteraction): Promise<void> {
@@ -572,6 +575,203 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   } else {
     await interaction.editReply(result.reason);
   }
+}
+
+// ── セレクトメニュー版ショップ購入ハンドラ ──────────────────────────
+// handleShopBuyButton と同じロジックだが StringSelectMenuInteraction を受け取る
+async function applyShopPurchase(
+  interaction: ButtonInteraction | StringSelectMenuInteraction,
+  itemId: number,
+): Promise<void> {
+  if (!interaction.guildId || !interaction.guild) {
+    await interaction.reply({ content: "このコンポーネントはサーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const item = await getShopItem(interaction.guildId, itemId);
+  if (!item) {
+    await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+    return;
+  }
+
+  // モーダルが必要なアイテムは defer せずにモーダルを表示
+  if (item.effectType === NICKNAME_CHANGE_EFFECT) {
+    await interaction.showModal(buildNicknameModal(item.id));
+    return;
+  }
+  if (item.effectType === VC_RENAME_EFFECT) {
+    await interaction.showModal(buildVcRenameModal(item.id));
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const settings = await getGuildSettings(interaction.guildId);
+
+  const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
+  if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
+    const isUra = item.category === "ura" && vcDuration !== undefined;
+    const result = isUra
+      ? await purchaseAndCreateUraVc(interaction.guild, member, itemId, settings.currencyName, vcDuration!, vcCatId, settings.uraChannelId)
+      : await purchaseAndCreatePrivateVc(interaction.guild, member, itemId, settings.currencyName, vcDuration, vcCatId);
+    if (result.ok) {
+      const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
+      const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
+      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
+    } else {
+      await interaction.editReply(result.reason);
+    }
+    return;
+  }
+
+  const extendDays = EVAL_EXTEND_DAYS[item.effectType ?? ""];
+  if (extendDays !== undefined) {
+    const sheetSettingsForExt = await getEvalSheetSettings(interaction.guildId);
+    const triggerRoleIdsForExt = sheetSettingsForExt?.triggerRoleIds?.split(",").map((r) => r.trim()).filter(Boolean) ?? [];
+    if (triggerRoleIdsForExt.length > 0) {
+      const memberForExt = await interaction.guild.members.fetch(interaction.user.id);
+      if (!memberForExt.roles.cache.hasAny(...triggerRoleIdsForExt)) {
+        await interaction.editReply("❌ この商品は評価中のメンバーのみ購入できます。");
+        return;
+      }
+    }
+    const currentSheetForExt = await getLatestEvalSheet(interaction.guildId, interaction.user.id);
+    if ((currentSheetForExt?.extensionCount ?? 0) >= 1) {
+      await interaction.editReply("❌ 評価延長券は評価シート1枚につき1回しか購入できません。");
+      return;
+    }
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    const extended = await extendCommunitySheet(interaction.guildId, interaction.user.id, extendDays);
+    if (extended) {
+      const ts = Math.floor(extended.newEndDate.getTime() / 1000);
+      await interaction.editReply(
+        `✅ **${result.item.name}**を購入しました！\n評価シートの期限を **<t:${ts}:D>** まで延長しました。`,
+      );
+      applySheetEmbedUpdate(interaction.client, interaction.guildId, extended).catch((err) => logger.error("[sheet] applySheetEmbedUpdate error", err));
+    } else {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 評価シートが見つかりませんでした。購入を取り消し、返金しました。\n管理者に評価シートの作成を依頼してください。");
+    }
+    return;
+  }
+
+  if (item.effectType === PERM_ROLE_EFFECT) {
+    if (!item.targetRoleId) {
+      await interaction.editReply("❌ このアイテムにはロールが設定されていません。管理者に連絡してください。");
+      return;
+    }
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    try {
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      await member.roles.add(item.targetRoleId);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
+  if (item.effectType === EVAL_RESURFACE_EFFECT) {
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    const sheetSettings = await getEvalSheetSettings(interaction.guildId);
+    if (!sheetSettings?.forumChannelId) {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 評価フォーラムが設定されていません。購入を取り消し、返金しました。");
+      return;
+    }
+    const forum = interaction.guild.channels.cache.get(sheetSettings.forumChannelId)
+      ?? await interaction.guild.channels.fetch(sheetSettings.forumChannelId).catch(() => null);
+    if (!forum || forum.type !== ChannelType.GuildForum) {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 評価フォーラムが見つかりません。購入を取り消し、返金しました。");
+      return;
+    }
+    try {
+      const evalDays = sheetSettings.evalPeriodDays ?? 14;
+      const startDate = new Date();
+      const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
+      const targetUser = await interaction.client.users.fetch(interaction.user.id);
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const displayName = member.displayName;
+      const [vcSeconds, selfIntro] = await Promise.all([
+        getSheetVcSeconds(interaction.guildId, interaction.user.id, startDate, endDate).catch(() => 0),
+        findSelfIntro(interaction.guild!, interaction.user.id, sheetSettings.rosterCategoryId).catch(() => null),
+      ]);
+      const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
+      const thread = await forum.threads.create({ name: buildSheetThreadName(displayName, endDate), message: { embeds: [embed] } });
+      await createEvalSheet(interaction.guildId, interaction.user.id, startDate, endDate, forum.id, thread.id);
+      const ts = Math.floor(endDate.getTime() / 1000);
+      await interaction.editReply(`✅ **${result.item.name}**を使用しました！評価シートが新規作成されました。期限: **<t:${ts}:D>**`);
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 評価シートの作成に失敗しました。購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
+  const uraExtendDuration = URA_EXTEND_DURATIONS[item.effectType ?? ""];
+  if (uraExtendDuration !== undefined) {
+    const session = await getActivePrivateVcSession(interaction.guildId, interaction.user.id, "ura");
+    if (!session) {
+      await interaction.editReply("❌ 有効な裏フリールームがありません。先に購入してください。");
+      return;
+    }
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    try {
+      const updated = await extendPrivateVcSession(session.id, uraExtendDuration);
+      const ts = Math.floor(updated.expiresAt.getTime() / 1000);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n裏フリールームの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
+  if (item.effectType === SHOP_LICENSE_EFFECT) {
+    const configs = await listShopLicenseConfigs(interaction.guildId);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const config = configs.find((c) => member.roles.cache.has(c.squadRoleId));
+    if (!config) {
+      await interaction.editReply("❌ このアイテムはあなたの隊に対応したショップ開業ロールが設定されていません。管理者に連絡してください。");
+      return;
+    }
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    try {
+      await member.roles.add(config.licenseRoleId);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`);
+      tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
+  const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+  if (result.ok) {
+    await interaction.editReply(`**${result.item.name}**を購入しました!`);
+    if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
+  } else {
+    await interaction.editReply(result.reason);
+  }
+}
+
+export async function handleShopSelectMenu(interaction: StringSelectMenuInteraction): Promise<void> {
+  const itemId = Number(interaction.values[0]);
+  if (!Number.isInteger(itemId)) {
+    await interaction.reply({ content: "不正な選択です。", ephemeral: true });
+    return;
+  }
+  await applyShopPurchase(interaction, itemId);
 }
 
 export async function handleVcRenameModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
