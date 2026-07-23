@@ -1679,7 +1679,7 @@ const roleButtonCommand: Command = {
         const role  = interaction.options.getRole(`role${n}`);
         const label = interaction.options.getString(`label${n}`);
         const style = Number(interaction.options.getString(`style${n}`) ?? "1");
-        if (role && label) buttons.push({ role: role as import("discord.js").Role, label, style });
+        if (role) buttons.push({ role: role as import("discord.js").Role, label: (label ?? role.name).slice(0, 80), style });
       }
 
       if (buttons.length === 0) {
