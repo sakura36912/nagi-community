@@ -1311,6 +1311,12 @@ const shopCommand: Command = {
         .addRoleOption((opt) =>
           opt.setName("role").setDescription("付与するロール（省略で解除）").setRequired(false),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("panel").setDescription("このチャンネルにショップパネルを投稿します（管理者）")
+        .addStringOption((opt) =>
+          opt.setName("category").setDescription("表示するショップカテゴリ").setRequired(true).addChoices(...CATEGORY_CHOICES),
+        ),
     ),
 
   async execute(interaction) {
@@ -1762,6 +1768,27 @@ const shopCommand: Command = {
           ephemeral: true,
         });
       }
+      return;
+    }
+
+    if (sub === "panel") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const cfg = getCfg();
+      const [items, settings] = await Promise.all([
+        listShopItems(guildId, cfg.category),
+        getGuildSettings(guildId),
+      ]);
+      if (items.length === 0) {
+        await interaction.reply({ content: `❌ **${cfg.displayName}** にアイテムがまだありません。先に \`/shop add\` でアイテムを追加してください。`, ephemeral: true });
+        return;
+      }
+      const panel = buildShopPanel(items, settings.currencyName, `${cfg.emoji} ${cfg.displayName}`, cfg.color);
+      // チャンネルに常設投稿（全員が見える）
+      await interaction.reply({ content: "✅ パネルを投稿しました。", ephemeral: true });
+      await (interaction.channel as import("discord.js").TextChannel).send(panel);
       return;
     }
   },
