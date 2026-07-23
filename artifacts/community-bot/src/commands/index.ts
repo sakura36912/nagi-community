@@ -1693,10 +1693,11 @@ const roleButtonCommand: Command = {
       if (description) embed.setDescription(description);
 
       // Post the panel message first (without button IDs — we need the messageId first)
+      // customId must be unique per message, so use index-based placeholders
       const placeholderRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        buttons.map((b) =>
+        buttons.map((b, i) =>
           new ButtonBuilder()
-            .setCustomId("pending")
+            .setCustomId(`pending:${i}`)
             .setLabel(b.label)
             .setStyle(b.style as ButtonStyle)
             .setDisabled(true),
@@ -1766,15 +1767,22 @@ export async function handleRoleButton(interaction: ButtonInteraction): Promise<
     return;
   }
 
-  const has = member.roles.cache.has(role.id);
+  // 排他制御：同一パネル内の他のロールをすでに持っていたら拒否
+  const panelButtons = await getRoleButtonsByMessage(btnRecord.messageId);
+  const panelRoleIds = panelButtons.map((b) => b.roleId);
+  const alreadyHeld  = panelRoleIds.find((rid) => member.roles.cache.has(rid));
+  if (alreadyHeld) {
+    await interaction.reply({
+      content: "❌ すでにこのパネルからロールを選択済みです。変更はできません。",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // 永久付与のみ（解除不可）
   try {
-    if (has) {
-      await member.roles.remove(role, "ロールボタンによる解除");
-      await interaction.reply({ content: `✅ **${role.name}** を解除しました。`, ephemeral: true });
-    } else {
-      await member.roles.add(role, "ロールボタンによる付与");
-      await interaction.reply({ content: `✅ **${role.name}** を付与しました。`, ephemeral: true });
-    }
+    await member.roles.add(role, "ロールボタンによる付与");
+    await interaction.reply({ content: `✅ **${role.name}** を付与しました。`, ephemeral: true });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[role-btn] role change failed guildId=${interaction.guildId} userId=${member.id} roleId=${role.id}:`, msg);

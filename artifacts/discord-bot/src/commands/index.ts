@@ -2101,6 +2101,7 @@ import { vclogCommand } from "./vclog";
 import { slotCommand } from "./slot";
 import { bannotifyCommand } from "./bannotify";
 import { returnlogCommand } from "./returnlog";
+import { rolePanelCommand } from "./rolepanel";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -2120,4 +2121,5 @@ export const commands: Command[] = [
   bannotifyCommand,
   returnlogCommand,
   evalsheetCommand,
+  rolePanelCommand,
 ];

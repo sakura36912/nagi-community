@@ -1,4 +1,5 @@
 import { AuditLogEvent, ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
+import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { EmbedBuilder } from "discord.js";
 import {
   commands,
@@ -922,6 +923,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       await command.execute(interaction);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(ROLE_PANEL_PREFIX)) {
+      await handleRolePanelButton(interaction);
       return;
     }
 
