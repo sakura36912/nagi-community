@@ -58,11 +58,11 @@ import {
   listSheetsNeedingReminder,
   markSheetReminderSent,
   setBanLogChannelId,
+  setLeaveLogChannelId,
   recordMemberJoin,
   recordMemberLeave,
-  getOrCreateWallet,
+  countPastJoins,
   findWallet,
-  countRealJoins,
 } from "./lib/economy";
 import { getEvalSheetConfigsForRoles } from "@workspace/db";
 
@@ -605,67 +605,6 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     ? []
     : [...oldMember.roles.cache.keys()].filter((id) => !newMember.roles.cache.has(id));
 
-  // ── 昇格通知（入門前ロールが外れたとき）→ 出戻り通知として送信 ──────────
-  if (removedRoleIds.length > 0) {
-    const guildSettings = await getGuildSettings(guildId).catch(() => null);
-    const watchRoleId = guildSettings?.promotionWatchRoleId;
-    // 再加入通知チャンネルを優先し、なければ昇格用チャンネルにフォールバック
-    const notifyChannelId = guildSettings?.returnLogChannelId ?? guildSettings?.promotionLogChannelId;
-
-    if (watchRoleId && notifyChannelId && removedRoleIds.includes(watchRoleId)) {
-      const notifyChannel = newMember.guild.channels.cache.get(notifyChannelId)
-        ?? await newMember.guild.channels.fetch(notifyChannelId).catch(() => null);
-
-      if (notifyChannel?.isTextBased()) {
-        const [wallet, joinCount] = await Promise.all([
-          findWallet(guildId, newMember.id).catch(() => null),
-          countRealJoins(guildId, newMember.id).catch(() => 0),
-        ]);
-
-        const isLegacyReturnee = joinCount === 0 && wallet !== null;
-        const returnCountDisplay = isLegacyReturnee
-          ? "不明（ボット導入前の在籍履歴あり）"
-          : joinCount > 0
-            ? `**${joinCount}** 回目の参加`
-            : "初回";
-
-        const balance = wallet ? wallet.balance.toLocaleString("ja-JP") : "0";
-        const currencyName = guildSettings.currencyName;
-
-        // 入門前ロールを除いた現在のロール
-        const newRoles = [...newMember.roles.cache.values()]
-          .filter((r) => r.id !== newMember.guild.id && r.id !== watchRoleId)
-          .sort((a, b) => b.position - a.position);
-        const roleDisplay = newRoles.length === 0
-          ? "なし"
-          : newRoles.length <= 5
-            ? newRoles.map((r) => `<@&${r.id}>`).join(" ")
-            : newRoles.slice(0, 5).map((r) => `<@&${r.id}>`).join(" ") + ` … 他 ${newRoles.length - 5} 件`;
-
-        const createdAt = Math.floor(newMember.user.createdTimestamp / 1000);
-
-        const embed = new EmbedBuilder()
-          .setTitle("🔄 出戻りメンバーが参加しました")
-          .setColor(0xf39c12)
-          .setThumbnail(newMember.user.displayAvatarURL({ size: 256 }))
-          .addFields(
-            { name: "ユーザー", value: `${newMember.user.tag}\n<@${newMember.id}>`, inline: true },
-            { name: "ユーザーID", value: newMember.id, inline: true },
-            { name: "出戻り回数", value: returnCountDisplay, inline: true },
-            { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
-            { name: "所持金", value: `${balance} ${currencyName}`, inline: true },
-            { name: "ロール", value: roleDisplay, inline: false },
-          )
-          .setTimestamp()
-          .setFooter({ text: newMember.guild.name, iconURL: newMember.guild.iconURL() ?? undefined });
-
-        await (notifyChannel as TextChannel).send({ embeds: [embed] }).catch((err) =>
-          logger.error("[returnlog] Failed to send promotion-as-returnee embed", err),
-        );
-      }
-    }
-  }
-
   if (addedRoleIds.length === 0) return;
 
   // ── 複数フォーラム × ロール マッピングで一致するものをすべて処理 ─────────
@@ -724,6 +663,81 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   }
 });
 
+// ─── GuildMemberAdd — 参加記録 ────────────────────────────────────────────────
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  try {
+    await recordMemberJoin(member.guild.id, member.id);
+  } catch (err) {
+    logger.error("[leavelog] Failed to record member join", err);
+  }
+});
+
+// ─── GuildMemberRemove — 退出通知 ─────────────────────────────────────────────
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  const guildId = member.guild.id;
+
+  // 参加記録を退出済みにする
+  recordMemberLeave(guildId, member.id).catch((err) =>
+    logger.error("[leavelog] Failed to record member leave", err),
+  );
+
+  // 通知チャンネル設定確認
+  const settings = await getGuildSettings(guildId).catch(() => null);
+  if (!settings?.leaveLogChannelId) return;
+
+  const logChannel =
+    member.guild.channels.cache.get(settings.leaveLogChannelId) ??
+    await member.guild.channels.fetch(settings.leaveLogChannelId).catch(() => null);
+  if (!logChannel?.isTextBased()) return;
+
+  // 過去の退出済み参加回数（今回の退出を記録する前に取得済みのため +0 で正確）
+  const pastJoins = await countPastJoins(guildId, member.id).catch(() => 0);
+  // 今回が退出なので出戻り回数 = 過去の退出済み回数（次に来たとき pastJoins+1 回目になる）
+  const rejoinDisplay =
+    pastJoins === 0 ? "初回の退出（出戻りなし）" : `**${pastJoins}** 回目の出戻り後の退出`;
+
+  // ウォレット残高
+  const wallet = await findWallet(guildId, member.id).catch(() => null);
+  const balance = wallet ? wallet.balance.toLocaleString("ja-JP") : "0";
+  const currencyName = settings.currencyName;
+
+  // ロール一覧（@everyone 除く、高位順）
+  const roles = member.roles?.cache
+    ? [...member.roles.cache.values()]
+        .filter((r) => r.id !== member.guild.id)
+        .sort((a, b) => b.position - a.position)
+    : [];
+  const roleDisplay =
+    roles.length === 0
+      ? "なし"
+      : roles.length <= 10
+        ? roles.map((r) => `<@&${r.id}>`).join(" ")
+        : roles.slice(0, 10).map((r) => `<@&${r.id}>`).join(" ") + ` … 他 ${roles.length - 10} 件`;
+
+  const createdAt = Math.floor(member.user.createdTimestamp / 1000);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🚪 メンバーが退出しました")
+    .setColor(0x95a5a6)
+    .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+    .addFields(
+      { name: "ユーザー", value: `${member.user.tag}\n<@${member.id}>`, inline: true },
+      { name: "ユーザーID", value: member.id, inline: true },
+      { name: "出戻り履歴", value: rejoinDisplay, inline: true },
+      { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
+      { name: "所持金", value: `${balance} ${currencyName}`, inline: true },
+      { name: "ロール", value: roleDisplay, inline: false },
+    )
+    .setTimestamp()
+    .setFooter({ text: member.guild.name, iconURL: member.guild.iconURL() ?? undefined });
+
+  await (logChannel as TextChannel).send({ embeds: [embed] }).catch((err) =>
+    logger.error("[leavelog] Failed to send leave log", err),
+  );
+});
+
 // ─── 初期発行 — テキストトリガー ───────────────────────────────────────────────
 
 const INITIAL_ISSUE_TRIGGER = "初期発行お願いします。";
@@ -752,96 +766,6 @@ client.on(Events.MessageCreate, async (message) => {
     await message.react("✅");
   } catch (err) {
     logger.error("[initial-issue] Error", err);
-  }
-});
-
-// ─── GuildMemberAdd — 出戻りログ ──────────────────────────────────────────────
-
-client.on(Events.GuildMemberAdd, async (member) => {
-  const guildId = member.guild.id;
-
-  // 参加記録の前にウォレット在籍歴を確認（ボット導入前メンバーの検知に使う）
-  const existingWallet = await findWallet(guildId, member.id).catch(() => null);
-
-  let previousJoinCount: number;
-  try {
-    ({ previousJoinCount } = await recordMemberJoin(guildId, member.id));
-  } catch (err) {
-    logger.error("[returnlog] Failed to record member join", err);
-    return;
-  }
-
-  // 履歴なし・ウォレットなし → 真の初回参加。通知不要
-  const isLegacyReturnee = previousJoinCount === 0 && existingWallet !== null;
-  if (previousJoinCount === 0 && !isLegacyReturnee) return;
-
-  const settings = await getGuildSettings(guildId).catch(() => null);
-  if (!settings?.returnLogChannelId) return;
-
-  const logChannel = member.guild.channels.cache.get(settings.returnLogChannelId)
-    ?? await member.guild.channels.fetch(settings.returnLogChannelId).catch(() => null);
-  if (!logChannel || !logChannel.isTextBased()) return;
-
-  // 所持金（ウォレットがあれば既存残高、なければ新規作成して 0）
-  const wallet = existingWallet ?? await getOrCreateWallet(guildId, member.id).catch(() => null);
-  const balance = wallet ? wallet.balance.toLocaleString("ja-JP") : "不明";
-  const currencyName = settings.currencyName;
-
-  // 出戻り回数の表示
-  const returnCountDisplay = isLegacyReturnee
-    ? "不明（ボット導入前の在籍履歴あり）"
-    : `**${previousJoinCount}** 回目の参加`;
-
-  // ロール（@everyone 除く、上位5件 + 残り件数）
-  const roles = [...member.roles.cache.values()]
-    .filter((r) => r.id !== member.guild.id)
-    .sort((a, b) => b.position - a.position);
-  const roleDisplay =
-    roles.length === 0
-      ? "なし"
-      : roles.length <= 5
-        ? roles.map((r) => `<@&${r.id}>`).join(" ")
-        : roles.slice(0, 5).map((r) => `<@&${r.id}>`).join(" ") +
-          ` … 他 ${roles.length - 5} 件`;
-
-  const createdAt = Math.floor(member.user.createdTimestamp / 1000);
-
-  const embed = new EmbedBuilder()
-    .setTitle("🔄 出戻りメンバーが参加しました")
-    .setColor(0xf39c12)
-    .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
-    .addFields(
-      { name: "ユーザー", value: `${member.user.tag}\n<@${member.id}>`, inline: true },
-      { name: "ユーザーID", value: member.id, inline: true },
-      { name: "出戻り回数", value: returnCountDisplay, inline: true },
-      { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
-      { name: "所持金", value: `${balance} ${currencyName}`, inline: true },
-      { name: "ロール", value: roleDisplay, inline: false },
-    )
-    .setTimestamp()
-    .setFooter({ text: member.guild.name, iconURL: member.guild.iconURL() ?? undefined });
-
-  try {
-    await (logChannel as TextChannel).send({ embeds: [embed] });
-  } catch (err) {
-    logger.error("[returnlog] Failed to send return log", err);
-  }
-});
-
-// ─── GuildMemberRemove — 退出記録 ─────────────────────────────────────────────
-
-client.on(Events.GuildMemberRemove, async (member) => {
-  try {
-    const settings = await getGuildSettings(member.guild.id).catch(() => null);
-    const excludedRoleIds = settings?.returnLogExcludedRoleIds
-      ? settings.returnLogExcludedRoleIds.split(",").filter(Boolean)
-      : [];
-    const memberRoleIds = member.roles.cache
-      ? [...member.roles.cache.keys()].filter((id) => id !== member.guild.id)
-      : [];
-    await recordMemberLeave(member.guild.id, member.id, memberRoleIds, excludedRoleIds);
-  } catch (err) {
-    logger.error("[returnlog] Failed to record member leave", err);
   }
 });
 

@@ -2100,9 +2100,9 @@ import { vcsalaryCommand } from "./vcsalary";
 import { vclogCommand } from "./vclog";
 import { slotCommand } from "./slot";
 import { bannotifyCommand } from "./bannotify";
-import { returnlogCommand } from "./returnlog";
 import { rolePanelCommand } from "./rolepanel";
 import { guideCommand } from "./guide";
+import { leavelogCommand } from "./leavelog";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -2120,8 +2120,8 @@ export const commands: Command[] = [
   vclogCommand,
   slotCommand,
   bannotifyCommand,
-  returnlogCommand,
   evalsheetCommand,
   rolePanelCommand,
   guideCommand,
+  leavelogCommand,
 ];

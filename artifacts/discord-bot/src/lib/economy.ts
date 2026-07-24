@@ -213,116 +213,47 @@ export async function setUraChannelId(
   return settings;
 }
 
-export async function setReturnLogChannelId(
+export async function setLeaveLogChannelId(
   guildId: string,
-  returnLogChannelId: string | null,
+  leaveLogChannelId: string | null,
 ): Promise<GuildSettings> {
   await getGuildSettings(guildId);
   const [settings] = await db
     .update(guildSettingsTable)
-    .set({ returnLogChannelId })
+    .set({ leaveLogChannelId })
     .where(eq(guildSettingsTable.guildId, guildId))
     .returning();
-  if (!settings) throw new Error("Failed to update return_log_channel_id");
+  if (!settings) throw new Error("Failed to update leave_log_channel_id");
   return settings;
 }
 
-// ─── 出戻り履歴 ──────────────────────────────────────────────────────────────
+// ─── 入退出履歴 ───────────────────────────────────────────────────────────────
 
-/** excluded = false の参加回数を返す（昇格通知での出戻り判定用）。 */
-export async function countRealJoins(guildId: string, userId: string): Promise<number> {
+/** メンバー参加を記録する。 */
+export async function recordMemberJoin(guildId: string, userId: string): Promise<void> {
+  await db.insert(memberJoinHistoryTable).values({ guildId, userId });
+}
+
+/** 最新の未退出レコードに left_at をセットする。 */
+export async function recordMemberLeave(guildId: string, userId: string): Promise<void> {
+  await db.execute(
+    sql`UPDATE member_join_history
+        SET left_at = now()
+        WHERE id = (
+          SELECT id FROM member_join_history
+          WHERE guild_id = ${guildId} AND user_id = ${userId} AND left_at IS NULL
+          ORDER BY joined_at DESC LIMIT 1
+        )`,
+  );
+}
+
+/** 過去の退出済み参加回数（＝出戻り回数）を返す。 */
+export async function countPastJoins(guildId: string, userId: string): Promise<number> {
   const result = await db.execute(
     sql`SELECT COUNT(*)::int AS cnt FROM member_join_history
-        WHERE guild_id = ${guildId} AND user_id = ${userId} AND excluded = 'false'`,
+        WHERE guild_id = ${guildId} AND user_id = ${userId} AND left_at IS NOT NULL`,
   );
   return Number((result.rows[0] as { cnt: number }).cnt);
-}
-
-export async function setReturnLogExcludedRoleIds(
-  guildId: string,
-  roleIds: string[],
-): Promise<GuildSettings> {
-  await getGuildSettings(guildId);
-  const value = roleIds.length > 0 ? roleIds.join(",") : null;
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ returnLogExcludedRoleIds: value })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-  if (!settings) throw new Error("Failed to update return_log_excluded_role_ids");
-  return settings;
-}
-
-/**
- * メンバー参加を記録し、除外フラグなし記録の件数（実質的な出戻り回数）を返す。
- * previousJoinCount === 0 → 初回 or 除外ロールのみで来ていた
- * previousJoinCount >= 1 → 出戻り
- */
-export async function recordMemberJoin(
-  guildId: string,
-  userId: string,
-): Promise<{ joinId: number; previousJoinCount: number }> {
-  const countResult = await db.execute(
-    sql`SELECT COUNT(*)::int AS cnt FROM member_join_history
-        WHERE guild_id = ${guildId} AND user_id = ${userId} AND excluded = 'false'`,
-  );
-  const previousJoinCount = Number((countResult.rows[0] as { cnt: number }).cnt);
-
-  const [row] = await db
-    .insert(memberJoinHistoryTable)
-    .values({ guildId, userId })
-    .returning();
-  if (!row) throw new Error("Failed to insert member_join_history");
-
-  return { joinId: row.id, previousJoinCount };
-}
-
-/**
- * 最も新しい未退出の参加レコードに left_at をセットする。
- * memberRoleIds が除外ロールのみ（あるいは全部除外）だった場合は excluded = 'true' にする。
- */
-export async function recordMemberLeave(
-  guildId: string,
-  userId: string,
-  memberRoleIds: string[],   // @everyone を除いたロールID一覧
-  excludedRoleIds: string[], // 管理者が設定した除外ロールID一覧
-): Promise<void> {
-  // 除外ロール以外のロールを一つでも持っていれば「正規在籍」とみなす
-  const hasQualifyingRole =
-    excludedRoleIds.length === 0 ||
-    memberRoleIds.some((id) => !excludedRoleIds.includes(id));
-  const excludedFlag = hasQualifyingRole ? "false" : "true";
-
-  await db.execute(
-    sql`
-      UPDATE member_join_history
-      SET left_at  = now(),
-          excluded = ${excludedFlag}
-      WHERE id = (
-        SELECT id FROM member_join_history
-        WHERE guild_id = ${guildId}
-          AND user_id  = ${userId}
-          AND left_at IS NULL
-        ORDER BY joined_at DESC
-        LIMIT 1
-      )
-    `,
-  );
-}
-
-export async function setPromotionLogSettings(
-  guildId: string,
-  promotionLogChannelId: string | null,
-  promotionWatchRoleId: string | null,
-): Promise<GuildSettings> {
-  await getGuildSettings(guildId);
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ promotionLogChannelId, promotionWatchRoleId })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-  if (!settings) throw new Error("Failed to update promotion_log settings");
-  return settings;
 }
 
 export async function setBanLogChannelId(

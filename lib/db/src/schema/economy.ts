@@ -30,14 +30,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   uraChannelId: text("ura_channel_id"),
   // Discord text channel ID where ban notifications are posted.
   banLogChannelId: text("ban_log_channel_id"),
-  // Discord text channel ID where returnee (出戻り) notifications are posted.
-  returnLogChannelId: text("return_log_channel_id"),
-  // Comma-separated role IDs excluded from returnee counting.
-  returnLogExcludedRoleIds: text("return_log_excluded_role_ids"),
-  // Channel where promotion notifications are posted (入門前 → 正規ロール).
-  promotionLogChannelId: text("promotion_log_channel_id"),
-  // The "入門前" role ID to watch for removal as a promotion trigger.
-  promotionWatchRoleId: text("promotion_watch_role_id"),
+  // Discord text channel ID where leave notifications are posted.
+  leaveLogChannelId: text("leave_log_channel_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -47,19 +41,14 @@ export const guildSettingsTable = pgTable("guild_settings", {
     .$onUpdate(() => new Date()),
 });
 
-// Tracks every join event per member per guild, enabling returnee detection.
-export const memberJoinHistoryTable = pgTable(
-  "member_join_history",
-  {
-    id: serial("id").primaryKey(),
-    guildId: text("guild_id").notNull(),
-    userId: text("user_id").notNull(),
-    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
-    leftAt: timestamp("left_at", { withTimezone: true }),
-    // true when the member left holding only excluded roles → not counted as a real stay
-    excluded: text("excluded").notNull().default("false"),
-  },
-);
+// Tracks every join/leave event per member per guild (for rejoin count display).
+export const memberJoinHistoryTable = pgTable("member_join_history", {
+  id:       serial("id").primaryKey(),
+  guildId:  text("guild_id").notNull(),
+  userId:   text("user_id").notNull(),
+  joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+  leftAt:   timestamp("left_at",   { withTimezone: true }),
+});
 export type MemberJoinHistory = typeof memberJoinHistoryTable.$inferSelect;
 
 export const insertGuildSettingsSchema = createInsertSchema(
