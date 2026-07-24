@@ -2102,6 +2102,7 @@ import { slotCommand } from "./slot";
 import { bannotifyCommand } from "./bannotify";
 import { returnlogCommand } from "./returnlog";
 import { rolePanelCommand } from "./rolepanel";
+import { guideCommand } from "./guide";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -2122,4 +2123,5 @@ export const commands: Command[] = [
   returnlogCommand,
   evalsheetCommand,
   rolePanelCommand,
+  guideCommand,
 ];

@@ -1,5 +1,6 @@
 import { AuditLogEvent, ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
+import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
 import { EmbedBuilder } from "discord.js";
 import {
   commands,
@@ -938,6 +939,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isStringSelectMenu() && interaction.customId === SHOP_SELECT_ID) {
       await handleShopSelectMenu(interaction);
+      return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === GUIDE_SELECT_ID) {
+      await handleGuideSelect(interaction);
       return;
     }
 
