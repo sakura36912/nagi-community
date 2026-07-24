@@ -36,10 +36,16 @@ async function getGuideItem(guildId: string, id: number): Promise<GuideItem | un
   return row;
 }
 
-async function addGuideItem(guildId: string, title: string, content: string, sortOrder: number): Promise<GuideItem> {
+async function addGuideItem(
+  guildId: string,
+  title: string,
+  content: string,
+  sortOrder: number,
+  imageUrl?: string,
+): Promise<GuideItem> {
   const [row] = await db
     .insert(guideItemsTable)
-    .values({ guildId, title, content, sortOrder })
+    .values({ guildId, title, content, sortOrder, imageUrl: imageUrl ?? null })
     .returning();
   return row!;
 }
@@ -47,7 +53,7 @@ async function addGuideItem(guildId: string, title: string, content: string, sor
 async function updateGuideItem(
   guildId: string,
   id: number,
-  fields: Partial<Pick<GuideItem, "title" | "content" | "sortOrder">>,
+  fields: Partial<Pick<GuideItem, "title" | "content" | "sortOrder" | "imageUrl">>,
 ): Promise<GuideItem | undefined> {
   const [row] = await db
     .update(guideItemsTable)
@@ -113,6 +119,10 @@ export async function handleGuideSelect(interaction: StringSelectMenuInteraction
     .setColor(0x5865f2)
     .setFooter({ text: "📖 新人案内ガイド" });
 
+  if (item.imageUrl) {
+    embed.setImage(item.imageUrl);
+  }
+
   await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
@@ -133,6 +143,9 @@ export const guideCommand = {
         .addStringOption((opt) =>
           opt.setName("content").setDescription("内容（選択時に表示されるテキスト）").setRequired(true).setMaxLength(4000),
         )
+        .addStringOption((opt) =>
+          opt.setName("image").setDescription("画像URL（選択時に表示される画像）").setRequired(false),
+        )
         .addIntegerOption((opt) =>
           opt.setName("order").setDescription("表示順（数値が小さいほど上）").setRequired(false).setMinValue(0),
         ),
@@ -149,6 +162,9 @@ export const guideCommand = {
         )
         .addStringOption((opt) =>
           opt.setName("content").setDescription("新しい内容").setRequired(false).setMaxLength(4000),
+        )
+        .addStringOption((opt) =>
+          opt.setName("image").setDescription("新しい画像URL（空文字で削除）").setRequired(false),
         )
         .addIntegerOption((opt) =>
           opt.setName("order").setDescription("新しい表示順").setRequired(false).setMinValue(0),
@@ -177,10 +193,11 @@ export const guideCommand = {
 
     // ── add ─────────────────────────────────────────────────────────────────
     if (sub === "add") {
-      const title   = interaction.options.getString("title", true);
-      const content = interaction.options.getString("content", true);
-      const order   = interaction.options.getInteger("order") ?? 0;
-      const item    = await addGuideItem(guildId, title, content, order);
+      const title    = interaction.options.getString("title", true);
+      const content  = interaction.options.getString("content", true);
+      const image    = interaction.options.getString("image") ?? undefined;
+      const order    = interaction.options.getInteger("order") ?? 0;
+      const item     = await addGuideItem(guildId, title, content, order, image);
       await interaction.reply({
         content: `✅ ガイド項目を追加しました（ID: **${item.id}**）\n**${item.title}**`,
         ephemeral: true,
@@ -194,17 +211,21 @@ export const guideCommand = {
       const id      = interaction.options.getInteger("id", true);
       const title   = interaction.options.getString("title")   ?? undefined;
       const content = interaction.options.getString("content") ?? undefined;
-      const order   = interaction.options.getInteger("order")  ?? undefined;
+      // 空文字を渡したら画像削除、値があれば更新、未指定(null)はそのまま
+      const imageRaw = interaction.options.getString("image");
+      const imageUrl = imageRaw === null ? undefined : (imageRaw === "" ? null : imageRaw);
+      const order    = interaction.options.getInteger("order") ?? undefined;
 
-      if (!title && !content && order === undefined) {
-        await interaction.reply({ content: "❌ 変更する項目（title / content / order）を最低1つ指定してください。", ephemeral: true });
+      if (!title && !content && imageRaw === null && order === undefined) {
+        await interaction.reply({ content: "❌ 変更する項目（title / content / image / order）を最低1つ指定してください。", ephemeral: true });
         return;
       }
 
       const updated = await updateGuideItem(guildId, id, {
-        ...(title   !== undefined && { title }),
-        ...(content !== undefined && { content }),
-        ...(order   !== undefined && { sortOrder: order }),
+        ...(title     !== undefined && { title }),
+        ...(content   !== undefined && { content }),
+        ...(imageUrl  !== undefined && { imageUrl }),
+        ...(order     !== undefined && { sortOrder: order }),
       });
 
       if (!updated) {
