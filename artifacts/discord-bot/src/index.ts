@@ -26,6 +26,13 @@ import {
   handleShiftPanelOpen,
 } from "./commands";
 import { handleHubJoin, handleHubLeave } from "./commands/vc";
+import {
+  getExpiredSchedules,
+  getSchedulesExpiringSoon,
+  deleteSchedule,
+  markScheduleNotified,
+  NOTIFY_BEFORE_MS,
+} from "./lib/vc";
 import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 
@@ -360,6 +367,71 @@ async function runSheetReminderScheduler(bot: Client<true>): Promise<void> {
 }
 
 
+// ─── VC rename-schedule: pre-expiry warning + deletion ───────────────────────
+
+/**
+ * Every tick:
+ *  1. Find schedules within the notification window (10 min before expiry)
+ *     that haven't been warned yet → DM the schedule owner.
+ *  2. Find schedules that have already expired → delete the Discord channel
+ *     and remove the DB row.
+ */
+async function runVcDeleteScheduler(): Promise<void> {
+  const now = new Date();
+
+  // ── Pre-expiry warning ────────────────────────────────────────────────────
+  const soon = await getSchedulesExpiringSoon(now);
+  for (const schedule of soon) {
+    try {
+      if (schedule.userId) {
+        const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
+        const user = await client.users.fetch(schedule.userId).catch(() => null);
+        if (user) {
+          await user.send(
+            `⏰ VCチャンネル「**${schedule.channelName}**」は <t:${expiresTs}:R>（<t:${expiresTs}:T>）に自動削除されます。必要であれば会話を引き続き行ってください。`,
+          ).catch(() => {
+            // DMs closed — ignore silently.
+          });
+          logger.info(
+            `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
+          );
+        }
+      }
+    } catch (err) {
+      logger.error(`[vc-schedule] Failed to send expiry warning for ${schedule.channelId}`, err);
+    }
+    // Always mark notified to prevent duplicate warnings, even if DM failed.
+    await markScheduleNotified(schedule.id, now).catch((err) =>
+      logger.error(`[vc-schedule] Failed to mark schedule ${schedule.id} as notified`, err),
+    );
+  }
+
+  // ── Delete expired channels ───────────────────────────────────────────────
+  const expired = await getExpiredSchedules(now);
+  for (const schedule of expired) {
+    try {
+      const guild = client.guilds.cache.get(schedule.guildId);
+      if (guild) {
+        const channel =
+          guild.channels.cache.get(schedule.channelId) ??
+          (await guild.channels.fetch(schedule.channelId).catch(() => null));
+        if (channel) {
+          await channel.delete("スケジュールによる自動削除");
+          logger.info(
+            `[vc-schedule] Deleted scheduled VC ${schedule.channelId} (${schedule.channelName}) in guild ${schedule.guildId}`,
+          );
+        }
+      }
+    } catch (err) {
+      logger.error(`[vc-schedule] Failed to delete channel ${schedule.channelId}`, err);
+    }
+    // Always remove the DB row (channel may already be gone).
+    await deleteSchedule(schedule.channelId).catch((err) =>
+      logger.error(`[vc-schedule] Failed to remove schedule row for ${schedule.channelId}`, err),
+    );
+  }
+}
+
 client.once(Events.ClientReady, (readyClient) => {
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
@@ -392,6 +464,7 @@ client.once(Events.ClientReady, (readyClient) => {
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
     runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
+    runVcDeleteScheduler().catch((err) => logger.error("[vc-schedule] Scheduler error", err));
     runSheetReminderScheduler(readyClient).catch((err) => logger.error("[sheet-reminder] Scheduler error", err));
     runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Scheduler error", err));
   }, 60 * 1000);

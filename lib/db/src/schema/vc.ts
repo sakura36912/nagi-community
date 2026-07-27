@@ -10,6 +10,10 @@ export const vcSchedulesTable = pgTable("vc_schedules", {
   channelId: text("channel_id").notNull().unique(),
   channelName: text("channel_name").notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  /** Discord user ID of whoever triggered the rename (for pre-expiry DM). Nullable for older rows. */
+  userId: text("user_id"),
+  /** Set when a pre-expiry warning DM has been sent so we don't send it twice. */
+  notifiedAt: timestamp("notified_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

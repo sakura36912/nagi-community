@@ -1,5 +1,8 @@
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, gt, isNull, lte } from "drizzle-orm";
 import { db, vcSchedulesTable, type VcSchedule } from "@workspace/db";
+
+/** Number of milliseconds before expiry at which we send the warning DM. */
+export const NOTIFY_BEFORE_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * Save (or replace) a VC rename schedule.
@@ -10,13 +13,14 @@ export async function saveSchedule(
   channelId: string,
   channelName: string,
   expiresAt: Date,
+  userId?: string,
 ): Promise<VcSchedule> {
   const [row] = await db
     .insert(vcSchedulesTable)
-    .values({ guildId, channelId, channelName, expiresAt })
+    .values({ guildId, channelId, channelName, expiresAt, userId: userId ?? null })
     .onConflictDoUpdate({
       target: vcSchedulesTable.channelId,
-      set: { guildId, channelName, expiresAt },
+      set: { guildId, channelName, expiresAt, userId: userId ?? null, notifiedAt: null },
     })
     .returning();
 
@@ -49,4 +53,30 @@ export async function getExpiredSchedules(now: Date): Promise<VcSchedule[]> {
     .select()
     .from(vcSchedulesTable)
     .where(lte(vcSchedulesTable.expiresAt, now));
+}
+
+/**
+ * Return schedules that are within NOTIFY_BEFORE_MS of expiry but haven't been
+ * notified yet. These are candidates for a pre-expiry warning DM.
+ */
+export async function getSchedulesExpiringSoon(now: Date): Promise<VcSchedule[]> {
+  const notifyWindow = new Date(now.getTime() + NOTIFY_BEFORE_MS);
+  return db
+    .select()
+    .from(vcSchedulesTable)
+    .where(
+      and(
+        gt(vcSchedulesTable.expiresAt, now),          // not yet expired
+        lte(vcSchedulesTable.expiresAt, notifyWindow), // within warning window
+        isNull(vcSchedulesTable.notifiedAt),           // not yet notified
+      ),
+    );
+}
+
+/** Mark a schedule as having had its pre-expiry notification sent. */
+export async function markScheduleNotified(id: number, at: Date): Promise<void> {
+  await db
+    .update(vcSchedulesTable)
+    .set({ notifiedAt: at })
+    .where(eq(vcSchedulesTable.id, id));
 }

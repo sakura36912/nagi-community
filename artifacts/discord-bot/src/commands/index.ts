@@ -1,4 +1,5 @@
 import { applySheetEmbedUpdate, buildSheetEmbed, buildSheetThreadName, findSelfIntro, refreshSheetEmbedForUser } from "../lib/sheet";
+import { saveSchedule } from "../lib/vc";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -853,8 +854,29 @@ export async function handleVcRenameModalSubmit(interaction: ModalSubmitInteract
   }
 
   try {
-    await privateVc.setName(`🔒 ${newName}`.slice(0, 100));
-    await interaction.editReply(`✅ **${result.item.name}**を使用しました！VCを「🔒 ${newName}」にリネームしました。`);
+    const renamedName = `🔒 ${newName}`.slice(0, 100);
+    await privateVc.setName(renamedName);
+    await interaction.editReply(`✅ **${result.item.name}**を使用しました！VCを「${renamedName}」にリネームしました。`);
+
+    // Record the rename in vc_schedules so the pre-expiry warning scheduler can
+    // notify this user before the channel is automatically deleted.
+    try {
+      const session =
+        (await getActivePrivateVcSession(interaction.guild.id, userId, "vc")) ??
+        (await getActivePrivateVcSession(interaction.guild.id, userId, "ura"));
+      if (session?.expiresAt) {
+        await saveSchedule(
+          interaction.guild.id,
+          privateVc.id,
+          renamedName,
+          session.expiresAt,
+          userId,
+        );
+      }
+    } catch (scheduleErr) {
+      // Best-effort — schedule tracking failure does not affect the rename.
+      logger.error("[vc-rename] Failed to save VC schedule after rename", scheduleErr);
+    }
   } catch {
     await refundPurchase(interaction.guild.id, userId, result.item);
     await interaction.editReply("❌ チャンネルのリネームに失敗しました。購入を取り消し、返金しました。");
