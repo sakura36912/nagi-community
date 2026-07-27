@@ -2010,7 +2010,7 @@ const treasuryCommand: Command = {
     const guildId = requireGuild(interaction);
     const sub = interaction.options.getSubcommand();
     const settings = await getGuildSettings(guildId);
-    const currencyName = settings?.currencyName ?? "円";
+    const currencyName = settings?.currencyName ?? "ベリー";
 
     const member = interaction.member as GuildMember | null;
     const isAdmin = !!member?.permissions.has("Administrator");
