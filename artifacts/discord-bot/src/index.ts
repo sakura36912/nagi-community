@@ -57,6 +57,7 @@ import {
   markRewardDistributed,
   seedDefaultShopItems,
   seedDefaultVcShopItems,
+  seedDefaultUraShopItems,
   getEvalSheetSettings,
   createEvalSheet,
   getSheetVcSeconds,
@@ -218,7 +219,22 @@ async function runVcExpiryScheduler(): Promise<void> {
           logger.info(`[vc-expiry] Deleted expired VC ${session.channelId} for user ${session.userId} in guild ${session.guildId}`);
         }
 
-
+        // For ura sessions, revoke the access channel permission.
+        if (session.category === "ura") {
+          try {
+            const settings = await getGuildSettings(session.guildId);
+            if (settings.uraChannelId) {
+              const accessCh = guild.channels.cache.get(settings.uraChannelId)
+                ?? await guild.channels.fetch(settings.uraChannelId).catch(() => null);
+              if (accessCh && "permissionOverwrites" in accessCh) {
+                await accessCh.permissionOverwrites.delete(session.userId, "裏フリールームVC期限切れ");
+                logger.info(`[vc-expiry] Revoked ura channel access for user ${session.userId}`);
+              }
+            }
+          } catch (err) {
+            logger.error(`[vc-expiry] Failed to revoke ura channel access for ${session.userId}`, err);
+          }
+        }
       }
     } catch (err) {
       logger.error(`[vc-expiry] Failed to delete channel ${session.channelId}`, err);
@@ -364,6 +380,9 @@ client.once(Events.ClientReady, (readyClient) => {
     );
     seedDefaultVcShopItems(guild.id).catch((err) =>
       logger.error(`[seed] Failed to seed VC shop items for guild ${guild.id}`, err),
+    );
+    seedDefaultUraShopItems(guild.id).catch((err) =>
+      logger.error(`[seed] Failed to seed ura shop items for guild ${guild.id}`, err),
     );
   }
 
