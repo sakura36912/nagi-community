@@ -353,10 +353,12 @@ export async function removeTicket(channelId: string) {
 
 /**
  * Set a user's VC tracking opt-out status for a guild.
- * optedOut=true  → stop recording new sessions
+ * optedOut=true  → stop recording new sessions and close any open session
  * optedOut=false → resume recording
+ *
+ * Returns true if an active session was closed (only possible when optedOut=true).
  */
-export async function setVcPrivacyOptOut(guildId: string, userId: string, optedOut: boolean): Promise<void> {
+export async function setVcPrivacyOptOut(guildId: string, userId: string, optedOut: boolean): Promise<boolean> {
   await db
     .insert(communityVcPrivacyTable)
     .values({ guildId, userId, optedOut, updatedAt: new Date() })
@@ -364,14 +366,20 @@ export async function setVcPrivacyOptOut(guildId: string, userId: string, optedO
       target: [communityVcPrivacyTable.guildId, communityVcPrivacyTable.userId],
       set: { optedOut, updatedAt: new Date() },
     });
+  if (optedOut) {
+    return closeSession(guildId, userId);
+  }
+  return false;
 }
 
 /**
  * Set a user's global VC tracking opt-out status (applies to all guilds).
- * optedOut=true  → stop recording in every guild
+ * optedOut=true  → stop recording in every guild and close all open sessions
  * optedOut=false → resume recording (per-guild settings still apply)
+ *
+ * Returns the number of sessions closed (only non-zero when optedOut=true).
  */
-export async function setVcGlobalPrivacyOptOut(userId: string, optedOut: boolean): Promise<void> {
+export async function setVcGlobalPrivacyOptOut(userId: string, optedOut: boolean): Promise<number> {
   await db
     .insert(communityVcPrivacyGlobalTable)
     .values({ userId, optedOut, updatedAt: new Date() })
@@ -379,6 +387,10 @@ export async function setVcGlobalPrivacyOptOut(userId: string, optedOut: boolean
       target: communityVcPrivacyGlobalTable.userId,
       set: { optedOut, updatedAt: new Date() },
     });
+  if (optedOut) {
+    return closeOpenSessionsForUser(userId);
+  }
+  return 0;
 }
 
 /** Returns true if the user has enabled global opt-out (across all guilds). */

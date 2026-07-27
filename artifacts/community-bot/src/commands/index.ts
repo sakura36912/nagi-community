@@ -57,8 +57,6 @@ import {
   isVcTrackingGloballyOptedOut,
   isVcTrackingGuildLocalOptedOut,
   deleteAllUserVcSessions,
-  closeSession,
-  closeOpenSessionsForUser,
   updateEventMessageId,
   type CommunityTicketSettings,
   type CommunityTicketPanel,
@@ -1548,10 +1546,7 @@ export async function handlePrivacyOptoutKeep(interaction: ButtonInteraction): P
   await interaction.deferUpdate();
   const guildId = interaction.guildId;
   const userId = interaction.user.id;
-  const [, sessionClosed] = await Promise.all([
-    setVcPrivacyOptOut(guildId, userId, true),
-    closeSession(guildId, userId),
-  ]);
+  const sessionClosed = await setVcPrivacyOptOut(guildId, userId, true);
   const closedNote = sessionClosed ? "• 進行中のVCセッションを自動的に終了しました\n" : "";
   const embed = new EmbedBuilder()
     .setTitle("🔒 トラッキングを停止しました")
@@ -1627,10 +1622,7 @@ export async function handlePrivacyDeleteCancel(interaction: ButtonInteraction):
 export async function handlePrivacyGlobalOptoutKeep(interaction: ButtonInteraction): Promise<void> {
   await interaction.deferUpdate();
   const userId = interaction.user.id;
-  const [, closed] = await Promise.all([
-    setVcGlobalPrivacyOptOut(userId, true),
-    closeOpenSessionsForUser(userId),
-  ]);
+  const closed = await setVcGlobalPrivacyOptOut(userId, true);
   const closedNote = closed > 0
     ? `• 進行中のVCセッション **${closed}件** を自動的に終了しました\n`
     : "";

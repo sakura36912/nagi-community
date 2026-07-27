@@ -115,7 +115,7 @@ describe("closeOpenSessionsForUser", () => {
     await closeOpenSessionsForUser("user-abc");
 
     // db.update() must receive the vc sessions table stub
-    const [tableArg] = mocks.update.mock.calls[0] as [Record<string, string>][];
+    const [tableArg] = mocks.update.mock.calls[0] as unknown as [Record<string, string>];
     expect(tableArg["userId"]).toBe("sessions.userId");
   });
 
@@ -125,7 +125,7 @@ describe("closeOpenSessionsForUser", () => {
     await closeOpenSessionsForUser("user-xyz");
     const after = Date.now();
 
-    const [setPayload] = mocks.set.mock.calls[0] as [{ leftAt: Date }][];
+    const [setPayload] = mocks.set.mock.calls[0] as unknown as [{ leftAt: Date }];
     expect(setPayload.leftAt).toBeInstanceOf(Date);
     expect(setPayload.leftAt.getTime()).toBeGreaterThanOrEqual(before);
     expect(setPayload.leftAt.getTime()).toBeLessThanOrEqual(after);
@@ -135,9 +135,9 @@ describe("closeOpenSessionsForUser", () => {
     mocks.returning.mockResolvedValueOnce([]);
     await closeOpenSessionsForUser("user-filter-test");
 
-    const [whereArg] = mocks.where.mock.calls[0] as [
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
       { op: string; args: { op: string }[] }
-    ][];
+    ];
     // Top-level operator must be AND
     expect(whereArg.op).toBe("and");
     // One branch must be an eq (for the userId)
@@ -163,7 +163,7 @@ describe('handlePrivacyGlobalOptoutKeep – "keep data" global opt-out path', ()
     // db.update() must have been called (by closeOpenSessionsForUser)
     expect(mocks.update).toHaveBeenCalled();
     // The set() payload must include a leftAt Date
-    const [setPayload] = mocks.set.mock.calls[0] as [{ leftAt: Date }][];
+    const [setPayload] = mocks.set.mock.calls[0] as unknown as [{ leftAt: Date }];
     expect(setPayload.leftAt).toBeInstanceOf(Date);
   });
 
@@ -176,9 +176,9 @@ describe('handlePrivacyGlobalOptoutKeep – "keep data" global opt-out path', ()
 
     // db.insert() must have been called (by setVcGlobalPrivacyOptOut)
     expect(mocks.insert).toHaveBeenCalled();
-    const [valuesArg] = mocks.values.mock.calls[0] as [
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
       { userId: string; optedOut: boolean }
-    ][];
+    ];
     expect(valuesArg.userId).toBe("user-keep-2");
     expect(valuesArg.optedOut).toBe(true);
   });
