@@ -44,6 +44,7 @@ import {
   awardBoostPoints,
   distributeRoleTenurePoints,
   listVcCategoryConfigs,
+  type PointVcCategoryConfig,
 } from "./lib/points";
 import {
   distributeRoleRewards,

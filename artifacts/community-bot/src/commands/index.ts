@@ -53,6 +53,10 @@ import {
   listTicketPanels,
   deleteTicketPanel,
   setVcPrivacyOptOut,
+  setVcGlobalPrivacyOptOut,
+  isVcTrackingGloballyOptedOut,
+  isVcTrackingGuildLocalOptedOut,
+  deleteAllUserVcSessions,
   updateEventMessageId,
   type CommunityTicketSettings,
   type CommunityTicketPanel,
@@ -68,6 +72,8 @@ export const COMM_PRIVACY_DELETE_CONFIRM = "comm:privacy:delete:confirm";
 export const COMM_PRIVACY_DELETE_CANCEL = "comm:privacy:delete:cancel";
 export const COMM_PRIVACY_OPTOUT_KEEP = "comm:privacy:optout:keep";
 export const COMM_PRIVACY_OPTOUT_DELETE = "comm:privacy:optout:delete";
+export const COMM_PRIVACY_GLOBAL_OPTOUT_KEEP = "comm:privacy:global:optout:keep";
+export const COMM_PRIVACY_GLOBAL_OPTOUT_DELETE = "comm:privacy:global:optout:delete";
 export const COMM_BOTSTATUS_REFRESH = "comm:botstatus:refresh";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -1104,12 +1110,17 @@ const privacyCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("optout")
-        .setDescription("VCの滞在時間の記録を停止します（ランキングや統計から除外されます）"),
+        .setDescription("このサーバーでのVCの滞在時間の記録を停止します"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("optout-all")
+        .setDescription("すべてのサーバーでVCの滞在時間の記録を一括停止します（グローバル設定）"),
     )
     .addSubcommand((sub) =>
       sub
         .setName("optin")
-        .setDescription("VCの滞在時間の記録を再開します"),
+        .setDescription("VCの滞在時間の記録を再開します（このサーバー＆グローバル設定を解除）"),
     )
     .addSubcommand((sub) =>
       sub
@@ -1134,7 +1145,7 @@ const privacyCommand: Command = {
         .setColor(0xfee75c)
         .setDescription(
           "**このサーバー**でのVCの滞在時間の記録を停止します。\n" +
-          "⚠️ この設定は**サーバーごと**に管理されます。他のサーバーでも停止したい場合は、そのサーバーで個別に `/privacy optout` を実行してください。\n\n" +
+          "ℹ️ 参加中の**すべてのサーバーで一括停止**したい場合は `/privacy optout-all` を使用してください。\n\n" +
           "過去のデータをどうするか選択してください。\n\n" +
           "**🗄️ 停止のみ（データを保持）**\n" +
           "• 新しい記録は残りません\n" +
@@ -1152,6 +1163,36 @@ const privacyCommand: Command = {
         new ButtonBuilder()
           .setCustomId(COMM_PRIVACY_OPTOUT_DELETE)
           .setLabel("停止＋過去データを削除 🗑️")
+          .setStyle(ButtonStyle.Danger),
+      );
+      await interaction.editReply({ embeds: [embed], components: [row] });
+      return;
+    }
+
+    if (sub === "optout-all") {
+      const embed = new EmbedBuilder()
+        .setTitle("🌐 すべてのサーバーでVCトラッキングを停止しますか？")
+        .setColor(0xfee75c)
+        .setDescription(
+          "Botが参加している**すべてのサーバー**でVCの滞在時間の記録を停止します。\n" +
+          "この設定はグローバルに適用され、サーバーごとの設定より優先されます。\n\n" +
+          "過去のデータをどうするか選択してください。\n\n" +
+          "**🗄️ 停止のみ（データを保持）**\n" +
+          "• 新しい記録はどのサーバーでも残りません\n" +
+          "• 各サーバーの既存データはそのまま残ります\n\n" +
+          "**🗑️ 停止＋全サーバーの過去データを削除（取り消し不可）**\n" +
+          "• 新しい記録はどのサーバーでも残りません\n" +
+          "• **すべてのサーバー**でのVC記録が完全に削除されます",
+        )
+        .setTimestamp();
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(COMM_PRIVACY_GLOBAL_OPTOUT_KEEP)
+          .setLabel("全サーバーで停止（データを保持）")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(COMM_PRIVACY_GLOBAL_OPTOUT_DELETE)
+          .setLabel("全サーバーで停止＋全データ削除 🗑️")
           .setStyle(ButtonStyle.Danger),
       );
       await interaction.editReply({ embeds: [embed], components: [row] });
@@ -1185,16 +1226,19 @@ const privacyCommand: Command = {
     }
 
     if (sub === "optin") {
-      await setVcPrivacyOptOut(guildId, userId, false);
+      // Clear both global and per-guild opt-out so the user resumes tracking everywhere.
+      await Promise.all([
+        setVcGlobalPrivacyOptOut(userId, false),
+        setVcPrivacyOptOut(guildId, userId, false),
+      ]);
       const embed = new EmbedBuilder()
         .setTitle("🔓 トラッキングを再開しました")
         .setColor(0x57f287)
         .setDescription(
-          "**このサーバー**でのVCの滞在時間の記録を**再開**しました。\n\n" +
-          "• これ以降のVCセッションが記録されます\n" +
+          "VCの滞在時間の記録を**再開**しました。\n\n" +
+          "• これ以降のVCセッションが記録されます（このサーバー＆グローバル設定を解除）\n" +
           "• `/ranking` や `/mystats` にあなたのデータが表示されます\n\n" +
-          "ℹ️ この設定は**サーバーごと**に管理されます。\n" +
-          "停止するには `/privacy optout` を使用してください。",
+          "停止するには `/privacy optout`（このサーバー）または `/privacy optout-all`（全サーバー）を使用してください。",
         )
         .setTimestamp();
       await interaction.editReply({ embeds: [embed] });
@@ -1202,24 +1246,46 @@ const privacyCommand: Command = {
     }
 
     if (sub === "status") {
-      const optedOut = await isVcTrackingOptedOut(guildId, userId);
+      const [globalOptedOut, guildOptedOut] = await Promise.all([
+        isVcTrackingGloballyOptedOut(userId),
+        isVcTrackingGuildLocalOptedOut(guildId, userId),
+      ]);
+      const effectivelyOptedOut = globalOptedOut || guildOptedOut;
+
+      let statusValue: string;
+      if (globalOptedOut) {
+        statusValue = "🔴 **全サーバーで停止中（グローバル）** — `/privacy optin` で再開できます";
+      } else if (guildOptedOut) {
+        statusValue = "🔴 **このサーバーで停止中** — `/privacy optin` で再開できます";
+      } else {
+        statusValue = "🟢 **有効** — `/privacy optout` で停止、`/privacy optout-all` で全サーバー停止";
+      }
+
       const embed = new EmbedBuilder()
-        .setTitle("🔎 プライバシー設定（このサーバー）")
-        .setColor(optedOut ? 0xed4245 : 0x57f287)
+        .setTitle("🔎 プライバシー設定")
+        .setColor(effectivelyOptedOut ? 0xed4245 : 0x57f287)
         .addFields(
           {
             name: "VCトラッキング",
-            value: optedOut
-              ? "🔴 **停止中** — `/privacy optin` で再開できます"
-              : "🟢 **有効** — `/privacy optout` で停止できます",
+            value: statusValue,
             inline: false,
           },
           {
-            name: "ℹ️ 設定の範囲",
-            value: "この設定は**このサーバー専用**です。他のサーバーで設定を変更したい場合は、そのサーバーで個別にコマンドを実行してください。サーバーを退出・再参加しても、設定はそのまま保持されます。",
-            inline: false,
+            name: "グローバル設定",
+            value: globalOptedOut
+              ? "🌐 **すべてのサーバーで停止中**"
+              : "— （グローバル停止なし）",
+            inline: true,
+          },
+          {
+            name: "このサーバーの設定",
+            value: guildOptedOut
+              ? "🔴 停止中"
+              : "🟢 有効",
+            inline: true,
           },
         )
+        .setFooter({ text: "グローバル設定はサーバーごとの設定より優先されます。サーバーを退出・再参加しても設定は保持されます。" })
         .setTimestamp();
       await interaction.editReply({ embeds: [embed] });
       return;
@@ -1538,6 +1604,41 @@ export async function handlePrivacyDeleteCancel(interaction: ButtonInteraction):
     .setTitle("✅ キャンセルしました")
     .setColor(0x57f287)
     .setDescription("VC記録の削除をキャンセルしました。データはそのまま保持されます。")
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+export async function handlePrivacyGlobalOptoutKeep(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferUpdate();
+  await setVcGlobalPrivacyOptOut(interaction.user.id, true);
+  const embed = new EmbedBuilder()
+    .setTitle("🌐 全サーバーでトラッキングを停止しました")
+    .setColor(0xed4245)
+    .setDescription(
+      "すべてのサーバーでVCの滞在時間の記録を**停止**しました。\n\n" +
+      "• 新しいセッションはどのサーバーでも記録されません\n" +
+      "• 各サーバーの過去データはそのまま残ります\n\n" +
+      "再開するには `/privacy optin` を使用してください。",
+    )
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+export async function handlePrivacyGlobalOptoutDelete(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferUpdate();
+  const userId = interaction.user.id;
+  const [deleted] = await Promise.all([
+    deleteAllUserVcSessions(userId),
+    setVcGlobalPrivacyOptOut(userId, true),
+  ]);
+  const embed = new EmbedBuilder()
+    .setTitle("🗑️ 全サーバーでトラッキングを停止し、全データを削除しました")
+    .setColor(0xed4245)
+    .setDescription(
+      `すべてのサーバーのVC滞在記録 **${deleted}件** を削除し、グローバルトラッキングを停止しました。\n\n` +
+      "• ランキングや統計からあなたのデータはすべて除外されます\n" +
+      "• 再開するには `/privacy optin` を使用してください",
+    )
     .setTimestamp();
   await interaction.editReply({ embeds: [embed], components: [] });
 }

@@ -157,6 +157,20 @@ export const communityVcPrivacyTable = pgTable(
 
 export type CommunityVcPrivacy = typeof communityVcPrivacyTable.$inferSelect;
 
+/**
+ * Global VC tracking opt-out, keyed only by user_id.
+ * A row with optedOut=true here suppresses VC session recording in ALL guilds,
+ * taking priority over the per-guild communityVcPrivacyTable.
+ * Toggling back to optedOut=false (or deleting the row) restores per-guild rules.
+ */
+export const communityVcPrivacyGlobalTable = pgTable("community_vc_privacy_global", {
+  userId: text("user_id").primaryKey(),
+  optedOut: boolean("opted_out").notNull().default(true),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type CommunityVcPrivacyGlobal = typeof communityVcPrivacyGlobalTable.$inferSelect;
+
 // ─── Eval Sheets ─────────────────────────────────────────────────────────────
 
 /** Per-guild configuration for eval sheets. */

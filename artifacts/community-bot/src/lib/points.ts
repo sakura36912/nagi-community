@@ -32,6 +32,7 @@ export async function getPointSettings(guildId: string): Promise<PointSettings> 
     guildId,
     vcRatePerHour: 100,
     eventParticipationPoints: 100,
+    boostPoints: 0,
     roleTenureLastAwardedAt: null,
     updatedAt: new Date(),
   };

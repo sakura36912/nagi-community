@@ -9,6 +9,7 @@ import {
   communityTicketPanelsTable,
   communityVcSessionsTable,
   communityVcPrivacyTable,
+  communityVcPrivacyGlobalTable,
   communityRankingSettingsTable,
   communityRoleButtonsTable,
   type CommunityRoleButton,
@@ -365,8 +366,36 @@ export async function setVcPrivacyOptOut(guildId: string, userId: string, optedO
     });
 }
 
-/** Returns true if the user has opted out of VC tracking in this guild. */
-export async function isVcTrackingOptedOut(guildId: string, userId: string): Promise<boolean> {
+/**
+ * Set a user's global VC tracking opt-out status (applies to all guilds).
+ * optedOut=true  → stop recording in every guild
+ * optedOut=false → resume recording (per-guild settings still apply)
+ */
+export async function setVcGlobalPrivacyOptOut(userId: string, optedOut: boolean): Promise<void> {
+  await db
+    .insert(communityVcPrivacyGlobalTable)
+    .values({ userId, optedOut, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: communityVcPrivacyGlobalTable.userId,
+      set: { optedOut, updatedAt: new Date() },
+    });
+}
+
+/** Returns true if the user has enabled global opt-out (across all guilds). */
+export async function isVcTrackingGloballyOptedOut(userId: string): Promise<boolean> {
+  const [row] = await db
+    .select()
+    .from(communityVcPrivacyGlobalTable)
+    .where(eq(communityVcPrivacyGlobalTable.userId, userId));
+  return row?.optedOut === true;
+}
+
+/**
+ * Returns true if the user has opted out of VC tracking in this guild only
+ * (does NOT consult the global opt-out table).
+ * Use this when you need to display the per-guild setting independently.
+ */
+export async function isVcTrackingGuildLocalOptedOut(guildId: string, userId: string): Promise<boolean> {
   const [row] = await db
     .select()
     .from(communityVcPrivacyTable)
@@ -377,6 +406,45 @@ export async function isVcTrackingOptedOut(guildId: string, userId: string): Pro
       ),
     );
   return row?.optedOut === true;
+}
+
+/**
+ * Returns true if the user has opted out of VC tracking.
+ * Global opt-out (community_vc_privacy_global) takes priority over the per-guild table.
+ */
+export async function isVcTrackingOptedOut(guildId: string, userId: string): Promise<boolean> {
+  // Check global opt-out first — if set, no guild-level check is needed.
+  const [globalRow, guildRow] = await Promise.all([
+    db
+      .select()
+      .from(communityVcPrivacyGlobalTable)
+      .where(eq(communityVcPrivacyGlobalTable.userId, userId))
+      .then((rows) => rows[0]),
+    db
+      .select()
+      .from(communityVcPrivacyTable)
+      .where(
+        and(
+          eq(communityVcPrivacyTable.guildId, guildId),
+          eq(communityVcPrivacyTable.userId, userId),
+        ),
+      )
+      .then((rows) => rows[0]),
+  ]);
+  if (globalRow?.optedOut === true) return true;
+  return guildRow?.optedOut === true;
+}
+
+/**
+ * Permanently deletes all VC session rows for a user across ALL guilds.
+ * Returns the number of rows deleted.
+ */
+export async function deleteAllUserVcSessions(userId: string): Promise<number> {
+  const result = await db
+    .delete(communityVcSessionsTable)
+    .where(eq(communityVcSessionsTable.userId, userId))
+    .returning({ id: communityVcSessionsTable.id });
+  return result.length;
 }
 
 // ─── VC Sessions ─────────────────────────────────────────────────────────────
@@ -506,6 +574,10 @@ export async function getVcRanking(guildId: string, periodStart?: Date): Promise
         SELECT user_id FROM community_vc_privacy
         WHERE guild_id = ${guildId} AND opted_out = true
       )
+      AND user_id NOT IN (
+        SELECT user_id FROM community_vc_privacy_global
+        WHERE opted_out = true
+      )
     GROUP BY user_id
     ORDER BY total_seconds DESC
     LIMIT 10
@@ -567,6 +639,10 @@ export async function getUserVcRank(
         AND user_id NOT IN (
           SELECT user_id FROM community_vc_privacy
           WHERE guild_id = ${guildId} AND opted_out = true
+        )
+        AND user_id NOT IN (
+          SELECT user_id FROM community_vc_privacy_global
+          WHERE opted_out = true
         )
       GROUP BY user_id
     ) ranked

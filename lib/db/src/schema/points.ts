@@ -14,6 +14,10 @@ import {
 /** Per-guild configuration for the point system. */
 export const pointSettingsTable = pgTable("point_settings", {
   guildId: text("guild_id").primaryKey(),
+  /** Points awarded per hour for VC time. */
+  vcRatePerHour: integer("vc_rate_per_hour").notNull().default(100),
+  /** Points awarded for event participation. */
+  eventParticipationPoints: integer("event_participation_points").notNull().default(100),
   /** Points awarded once when a user starts boosting the server. */
   boostPoints: integer("boost_points").notNull().default(0),
   /** Last time role-tenure batch was run (to prevent double-awards). */
