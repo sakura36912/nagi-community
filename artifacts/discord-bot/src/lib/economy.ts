@@ -35,11 +35,13 @@ export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // Shop item effect types recognized by the bot.
 export const NICKNAME_CHANGE_EFFECT = "nickname_change";
-export const PRIVATE_VC_EFFECT = "private_vc"; // permanent (no expiry)
-export const VC_RENAME_EFFECT  = "vc_rename";  // rename existing private VC, no duration
+export const PRIVATE_VC_EFFECT    = "private_vc";      // permanent (no expiry)
+export const VC_RENAME_EFFECT     = "vc_rename";       // rename existing private VC, no duration
 export const PRIVATE_VC_1D_EFFECT = "private_vc_1d";
+export const PRIVATE_VC_3D_EFFECT = "private_vc_3d";
 export const PRIVATE_VC_1W_EFFECT = "private_vc_1w";
 export const PRIVATE_VC_1M_EFFECT = "private_vc_1m";
+export const VC_EXTEND_1D_EFFECT  = "vc_extend_1d";    // extend existing private VC by 1 day
 export const EVAL_EXTEND_EFFECT    = "eval_extend_1w"; // +7 days
 export const EVAL_EXTEND_2W_EFFECT = "eval_extend_2w"; // +14 days
 export const EVAL_EXTEND_1M_EFFECT = "eval_extend_1m"; // +30 days
@@ -50,9 +52,15 @@ export const URA_EXTEND_1D_EFFECT  = "ura_extend_1d";   // extend existing ura V
 
 // Duration in milliseconds for each timed VC effect type.
 export const TIMED_VC_DURATIONS: Record<string, number> = {
-  [PRIVATE_VC_1D_EFFECT]: 24 * 60 * 60 * 1000,
-  [PRIVATE_VC_1W_EFFECT]: 7 * 24 * 60 * 60 * 1000,
+  [PRIVATE_VC_1D_EFFECT]: 1  * 24 * 60 * 60 * 1000,
+  [PRIVATE_VC_3D_EFFECT]: 3  * 24 * 60 * 60 * 1000,
+  [PRIVATE_VC_1W_EFFECT]: 7  * 24 * 60 * 60 * 1000,
   [PRIVATE_VC_1M_EFFECT]: 30 * 24 * 60 * 60 * 1000,
+};
+
+/** 非公開VC（categoryが"vc"）延長専用。既存セッションがある場合のみ延長（新規作成なし）。 */
+export const VC_EXTEND_DURATIONS: Record<string, number> = {
+  [VC_EXTEND_1D_EFFECT]: 24 * 60 * 60 * 1000,
 };
 
 /** 裏フリールーム延長専用。既存セッションがある場合のみ延長（新規作成なし）。 */
@@ -98,41 +106,47 @@ export async function seedDefaultShopItems(guildId: string): Promise<void> {
 }
 
 // Inserts the default VC shop items (timed private VCs) for a guild.
-// Safe to call multiple times — uses a count guard so it never duplicates.
+// Safe to call multiple times — uses effectType guard so it never duplicates.
 export async function seedDefaultVcShopItems(guildId: string): Promise<void> {
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(shopItemsTable)
-    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "vc")));
-
-  if (count > 0) return;
-
-  await db.insert(shopItemsTable).values([
+  const defaults: Array<{ name: string; description: string; price: number; effectType: string }> = [
     {
-      guildId,
       name: "非公開VC（1日）",
       description: "自分だけが見える専用VCを1日間作成します。期間終了後に自動削除されます。",
       price: 1000,
       effectType: PRIVATE_VC_1D_EFFECT,
-      category: "vc",
     },
     {
-      guildId,
+      name: "非公開VC（3日）",
+      description: "自分だけが見える専用VCを3日間作成します。期間終了後に自動削除されます。",
+      price: 2500,
+      effectType: PRIVATE_VC_3D_EFFECT,
+    },
+    {
       name: "非公開VC（1週間）",
       description: "自分だけが見える専用VCを1週間作成します。期間終了後に自動削除されます。",
       price: 5000,
       effectType: PRIVATE_VC_1W_EFFECT,
-      category: "vc",
     },
     {
-      guildId,
-      name: "非公開VC（1ヶ月）",
-      description: "自分だけが見える専用VCを1ヶ月間作成します。期間終了後に自動削除されます。",
-      price: 15000,
-      effectType: PRIVATE_VC_1M_EFFECT,
-      category: "vc",
+      name: "非公開VC延長（1日）",
+      description: "既存の非公開VCの期限を1日延長します。部屋がない場合は使用できません。",
+      price: 800,
+      effectType: VC_EXTEND_1D_EFFECT,
     },
-  ]);
+  ];
+
+  const existing = await db
+    .select({ effectType: shopItemsTable.effectType })
+    .from(shopItemsTable)
+    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "vc")));
+  const existingEffects = new Set(existing.map((r) => r.effectType));
+
+  const toInsert = defaults.filter((d) => !existingEffects.has(d.effectType));
+  if (toInsert.length === 0) return;
+
+  await db.insert(shopItemsTable).values(
+    toInsert.map((d) => ({ ...d, guildId, category: "vc" })),
+  );
 }
 
 export async function getGuildSettings(guildId: string): Promise<GuildSettings> {

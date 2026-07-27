@@ -26,10 +26,13 @@ import {
   NICKNAME_CHANGE_EFFECT,
   PRIVATE_VC_EFFECT,
   PRIVATE_VC_1D_EFFECT,
+  PRIVATE_VC_3D_EFFECT,
   PRIVATE_VC_1W_EFFECT,
   PRIVATE_VC_1M_EFFECT,
   VC_RENAME_EFFECT,
   TIMED_VC_DURATIONS,
+  VC_EXTEND_DURATIONS,
+  VC_EXTEND_1D_EFFECT,
   URA_EXTEND_DURATIONS,
   URA_EXTEND_1D_EFFECT,
   EVAL_EXTEND_DAYS,
@@ -711,6 +714,27 @@ async function applyShopPurchase(
     return;
   }
 
+  // 非公開VC延長（category="vc"）
+  const vcExtendDuration = VC_EXTEND_DURATIONS[item.effectType ?? ""];
+  if (vcExtendDuration !== undefined) {
+    const session = await getActivePrivateVcSession(interaction.guildId, interaction.user.id, "vc");
+    if (!session) {
+      await interaction.editReply("❌ 有効な非公開VCがありません。先に購入してください。");
+      return;
+    }
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    try {
+      const updated = await extendPrivateVcSession(session.id, vcExtendDuration);
+      const ts = Math.floor(updated.expiresAt.getTime() / 1000);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
   const uraExtendDuration = URA_EXTEND_DURATIONS[item.effectType ?? ""];
   if (uraExtendDuration !== undefined) {
     const session = await getActivePrivateVcSession(interaction.guildId, interaction.user.id, "ura");
@@ -1192,15 +1216,17 @@ type EffectChoice = { name: string; value: string };
 
 const COMBINED_EFFECT_CHOICES: EffectChoice[] = [
   { name: "ニックネーム変更権",        value: NICKNAME_CHANGE_EFFECT   },
-  { name: "非公開VC作成(無期限)",      value: PRIVATE_VC_EFFECT        },
-  { name: "永久ロール付与",             value: PERM_ROLE_EFFECT         },
+  { name: "非公開VC作成(無期限)",        value: PRIVATE_VC_EFFECT        },
+  { name: "永久ロール付与",              value: PERM_ROLE_EFFECT         },
   { name: "評価落ち浮上券",             value: EVAL_RESURFACE_EFFECT    },
-  { name: "個人ショップ開業券",         value: SHOP_LICENSE_EFFECT      },
-  { name: "非公開VC/裏部屋（1日）",    value: PRIVATE_VC_1D_EFFECT     },
+  { name: "個人ショップ開業券",          value: SHOP_LICENSE_EFFECT      },
+  { name: "非公開VC/裏部屋（1日）",     value: PRIVATE_VC_1D_EFFECT     },
+  { name: "非公開VC（3日）",            value: PRIVATE_VC_3D_EFFECT     },
   { name: "非公開VC/裏部屋（1週間）",  value: PRIVATE_VC_1W_EFFECT     },
   { name: "非公開VC/裏部屋（1ヶ月）",  value: PRIVATE_VC_1M_EFFECT     },
-  { name: "VCリネーム",                 value: VC_RENAME_EFFECT         },
-  { name: "裏フリールーム延長（1日）", value: URA_EXTEND_1D_EFFECT     },
+  { name: "VCリネーム",                  value: VC_RENAME_EFFECT         },
+  { name: "非公開VC延長（1日）",        value: VC_EXTEND_1D_EFFECT      },
+  { name: "裏フリールーム延長（1日）",  value: URA_EXTEND_1D_EFFECT     },
 ];
 
 const CATEGORY_CHOICES = [
@@ -1466,6 +1492,48 @@ const shopCommand: Command = {
           } catch {
             await refundPurchase(guildId, interaction.user.id, result.item);
             await interaction.editReply("❌ 評価シートの作成に失敗しました。購入を取り消し、返金しました。");
+          }
+          return;
+        }
+
+        // 非公開VC延長
+        const vcExtendDurationBuy = VC_EXTEND_DURATIONS[item.effectType ?? ""];
+        if (vcExtendDurationBuy !== undefined) {
+          const session = await getActivePrivateVcSession(guildId, interaction.user.id, "vc");
+          if (!session) {
+            await interaction.editReply("❌ 有効な非公開VCがありません。先に購入してください。");
+            return;
+          }
+          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
+          if (!result.ok) { await interaction.editReply(result.reason); return; }
+          try {
+            const updated = await extendPrivateVcSession(session.id, vcExtendDurationBuy);
+            const ts = Math.floor(updated.expiresAt.getTime() / 1000);
+            await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
+          } catch {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
+          }
+          return;
+        }
+
+        // 裏フリールーム延長
+        const uraExtendDurationBuy = URA_EXTEND_DURATIONS[item.effectType ?? ""];
+        if (uraExtendDurationBuy !== undefined) {
+          const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+          if (!session) {
+            await interaction.editReply("❌ 有効な裏フリールームがありません。先に購入してください。");
+            return;
+          }
+          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
+          if (!result.ok) { await interaction.editReply(result.reason); return; }
+          try {
+            const updated = await extendPrivateVcSession(session.id, uraExtendDurationBuy);
+            const ts = Math.floor(updated.expiresAt.getTime() / 1000);
+            await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n裏フリールームの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
+          } catch {
+            await refundPurchase(guildId, interaction.user.id, result.item);
+            await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
           }
           return;
         }
