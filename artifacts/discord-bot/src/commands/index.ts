@@ -286,7 +286,8 @@ async function purchaseAndCreatePrivateVc(
       channel.send(
         `🔒 <@${member.id}> の非公開VCが作成されました。\n` +
         `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）\n` +
-        `期限延長: \`/shop buy\`（延長券）`,
+        `👥 メンバーを招待: \`/shop invite\` | 追い出し: \`/shop kick\`\n` +
+        `🔁 期限延長: \`/shop buy\`（延長券）`,
       ).catch((err) => logger.error("[privateVC] Failed to send expiry notice to VC text", err));
     }
 
@@ -1715,9 +1716,12 @@ const shopCommand: Command = {
 
     if (sub === "invite") {
       await interaction.deferReply({ ephemeral: true });
-      const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+      // vc・ura どちらのセッションでも対応
+      const session =
+        await getActivePrivateVcSession(guildId, interaction.user.id, "vc") ??
+        await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
       if (!session) {
-        await interaction.editReply("❌ 有効な裏フリールームが見つかりません。先に購入してください。");
+        await interaction.editReply("❌ 有効な非公開VCが見つかりません。先に購入してください。");
         return;
       }
       const targetUser = interaction.options.getUser("member", true);
@@ -1734,15 +1738,18 @@ const shopCommand: Command = {
       await ch.permissionOverwrites.edit(targetUser.id, {
         ViewChannel: true, Connect: true, Speak: true, Stream: true, SendMessages: true,
       });
-      await interaction.editReply(`✅ <@${targetUser.id}> を裏フリールームに招待しました。`);
+      const label = session.category === "ura" ? "裏フリールーム" : "非公開VC";
+      await interaction.editReply(`✅ <@${targetUser.id}> を${label}に招待しました。`);
       return;
     }
 
     if (sub === "kick") {
       await interaction.deferReply({ ephemeral: true });
-      const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+      const session =
+        await getActivePrivateVcSession(guildId, interaction.user.id, "vc") ??
+        await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
       if (!session) {
-        await interaction.editReply("❌ 有効な裏フリールームが見つかりません。");
+        await interaction.editReply("❌ 有効な非公開VCが見つかりません。");
         return;
       }
       const targetUser = interaction.options.getUser("member", true);
