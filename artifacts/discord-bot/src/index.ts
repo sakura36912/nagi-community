@@ -510,7 +510,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   async function getPointCategoryId(channelId: string): Promise<string | null> {
     const channel = guild.channels.cache.get(channelId);
     if (!channel?.parentId) return null;
-    const configs = await listVcCategoryConfigs(guild.id).catch(() => []);
+    const configs = await listVcCategoryConfigs(guild.id).catch(() => [] as Awaited<ReturnType<typeof listVcCategoryConfigs>>);
     return configs.some((c) => c.categoryId === channel.parentId) ? channel.parentId! : null;
   }
 
