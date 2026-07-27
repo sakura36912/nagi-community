@@ -353,6 +353,14 @@ async function purchaseAndCreateUraVc(
     await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, "ura");
     if (uraChannelId) await grantUraChannelAccess(guild, member.id, uraChannelId);
 
+    // ボイステキストに期限を通知
+    const ts = Math.floor(expiresAt.getTime() / 1000);
+    channel.send(
+      `🌙 <@${member.id}> の裏フリールームが作成されました。\n` +
+      `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）\n` +
+      `メンバーを招待: \`/shop invite\` | 期限延長: \`/shop buy\`（延長券）`,
+    ).catch((err) => logger.error("[ura] Failed to send expiry notice to VC text", err));
+
     return { ok: true, item: result.item, channelId: channel.id, expiresAt };
   } catch (err) {
     try { await refundPurchase(guild.id, member.id, result.item); } catch { /* best-effort */ }
