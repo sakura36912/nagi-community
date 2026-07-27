@@ -57,6 +57,7 @@ import {
   isVcTrackingGloballyOptedOut,
   isVcTrackingGuildLocalOptedOut,
   deleteAllUserVcSessions,
+  closeOpenSessionsForUser,
   updateEventMessageId,
   type CommunityTicketSettings,
   type CommunityTicketPanel,
@@ -1617,13 +1618,21 @@ export async function handlePrivacyDeleteCancel(interaction: ButtonInteraction):
 
 export async function handlePrivacyGlobalOptoutKeep(interaction: ButtonInteraction): Promise<void> {
   await interaction.deferUpdate();
-  await setVcGlobalPrivacyOptOut(interaction.user.id, true);
+  const userId = interaction.user.id;
+  const [, closed] = await Promise.all([
+    setVcGlobalPrivacyOptOut(userId, true),
+    closeOpenSessionsForUser(userId),
+  ]);
+  const closedNote = closed > 0
+    ? `• 進行中のVCセッション **${closed}件** を自動的に終了しました\n`
+    : "";
   const embed = new EmbedBuilder()
     .setTitle("🌐 全サーバーでトラッキングを停止しました")
     .setColor(0xed4245)
     .setDescription(
       "すべてのサーバーでVCの滞在時間の記録を**停止**しました。\n\n" +
       "• 新しいセッションはどのサーバーでも記録されません\n" +
+      closedNote +
       "• 各サーバーの過去データはそのまま残ります\n\n" +
       "再開するには `/privacy optin` を使用してください。",
     )

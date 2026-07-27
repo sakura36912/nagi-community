@@ -499,6 +499,24 @@ export async function closeAllOpenSessions(): Promise<void> {
     .where(isNull(communityVcSessionsTable.leftAt));
 }
 
+/**
+ * Closes all open VC sessions (left_at IS NULL) for a single user across all guilds.
+ * Returns the number of sessions closed.
+ */
+export async function closeOpenSessionsForUser(userId: string): Promise<number> {
+  const result = await db
+    .update(communityVcSessionsTable)
+    .set({ leftAt: new Date() })
+    .where(
+      and(
+        eq(communityVcSessionsTable.userId, userId),
+        isNull(communityVcSessionsTable.leftAt),
+      ),
+    )
+    .returning({ id: communityVcSessionsTable.id });
+  return result.length;
+}
+
 export async function getActiveSession(
   guildId: string,
   userId: string,
