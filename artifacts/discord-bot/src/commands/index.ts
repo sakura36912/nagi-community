@@ -281,6 +281,13 @@ async function purchaseAndCreatePrivateVc(
 
     if (expiresAt) {
       await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, "vc");
+      // ボイステキストに期限を通知
+      const ts = Math.floor(expiresAt.getTime() / 1000);
+      channel.send(
+        `🔒 <@${member.id}> の非公開VCが作成されました。\n` +
+        `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）\n` +
+        `期限延長: \`/shop buy\`（延長券）`,
+      ).catch((err) => logger.error("[privateVC] Failed to send expiry notice to VC text", err));
     }
 
     return { ok: true, item: result.item, channelId: channel.id, expiresAt };
