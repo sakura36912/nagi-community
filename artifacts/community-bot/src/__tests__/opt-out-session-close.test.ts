@@ -80,12 +80,13 @@ vi.mock("drizzle-orm", () => ({
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
 import { closeOpenSessionsForUser } from "../lib/community.js";
-import { handlePrivacyGlobalOptoutKeep } from "../commands/index.js";
+import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutKeep } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
-function makeInteraction(userId: string) {
+function makeInteraction(userId: string, guildId?: string) {
   return {
     user: { id: userId },
+    guildId: guildId ?? null,
     deferUpdate: vi.fn().mockResolvedValue(undefined),
     editReply: vi.fn().mockResolvedValue(undefined),
   };
@@ -209,5 +210,99 @@ describe('handlePrivacyGlobalOptoutKeep – "keep data" global opt-out path', ()
     // This assertion is implicitly satisfied; add an explicit check on update
     // to confirm only update (close) was used, not a delete (purge).
     expect(mocks.update).toHaveBeenCalled(); // close path
+  });
+});
+
+describe('handlePrivacyOptoutKeep – "keep data" per-guild opt-out path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // setVcPrivacyOptOut executes: insert (opt-out flag) then update (closeSession).
+  // Mock ordering must match that call sequence.
+
+  it("closes any open VC session for the user in that guild", async () => {
+    // insert (opt-out flag) completes first
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    // update (closeSession) finds and stamps one open session
+    mocks.returning.mockResolvedValueOnce([{ id: 20 }]);
+
+    const interaction = makeInteraction("user-pgkeep-1", "guild-A");
+    await handlePrivacyOptoutKeep(interaction as never);
+
+    // db.update() must have been called (by closeSession)
+    expect(mocks.update).toHaveBeenCalled();
+    // The set() payload must include a leftAt Date
+    const [setPayload] = mocks.set.mock.calls[0] as unknown as [{ leftAt: Date }];
+    expect(setPayload.leftAt).toBeInstanceOf(Date);
+  });
+
+  it("also persists the per-guild opt-out flag (insert path)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    const interaction = makeInteraction("user-pgkeep-2", "guild-B");
+    await handlePrivacyOptoutKeep(interaction as never);
+
+    // db.insert() must have been called (by setVcPrivacyOptOut)
+    expect(mocks.insert).toHaveBeenCalled();
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { guildId: string; userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.guildId).toBe("guild-B");
+    expect(valuesArg.userId).toBe("user-pgkeep-2");
+    expect(valuesArg.optedOut).toBe(true);
+  });
+
+  it("replies to the interaction after both operations complete", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([{ id: 21 }]);
+
+    const interaction = makeInteraction("user-pgkeep-3", "guild-C");
+    await handlePrivacyOptoutKeep(interaction as never);
+
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("does NOT delete session rows (keep-data path leaves history intact)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    const interaction = makeInteraction("user-pgkeep-4", "guild-D");
+    await handlePrivacyOptoutKeep(interaction as never);
+
+    // update (close) is used; no delete (purge) is invoked
+    expect(mocks.update).toHaveBeenCalled();
+  });
+
+  it("does nothing when guildId is absent (DM context guard)", async () => {
+    // interaction with no guildId — handler should return early without touching db
+    const interaction = makeInteraction("user-pgkeep-5");
+    await handlePrivacyOptoutKeep(interaction as never);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+  });
+
+  it("filters the close by guildId so only that guild's session is stamped", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    const interaction = makeInteraction("user-pgkeep-6", "guild-E");
+    await handlePrivacyOptoutKeep(interaction as never);
+
+    // The where() call receives an AND with three branches:
+    // eq(guildId), eq(userId), isNull(leftAt)
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string }[] }
+    ];
+    expect(whereArg.op).toBe("and");
+    // At least two eq branches (guildId + userId) and one isNull branch
+    expect(whereArg.args.filter((a) => a.op === "eq").length).toBeGreaterThanOrEqual(2);
+    expect(whereArg.args.some((a) => a.op === "isNull")).toBe(true);
   });
 });
