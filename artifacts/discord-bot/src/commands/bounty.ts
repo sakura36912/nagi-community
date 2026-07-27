@@ -15,6 +15,7 @@ import {
   type Bounty,
 } from "../lib/bounty";
 import { getGuildSettings } from "../lib/economy";
+import { getPointBalance } from "../lib/points";
 import { logger } from "../lib/logger";
 
 interface Command {
@@ -28,7 +29,7 @@ function bountyStatusLabel(status: string): string {
   return status === "active" ? "🟡 募集中" : status === "awarded" ? "✅ 達成済み" : "❌ キャンセル";
 }
 
-function buildBoardEmbed(bounties: Bounty[], currencyName: string): EmbedBuilder {
+function buildBoardEmbed(bounties: Bounty[]): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setTitle("💰 懸賞金ボード")
     .setColor(0xf39c12);
@@ -43,7 +44,7 @@ function buildBoardEmbed(bounties: Bounty[], currencyName: string): EmbedBuilder
       name: `#${b.id} ｜ ${b.title}`,
       value:
         `> ${b.description.slice(0, 120)}${b.description.length > 120 ? "…" : ""}\n` +
-        `💰 **${b.reward.toLocaleString("ja-JP")} ${currencyName}**　／　掲載: <@${b.posterId}>`,
+        `💎 **${b.reward.toLocaleString("ja-JP")} pt**　／　掲載: <@${b.posterId}>`,
       inline: false,
     });
   }
@@ -60,12 +61,12 @@ function buildBoardEmbed(bounties: Bounty[], currencyName: string): EmbedBuilder
 export const bountyCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("bounty")
-    .setDescription("懸賞金機能")
+    .setDescription("懸賞金機能（ポイントを使って懸賞金を掛ける）")
     // ── post ──────────────────────────────────────────────────────────────────
     .addSubcommand((sub) =>
       sub
         .setName("post")
-        .setDescription("懸賞金を掛ける（自分の所持金から報酬を出す）")
+        .setDescription("懸賞金を掛ける（自分のポイントから報酬を出す）")
         .addStringOption((opt) =>
           opt.setName("title").setDescription("タイトル（最大50文字）").setRequired(true).setMaxLength(50),
         )
@@ -73,14 +74,14 @@ export const bountyCommand: Command = {
           opt.setName("description").setDescription("達成条件の詳細（最大500文字）").setRequired(true).setMaxLength(500),
         )
         .addIntegerOption((opt) =>
-          opt.setName("reward").setDescription("報酬額").setRequired(true).setMinValue(1),
+          opt.setName("reward").setDescription("報酬ポイント数").setRequired(true).setMinValue(1),
         ),
     )
     // ── cancel ────────────────────────────────────────────────────────────────
     .addSubcommand((sub) =>
       sub
         .setName("cancel")
-        .setDescription("自分が掛けた懸賞金をキャンセルして返金する")
+        .setDescription("自分が掛けた懸賞金をキャンセルしてポイントを返金する")
         .addIntegerOption((opt) =>
           opt.setName("id").setDescription("懸賞金ID（/bounty list で確認）").setRequired(true),
         ),
@@ -89,7 +90,7 @@ export const bountyCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("award")
-        .setDescription("【管理者】達成者に懸賞金を支払う")
+        .setDescription("【管理者】達成者に懸賞金ポイントを支払う")
         .addIntegerOption((opt) =>
           opt.setName("id").setDescription("懸賞金ID").setRequired(true),
         )
@@ -150,10 +151,8 @@ export const bountyCommand: Command = {
       if (requiredRoleId) {
         const member = interaction.member;
         const roleIds =
-          member && "roles" in member
-            ? member.roles instanceof Array
-              ? member.roles
-              : [...(member.roles as import("discord.js").GuildMemberRoleManager).cache.keys()]
+          member && "roles" in member && typeof member.roles === "object" && "cache" in (member.roles as object)
+            ? [...(member.roles as import("discord.js").GuildMemberRoleManager).cache.keys()]
             : [];
         if (!roleIds.includes(requiredRoleId)) {
           await interaction.editReply(`❌ <@&${requiredRoleId}> を持つユーザーのみ懸賞金を掛けられます。`);
@@ -165,17 +164,26 @@ export const bountyCommand: Command = {
       const description = interaction.options.getString("description", true);
       const reward      = interaction.options.getInteger("reward", true);
 
+      // Show current balance before posting
+      const balance = await getPointBalance(guildId, interaction.user.id);
+      if (balance < reward) {
+        await interaction.editReply(
+          `❌ ポイントが不足しています。\n現在の残高: **${balance.toLocaleString("ja-JP")} pt** / 必要: **${reward.toLocaleString("ja-JP")} pt**\n\nポイントはVC滞在・ロール保持・ブースト・イベント順位で獲得できます。`,
+        );
+        return;
+      }
+
       try {
         const bounty = await postBounty(guildId, interaction.user.id, title, description, reward);
-        const currencyName = settings?.currencyName ?? "円";
         await interaction.editReply(
           `✅ 懸賞金を掛けました（ID: **#${bounty.id}**）\n` +
-          `**${title}**\n報酬: **${reward.toLocaleString("ja-JP")} ${currencyName}**`,
+          `**${title}**\n報酬: **${reward.toLocaleString("ja-JP")} pt**\n` +
+          `残高: **${(balance - reward).toLocaleString("ja-JP")} pt**`,
         );
-        logger.info(`[bounty] post id=${bounty.id} poster=${interaction.user.id} reward=${reward}`);
+        logger.info(`[bounty] post id=${bounty.id} poster=${interaction.user.id} reward=${reward}pt`);
       } catch (err) {
-        if (err instanceof Error && err.message === "INSUFFICIENT_FUNDS") {
-          await interaction.editReply("❌ 所持金が不足しています。");
+        if (err instanceof Error && err.message === "INSUFFICIENT_POINTS") {
+          await interaction.editReply("❌ ポイントが不足しています。");
         } else {
           logger.error("[bounty] post error", err);
           await interaction.editReply("❌ 懸賞金の登録に失敗しました。");
@@ -204,12 +212,10 @@ export const bountyCommand: Command = {
         return;
       }
 
-      const settings = await getGuildSettings(guildId).catch(() => null);
-      const currencyName = settings?.currencyName ?? "円";
       await cancelBounty(guildId, id);
       await interaction.editReply(
         `✅ 懸賞金 **#${id}「${existing.title}」** をキャンセルしました。\n` +
-        `**${existing.reward.toLocaleString("ja-JP")} ${currencyName}** を返金しました。`,
+        `**${existing.reward.toLocaleString("ja-JP")} pt** を返金しました。`,
       );
       return;
     }
@@ -235,9 +241,6 @@ export const bountyCommand: Command = {
         return;
       }
 
-      const settings = await getGuildSettings(guildId).catch(() => null);
-      const currencyName = settings?.currencyName ?? "円";
-
       await awardBounty(guildId, id, winner.id);
 
       const embed = new EmbedBuilder()
@@ -246,12 +249,11 @@ export const bountyCommand: Command = {
         .addFields(
           { name: "懸賞金", value: `#${id} **${existing.title}**`, inline: false },
           { name: "達成者", value: `<@${winner.id}>`, inline: true },
-          { name: "報酬", value: `**${existing.reward.toLocaleString("ja-JP")} ${currencyName}**`, inline: true },
+          { name: "報酬", value: `**${existing.reward.toLocaleString("ja-JP")} pt**`, inline: true },
           { name: "掲載者", value: `<@${existing.posterId}>`, inline: true },
         )
         .setTimestamp();
 
-      // 公開通知をチャンネルに送る
       await (interaction.channel as TextChannel).send({ embeds: [embed] }).catch(() => null);
       await interaction.editReply(`✅ **#${id}** の懸賞金を <@${winner.id}> に支払いました。`);
       logger.info(`[bounty] award id=${id} winner=${winner.id}`);
@@ -262,8 +264,7 @@ export const bountyCommand: Command = {
     if (sub === "list") {
       await interaction.deferReply({ ephemeral: true });
       const bounties = await listActiveBounties(guildId);
-      const settings = await getGuildSettings(guildId).catch(() => null);
-      const embed = buildBoardEmbed(bounties, settings?.currencyName ?? "円");
+      const embed = buildBoardEmbed(bounties);
       await interaction.editReply({ embeds: [embed] });
       return;
     }
@@ -272,8 +273,7 @@ export const bountyCommand: Command = {
     if (sub === "board") {
       await interaction.deferReply({ ephemeral: true });
       const bounties = await listActiveBounties(guildId);
-      const settings = await getGuildSettings(guildId).catch(() => null);
-      const embed = buildBoardEmbed(bounties, settings?.currencyName ?? "円");
+      const embed = buildBoardEmbed(bounties);
       await (interaction.channel as TextChannel).send({ embeds: [embed] });
       await interaction.editReply("✅ 懸賞金ボードを投稿しました。");
     }

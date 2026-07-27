@@ -39,6 +39,13 @@ import {
   recordVcLogLeave,
 } from "./lib/vcReward";
 import {
+  recordPointVcJoin,
+  settlePointVcSession,
+  awardBoostPoints,
+  distributeRoleTenurePoints,
+  listVcCategoryConfigs,
+} from "./lib/points";
+import {
   distributeRoleRewards,
   getExpiredPrivateVcSessions,
   deletePrivateVcSession,
@@ -386,6 +393,16 @@ client.once(Events.ClientReady, (readyClient) => {
     runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Scheduler error", err));
   }, 60 * 1000);
 
+  // Daily role-tenure point distribution — run once every 24 h
+  const ROLE_TENURE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  setInterval(() => {
+    for (const guild of readyClient.guilds.cache.values()) {
+      distributeRoleTenurePoints(guild).catch((err) =>
+        logger.error(`[points] role tenure error for guild ${guild.id}`, err),
+      );
+    }
+  }, ROLE_TENURE_INTERVAL_MS);
+
   // ── Weekly shift post — every Monday 00:00 UTC (= 09:00 JST) ─────────────
   const nextWeeklyPost = getNextWeeklyPostTime();
   const shiftDelay = nextWeeklyPost.getTime() - Date.now();
@@ -489,6 +506,14 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const wasInAfk = oldState.channelId === afkChannelId;
   const isInAfk = newState.channelId === afkChannelId;
 
+  /** Returns the category ID for a channel if it matches a configured point VC category. */
+  async function getPointCategoryId(channelId: string): Promise<string | null> {
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel?.parentId) return null;
+    const configs = await listVcCategoryConfigs(guild.id).catch(() => []);
+    return configs.some((c) => c.categoryId === channel.parentId) ? channel.parentId! : null;
+  }
+
   // ── Joined VC (from nothing or from AFK) ─────────────────────────────────
   if (isInVc && !isInAfk && (!wasInVc || wasInAfk)) {
     await Promise.all([
@@ -501,6 +526,15 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           }
         } catch (err) {
           logger.error(`[vcsalary] recordVcJoin error for ${userId}`, err);
+        }
+      })(),
+      // Point VC tracking
+      (async () => {
+        try {
+          const catId = await getPointCategoryId(newState.channelId!);
+          if (catId) await recordPointVcJoin(guild.id, userId, catId);
+        } catch (err) {
+          logger.error(`[points] recordPointVcJoin error for ${userId}`, err);
         }
       })(),
       // Session log tracking
@@ -532,6 +566,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         });
         if (presence) await handleVcLeave(guild, userId, presence.joinedAt);
       })(),
+      // Point VC settlement
+      settlePointVcSession(guild.id, userId).catch((err) =>
+        logger.error(`[points] settlePointVcSession error for ${userId}`, err),
+      ),
       // Session log
       recordVcLogLeave(guild.id, userId).catch((err) =>
         logger.error(`[vclog] recordVcLogLeave error for ${userId}`, err),
@@ -562,6 +600,24 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           }
         } catch (err) {
           logger.error(`[vcsalary] channel-move handling error for ${userId}`, err);
+        }
+      })(),
+      // Point VC tracking – category may have changed
+      (async () => {
+        try {
+          const wasPointCat = await getPointCategoryId(oldState.channelId!);
+          const nowPointCat = await getPointCategoryId(newState.channelId!);
+          if (wasPointCat && !nowPointCat) {
+            await settlePointVcSession(guild.id, userId);
+          } else if (!wasPointCat && nowPointCat) {
+            await recordPointVcJoin(guild.id, userId, nowPointCat);
+          } else if (wasPointCat && nowPointCat && wasPointCat !== nowPointCat) {
+            // Different point category — settle old, start new
+            await settlePointVcSession(guild.id, userId);
+            await recordPointVcJoin(guild.id, userId, nowPointCat);
+          }
+        } catch (err) {
+          logger.error(`[points] VC move point tracking error for ${userId}`, err);
         }
       })(),
       // Session log – category eligibility may have changed
@@ -604,6 +660,14 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const removedRoleIds = oldMember.partial
     ? []
     : [...oldMember.roles.cache.keys()].filter((id) => !newMember.roles.cache.has(id));
+
+  // ── サーバーブースト開始検知 → ポイント付与 ──────────────────────────────
+  const justBoosted = !oldMember.partial && !oldMember.premiumSince && !!newMember.premiumSince;
+  if (justBoosted) {
+    awardBoostPoints(guildId, newMember.id).then((pts) => {
+      if (pts > 0) logger.info(`[points] boost award ${newMember.id} +${pts}pt`);
+    }).catch((err) => logger.error("[points] boost award error", err));
+  }
 
   if (addedRoleIds.length === 0) return;
 

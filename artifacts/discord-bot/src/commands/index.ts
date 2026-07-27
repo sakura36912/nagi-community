@@ -2104,6 +2104,8 @@ import { rolePanelCommand } from "./rolepanel";
 import { guideCommand } from "./guide";
 import { leavelogCommand } from "./leavelog";
 import { bountyCommand } from "./bounty";
+import { pointconfigCommand } from "./pointconfig";
+import { pointCommand } from "./point";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -2126,4 +2128,6 @@ export const commands: Command[] = [
   guideCommand,
   leavelogCommand,
   bountyCommand,
+  pointconfigCommand,
+  pointCommand,
 ];

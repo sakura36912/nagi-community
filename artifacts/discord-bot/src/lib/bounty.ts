@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db, bountiesTable, guildSettingsTable, type Bounty } from "@workspace/db";
-import { getOrCreateWallet } from "./economy";
+import { deductPoints, addPoints, getPointBalance } from "./points";
 
 export { type Bounty };
 
@@ -34,8 +34,8 @@ export async function getBounty(guildId: string, id: number): Promise<Bounty | u
 }
 
 /**
- * Deducts `reward` from the poster's wallet and inserts a bounty row.
- * Throws if the poster has insufficient funds.
+ * Deducts `reward` pts from the poster's point balance and inserts a bounty row.
+ * Throws "INSUFFICIENT_POINTS" if the poster has too few points.
  */
 export async function postBounty(
   guildId: string,
@@ -44,19 +44,8 @@ export async function postBounty(
   description: string,
   reward: number,
 ): Promise<Bounty> {
-  const wallet = await getOrCreateWallet(guildId, posterId);
-  if (wallet.balance < reward) {
-    throw new Error("INSUFFICIENT_FUNDS");
-  }
-
-  // Deduct from poster
-  await db.execute(
-    // Use raw SQL for atomic deduction to avoid race conditions
-    (await import("drizzle-orm")).sql`
-      UPDATE wallets SET balance = balance - ${reward}, updated_at = NOW()
-      WHERE guild_id = ${guildId} AND user_id = ${posterId}
-    `,
-  );
+  // Deduct points atomically (throws INSUFFICIENT_POINTS if not enough)
+  await deductPoints(guildId, posterId, reward, "bounty_post", `懸賞金掲載「${title}」`);
 
   const [row] = await db
     .insert(bountiesTable)
@@ -66,8 +55,7 @@ export async function postBounty(
 }
 
 /**
- * Cancels a bounty and refunds the reward to the poster.
- * Only the poster or an admin should call this.
+ * Cancels a bounty and refunds the reward points to the poster.
  */
 export async function cancelBounty(guildId: string, id: number): Promise<Bounty | undefined> {
   const bounty = await getBounty(guildId, id);
@@ -79,20 +67,15 @@ export async function cancelBounty(guildId: string, id: number): Promise<Bounty 
     .where(and(eq(bountiesTable.guildId, guildId), eq(bountiesTable.id, id)))
     .returning();
 
-  // Refund to poster
-  await db.execute(
-    (await import("drizzle-orm")).sql`
-      UPDATE wallets SET balance = balance + ${bounty.reward}, updated_at = NOW()
-      WHERE guild_id = ${guildId} AND user_id = ${bounty.posterId}
-    `,
-  );
+  // Refund points to poster
+  await addPoints(guildId, bounty.posterId, bounty.reward, "bounty_refund", `懸賞金キャンセル返金「${bounty.title}」`);
 
   return updated;
 }
 
 /**
- * Awards a bounty to `winnerId` — transfers reward from the held pool
- * (already deducted at post time) to the winner's wallet.
+ * Awards a bounty to `winnerId` — points were already deducted at post time,
+ * so just credit the winner.
  */
 export async function awardBounty(
   guildId: string,
@@ -108,14 +91,9 @@ export async function awardBounty(
     .where(and(eq(bountiesTable.guildId, guildId), eq(bountiesTable.id, id)))
     .returning();
 
-  // Pay winner (reward was already deducted from poster at post time)
-  await getOrCreateWallet(guildId, winnerId);
-  await db.execute(
-    (await import("drizzle-orm")).sql`
-      UPDATE wallets SET balance = balance + ${bounty.reward}, updated_at = NOW()
-      WHERE guild_id = ${guildId} AND user_id = ${winnerId}
-    `,
-  );
+  await addPoints(guildId, winnerId, bounty.reward, "bounty_award", `懸賞金受取「${bounty.title}」`);
 
   return updated;
 }
+
+export { getPointBalance as getPosterPointBalance };
