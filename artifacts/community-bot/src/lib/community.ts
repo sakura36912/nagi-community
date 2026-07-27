@@ -465,8 +465,8 @@ export async function openSession(guildId: string, userId: string, channelId: st
   return row;
 }
 
-export async function closeSession(guildId: string, userId: string): Promise<void> {
-  await db
+export async function closeSession(guildId: string, userId: string): Promise<boolean> {
+  const result = await db
     .update(communityVcSessionsTable)
     .set({ leftAt: new Date() })
     .where(
@@ -475,7 +475,9 @@ export async function closeSession(guildId: string, userId: string): Promise<voi
         eq(communityVcSessionsTable.userId, userId),
         isNull(communityVcSessionsTable.leftAt),
       ),
-    );
+    )
+    .returning({ id: communityVcSessionsTable.id });
+  return result.length > 0;
 }
 
 /**

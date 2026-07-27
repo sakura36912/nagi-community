@@ -57,6 +57,7 @@ import {
   isVcTrackingGloballyOptedOut,
   isVcTrackingGuildLocalOptedOut,
   deleteAllUserVcSessions,
+  closeSession,
   closeOpenSessionsForUser,
   updateEventMessageId,
   type CommunityTicketSettings,
@@ -1545,13 +1546,20 @@ export async function handleBotstatusRefresh(interaction: ButtonInteraction): Pr
 export async function handlePrivacyOptoutKeep(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guildId) return;
   await interaction.deferUpdate();
-  await setVcPrivacyOptOut(interaction.guildId, interaction.user.id, true);
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+  const [, sessionClosed] = await Promise.all([
+    setVcPrivacyOptOut(guildId, userId, true),
+    closeSession(guildId, userId),
+  ]);
+  const closedNote = sessionClosed ? "• 進行中のVCセッションを自動的に終了しました\n" : "";
   const embed = new EmbedBuilder()
     .setTitle("🔒 トラッキングを停止しました")
     .setColor(0xed4245)
     .setDescription(
       "VCの滞在時間の記録を**停止**しました。\n\n" +
       "• 新しいセッションは記録されません\n" +
+      closedNote +
       "• 過去のデータはそのまま残ります\n\n" +
       "再開するには `/privacy optin` を使用してください。",
     )
