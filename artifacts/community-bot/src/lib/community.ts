@@ -624,6 +624,14 @@ export async function getVcTimeInPeriod(
       AND user_id = ${userId}
       AND joined_at < ${endDate}
       AND COALESCE(left_at, NOW()) > ${startDate}
+      AND user_id NOT IN (
+        SELECT user_id FROM community_vc_privacy
+        WHERE guild_id = ${guildId} AND opted_out = true
+      )
+      AND user_id NOT IN (
+        SELECT user_id FROM community_vc_privacy_global
+        WHERE opted_out = true
+      )
   `);
   return Number(rows.rows[0]?.total_seconds ?? 0);
 }
