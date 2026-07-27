@@ -27,10 +27,11 @@ import {
 
 // ─── Button prefix constants ─────────────────────────────────────────────────
 
-export const SHIFT_TOGGLE_PREFIX = "shift:toggle:";   // shift:toggle:{sid}:{date}
+export const SHIFT_TOGGLE_PREFIX  = "shift:toggle:";   // shift:toggle:{sid}:{date}
 export const SHIFT_CONFIRM_PREFIX = "shift:confirm:"; // shift:confirm:{sid}
 export const SHIFT_CANCEL_PREFIX  = "shift:cancel:";  // shift:cancel:{sid}
 export const SHIFT_TIME_PREFIX    = "shift:time:";    // shift:time:{sid}:{time}
+export const SHIFT_PANEL_OPEN     = "shift:panel:open"; // パネルボタン → submit起動
 
 /** 選択肢として表示する時刻一覧 */
 const SHIFT_TIME_OPTIONS = ["21:00", "22:00", "23:00"];
@@ -500,6 +501,11 @@ export const shiftCommand: Command = {
     )
     .addSubcommand((sub) =>
       sub
+        .setName("panel")
+        .setDescription("このチャンネルにシフト提出ボタンを設置します（管理者）"),
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName("setup")
         .setDescription("週次自動投稿の設定・手動投稿（管理者）")
         .addChannelOption((opt) =>
@@ -710,6 +716,36 @@ export const shiftCommand: Command = {
       const shifts = await getShiftsInRange(guildId, from, to, userOpt?.id);
       const embed = buildSummaryEmbed(shifts, label, from, to);
       await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    // ── /shift panel ──────────────────────────────────────────────────────────
+    if (sub === "panel") {
+      if (!isAdmin) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      if (!interaction.channel?.isTextBased()) {
+        await interaction.reply({ content: "テキストチャンネル内で実行してください。", ephemeral: true });
+        return;
+      }
+      const embed = new EmbedBuilder()
+        .setTitle("📋 シフト提出")
+        .setColor(0x5865f2)
+        .setDescription("下のボタンを押すと今週のシフト提出フォームが開きます。");
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(SHIFT_PANEL_OPEN)
+          .setLabel("📋 シフトを提出する")
+          .setStyle(ButtonStyle.Primary),
+      );
+      const ch = interaction.channel;
+      if (!ch || !("send" in ch)) {
+        await interaction.reply({ content: "このチャンネルにはメッセージを送信できません。", ephemeral: true });
+        return;
+      }
+      await ch.send({ embeds: [embed], components: [row] });
+      await interaction.reply({ content: "✅ シフト提出パネルを設置しました。", ephemeral: true });
       return;
     }
 
@@ -975,5 +1011,45 @@ export async function handleShiftCancel(interaction: ButtonInteraction): Promise
   await interaction.update({
     embeds: [new EmbedBuilder().setTitle("❌ シフト提出をキャンセルしました").setColor(0x95a5a6)],
     components: [],
+  });
+}
+
+/** パネルボタン押下: /shift submit と同じフローを ephemeral で起動 */
+export async function handleShiftPanelOpen(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "このボタンはサーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const guildId = interaction.guildId;
+  const settings = await getShiftSettings(guildId);
+  const allowedRoles = settings?.submitRoleIds ?? [];
+  if (allowedRoles.length > 0) {
+    const memberRoles = interaction.member && "roles" in interaction.member
+      ? (interaction.member.roles as { cache: Map<string, unknown> }).cache
+      : null;
+    const hasRole = memberRoles ? allowedRoles.some((id: string) => memberRoles.has(id)) : false;
+    if (!hasRole) {
+      await interaction.reply({ content: "❌ このボタンは指定されたロールのメンバーのみ使用できます。", ephemeral: true });
+      return;
+    }
+  }
+
+  cleanExpiredSessions();
+  const sessionId = interaction.id;
+  const dates = getWeekDates(0);
+  const session: SubmitSession = {
+    guildId,
+    userId: interaction.user.id,
+    dates,
+    selections: Object.fromEntries(dates.map((d) => [d, { times: [] }])),
+    expiresAt: Date.now() + 15 * 60 * 1000,
+  };
+  submitSessions.set(sessionId, session);
+
+  await interaction.reply({
+    embeds: [buildSubmitEmbed(session)],
+    components: buildSubmitComponents(sessionId, session),
+    ephemeral: true,
   });
 }

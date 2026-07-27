@@ -18,10 +18,12 @@ import {
   SHIFT_CONFIRM_PREFIX,
   SHIFT_CANCEL_PREFIX,
   SHIFT_TIME_PREFIX,
+  SHIFT_PANEL_OPEN,
   handleShiftToggle,
   handleShiftConfirm,
   handleShiftCancel,
   handleShiftTime,
+  handleShiftPanelOpen,
 } from "./commands";
 import { handleHubJoin, handleHubLeave } from "./commands/vc";
 import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
@@ -950,6 +952,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isButton() && interaction.customId.startsWith(SHIFT_CANCEL_PREFIX)) {
       await handleShiftCancel(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId === SHIFT_PANEL_OPEN) {
+      await handleShiftPanelOpen(interaction);
       return;
     }
 

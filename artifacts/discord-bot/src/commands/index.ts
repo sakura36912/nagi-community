@@ -2138,6 +2138,7 @@ const treasuryCommand: Command = {
 
 import { vcCommand } from "./vc";
 import { evalsheetCommand } from "./evalsheet";
+import { shiftCommand } from "./shift";
 export {
   shiftCommand,
   postWeeklyShifts,
@@ -2150,8 +2151,9 @@ export {
   handleShiftConfirm,
   handleShiftCancel,
   handleShiftTime,
+  SHIFT_PANEL_OPEN,
+  handleShiftPanelOpen,
 } from "./shift";
-import { shiftCommand } from "./shift";
 import { vcsalaryCommand } from "./vcsalary";
 import { vclogCommand } from "./vclog";
 import { slotCommand } from "./slot";
