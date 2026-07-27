@@ -24,10 +24,7 @@ export const guildSettingsTable = pgTable("guild_settings", {
   lastRewardAt: timestamp("last_reward_at", { withTimezone: true }),
   // Discord category channel ID where private VCs (vcshop) are created.
   vcCategoryId: text("vc_category_id"),
-  // Discord category channel ID where 裏フリールーム VCs (urashop) are created.
-  uraCategoryId: text("ura_category_id"),
-  // Discord text/voice channel ID that urashop buyers get ViewChannel access to.
-  uraChannelId: text("ura_channel_id"),
+
   // Discord text channel ID where ban notifications are posted.
   banLogChannelId: text("ban_log_channel_id"),
   // Discord text channel ID where leave notifications are posted.
