@@ -32,6 +32,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   banLogChannelId: text("ban_log_channel_id"),
   // Discord text channel ID where leave notifications are posted.
   leaveLogChannelId: text("leave_log_channel_id"),
+  // Role ID allowed to post bounties.
+  bountyPosterRoleId: text("bounty_poster_role_id"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

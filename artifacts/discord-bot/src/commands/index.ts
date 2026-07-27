@@ -2103,6 +2103,7 @@ import { bannotifyCommand } from "./bannotify";
 import { rolePanelCommand } from "./rolepanel";
 import { guideCommand } from "./guide";
 import { leavelogCommand } from "./leavelog";
+import { bountyCommand } from "./bounty";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -2124,4 +2125,5 @@ export const commands: Command[] = [
   rolePanelCommand,
   guideCommand,
   leavelogCommand,
+  bountyCommand,
 ];
