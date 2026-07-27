@@ -264,9 +264,16 @@ const rankingCommand: Command = {
     if (sub === "me") {
       await interaction.deferReply({ ephemeral: true });
 
-      const optedOut = await isVcTrackingOptedOut(guildId, interaction.user.id);
-      if (optedOut) {
-        await interaction.editReply("🔒 VCトラッキングをオフにしています。`/privacy optin` で再開できます。");
+      const [globalOptedOut, guildOptedOut] = await Promise.all([
+        isVcTrackingGloballyOptedOut(interaction.user.id),
+        isVcTrackingGuildLocalOptedOut(guildId, interaction.user.id),
+      ]);
+      if (globalOptedOut) {
+        await interaction.editReply("⏸ VCトラッキングを**全サーバーで停止中**です（グローバルオプトアウト）。`/privacy optin` で再開できます。");
+        return;
+      }
+      if (guildOptedOut) {
+        await interaction.editReply("🔒 このサーバーでVCトラッキングをオフにしています。`/privacy optin` で再開できます。");
         return;
       }
 
