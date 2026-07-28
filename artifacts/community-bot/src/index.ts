@@ -46,6 +46,8 @@ import {
   COMM_PRIVACY_OPTOUT_DELETE,
   COMM_PRIVACY_GLOBAL_OPTOUT_KEEP,
   COMM_PRIVACY_GLOBAL_OPTOUT_DELETE,
+  COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX,
+  COMM_PRIVACY_ADMIN_DELETE_CANCEL_PREFIX,
   COMM_BOTSTATUS_REFRESH,
   handleEventJoin,
   handleEventCancel,
@@ -57,6 +59,8 @@ import {
   handlePrivacyOptoutDelete,
   handlePrivacyGlobalOptoutKeep,
   handlePrivacyGlobalOptoutDelete,
+  handlePrivacyAdminDeleteConfirm,
+  handlePrivacyAdminDeleteCancel,
   handleBotstatusRefresh,
   handleRoleButton,
   COMM_ROLEBUTTON_PREFIX,
@@ -565,6 +569,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id === COMM_PRIVACY_DELETE_CANCEL) {
         await handlePrivacyDeleteCancel(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX)) {
+        await handlePrivacyAdminDeleteConfirm(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_PRIVACY_ADMIN_DELETE_CANCEL_PREFIX)) {
+        await handlePrivacyAdminDeleteCancel(interaction);
         return;
       }
       if (id.startsWith(COMM_ROLEBUTTON_PREFIX)) {

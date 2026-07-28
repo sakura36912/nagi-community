@@ -75,6 +75,8 @@ export const COMM_PRIVACY_OPTOUT_KEEP = "comm:privacy:optout:keep";
 export const COMM_PRIVACY_OPTOUT_DELETE = "comm:privacy:optout:delete";
 export const COMM_PRIVACY_GLOBAL_OPTOUT_KEEP = "comm:privacy:global:optout:keep";
 export const COMM_PRIVACY_GLOBAL_OPTOUT_DELETE = "comm:privacy:global:optout:delete";
+export const COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX = "comm:privacy:admin-delete:confirm:";
+export const COMM_PRIVACY_ADMIN_DELETE_CANCEL_PREFIX = "comm:privacy:admin-delete:cancel:";
 export const COMM_BOTSTATUS_REFRESH = "comm:botstatus:refresh";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -1140,6 +1142,14 @@ const privacyCommand: Command = {
       sub
         .setName("delete")
         .setDescription("過去のVC滞在記録をすべて削除します（取り消し不可）"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("admin-delete")
+        .setDescription("指定したメンバーのVC記録を削除します（ManageGuild権限が必要）")
+        .addUserOption((opt) =>
+          opt.setName("member").setDescription("対象ユーザー").setRequired(true),
+        ),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -1297,6 +1307,39 @@ const privacyCommand: Command = {
         .setFooter({ text: "グローバル設定はサーバーごとの設定より優先されます。サーバーを退出・再参加しても設定は保持されます。" })
         .setTimestamp();
       await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    if (sub === "admin-delete") {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.editReply("このコマンドはサーバー管理（ManageGuild）権限が必要です。");
+        return;
+      }
+
+      const targetUser = interaction.options.getUser("member", true);
+
+      const embed = new EmbedBuilder()
+        .setTitle("⚠️ メンバーのVC記録を削除しますか？")
+        .setColor(0xfee75c)
+        .setDescription(
+          `<@${targetUser.id}> のこのサーバーにおける**すべてのVC滞在記録**を削除します。\n\n` +
+          "• ランキングや統計からそのメンバーのデータが除外されます\n" +
+          "• この操作は**取り消せません**\n\n" +
+          "本当に削除しますか？",
+        )
+        .setFooter({ text: `対象ユーザーID: ${targetUser.id}` })
+        .setTimestamp();
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX}${targetUser.id}`)
+          .setLabel("削除する 🗑️")
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(`${COMM_PRIVACY_ADMIN_DELETE_CANCEL_PREFIX}${targetUser.id}`)
+          .setLabel("キャンセル")
+          .setStyle(ButtonStyle.Secondary),
+      );
+      await interaction.editReply({ embeds: [embed], components: [row] });
       return;
     }
   },
@@ -1657,6 +1700,47 @@ export async function handlePrivacyGlobalOptoutDelete(interaction: ButtonInterac
       "• ランキングや統計からあなたのデータはすべて除外されます\n" +
       "• 再開するには `/privacy optin` を使用してください",
     )
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+export async function handlePrivacyAdminDeleteConfirm(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+  // Verify the button-clicker still has ManageGuild
+  const member = interaction.member as GuildMember | null;
+  if (!member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    await interaction.reply({ content: "このボタンはサーバー管理（ManageGuild）権限を持つメンバーのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  await interaction.deferUpdate();
+
+  const targetUserId = interaction.customId.slice(COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX.length);
+  const guildId = interaction.guildId;
+
+  const deleted = await deleteUserVcSessions(guildId, targetUserId);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🗑️ VC記録を削除しました")
+    .setColor(0xed4245)
+    .setDescription(
+      `<@${targetUserId}> のVC滞在記録 **${deleted}件** を削除しました。\n\n` +
+      "• ランキングや統計からそのメンバーのデータは除外されます",
+    )
+    .setFooter({ text: `操作者: ${interaction.user.tag} (${interaction.user.id})` })
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+export async function handlePrivacyAdminDeleteCancel(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferUpdate();
+  const embed = new EmbedBuilder()
+    .setTitle("✅ キャンセルしました")
+    .setColor(0x57f287)
+    .setDescription("VC記録の削除をキャンセルしました。データはそのまま保持されます。")
     .setTimestamp();
   await interaction.editReply({ embeds: [embed], components: [] });
 }
