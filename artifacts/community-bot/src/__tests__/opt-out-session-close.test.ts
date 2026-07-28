@@ -79,7 +79,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
-import { closeOpenSessionsForUser } from "../lib/community.js";
+import { closeOpenSessionsForUser, setVcPrivacyOptOut } from "../lib/community.js";
 import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutKeep } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
@@ -304,5 +304,57 @@ describe('handlePrivacyOptoutKeep – "keep data" per-guild opt-out path', () =>
     // At least two eq branches (guildId + userId) and one isNull branch
     expect(whereArg.args.filter((a) => a.op === "eq").length).toBeGreaterThanOrEqual(2);
     expect(whereArg.args.some((a) => a.op === "isNull")).toBe(true);
+  });
+
+  it("includes the session-closed note in the embed when a session was open", async () => {
+    // insert (opt-out flag), then update (closeSession) finds one open session
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([{ id: 30 }]);
+
+    const interaction = makeInteraction("user-pgkeep-7", "guild-F");
+    await handlePrivacyOptoutKeep(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("進行中のVCセッションを自動的に終了しました");
+  });
+
+  it("omits the session-closed note from the embed when no session was open", async () => {
+    // insert (opt-out flag), then update (closeSession) finds nothing
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    const interaction = makeInteraction("user-pgkeep-8", "guild-G");
+    await handlePrivacyOptoutKeep(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).not.toContain("進行中のVCセッションを自動的に終了しました");
+  });
+});
+
+// ─── setVcPrivacyOptOut return value ─────────────────────────────────────────
+
+describe("setVcPrivacyOptOut – return value", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns true when an open session was closed", async () => {
+    // insert (opt-out flag) succeeds, then update (closeSession) finds one row
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([{ id: 99 }]);
+
+    const result = await setVcPrivacyOptOut("guild-rv-1", "user-rv-1", true);
+    expect(result).toBe(true);
+  });
+
+  it("returns false when no session is open", async () => {
+    // insert (opt-out flag) succeeds, then update (closeSession) finds nothing
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    const result = await setVcPrivacyOptOut("guild-rv-2", "user-rv-2", true);
+    expect(result).toBe(false);
   });
 });
