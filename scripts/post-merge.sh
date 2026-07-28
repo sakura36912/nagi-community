@@ -8,3 +8,6 @@ pnpm install --frozen-lockfile
 (cd lib/db && npx tsc --build)
 
 pnpm --filter @workspace/db run push-force
+
+# Run TypeScript type checks across all workspace packages to catch build breaks early.
+pnpm run typecheck
