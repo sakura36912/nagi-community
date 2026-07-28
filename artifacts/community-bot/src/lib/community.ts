@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import {
   db,
   communityEventSettingsTable,
@@ -769,6 +769,35 @@ export async function getLeaveLogChannel(guildId: string): Promise<string | null
     .from(communityRankingSettingsTable)
     .where(eq(communityRankingSettingsTable.guildId, guildId));
   return row?.leaveLogChannelId ?? null;
+}
+
+/**
+ * Returns completed VC sessions (leftAt IS NOT NULL) for a guild,
+ * optionally filtered to a date window on leftAt.
+ *
+ * @param start - Inclusive lower bound (sessions that ended at or after this date).
+ * @param end   - Exclusive upper bound (sessions that ended strictly before this date).
+ *               To include a full calendar day, pass midnight of the following day.
+ */
+export async function getAllTempVcDeletions(
+  guildId: string,
+  opts: { start?: Date; end?: Date } = {},
+): Promise<CommunityVcSession[]> {
+  const conditions: ReturnType<typeof eq>[] = [
+    eq(communityVcSessionsTable.guildId, guildId),
+    isNotNull(communityVcSessionsTable.leftAt) as ReturnType<typeof eq>,
+  ];
+  if (opts.start) {
+    conditions.push(gte(communityVcSessionsTable.leftAt, opts.start) as ReturnType<typeof eq>);
+  }
+  if (opts.end) {
+    conditions.push(lt(communityVcSessionsTable.leftAt, opts.end) as ReturnType<typeof eq>);
+  }
+  return db
+    .select()
+    .from(communityVcSessionsTable)
+    .where(and(...conditions))
+    .orderBy(asc(communityVcSessionsTable.leftAt));
 }
 
 export async function setLeaveLogChannel(

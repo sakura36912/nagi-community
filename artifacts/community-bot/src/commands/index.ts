@@ -58,6 +58,7 @@ import {
   isVcTrackingGuildLocalOptedOut,
   deleteAllUserVcSessions,
   updateEventMessageId,
+  getAllTempVcDeletions,
   type CommunityTicketSettings,
   type CommunityTicketPanel,
 } from "../lib/community.js";
@@ -1957,6 +1958,142 @@ const leavelogCommand: Command = {
   },
 };
 
+// ─── /tempvc ─────────────────────────────────────────────────────────────────
+
+/**
+ * Build a CSV string from a list of completed VC sessions.
+ * Columns: id, user_id, channel_id, joined_at, left_at, duration_seconds
+ */
+function buildTempVcCsv(
+  rows: Awaited<ReturnType<typeof getAllTempVcDeletions>>,
+): string {
+  const header = "id,user_id,channel_id,joined_at,left_at,duration_seconds";
+  const lines = rows.map((r) => {
+    const joinedIso = r.joinedAt.toISOString();
+    const leftIso   = r.leftAt!.toISOString();
+    const durationSec = Math.floor(
+      (r.leftAt!.getTime() - r.joinedAt.getTime()) / 1000,
+    );
+    return `${r.id},${r.userId},${r.channelId},${joinedIso},${leftIso},${durationSec}`;
+  });
+  return [header, ...lines].join("\n");
+}
+
+const tempvcCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("tempvc")
+    .setDescription("一時VCセッションのログを管理します（管理者用）")
+    .addSubcommand((sub) =>
+      sub
+        .setName("export")
+        .setDescription("完了したVCセッションのログをCSVでエクスポートします（管理者用）")
+        .addStringOption((opt) =>
+          opt
+            .setName("start")
+            .setDescription("集計開始日（YYYY-MM-DD）省略時は全期間")
+            .setRequired(false)
+            .setMinLength(10)
+            .setMaxLength(10),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("end")
+            .setDescription("集計終了日（YYYY-MM-DD・当日を含む）省略時は全期間")
+            .setRequired(false)
+            .setMinLength(10)
+            .setMaxLength(10),
+        ),
+    ),
+
+  async execute(interaction) {
+    requireGuild(interaction);
+
+    if (!requireAdmin(interaction)) {
+      await interaction.reply({
+        content: "このコマンドはサーバー管理権限が必要です。",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "export") {
+      await interaction.deferReply({ ephemeral: true });
+
+      const guildId  = interaction.guildId!;
+      const startStr = interaction.options.getString("start");
+      const endStr   = interaction.options.getString("end");
+
+      // Parse and validate date strings
+      let startDate: Date | undefined;
+      let endDate:   Date | undefined;
+
+      if (startStr) {
+        const parsed = parseDate(startStr);
+        if (!parsed) {
+          await interaction.editReply(
+            "❌ `start` の日付形式が正しくありません。`YYYY-MM-DD` 形式で指定してください（例: `2025-01-01`）。",
+          );
+          return;
+        }
+        startDate = parsed;
+      }
+
+      if (endStr) {
+        const parsed = parseDate(endStr);
+        if (!parsed) {
+          await interaction.editReply(
+            "❌ `end` の日付形式が正しくありません。`YYYY-MM-DD` 形式で指定してください（例: `2025-01-31`）。",
+          );
+          return;
+        }
+        // Add 1 day so the end date is inclusive (sessions ending on that calendar day are included).
+        endDate = new Date(parsed.getTime() + 24 * 60 * 60 * 1000);
+      }
+
+      if (startDate && endDate && startDate >= endDate) {
+        await interaction.editReply("❌ `start` は `end` より前の日付を指定してください。");
+        return;
+      }
+
+      const rows = await getAllTempVcDeletions(guildId, { start: startDate, end: endDate });
+
+      if (rows.length === 0) {
+        const rangeNote = startStr || endStr
+          ? `（期間: ${startStr ?? "−"} 〜 ${endStr ?? "−"}）`
+          : "";
+        await interaction.editReply(`📭 エクスポート対象のセッション記録が見つかりませんでした。${rangeNote}`);
+        return;
+      }
+
+      // Build CSV and filename
+      const csv = buildTempVcCsv(rows);
+
+      let filename: string;
+      if (startStr && endStr) {
+        filename = `tempvc-log-${startStr}_${endStr}.csv`;
+      } else if (startStr) {
+        filename = `tempvc-log-from-${startStr}.csv`;
+      } else if (endStr) {
+        filename = `tempvc-log-until-${endStr}.csv`;
+      } else {
+        filename = "tempvc-log-all.csv";
+      }
+
+      await interaction.editReply({
+        content: `✅ **${rows.length}件** のセッション記録をエクスポートしました。`,
+        files: [
+          {
+            attachment: Buffer.from(csv, "utf-8"),
+            name: filename,
+          },
+        ],
+      });
+    }
+  },
+};
+
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 import { prebanCommand } from "./preban.js";
@@ -1973,4 +2110,5 @@ export const commands: Command[] = [
   leavelogCommand,
   prebanCommand,
   pointCommand,
+  tempvcCommand,
 ];
