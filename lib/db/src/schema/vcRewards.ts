@@ -69,6 +69,8 @@ export const vcSessionLogSettingsTable = pgTable("vc_session_log_settings", {
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),
+  /** Channel ID to post real-time join/leave notifications. Null = disabled. */
+  notifyChannelId: text("notify_channel_id"),
 });
 export type VcSessionLogSettings = typeof vcSessionLogSettingsTable.$inferSelect;
 

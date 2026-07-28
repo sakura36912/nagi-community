@@ -517,6 +517,35 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 
+// ─── VC 入退室通知 ────────────────────────────────────────────────────────────
+
+async function sendVcNotifyJoin(guild: VoiceState["guild"], userId: string, channelId: string, notifyChannelId: string): Promise<void> {
+  try {
+    const ch = guild.channels.cache.get(notifyChannelId);
+    if (!ch || !("send" in ch)) return;
+    await (ch as TextChannel).send(`🔊 <@${userId}> が <#${channelId}> に参加しました`);
+  } catch {
+    // 通知失敗は無視
+  }
+}
+
+async function sendVcNotifyLeave(guild: VoiceState["guild"], userId: string, channelId: string, notifyChannelId: string, joinedAt?: Date): Promise<void> {
+  try {
+    const ch = guild.channels.cache.get(notifyChannelId);
+    if (!ch || !("send" in ch)) return;
+    let suffix = "";
+    if (joinedAt) {
+      const secs = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      suffix = `（滞在: ${m}分${s}秒）`;
+    }
+    await (ch as TextChannel).send(`🔇 <@${userId}> が <#${channelId}> から退出しました${suffix}`);
+  } catch {
+    // 通知失敗は無視
+  }
+}
+
 // ─── VC-time reward handler ───────────────────────────────────────────────────
 
 /**
@@ -632,12 +661,15 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           logger.error(`[points] recordPointVcJoin error for ${userId}`, err);
         }
       })(),
-      // Session log tracking
+      // Session log tracking + join notification
       (async () => {
         try {
           const logSettings = await getVcLogSettings(guild.id);
           const catId = getLogCategoryId(newState.channelId!, logSettings.categoryIds, guild);
           if (catId) await recordVcLogJoin(guild.id, userId, newState.channelId!, catId);
+          if (logSettings.notifyChannelId) {
+            await sendVcNotifyJoin(guild, userId, newState.channelId!, logSettings.notifyChannelId);
+          }
         } catch (err) {
           logger.error(`[vclog] recordVcLogJoin error for ${userId}`, err);
         }
@@ -665,10 +697,18 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       settlePointVcSession(guild.id, userId).catch((err) =>
         logger.error(`[points] settlePointVcSession error for ${userId}`, err),
       ),
-      // Session log
-      recordVcLogLeave(guild.id, userId).catch((err) =>
-        logger.error(`[vclog] recordVcLogLeave error for ${userId}`, err),
-      ),
+      // Session log + leave notification
+      (async () => {
+        try {
+          const logSettings = await getVcLogSettings(guild.id);
+          await recordVcLogLeave(guild.id, userId);
+          if (logSettings.notifyChannelId) {
+            await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId);
+          }
+        } catch (err) {
+          logger.error(`[vclog] recordVcLogLeave error for ${userId}`, err);
+        }
+      })(),
       // Hub: Hub が生成したVCが空になった場合は自動削除
       handleHubLeave(oldState).catch((err) =>
         logger.error(`[vcHub] handleHubLeave error for ${userId}`, err),
@@ -715,7 +755,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           logger.error(`[points] VC move point tracking error for ${userId}`, err);
         }
       })(),
-      // Session log – category eligibility may have changed
+      // Session log + move notification – category eligibility may have changed
       (async () => {
         try {
           const logSettings = await getVcLogSettings(guild.id);
@@ -723,10 +763,19 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           const nowLogCat = getLogCategoryId(newState.channelId!, logSettings.categoryIds, guild);
           if (wasLogCat && !nowLogCat) {
             await recordVcLogLeave(guild.id, userId);
+            if (logSettings.notifyChannelId) {
+              await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId);
+            }
           } else if (!wasLogCat && nowLogCat) {
             await recordVcLogJoin(guild.id, userId, newState.channelId!, nowLogCat);
+            if (logSettings.notifyChannelId) {
+              await sendVcNotifyJoin(guild, userId, newState.channelId!, logSettings.notifyChannelId);
+            }
+          } else if (wasLogCat && nowLogCat && logSettings.notifyChannelId) {
+            // Both tracked: notify move
+            await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId);
+            await sendVcNotifyJoin(guild, userId, newState.channelId!, logSettings.notifyChannelId);
           }
-          // Both in or both out → no change needed
         } catch (err) {
           logger.error(`[vclog] channel-move log error for ${userId}`, err);
         }

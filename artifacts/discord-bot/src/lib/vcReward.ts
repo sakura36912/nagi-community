@@ -210,6 +210,19 @@ export async function removeVcLogCategory(
   return row!;
 }
 
+export async function setVcLogNotifyChannel(
+  guildId: string,
+  channelId: string | null,
+): Promise<VcSessionLogSettings> {
+  await getVcLogSettings(guildId);
+  const [row] = await db
+    .update(vcSessionLogSettingsTable)
+    .set({ notifyChannelId: channelId })
+    .where(eq(vcSessionLogSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
 // ─── VC Log Presence ──────────────────────────────────────────────────────────
 
 export async function recordVcLogJoin(
