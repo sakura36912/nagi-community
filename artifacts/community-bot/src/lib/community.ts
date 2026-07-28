@@ -834,3 +834,6 @@ export async function setLeaveLogChannel(
       set: { leaveLogChannelId: channelId, updatedAt: new Date() },
     });
 }
+
+// Re-export awardVcTime so tests can mock it from this module
+export { awardVcTime } from "./points.js";
