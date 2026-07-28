@@ -25,6 +25,7 @@ import {
   getLeaveLogChannel,
   markReminderSent,
   openSession,
+  pruneOldVcSessions,
 } from "./lib/community.js";
 import { awardVcTime, awardEventParticipation, runRoleTenureBatch } from "./lib/points.js";
 import { getPreban } from "@workspace/db";
@@ -364,6 +365,23 @@ client.once(Events.ClientReady, async (readyClient) => {
   }
 
   scheduleRoleTenureBatch();
+
+  // ── VC session pruning ────────────────────────────────────────────────────
+  // Delete completed sessions older than 180 days immediately on startup,
+  // then repeat every 24 h to keep the table from growing unbounded.
+  async function runVcSessionPrune(): Promise<void> {
+    try {
+      const deleted = await pruneOldVcSessions(180);
+      if (deleted > 0) {
+        logger.info(`[vc/prune] Pruned ${deleted} old VC session(s) (>180 days)`);
+      }
+    } catch (err) {
+      logger.error("[vc/prune] Failed to prune old VC sessions", err);
+    }
+  }
+
+  runVcSessionPrune();
+  setInterval(runVcSessionPrune, 24 * 60 * 60 * 1000);
 
   // Tick every 60 s.
   setInterval(() => {

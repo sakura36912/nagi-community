@@ -514,6 +514,25 @@ export async function closeAllOpenSessions(): Promise<void> {
 }
 
 /**
+ * Deletes completed VC sessions whose left_at is older than retentionDays.
+ * Active sessions (left_at IS NULL) are never deleted.
+ * Returns the number of rows deleted.
+ */
+export async function pruneOldVcSessions(retentionDays = 180): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const result = await db
+    .delete(communityVcSessionsTable)
+    .where(
+      and(
+        isNotNull(communityVcSessionsTable.leftAt),
+        lt(communityVcSessionsTable.leftAt, cutoff),
+      ),
+    )
+    .returning({ id: communityVcSessionsTable.id });
+  return result.length;
+}
+
+/**
  * Closes all open VC sessions (left_at IS NULL) for a single user across all guilds.
  * Returns the number of sessions closed.
  */
