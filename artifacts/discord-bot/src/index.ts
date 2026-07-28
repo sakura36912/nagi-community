@@ -1,4 +1,4 @@
-import { AuditLogEvent, ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
+import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
 import { EmbedBuilder } from "discord.js";
@@ -409,6 +409,7 @@ async function runVcDeleteScheduler(): Promise<void> {
   // ── Delete expired channels ───────────────────────────────────────────────
   const expired = await getExpiredSchedules(now);
   for (const schedule of expired) {
+    let missingPermissions = false;
     try {
       const guild = client.guilds.cache.get(schedule.guildId);
       if (guild) {
@@ -423,9 +424,27 @@ async function runVcDeleteScheduler(): Promise<void> {
         }
       }
     } catch (err) {
-      logger.error(`[vc-schedule] Failed to delete channel ${schedule.channelId}`, err);
+      // DiscordAPIError code 50013 = Missing Permissions.
+      // In this case we must NOT remove the DB row so that /vc list still shows
+      // the entry and an admin can notice the permission problem and act on it.
+      if (err instanceof DiscordAPIError && err.code === 50013) {
+        missingPermissions = true;
+        logger.error(
+          `[vc-schedule] Missing Permissions — cannot delete channel ${schedule.channelId} ` +
+          `(${schedule.channelName}) in guild ${schedule.guildId}. ` +
+          `Grant the bot ManageChannels permission and the channel will be removed on the next tick.`,
+          err,
+        );
+      } else {
+        logger.error(`[vc-schedule] Failed to delete channel ${schedule.channelId}`, err);
+      }
     }
-    // Always remove the DB row (channel may already be gone).
+
+    // Skip DB cleanup when the channel is still alive but we lack permission —
+    // leave the row so /vc list stays accurate and the admin can investigate.
+    if (missingPermissions) continue;
+
+    // Remove the DB row (channel was deleted or was already gone).
     await deleteSchedule(schedule.channelId).catch((err) =>
       logger.error(`[vc-schedule] Failed to remove schedule row for ${schedule.channelId}`, err),
     );
