@@ -2,7 +2,8 @@ modules = ["nodejs-24", "postgresql-16"]
 
 [deployment]
 router = "application"
-deploymentTarget = "autoscale"
+deploymentTarget = "vm"
+run = ["bash", "-c", "pnpm --filter @workspace/discord-bot run dev & pnpm --filter @workspace/community-bot run dev & wait"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
