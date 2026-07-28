@@ -598,6 +598,7 @@ export async function getActiveSessionCount(guildId: string): Promise<number> {
 export interface RankingEntry {
   userId: string;
   totalSeconds: number;
+  isLive: boolean;
 }
 
 /**
@@ -613,11 +614,12 @@ export async function getVcRanking(guildId: string, periodStart?: Date): Promise
     ? sql`GREATEST(${communityVcSessionsTable.joinedAt}, ${periodStart})`
     : sql`${communityVcSessionsTable.joinedAt}`;
 
-  const rows = await db.execute<{ user_id: string; total_seconds: string }>(sql`
+  const rows = await db.execute<{ user_id: string; total_seconds: string; is_live: boolean }>(sql`
     SELECT user_id,
       SUM(GREATEST(0, EXTRACT(EPOCH FROM (
         COALESCE(left_at, NOW()) - ${startClamp}
-      ))))::bigint AS total_seconds
+      ))))::bigint AS total_seconds,
+      bool_or(left_at IS NULL) AS is_live
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       ${periodFilter}
@@ -637,6 +639,7 @@ export async function getVcRanking(guildId: string, periodStart?: Date): Promise
   return rows.rows.map((r) => ({
     userId: r.user_id,
     totalSeconds: Number(r.total_seconds),
+    isLive: r.is_live === true,
   }));
 }
 

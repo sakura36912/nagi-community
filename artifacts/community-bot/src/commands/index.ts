@@ -185,14 +185,15 @@ export const RANKING_PERIOD_LABELS: Record<RankingPeriod, string> = {
 };
 
 export function buildRankingEmbed(
-  ranking: { userId: string; totalSeconds: number }[],
+  ranking: { userId: string; totalSeconds: number; isLive?: boolean }[],
   activeCount: number,
   period: RankingPeriod,
 ): EmbedBuilder {
   const medals = ["🥇", "🥈", "🥉"];
   const lines = ranking.map((entry, i) => {
     const prefix = medals[i] ?? `**${i + 1}.**`;
-    return `${prefix} <@${entry.userId}> — ${formatSeconds(entry.totalSeconds)}`;
+    const liveMark = entry.isLive ? " 🔴" : "";
+    return `${prefix} <@${entry.userId}> — ${formatSeconds(entry.totalSeconds)}${liveMark}`;
   });
   const liveIndicator = activeCount > 0
     ? `🔴 現在 ${activeCount}名 がVC参加中（スコアはリアルタイム集計）`
