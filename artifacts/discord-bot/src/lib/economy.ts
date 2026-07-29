@@ -227,6 +227,20 @@ export async function setVcCategoryId(
   return settings;
 }
 
+export async function setVcWarnBeforeMinutes(
+  guildId: string,
+  vcWarnBeforeMinutes: number,
+): Promise<GuildSettings> {
+  await getGuildSettings(guildId); // ensure row exists
+  const [settings] = await db
+    .update(guildSettingsTable)
+    .set({ vcWarnBeforeMinutes })
+    .where(eq(guildSettingsTable.guildId, guildId))
+    .returning();
+  if (!settings) throw new Error("Failed to update vc_warn_before_minutes");
+  return settings;
+}
+
 
 export async function setLeaveLogChannelId(
   guildId: string,

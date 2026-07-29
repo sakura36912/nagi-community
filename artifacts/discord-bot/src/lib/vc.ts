@@ -1,8 +1,8 @@
 import { and, eq, gt, isNull, lte } from "drizzle-orm";
 import { db, vcSchedulesTable, type VcSchedule } from "@workspace/db";
 
-/** Number of milliseconds before expiry at which we send the warning DM. */
-export const NOTIFY_BEFORE_MS = 10 * 60 * 1000; // 10 minutes
+/** Default number of milliseconds before expiry at which we send the warning DM. */
+export const NOTIFY_BEFORE_MS = 10 * 60 * 1000; // 10 minutes (kept for reference)
 
 /**
  * Save (or replace) a VC rename schedule.
@@ -56,19 +56,29 @@ export async function getExpiredSchedules(now: Date): Promise<VcSchedule[]> {
 }
 
 /**
- * Return schedules that are within NOTIFY_BEFORE_MS of expiry but haven't been
- * notified yet. These are candidates for a pre-expiry warning DM.
+ * Return schedules for a specific guild that are within `warnBeforeMs` of
+ * expiry but haven't been notified yet. These are candidates for a pre-expiry
+ * warning DM.
+ *
+ * @param guildId      - The guild to query.
+ * @param now          - Current time reference.
+ * @param warnBeforeMs - Warning window in milliseconds (e.g. 10 * 60 * 1000).
  */
-export async function getSchedulesExpiringSoon(now: Date): Promise<VcSchedule[]> {
-  const notifyWindow = new Date(now.getTime() + NOTIFY_BEFORE_MS);
+export async function getSchedulesExpiringSoon(
+  guildId: string,
+  now: Date,
+  warnBeforeMs: number,
+): Promise<VcSchedule[]> {
+  const notifyWindow = new Date(now.getTime() + warnBeforeMs);
   return db
     .select()
     .from(vcSchedulesTable)
     .where(
       and(
-        gt(vcSchedulesTable.expiresAt, now),          // not yet expired
+        eq(vcSchedulesTable.guildId, guildId),
+        gt(vcSchedulesTable.expiresAt, now),           // not yet expired
         lte(vcSchedulesTable.expiresAt, notifyWindow), // within warning window
-        isNull(vcSchedulesTable.notifiedAt),           // not yet notified
+        isNull(vcSchedulesTable.notifiedAt),            // not yet notified
       ),
     );
 }

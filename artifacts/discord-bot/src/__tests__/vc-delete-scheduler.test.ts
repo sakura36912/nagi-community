@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   markScheduleNotified: vi.fn(),
   getExpiredSchedules: vi.fn(),
   deleteSchedule: vi.fn(),
+  getGuildSettings: vi.fn(),
   loggerInfo: vi.fn(),
   loggerError: vi.fn(),
 }));
@@ -54,7 +55,11 @@ vi.mock("../lib/vc.js", () => ({
   markScheduleNotified: mocks.markScheduleNotified,
   getExpiredSchedules: mocks.getExpiredSchedules,
   deleteSchedule: mocks.deleteSchedule,
-  NOTIFY_BEFORE_MS: 10 * 60 * 1000,
+}));
+
+// ─── Mock lib/economy ────────────────────────────────────────────────────────
+vi.mock("../lib/economy.js", () => ({
+  getGuildSettings: mocks.getGuildSettings,
 }));
 
 // ─── Mock logger ─────────────────────────────────────────────────────────────
@@ -72,6 +77,7 @@ import {
   getExpiredSchedules,
   deleteSchedule,
 } from "../lib/vc.js";
+import { getGuildSettings } from "../lib/economy.js";
 import { logger } from "../lib/logger.js";
 
 // ─── Inline scheduler ────────────────────────────────────────────────────────
@@ -96,33 +102,44 @@ async function runVcDeleteScheduler(
 ): Promise<void> {
   const now = new Date();
 
-  // ── Pre-expiry warning ───────────────────────────────────────────────────
-  const soon = await getSchedulesExpiringSoon(now);
-  for (const schedule of soon) {
+  // ── Pre-expiry warning (per-guild) ───────────────────────────────────────
+  for (const [guildId, guild] of client.guilds.cache) {
     try {
-      if (schedule.userId) {
-        const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
-        const user = await client.users.fetch(schedule.userId).catch(() => null);
-        if (user) {
-          await user
-            .send(
-              `⏰ VCチャンネル「**${schedule.channelName}**」は <t:${expiresTs}:R>（<t:${expiresTs}:T>）に自動削除されます。必要であれば会話を引き続き行ってください。`,
-            )
-            .catch(() => {
-              // DMs closed — ignore silently.
-            });
-          logger.info(
-            `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
-          );
+      const guildSettings = await getGuildSettings(guildId);
+      const warnBeforeMs = (guildSettings as { vcWarnBeforeMinutes: number }).vcWarnBeforeMinutes * 60 * 1000;
+      const soon = await getSchedulesExpiringSoon(guildId, now, warnBeforeMs);
+
+      for (const schedule of soon) {
+        try {
+          if (schedule.userId) {
+            const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
+            const user = await client.users.fetch(schedule.userId).catch(() => null);
+            if (user) {
+              await user
+                .send(
+                  `⏰ VCチャンネル「**${schedule.channelName}**」は <t:${expiresTs}:R>（<t:${expiresTs}:T>）に自動削除されます。必要であれば会話を引き続き行ってください。`,
+                )
+                .catch(() => {
+                  // DMs closed — ignore silently.
+                });
+              logger.info(
+                `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
+              );
+            }
+          }
+        } catch (err) {
+          logger.error(`[vc-schedule] Failed to send expiry warning for ${schedule.channelId}`, err);
         }
+        // Always mark notified to prevent duplicate warnings, even if DM failed.
+        await markScheduleNotified(schedule.id, now).catch((err) =>
+          logger.error(`[vc-schedule] Failed to mark schedule ${schedule.id} as notified`, err),
+        );
       }
     } catch (err) {
-      logger.error(`[vc-schedule] Failed to send expiry warning for ${schedule.channelId}`, err);
+      logger.error(`[vc-schedule] Failed to process expiry warnings for guild ${guildId}`, err);
     }
-    // Always mark notified to prevent duplicate warnings, even if DM failed.
-    await markScheduleNotified(schedule.id, now).catch((err) =>
-      logger.error(`[vc-schedule] Failed to mark schedule ${schedule.id} as notified`, err),
-    );
+    // suppress unused var warning
+    void guild;
   }
 
   // ── Delete expired channels ──────────────────────────────────────────────
@@ -231,6 +248,7 @@ function makeClient(
 describe("runVcDeleteScheduler – pre-expiry warning", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
     mocks.markScheduleNotified.mockResolvedValue(undefined);
     mocks.getExpiredSchedules.mockResolvedValue([]);
   });
@@ -338,6 +356,7 @@ describe("runVcDeleteScheduler – pre-expiry warning", () => {
 describe("runVcDeleteScheduler – channel deletion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
     mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
     mocks.markScheduleNotified.mockResolvedValue(undefined);
     mocks.deleteSchedule.mockResolvedValue(true);
@@ -420,6 +439,7 @@ describe("runVcDeleteScheduler – channel deletion", () => {
 describe("runVcDeleteScheduler – DM failure does not block channel deletion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
     mocks.markScheduleNotified.mockResolvedValue(undefined);
     mocks.deleteSchedule.mockResolvedValue(true);
   });
@@ -448,25 +468,40 @@ describe("runVcDeleteScheduler – DM failure does not block channel deletion", 
 describe("getSchedulesExpiringSoon – query filter assertions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
     mocks.getExpiredSchedules.mockResolvedValue([]);
     mocks.markScheduleNotified.mockResolvedValue(undefined);
     mocks.deleteSchedule.mockResolvedValue(true);
   });
 
-  it("is called with the current Date", async () => {
+  it("is called with the guild ID, current Date, and warn window in ms", async () => {
     mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([]);
 
     const before = Date.now();
     await runVcDeleteScheduler(makeClient());
     const after = Date.now();
 
-    const [calledWith] = mocks.getSchedulesExpiringSoon.mock.calls[0] as [Date];
-    expect(calledWith).toBeInstanceOf(Date);
-    expect(calledWith.getTime()).toBeGreaterThanOrEqual(before);
-    expect(calledWith.getTime()).toBeLessThanOrEqual(after);
+    // New signature: (guildId, now, warnBeforeMs)
+    const [guildId, now, warnBeforeMs] = mocks.getSchedulesExpiringSoon.mock.calls[0] as [string, Date, number];
+    expect(guildId).toBe("guild-1");
+    expect(now).toBeInstanceOf(Date);
+    expect(now.getTime()).toBeGreaterThanOrEqual(before);
+    expect(now.getTime()).toBeLessThanOrEqual(after);
+    expect(warnBeforeMs).toBe(10 * 60 * 1000); // default 10 min
   });
 
-  it("is called exactly once per scheduler tick", async () => {
+  it("uses the guild's configured warn time (e.g. 30 min)", async () => {
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 30 });
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([]);
+
+    await runVcDeleteScheduler(makeClient());
+
+    const [, , warnBeforeMs] = mocks.getSchedulesExpiringSoon.mock.calls[0] as [string, Date, number];
+    expect(warnBeforeMs).toBe(30 * 60 * 1000);
+  });
+
+  it("is called once per guild in the cache per scheduler tick", async () => {
+    // makeClient() puts exactly one guild ("guild-1") in the cache
     mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([]);
 
     await runVcDeleteScheduler(makeClient());

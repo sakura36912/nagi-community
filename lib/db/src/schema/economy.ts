@@ -34,6 +34,10 @@ export const guildSettingsTable = pgTable("guild_settings", {
   // Discord text channel ID where leave notifications are posted.
   leaveLogChannelId: text("leave_log_channel_id"),
 
+  // How many minutes before a VC rename schedule expires to send the warning DM.
+  // Defaults to 10 minutes (matches the original hardcoded value).
+  vcWarnBeforeMinutes: integer("vc_warn_before_minutes").notNull().default(10),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

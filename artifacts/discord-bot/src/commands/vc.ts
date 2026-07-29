@@ -23,6 +23,7 @@ import {
   getHubSession,
   deleteHubSession,
 } from "@workspace/db";
+import { getGuildSettings, setVcWarnBeforeMinutes } from "../lib/economy";
 import { logger } from "../lib/logger";
 
 // ─── /vc command ────────────────────────────────────────────────────────────
@@ -103,6 +104,30 @@ export const vcCommand = {
       sub
         .setName("hub-list")
         .setDescription("登録済みの Hub チャンネル一覧を表示します"),
+    )
+    // ── warn-time ─────────────────────────────────────────────────────────
+    .addSubcommandGroup((group) =>
+      group
+        .setName("warn-time")
+        .setDescription("VCリネームスケジュールの事前警告時間を管理します")
+        .addSubcommand((sub) =>
+          sub
+            .setName("get")
+            .setDescription("現在の警告時間（分）を表示します"),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("set")
+            .setDescription("VCが削除される何分前に警告DMを送るかを設定します")
+            .addIntegerOption((opt) =>
+              opt
+                .setName("minutes")
+                .setDescription("警告を送る時間（分）。1〜120の範囲で指定してください。")
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(120),
+            ),
+        ),
     ),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -114,7 +139,8 @@ export const vcCommand = {
       return;
     }
 
-    const sub = interaction.options.getSubcommand();
+    const group = interaction.options.getSubcommandGroup(false);
+    const sub   = interaction.options.getSubcommand();
 
     // ── rename ────────────────────────────────────────────────────────────
     if (sub === "rename") {
@@ -122,13 +148,37 @@ export const vcCommand = {
       return;
     }
 
-    // hub-* subcommands require ManageChannels
+    // All remaining subcommands require ManageChannels
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
       await interaction.reply({
         content: "このコマンドを使用するには ManageChannels 権限が必要です。",
         ephemeral: true,
       });
       return;
+    }
+
+    // ── warn-time ─────────────────────────────────────────────────────────
+    if (group === "warn-time") {
+      if (sub === "get") {
+        const settings = await getGuildSettings(interaction.guildId);
+        await interaction.reply({
+          content:
+            `⏰ 現在の警告時間: **${settings.vcWarnBeforeMinutes}分前**\n` +
+            `（VCが削除される ${settings.vcWarnBeforeMinutes} 分前に警告DMが送信されます）`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (sub === "set") {
+        const minutes = interaction.options.getInteger("minutes", true);
+        await setVcWarnBeforeMinutes(interaction.guildId, minutes);
+        await interaction.reply({
+          content: `✅ 警告時間を **${minutes}分前** に設定しました。`,
+          ephemeral: true,
+        });
+        return;
+      }
     }
 
     // ── hub-add ───────────────────────────────────────────────────────────

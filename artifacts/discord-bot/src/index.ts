@@ -31,7 +31,6 @@ import {
   getSchedulesExpiringSoon,
   deleteSchedule,
   markScheduleNotified,
-  NOTIFY_BEFORE_MS,
 } from "./lib/vc";
 import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
@@ -379,31 +378,40 @@ async function runSheetReminderScheduler(bot: Client<true>): Promise<void> {
 async function runVcDeleteScheduler(): Promise<void> {
   const now = new Date();
 
-  // ── Pre-expiry warning ────────────────────────────────────────────────────
-  const soon = await getSchedulesExpiringSoon(now);
-  for (const schedule of soon) {
+  // ── Pre-expiry warning (per-guild, using each guild's configured warn time) ──
+  for (const guild of client.guilds.cache.values()) {
     try {
-      if (schedule.userId) {
-        const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
-        const user = await client.users.fetch(schedule.userId).catch(() => null);
-        if (user) {
-          await user.send(
-            `⏰ VCチャンネル「**${schedule.channelName}**」は <t:${expiresTs}:R>（<t:${expiresTs}:T>）に自動削除されます。必要であれば会話を引き続き行ってください。`,
-          ).catch(() => {
-            // DMs closed — ignore silently.
-          });
-          logger.info(
-            `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
-          );
+      const guildSettings = await getGuildSettings(guild.id);
+      const warnBeforeMs = guildSettings.vcWarnBeforeMinutes * 60 * 1000;
+      const soon = await getSchedulesExpiringSoon(guild.id, now, warnBeforeMs);
+
+      for (const schedule of soon) {
+        try {
+          if (schedule.userId) {
+            const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
+            const user = await client.users.fetch(schedule.userId).catch(() => null);
+            if (user) {
+              await user.send(
+                `⏰ VCチャンネル「**${schedule.channelName}**」は <t:${expiresTs}:R>（<t:${expiresTs}:T>）に自動削除されます。必要であれば会話を引き続き行ってください。`,
+              ).catch(() => {
+                // DMs closed — ignore silently.
+              });
+              logger.info(
+                `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
+              );
+            }
+          }
+        } catch (err) {
+          logger.error(`[vc-schedule] Failed to send expiry warning for ${schedule.channelId}`, err);
         }
+        // Always mark notified to prevent duplicate warnings, even if DM failed.
+        await markScheduleNotified(schedule.id, now).catch((err) =>
+          logger.error(`[vc-schedule] Failed to mark schedule ${schedule.id} as notified`, err),
+        );
       }
     } catch (err) {
-      logger.error(`[vc-schedule] Failed to send expiry warning for ${schedule.channelId}`, err);
+      logger.error(`[vc-schedule] Failed to process expiry warnings for guild ${guild.id}`, err);
     }
-    // Always mark notified to prevent duplicate warnings, even if DM failed.
-    await markScheduleNotified(schedule.id, now).catch((err) =>
-      logger.error(`[vc-schedule] Failed to mark schedule ${schedule.id} as notified`, err),
-    );
   }
 
   // ── Delete expired channels ───────────────────────────────────────────────
