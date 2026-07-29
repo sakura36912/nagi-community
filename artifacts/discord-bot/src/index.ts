@@ -216,6 +216,7 @@ async function runVcExpiryScheduler(): Promise<void> {
   const expired = await getExpiredPrivateVcSessions(now);
 
   for (const session of expired) {
+    let missingPermissions = false;
     try {
       const guild = client.guilds.cache.get(session.guildId);
       if (guild) {
@@ -245,11 +246,28 @@ async function runVcExpiryScheduler(): Promise<void> {
         }
       }
     } catch (err) {
-      logger.error(`[vc-expiry] Failed to delete channel ${session.channelId}`, err);
+      // DiscordAPIError code 50013 = Missing Permissions.
+      // Do NOT remove the DB row — the channel is still alive. Leave the
+      // session record intact so the next scheduler tick retries automatically
+      // once an admin restores the ManageChannels permission.
+      if (err instanceof DiscordAPIError && err.code === 50013) {
+        missingPermissions = true;
+        logger.error(
+          `[vc-expiry] Missing Permissions — cannot delete channel ${session.channelId} ` +
+          `for user ${session.userId} in guild ${session.guildId}. ` +
+          `Grant the bot ManageChannels permission and the channel will be removed on the next tick.`,
+          err,
+        );
+      } else {
+        logger.error(`[vc-expiry] Failed to delete channel ${session.channelId}`, err);
+      }
     }
 
-    // Always remove the session record even if channel deletion failed
-    // (channel may have already been manually deleted).
+    // Skip DB cleanup when the channel is still alive but we lack permission —
+    // leave the row so the session is retried on the next tick.
+    if (missingPermissions) continue;
+
+    // Remove the session record (channel was deleted or was already gone).
     await deletePrivateVcSession(session.id).catch((err) =>
       logger.error(`[vc-expiry] Failed to delete session ${session.id}`, err),
     );
