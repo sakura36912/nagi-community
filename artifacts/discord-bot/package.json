@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "deploy": "tsx src/deploy-commands.ts"
+    "deploy": "tsx src/deploy-commands.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@workspace/db": "workspace:*",
@@ -15,6 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "tsx": "catalog:"
+    "tsx": "catalog:",
+    "vitest": "^3.2.7"
   }
 }
