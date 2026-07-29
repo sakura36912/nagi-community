@@ -24,8 +24,8 @@ const INITIAL_BERRY = 150_000;
 
 export const interviewCommand: Command = {
   data: new SlashCommandBuilder()
-    .setName("面接通過")
-    .setDescription("面接通過者にロールを付与し初期ベリーを配布する")
+    .setName("説明会通過")
+    .setDescription("説明会通過者にロールを付与し初期ベリーを配布する")
     .addUserOption((opt) =>
       opt
         .setName("メンバー")
