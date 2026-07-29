@@ -2186,6 +2186,7 @@ import { leavelogCommand } from "./leavelog";
 
 import { pointconfigCommand } from "./pointconfig";
 import { pointCommand } from "./point";
+import { interviewCommand } from "./interview";
 
 export const commands: Command[] = [
   currencyCommand,
@@ -2210,4 +2211,5 @@ export const commands: Command[] = [
 
   pointconfigCommand,
   pointCommand,
+  interviewCommand,
 ];
