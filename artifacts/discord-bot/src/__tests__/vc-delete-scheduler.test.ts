@@ -463,6 +463,60 @@ describe("runVcDeleteScheduler – DM failure does not block channel deletion", 
   });
 });
 
+// ─── Two-tick retry: permission restored between ticks ───────────────────────
+
+describe("runVcDeleteScheduler – retry after permission is restored", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
+  });
+
+  it("preserves the DB row on the first tick (50013) and removes it on the second tick once permissions are restored", async () => {
+    const schedule = makeSchedule();
+
+    // Both ticks see the same expired schedule (it was preserved after tick 1).
+    mocks.getExpiredSchedules.mockResolvedValue([schedule]);
+
+    // channel.delete() fails with 50013 on the first call, succeeds on the second.
+    const channelDelete = vi
+      .fn()
+      .mockRejectedValueOnce(makeDiscordAPIError(50013, "Missing Permissions"))
+      .mockResolvedValueOnce(undefined);
+
+    const client = makeClient({ channelDelete });
+
+    // ── Tick 1: missing permissions ──────────────────────────────────────────
+    await runVcDeleteScheduler(client);
+
+    // Row must NOT be deleted — scheduler should retry on next tick.
+    expect(mocks.deleteSchedule).not.toHaveBeenCalled();
+    // A "Missing Permissions" error must be logged.
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("Missing Permissions"),
+      expect.anything(),
+    );
+
+    vi.clearAllMocks();
+    mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
+    mocks.deleteSchedule.mockResolvedValue(true);
+    mocks.getExpiredSchedules.mockResolvedValue([schedule]);
+
+    // ── Tick 2: permissions restored ─────────────────────────────────────────
+    await runVcDeleteScheduler(client);
+
+    // channel.delete() must have been called a second time.
+    expect(channelDelete).toHaveBeenCalledTimes(1); // only the tick-2 call (mock was cleared)
+    // DB row must now be cleaned up.
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+    // No permission error on tick 2.
+    expect(mocks.loggerError).not.toHaveBeenCalled();
+  });
+});
+
 // ─── Unit tests for the DB query helpers (no Discord client needed) ───────────
 
 describe("getSchedulesExpiringSoon – query filter assertions", () => {
