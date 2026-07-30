@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import {
   db,
   communityEventSettingsTable,
@@ -781,6 +781,88 @@ export async function getAllRankingSettings(): Promise<CommunityRankingSettings[
     .select()
     .from(communityRankingSettingsTable)
     .where(sql`${communityRankingSettingsTable.channelId} IS NOT NULL`);
+}
+
+/**
+ * Returns the configured VC session retention window for a guild in days.
+ * Falls back to 180 when no custom value has been set.
+ */
+export async function getVcSessionRetentionDays(guildId: string): Promise<number> {
+  const [row] = await db
+    .select({ vcSessionRetentionDays: communityRankingSettingsTable.vcSessionRetentionDays })
+    .from(communityRankingSettingsTable)
+    .where(eq(communityRankingSettingsTable.guildId, guildId));
+  return row?.vcSessionRetentionDays ?? 180;
+}
+
+/**
+ * Stores a custom VC session retention window (in days) for a guild.
+ * Pass null to revert to the system default (180 days).
+ */
+export async function setVcSessionRetentionDays(
+  guildId: string,
+  days: number | null,
+): Promise<void> {
+  await db
+    .insert(communityRankingSettingsTable)
+    .values({ guildId, period: "all", vcSessionRetentionDays: days })
+    .onConflictDoUpdate({
+      target: communityRankingSettingsTable.guildId,
+      set: { vcSessionRetentionDays: days, updatedAt: new Date() },
+    });
+}
+
+/**
+ * Deletes completed VC sessions for a single guild whose left_at is older
+ * than retentionDays.  Active sessions (left_at IS NULL) are never deleted.
+ * Returns the number of rows deleted.
+ */
+export async function pruneGuildVcSessions(
+  guildId: string,
+  retentionDays: number,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const result = await db
+    .delete(communityVcSessionsTable)
+    .where(
+      and(
+        eq(communityVcSessionsTable.guildId, guildId),
+        isNotNull(communityVcSessionsTable.leftAt),
+        lt(communityVcSessionsTable.leftAt, cutoff),
+      ),
+    )
+    .returning({ id: communityVcSessionsTable.id });
+  return result.length;
+}
+
+/**
+ * Deletes completed VC sessions that belong to guilds NOT in activeGuildIds,
+ * applying a fixed 180-day retention window.  This is a catch-all to clean up
+ * rows from guilds the bot has since left; it never touches sessions that
+ * belong to an active guild (those are handled by pruneGuildVcSessions).
+ *
+ * If activeGuildIds is empty the function is a no-op — a bot with no guilds
+ * should not mass-delete all historical data.
+ *
+ * Returns the number of rows deleted.
+ */
+export async function pruneOrphanedVcSessions(
+  activeGuildIds: string[],
+  retentionDays = 180,
+): Promise<number> {
+  if (activeGuildIds.length === 0) return 0;
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const result = await db
+    .delete(communityVcSessionsTable)
+    .where(
+      and(
+        notInArray(communityVcSessionsTable.guildId, activeGuildIds),
+        isNotNull(communityVcSessionsTable.leftAt),
+        lt(communityVcSessionsTable.leftAt, cutoff),
+      ),
+    )
+    .returning({ id: communityVcSessionsTable.id });
+  return result.length;
 }
 
 // ─── Leave Log Settings ───────────────────────────────────────────────────────

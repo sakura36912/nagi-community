@@ -43,6 +43,8 @@ import {
   removeTicket,
   setLeaveLogChannel,
   setRankingSettings,
+  setVcSessionRetentionDays,
+  getVcSessionRetentionDays,
   setStaffRole,
   setTicketMessages,
   setTicketRenameRole,
@@ -258,6 +260,19 @@ const rankingCommand: Command = {
     )
     .addSubcommand((sub) =>
       sub.setName("disable").setDescription("毎日の自動投稿を停止します（管理者用）"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("retention-days")
+        .setDescription("VCセッション履歴の保持期間を設定します（管理者用）")
+        .addIntegerOption((opt) =>
+          opt
+            .setName("days")
+            .setDescription("保持日数（1〜3650）。省略すると現在の設定を表示。0を指定するとデフォルト（180日）にリセット。")
+            .setRequired(false)
+            .setMinValue(0)
+            .setMaxValue(3650),
+        ),
     ),
 
   async execute(interaction) {
@@ -366,6 +381,37 @@ const rankingCommand: Command = {
     if (sub === "disable") {
       await setRankingSettings(guildId, null, "today");
       await interaction.reply({ content: "毎日のランキング自動投稿を停止しました。", ephemeral: true });
+      return;
+    }
+
+    if (sub === "retention-days") {
+      const days = interaction.options.getInteger("days");
+
+      // No argument → show current setting
+      if (days === null) {
+        const current = await getVcSessionRetentionDays(guildId);
+        await interaction.reply({
+          content: `現在のVCセッション保持期間は **${current}日** です（カスタム設定がない場合はデフォルトの180日）。`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      // days=0 → reset to default
+      if (days === 0) {
+        await setVcSessionRetentionDays(guildId, null);
+        await interaction.reply({
+          content: "VCセッションの保持期間をデフォルト（**180日**）にリセットしました。",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await setVcSessionRetentionDays(guildId, days);
+      await interaction.reply({
+        content: `VCセッションの保持期間を **${days}日** に設定しました。180日より短い場合は古いセッションが次回のプルーン時に削除されます。`,
+        ephemeral: true,
+      });
       return;
     }
   },

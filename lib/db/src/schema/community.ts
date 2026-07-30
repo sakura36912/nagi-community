@@ -258,6 +258,12 @@ export const communityRankingSettingsTable = pgTable("community_ranking_settings
   period: text("period").notNull().default("all"),
   /** Channel where member-leave log embeds are posted. Null = disabled. */
   leaveLogChannelId: text("leave_log_channel_id"),
+  /**
+   * How many days of completed VC sessions to keep for this guild.
+   * Null means use the system default of 180 days.
+   * Must be between 1 and 3650.
+   */
+  vcSessionRetentionDays: integer("vc_session_retention_days"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
