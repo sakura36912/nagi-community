@@ -29,7 +29,7 @@ import {
   type GroupShopSale,
 } from "@workspace/db";
 
-export const DEFAULT_CURRENCY_NAME = "ベリー";
+export const DEFAULT_CURRENCY_NAME = "$";
 export const DEFAULT_DAILY_AMOUNT = 500;
 export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
