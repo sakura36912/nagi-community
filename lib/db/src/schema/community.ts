@@ -292,6 +292,8 @@ export const communityTicketPanelsTable = pgTable("community_ticket_panels", {
   closeButtonStyle: integer("close_button_style"),
   /** Role IDs to mention when a ticket is opened from this panel. */
   mentionRoleIds: text("mention_role_ids").array(),
+  /** Discord category channel ID where tickets from this panel are created. Overrides global setting. */
+  categoryId: text("category_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

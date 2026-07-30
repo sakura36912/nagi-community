@@ -714,7 +714,10 @@ function addPanelOpts<T extends import("discord.js").SlashCommandSubcommandBuild
     .addStringOption((o) => o.setName("embed_title").setDescription("ウェルカムEmbedの見出し").setRequired(false).setMaxLength(256))
     .addStringOption((o) => o.setName("embed_color").setDescription("ウェルカムEmbedの色（例: #5865F2）").setRequired(false).setMaxLength(7))
     .addStringOption((o) => o.setName("close_label").setDescription("クローズボタンのラベル").setRequired(false).setMaxLength(80))
-    .addStringOption((o) => o.setName("close_style").setDescription("クローズボタンの色").setRequired(false).addChoices(...STYLE_CHOICES));
+    .addStringOption((o) => o.setName("close_style").setDescription("クローズボタンの色").setRequired(false).addChoices(...STYLE_CHOICES))
+    .addChannelOption((o) =>
+      o.setName("category").setDescription("チケットを作成するカテゴリー（未設定時はグローバル設定を使用）").setRequired(false).addChannelTypes(ChannelType.GuildCategory),
+    );
   for (let i = 1; i <= MAX_MENTION_ROLES; i++) {
     s = s.addRoleOption((o) =>
       o.setName(`mention_role_${i}`).setDescription(`チケット開設時にpingするロール ${i}`).setRequired(false),
@@ -755,6 +758,10 @@ function collectPanelOpts(interaction: ChatInputCommandInteraction) {
     // Only include if at least one role was specified (so edit without touching
     // roles does not overwrite existing ones)
     ...(mentionRoleIds.length > 0 ? { mentionRoleIds } : {}),
+    // Only include categoryId if the option was explicitly provided
+    ...(interaction.options.getChannel("category") != null
+      ? { categoryId: interaction.options.getChannel("category")!.id }
+      : {}),
   };
 }
 
@@ -1496,8 +1503,8 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
     });
   }
 
-  // ── Category: global setting, fallback to hardcoded ───────────────────────
-  const categoryId = settings?.categoryId ?? TICKET_CATEGORY_FALLBACK;
+  // ── Category: panel > global setting > hardcoded fallback ────────────────
+  const categoryId = panel?.categoryId ?? settings?.categoryId ?? TICKET_CATEGORY_FALLBACK;
 
   let channel;
   try {
