@@ -2087,6 +2087,12 @@ const tempvcCommand: Command = {
             .setRequired(false)
             .setMinLength(10)
             .setMaxLength(10),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName("user")
+            .setDescription("特定のユーザーのみエクスポート（省略時は全ユーザー）")
+            .setRequired(false),
         ),
     ),
 
@@ -2109,6 +2115,7 @@ const tempvcCommand: Command = {
       const guildId  = interaction.guildId!;
       const startStr = interaction.options.getString("start");
       const endStr   = interaction.options.getString("end");
+      const targetUser: User | null = interaction.options.getUser("user");
 
       // Parse and validate date strings
       let startDate: Date | undefined;
@@ -2142,29 +2149,34 @@ const tempvcCommand: Command = {
         return;
       }
 
-      const rows = await getAllTempVcDeletions(guildId, { start: startDate, end: endDate });
+      const rows = await getAllTempVcDeletions(guildId, {
+        start: startDate,
+        end: endDate,
+        userId: targetUser?.id,
+      });
 
       if (rows.length === 0) {
         const rangeNote = startStr || endStr
           ? `（期間: ${startStr ?? "−"} 〜 ${endStr ?? "−"}）`
           : "";
-        await interaction.editReply(`📭 エクスポート対象のセッション記録が見つかりませんでした。${rangeNote}`);
+        const userNote = targetUser ? `（ユーザー: <@${targetUser.id}>）` : "";
+        await interaction.editReply(`📭 エクスポート対象のセッション記録が見つかりませんでした。${rangeNote}${userNote}`);
         return;
       }
 
       // Build CSV and filename
       const csv = buildTempVcCsv(rows);
 
-      let filename: string;
-      if (startStr && endStr) {
-        filename = `tempvc-log-${startStr}_${endStr}.csv`;
-      } else if (startStr) {
-        filename = `tempvc-log-from-${startStr}.csv`;
-      } else if (endStr) {
-        filename = `tempvc-log-until-${endStr}.csv`;
-      } else {
-        filename = "tempvc-log-all.csv";
-      }
+      // Build filename: include date range and/or user ID if specified
+      const datePart = startStr && endStr
+        ? `${startStr}_${endStr}`
+        : startStr
+          ? `from-${startStr}`
+          : endStr
+            ? `until-${endStr}`
+            : "all";
+      const userPart = targetUser ? `-${targetUser.id}` : "";
+      const filename = `tempvc-log-${datePart}${userPart}.csv`;
 
       await interaction.editReply({
         content: `✅ **${rows.length}件** のセッション記録をエクスポートしました。`,

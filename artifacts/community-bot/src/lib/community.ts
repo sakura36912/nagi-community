@@ -803,7 +803,7 @@ export async function getLeaveLogChannel(guildId: string): Promise<string | null
  */
 export async function getAllTempVcDeletions(
   guildId: string,
-  opts: { start?: Date; end?: Date } = {},
+  opts: { start?: Date; end?: Date; userId?: string } = {},
 ): Promise<CommunityVcSession[]> {
   const conditions: ReturnType<typeof eq>[] = [
     eq(communityVcSessionsTable.guildId, guildId),
@@ -814,6 +814,9 @@ export async function getAllTempVcDeletions(
   }
   if (opts.end) {
     conditions.push(lt(communityVcSessionsTable.leftAt, opts.end) as ReturnType<typeof eq>);
+  }
+  if (opts.userId) {
+    conditions.push(eq(communityVcSessionsTable.userId, opts.userId) as ReturnType<typeof eq>);
   }
   return db
     .select()
