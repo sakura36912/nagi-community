@@ -548,11 +548,23 @@ client.once(Events.ClientReady, (readyClient) => {
 
 // ─── VC 入退室通知 ────────────────────────────────────────────────────────────
 
+/** メンバーの表示名を取得。キャッシュになければユーザーIDをフォールバックとして使用 */
+function getMemberDisplayName(guild: VoiceState["guild"], userId: string): string {
+  return guild.members.cache.get(userId)?.displayName ?? `ユーザー(${userId})`;
+}
+
+/** チャンネル名を取得。キャッシュになければチャンネルIDをフォールバックとして使用 */
+function getVcChannelName(guild: VoiceState["guild"], channelId: string): string {
+  return guild.channels.cache.get(channelId)?.name ?? `チャンネル(${channelId})`;
+}
+
 async function sendVcNotifyJoin(guild: VoiceState["guild"], userId: string, channelId: string, notifyChannelId: string): Promise<void> {
   try {
     const ch = guild.channels.cache.get(notifyChannelId);
     if (!ch || !("send" in ch)) return;
-    await (ch as TextChannel).send(`🔊 <@${userId}> が <#${channelId}> に参加しました`);
+    const memberName  = getMemberDisplayName(guild, userId);
+    const channelName = getVcChannelName(guild, channelId);
+    await (ch as TextChannel).send({ content: `🔊 ${memberName} が「${channelName}」に参加しました`, allowedMentions: { parse: [] } });
   } catch {
     // 通知失敗は無視
   }
@@ -562,6 +574,8 @@ async function sendVcNotifyLeave(guild: VoiceState["guild"], userId: string, cha
   try {
     const ch = guild.channels.cache.get(notifyChannelId);
     if (!ch || !("send" in ch)) return;
+    const memberName  = getMemberDisplayName(guild, userId);
+    const channelName = getVcChannelName(guild, channelId);
     let suffix = "";
     if (joinedAt) {
       const secs = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
@@ -569,7 +583,7 @@ async function sendVcNotifyLeave(guild: VoiceState["guild"], userId: string, cha
       const s = secs % 60;
       suffix = `（滞在: ${m}分${s}秒）`;
     }
-    await (ch as TextChannel).send(`🔇 <@${userId}> が <#${channelId}> から退出しました${suffix}`);
+    await (ch as TextChannel).send({ content: `🔇 ${memberName} が「${channelName}」から退出しました${suffix}`, allowedMentions: { parse: [] } });
   } catch {
     // 通知失敗は無視
   }
