@@ -275,6 +275,16 @@ async function purchaseAndCreatePrivateVc(
 
     if (expiresAt) {
       await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, "vc");
+
+      // Register the schedule immediately so the pre-expiry warning DM fires
+      // even if the user never renames the VC (renaming will upsert this row).
+      try {
+        await saveSchedule(guild.id, channel.id, channelName.slice(0, 100), expiresAt, member.id);
+      } catch (scheduleErr) {
+        // Best-effort — schedule tracking failure does not affect VC creation.
+        logger.error("[privateVC] Failed to save VC schedule after creation", scheduleErr);
+      }
+
       // ボイステキストに期限を通知
       const ts = Math.floor(expiresAt.getTime() / 1000);
       channel.send(
