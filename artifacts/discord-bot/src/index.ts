@@ -120,7 +120,7 @@ const client = new Client({
   ],
 });
 
-// Checks every minute whether any guild's reward interval has elapsed and
+// Checks every minute whether any guild's reward day has arrived and
 // distributes role-based rewards (salary) if so.
 async function runRewardScheduler(): Promise<void> {
   const now = new Date();
@@ -129,10 +129,9 @@ async function runRewardScheduler(): Promise<void> {
     try {
       const settings = await getGuildSettings(guild.id);
 
-      // Calendar-day mode takes priority over interval mode.
-      const due = settings.rewardDayOfMonth !== null && settings.rewardDayOfMonth !== undefined
-        ? isDueCalendarDay(settings, now)
-        : now.getTime() - (settings.lastRewardAt?.getTime() ?? 0) >= settings.rewardIntervalMinutes * 60 * 1000;
+      // Only calendar-day mode is supported.
+      if (settings.rewardDayOfMonth === null || settings.rewardDayOfMonth === undefined) continue;
+      const due = isDueCalendarDay(settings, now);
 
       if (!due) {
         continue;

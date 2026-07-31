@@ -1843,14 +1843,6 @@ const rewardCommand: Command = {
     .addSubcommand((sub) => sub.setName("list").setDescription("設定済みの自動報酬一覧を表示します"))
     .addSubcommand((sub) =>
       sub
-        .setName("interval")
-        .setDescription("自動報酬の配布間隔を設定します(分指定)")
-        .addIntegerOption((opt) =>
-          opt.setName("minutes").setDescription("配布間隔(分)").setRequired(true).setMinValue(1),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
         .setName("day")
         .setDescription("毎月の給料日を設定します(例: 25 = 毎月25日)")
         .addIntegerOption((opt) =>
@@ -1888,11 +1880,9 @@ const rewardCommand: Command = {
         return;
       }
       const lines = rewards.map((r) => `<@&${r.roleId}> — ${r.amount}${settings.currencyName}`);
-      const scheduleLabel = settings.rewardDayOfMonth
-        ? `毎月${settings.rewardDayOfMonth}日`
-        : `${settings.rewardIntervalMinutes}分ごと`;
+      const scheduleLabel = settings.rewardDayOfMonth ? `毎月${settings.rewardDayOfMonth}日` : "未設定";
       await interaction.reply({
-        content: `## ⏱️ 自動報酬設定(${scheduleLabel})\n${lines.join("\n")}`,
+        content: `## 💰 自動報酬設定(給料日: ${scheduleLabel})\n${lines.join("\n")}`,
         allowedMentions: { parse: [] },
       });
       return;
@@ -1906,19 +1896,10 @@ const rewardCommand: Command = {
         setRoleReward(guildId, role.id, amount),
         getGuildSettings(guildId),
       ]);
-      const scheduleLabel = settings.rewardDayOfMonth
-        ? `毎月${settings.rewardDayOfMonth}日`
-        : `${settings.rewardIntervalMinutes}分ごと`;
+      const scheduleLabel = settings.rewardDayOfMonth ? `毎月${settings.rewardDayOfMonth}日` : "未設定";
       await interaction.reply(
-        `<@&${reward.roleId}> の自動報酬を **${amount}${settings.currencyName}** に設定しました(配布: ${scheduleLabel})。`,
+        `<@&${reward.roleId}> の自動報酬を **${amount}${settings.currencyName}** に設定しました(給料日: ${scheduleLabel})。`,
       );
-      return;
-    }
-
-    if (sub === "interval") {
-      const minutes = interaction.options.getInteger("minutes", true);
-      const settings = await setRewardInterval(guildId, minutes);
-      await interaction.reply(`自動報酬の配布間隔を **${settings.rewardIntervalMinutes}分ごと** に設定しました。`);
       return;
     }
 
