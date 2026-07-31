@@ -43,6 +43,7 @@ import {
   getAllVcPresences,
   payVcReward,
   getVcLogSettings,
+  setVcLogNotifyChannel,
   recordVcLogJoin,
   recordVcLogLeave,
 } from "./lib/vcReward";
@@ -1062,6 +1063,29 @@ client.on(Events.GuildBanAdd, async (ban) => {
     await (logChannel as TextChannel).send({ embeds: [embed] });
   } catch (err) {
     logger.error("[bannotify] Failed to send ban notification", err);
+  }
+});
+
+// ─── ChannelDelete — 通知チャンネル自動クリア ────────────────────────────────
+
+client.on(Events.ChannelDelete, async (channel) => {
+  // DM チャンネルはギルドに属さないので無視
+  if (!("guildId" in channel) || !channel.guildId) return;
+
+  const guildId = channel.guildId;
+
+  try {
+    const logSettings = await getVcLogSettings(guildId);
+    if (logSettings.notifyChannelId !== channel.id) return;
+
+    // 削除されたチャンネルが通知チャンネルとして設定されていたので null にクリア
+    await setVcLogNotifyChannel(guildId, null);
+    logger.warn(
+      `[vclog] 通知チャンネル ${channel.id} がギルド ${guildId} で削除されたため notifyChannelId を自動クリアしました。` +
+      ` /vclog channel set で再設定してください。`,
+    );
+  } catch (err) {
+    logger.error(`[vclog] ChannelDelete: 通知チャンネル設定のクリアに失敗 (guild=${guildId}, channel=${channel.id})`, err);
   }
 });
 
