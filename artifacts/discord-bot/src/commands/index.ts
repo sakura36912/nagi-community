@@ -1520,8 +1520,10 @@ import { leavelogCommand } from "./leavelog";
 
 import { pointconfigCommand } from "./pointconfig";
 import { pointCommand } from "./point";
+import { interviewCommand } from "./interview";
 
 export const commands: Command[] = [
+  interviewCommand,
   balanceCommand,
   dailyCommand,
   payCommand,
