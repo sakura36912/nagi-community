@@ -435,13 +435,19 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
     if (!result.ok) { await interaction.editReply(result.reason); return; }
+    let roleGranted = false;
     try {
       const member = await interaction.guild!.members.fetch(interaction.user.id);
       await member.roles.add(item.targetRoleId);
-      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+      roleGranted = true;
+      // Role is now granted — don't refund if the reply itself fails.
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`)
+        .catch((err) => logger.error("[shop] editReply failed after role grant (perm-role)", err));
     } catch {
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+      if (!roleGranted) {
+        await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+        await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+      }
     }
     return;
   }
@@ -479,9 +485,12 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
         return;
       }
       await member.roles.add(config.licenseRoleId);
-      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`);
+      // Role granted — record sale and reply best-effort; don't refund on reply failure.
       tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`)
+        .catch((err) => logger.error("[shop] editReply failed after role grant (shop-license)", err));
     } catch {
+      // Only reaches here when role assignment itself failed — safe to refund.
       await refundPurchase(interaction.guildId, interaction.user.id, result.item);
       await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
     }
@@ -492,18 +501,25 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
 
   if (result.ok) {
     if (item.targetRoleId) {
+      let roleGranted = false;
       try {
         const member = await interaction.guild!.members.fetch(interaction.user.id);
         await member.roles.add(item.targetRoleId);
-        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+        roleGranted = true;
+        // Role granted — record group sale and reply best-effort.
+        if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
+        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`)
+          .catch((err) => logger.error("[shop] editReply failed after role grant (generic)", err));
       } catch {
-        await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-        await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+        if (!roleGranted) {
+          await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+          await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+        }
       }
     } else {
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！`);
+      if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
     }
-    if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
   } else {
     await interaction.editReply(result.reason);
   }
@@ -655,9 +671,12 @@ async function applyShopPurchase(
     if (!result.ok) { await interaction.editReply(result.reason); return; }
     try {
       await member.roles.add(config.licenseRoleId);
-      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`);
+      // Role granted — record sale and reply best-effort; don't refund on reply failure.
       tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`)
+        .catch((err) => logger.error("[shop] editReply failed after role grant (shop-license/select)", err));
     } catch {
+      // Only reaches here when role assignment itself failed — safe to refund.
       await refundPurchase(interaction.guildId, interaction.user.id, result.item);
       await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
     }
@@ -667,18 +686,25 @@ async function applyShopPurchase(
   const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
   if (result.ok) {
     if (item.targetRoleId) {
+      let roleGranted = false;
       try {
         const member = await interaction.guild.members.fetch(interaction.user.id);
         await member.roles.add(item.targetRoleId);
-        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+        roleGranted = true;
+        // Role granted — record group sale and reply best-effort.
+        if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
+        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`)
+          .catch((err) => logger.error("[shop] editReply failed after role grant (generic/select)", err));
       } catch {
-        await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-        await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+        if (!roleGranted) {
+          await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+          await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+        }
       }
     } else {
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！`);
+      if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
     }
-    if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
   } else {
     await interaction.editReply(result.reason);
   }
@@ -1462,8 +1488,6 @@ const rewardCommand: Command = {
     }
   },
 };
-
-
 
 
 import { vcCommand } from "./vc";

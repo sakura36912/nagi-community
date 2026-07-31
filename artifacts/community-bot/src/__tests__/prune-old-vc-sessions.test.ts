@@ -203,4 +203,123 @@ describe("pruneOldVcSessions", () => {
     // The column must be leftAt on the sessions table
     expect(ltClause!.col).toBe("sessions.leftAt");
   });
+
+  // ── Custom retention window tests ────────────────────────────────────────────
+
+  /**
+   * When a custom window shorter than 180 days is used (e.g. 90 days), the
+   * cutoff should be ~90 days ago — NOT ~180 days ago.  A row aged 100 days
+   * falls between the custom window (90 d) and the default (180 d), so it must
+   * be included in the deletion predicate (cutoff ≤ row age).
+   */
+  it("uses the custom cutoff (not 180-day default) so rows in the gap between custom and default ARE targeted for deletion", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    const customDays = 90;
+    const before = Date.now();
+    await pruneOldVcSessions(customDays);
+    const after = Date.now();
+
+    const expectedCutoffMin = before - customDays * 24 * 60 * 60 * 1000;
+    const expectedCutoffMax = after  - customDays * 24 * 60 * 60 * 1000;
+    const defaultCutoff     = before - 180       * 24 * 60 * 60 * 1000;
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const ltClause = whereArg.args.find((a) => a.op === "lt") as
+      | { op: string; col: string; val: Date }
+      | undefined;
+
+    expect(ltClause).toBeDefined();
+    const cutoffMs = ltClause!.val.getTime();
+
+    // Cutoff must be in the 90-day range
+    expect(cutoffMs).toBeGreaterThanOrEqual(expectedCutoffMin);
+    expect(cutoffMs).toBeLessThanOrEqual(expectedCutoffMax);
+
+    // A row aged 100 days (between the custom 90-d window and the default 180-d
+    // window) has leftAt ≈ (now – 100 days).  That value is LESS THAN the
+    // cutoff (now – 90 days), so lt(leftAt, cutoff) is satisfied — i.e. the row
+    // IS included in the deletion predicate.
+    const rowAgedMs = before - 100 * 24 * 60 * 60 * 1000;
+    expect(rowAgedMs).toBeLessThan(cutoffMs);
+
+    // Sanity: the cutoff is meaningfully newer than the 180-day default so we
+    // are not accidentally using the wrong default.
+    expect(cutoffMs).toBeGreaterThan(defaultCutoff);
+  });
+
+  /**
+   * When a custom window longer than 180 days is used (e.g. 365 days), the
+   * cutoff should be ~365 days ago — NOT ~180 days ago.  A row aged 200 days
+   * falls between the default (180 d) and the custom window (365 d), so it
+   * must NOT be included in the deletion predicate (row age < cutoff).
+   */
+  it("uses the custom cutoff (not 180-day default) so rows in the gap between default and custom are NOT prematurely deleted", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    const customDays = 365;
+    const before = Date.now();
+    await pruneOldVcSessions(customDays);
+    const after = Date.now();
+
+    const expectedCutoffMin = before - customDays * 24 * 60 * 60 * 1000;
+    const expectedCutoffMax = after  - customDays * 24 * 60 * 60 * 1000;
+    const defaultCutoff     = before - 180        * 24 * 60 * 60 * 1000;
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const ltClause = whereArg.args.find((a) => a.op === "lt") as
+      | { op: string; col: string; val: Date }
+      | undefined;
+
+    expect(ltClause).toBeDefined();
+    const cutoffMs = ltClause!.val.getTime();
+
+    // Cutoff must be in the 365-day range
+    expect(cutoffMs).toBeGreaterThanOrEqual(expectedCutoffMin);
+    expect(cutoffMs).toBeLessThanOrEqual(expectedCutoffMax);
+
+    // A row aged 200 days (between the default 180-d window and the custom
+    // 365-d window) has leftAt ≈ (now – 200 days).  That value is GREATER THAN
+    // the cutoff (now – 365 days), so lt(leftAt, cutoff) is NOT satisfied —
+    // i.e. the row is NOT included in the deletion predicate and is preserved.
+    const rowAgedMs = before - 200 * 24 * 60 * 60 * 1000;
+    expect(rowAgedMs).toBeGreaterThan(cutoffMs);
+
+    // Sanity: the cutoff is older than the 180-day default so we are not
+    // accidentally using the wrong default.
+    expect(cutoffMs).toBeLessThan(defaultCutoff);
+  });
+
+  /**
+   * Records older than the custom window ARE deleted: a row aged beyond the
+   * custom retention period has leftAt < cutoff and must be targeted.
+   */
+  it("targets records older than the custom retention window for deletion", async () => {
+    mocks.returning.mockResolvedValueOnce([{ id: 7 }, { id: 8 }]);
+    const customDays = 90;
+    const count = await pruneOldVcSessions(customDays);
+
+    // The function should return the count of deleted rows from .returning()
+    expect(count).toBe(2);
+
+    const before = Date.now();
+    // Verify that a row aged beyond customDays (e.g. 120 days) would satisfy
+    // the lt predicate produced for this call.
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const ltClause = whereArg.args.find((a) => a.op === "lt") as
+      | { op: string; col: string; val: Date }
+      | undefined;
+
+    expect(ltClause).toBeDefined();
+    const cutoffMs = ltClause!.val.getTime();
+
+    // A row aged 120 days (older than the 90-day custom window) has
+    // leftAt < cutoff — it IS targeted for deletion.
+    const rowAgedMs = before - 120 * 24 * 60 * 60 * 1000;
+    expect(rowAgedMs).toBeLessThan(cutoffMs);
+  });
 });
