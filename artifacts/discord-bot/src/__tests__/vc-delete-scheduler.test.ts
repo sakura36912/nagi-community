@@ -263,6 +263,28 @@ describe("runVcDeleteScheduler – pre-expiry warning", () => {
     expect(client._userSend.mock.calls[0][0]).toContain("テストVC");
   });
 
+  it("DM content includes the exact channel name and Unix timestamp from expiresAt", async () => {
+    // Use a fixed future date so the expected timestamp is deterministic.
+    const expiresAt = new Date("2026-08-01T12:00:00.000Z");
+    const expectedTs = Math.floor(expiresAt.getTime() / 1000);
+
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ channelName: "テストVC", expiresAt }),
+    ]);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    expect(client._userSend).toHaveBeenCalledOnce();
+    const dmText: string = client._userSend.mock.calls[0][0];
+    // Channel name must appear verbatim.
+    expect(dmText).toContain("テストVC");
+    // Both relative (<t:…:R>) and time (<t:…:T>) Discord timestamp tokens
+    // must use the Unix second derived from schedule.expiresAt.
+    expect(dmText).toContain(`<t:${expectedTs}:R>`);
+    expect(dmText).toContain(`<t:${expectedTs}:T>`);
+  });
+
   it("logs the warning after sending the DM", async () => {
     mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
 
