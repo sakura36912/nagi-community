@@ -876,8 +876,27 @@ export async function getLeaveLogChannel(guildId: string): Promise<string | null
 }
 
 /**
+ * A completed VC session row enriched with the user's current opt-out status.
+ * `optedOut` is true when the user has an active per-guild or global opt-out at
+ * the time of the query, regardless of when the session was recorded.
+ */
+export interface TempVcDeletionRow {
+  id: number;
+  guildId: string;
+  userId: string;
+  channelId: string;
+  joinedAt: Date;
+  leftAt: Date;
+  optedOut: boolean;
+}
+
+/**
  * Returns completed VC sessions (leftAt IS NOT NULL) for a guild,
  * optionally filtered to a date window on leftAt.
+ *
+ * Each row carries an `optedOut` boolean reflecting whether the user currently
+ * has an active opt-out (per-guild OR global).  This lets admins flag
+ * privacy-sensitive rows in the CSV export without a separate lookup.
  *
  * @param start - Inclusive lower bound (sessions that ended at or after this date).
  * @param end   - Exclusive upper bound (sessions that ended strictly before this date).
@@ -886,25 +905,56 @@ export async function getLeaveLogChannel(guildId: string): Promise<string | null
 export async function getAllTempVcDeletions(
   guildId: string,
   opts: { start?: Date; end?: Date; userId?: string } = {},
-): Promise<CommunityVcSession[]> {
-  const conditions: ReturnType<typeof eq>[] = [
-    eq(communityVcSessionsTable.guildId, guildId),
-    isNotNull(communityVcSessionsTable.leftAt) as ReturnType<typeof eq>,
-  ];
-  if (opts.start) {
-    conditions.push(gte(communityVcSessionsTable.leftAt, opts.start) as ReturnType<typeof eq>);
-  }
-  if (opts.end) {
-    conditions.push(lt(communityVcSessionsTable.leftAt, opts.end) as ReturnType<typeof eq>);
-  }
-  if (opts.userId) {
-    conditions.push(eq(communityVcSessionsTable.userId, opts.userId) as ReturnType<typeof eq>);
-  }
-  return db
-    .select()
-    .from(communityVcSessionsTable)
-    .where(and(...conditions))
-    .orderBy(asc(communityVcSessionsTable.leftAt));
+): Promise<TempVcDeletionRow[]> {
+  const startFilter = opts.start ? sql`AND s.left_at >= ${opts.start}` : sql``;
+  const endFilter   = opts.end   ? sql`AND s.left_at < ${opts.end}`   : sql``;
+  const userFilter  = opts.userId ? sql`AND s.user_id = ${opts.userId}` : sql``;
+
+  const rows = await db.execute<{
+    id: number;
+    guild_id: string;
+    user_id: string;
+    channel_id: string;
+    joined_at: string | Date;
+    left_at: string | Date;
+    opted_out: boolean;
+  }>(sql`
+    SELECT
+      s.id,
+      s.guild_id,
+      s.user_id,
+      s.channel_id,
+      s.joined_at,
+      s.left_at,
+      (
+        EXISTS (
+          SELECT 1 FROM community_vc_privacy_global g
+          WHERE g.user_id = s.user_id AND g.opted_out = true
+        )
+        OR
+        EXISTS (
+          SELECT 1 FROM community_vc_privacy p
+          WHERE p.guild_id = s.guild_id AND p.user_id = s.user_id AND p.opted_out = true
+        )
+      ) AS opted_out
+    FROM community_vc_sessions s
+    WHERE s.guild_id = ${guildId}
+      AND s.left_at IS NOT NULL
+      ${startFilter}
+      ${endFilter}
+      ${userFilter}
+    ORDER BY s.left_at ASC
+  `);
+
+  return rows.rows.map((r) => ({
+    id: Number(r.id),
+    guildId: r.guild_id,
+    userId: r.user_id,
+    channelId: r.channel_id,
+    joinedAt: new Date(r.joined_at),
+    leftAt: new Date(r.left_at),
+    optedOut: r.opted_out === true,
+  }));
 }
 
 export async function setLeaveLogChannel(
