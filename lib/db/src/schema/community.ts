@@ -264,6 +264,8 @@ export const communityRankingSettingsTable = pgTable("community_ranking_settings
    * Must be between 1 and 3650.
    */
   vcSessionRetentionDays: integer("vc_session_retention_days"),
+  /** Channel where admin VC record deletions are logged. Null = disabled. */
+  auditLogChannelId: text("audit_log_channel_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

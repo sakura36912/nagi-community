@@ -61,6 +61,8 @@ import {
   deleteAllUserVcSessions,
   updateEventMessageId,
   getAllTempVcDeletions,
+  getAuditLogChannel,
+  setAuditLogChannel,
   type CommunityTicketSettings,
   type CommunityTicketPanel,
 } from "../lib/community.js";
@@ -1203,6 +1205,21 @@ const privacyCommand: Command = {
         .addUserOption((opt) =>
           opt.setName("member").setDescription("対象ユーザー").setRequired(true),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("audit-channel")
+        .setDescription("管理者によるVC記録削除の監査ログチャンネルを設定します（管理者用）")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("監査ログを投稿するチャンネル（省略すると現在の設定を表示、'none'で無効化）")
+            .setRequired(false)
+            .addChannelTypes(ChannelType.GuildText),
+        )
+        .addBooleanOption((opt) =>
+          opt.setName("disable").setDescription("監査ログを無効化する").setRequired(false),
+        ),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -1360,6 +1377,42 @@ const privacyCommand: Command = {
         .setFooter({ text: "グローバル設定はサーバーごとの設定より優先されます。サーバーを退出・再参加しても設定は保持されます。" })
         .setTimestamp();
       await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    if (sub === "audit-channel") {
+      if (!requireAdmin(interaction)) {
+        await interaction.editReply("このコマンドはサーバー管理権限が必要です。");
+        return;
+      }
+
+      const disable = interaction.options.getBoolean("disable") ?? false;
+      const channel = interaction.options.getChannel("channel");
+
+      // No arguments → show current setting
+      if (!disable && !channel) {
+        const current = await getAuditLogChannel(guildId);
+        const embed = new EmbedBuilder()
+          .setTitle("📋 監査ログ設定")
+          .setColor(0x5865f2)
+          .addFields({
+            name: "監査ログチャンネル",
+            value: current ? `<#${current}>` : "未設定（無効）",
+            inline: false,
+          })
+          .setFooter({ text: "channel を指定して再実行するとチャンネルを設定できます。disable: true で無効化。" });
+        await interaction.editReply({ embeds: [embed] });
+        return;
+      }
+
+      if (disable) {
+        await setAuditLogChannel(guildId, null);
+        await interaction.editReply("✅ 監査ログを無効化しました。");
+        return;
+      }
+
+      await setAuditLogChannel(guildId, channel!.id);
+      await interaction.editReply(`✅ 監査ログチャンネルを <#${channel!.id}> に設定しました。`);
       return;
     }
 
@@ -1786,6 +1839,31 @@ export async function handlePrivacyAdminDeleteConfirm(interaction: ButtonInterac
     .setFooter({ text: `操作者: ${interaction.user.tag} (${interaction.user.id})` })
     .setTimestamp();
   await interaction.editReply({ embeds: [embed], components: [] });
+
+  // Post to the audit log channel if configured
+  const auditChannelId = await getAuditLogChannel(guildId);
+  if (auditChannelId) {
+    try {
+      const auditChannel = interaction.guild?.channels.cache.get(auditChannelId)
+        ?? await interaction.guild?.channels.fetch(auditChannelId).catch(() => null);
+      if (auditChannel?.isTextBased()) {
+        const auditEmbed = new EmbedBuilder()
+          .setTitle("🔍 管理者によるVC記録削除")
+          .setColor(0xed4245)
+          .addFields(
+            { name: "操作者", value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
+            { name: "対象ユーザー", value: `<@${targetUserId}>`, inline: true },
+            { name: "削除件数", value: `${deleted}件`, inline: true },
+            { name: "サーバー", value: interaction.guild?.name ?? guildId, inline: false },
+          )
+          .setFooter({ text: `操作者ID: ${interaction.user.id} | 対象ID: ${targetUserId}` })
+          .setTimestamp();
+        await auditChannel.send({ embeds: [auditEmbed] });
+      }
+    } catch (err) {
+      logger.error("[privacy] Failed to post to audit log channel", err);
+    }
+  }
 }
 
 export async function handlePrivacyAdminDeleteCancel(interaction: ButtonInteraction): Promise<void> {

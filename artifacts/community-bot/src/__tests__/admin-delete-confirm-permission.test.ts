@@ -16,7 +16,12 @@ const mocks = vi.hoisted(() => {
   const where = vi.fn(() => ({ returning }));
   const del = vi.fn(() => ({ where }));
 
-  return { returning, where, del };
+  // select chain: db.select({...}).from(...).where(...) → [] (no audit channel)
+  const selectWhere = vi.fn().mockResolvedValue([]);
+  const selectFrom = vi.fn(() => ({ where: selectWhere }));
+  const select = vi.fn(() => ({ from: selectFrom }));
+
+  return { returning, where, del, select, selectFrom, selectWhere };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -29,6 +34,7 @@ vi.mock("@workspace/db", () => {
   return {
     db: {
       delete: mocks.del,
+      select: mocks.select,
     },
     communityVcSessionsTable: tbl("sessions"),
     communityVcPrivacyGlobalTable: tbl("global"),

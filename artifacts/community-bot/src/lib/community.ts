@@ -920,5 +920,28 @@ export async function setLeaveLogChannel(
     });
 }
 
+// ─── Audit Log Settings ───────────────────────────────────────────────────────
+
+export async function getAuditLogChannel(guildId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ auditLogChannelId: communityRankingSettingsTable.auditLogChannelId })
+    .from(communityRankingSettingsTable)
+    .where(eq(communityRankingSettingsTable.guildId, guildId));
+  return row?.auditLogChannelId ?? null;
+}
+
+export async function setAuditLogChannel(
+  guildId: string,
+  channelId: string | null,
+): Promise<void> {
+  await db
+    .insert(communityRankingSettingsTable)
+    .values({ guildId, channelId: null, period: "all", auditLogChannelId: channelId })
+    .onConflictDoUpdate({
+      target: communityRankingSettingsTable.guildId,
+      set: { auditLogChannelId: channelId, updatedAt: new Date() },
+    });
+}
+
 // Re-export awardVcTime so tests can mock it from this module
 export { awardVcTime } from "./points.js";
