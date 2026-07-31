@@ -648,16 +648,16 @@ export const shiftCommand: Command = {
       }
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}-1`)
-          .setLabel("先週")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
           .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}0`)
           .setLabel("今週")
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}1`)
           .setLabel("来週")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}2`)
+          .setLabel("再来週")
           .setStyle(ButtonStyle.Secondary),
       );
       await ch.send({ embeds: [embed], components: [row] });
