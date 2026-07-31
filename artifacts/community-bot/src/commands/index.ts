@@ -1400,15 +1400,14 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
 
   const ticket = await createTicket(guildId, channel.id, interaction.user.id);
 
-  // ── Welcome embed: per-panel settings > defaults ──────────────────────────
-  const welcome    = panel?.welcomeMessage    ?? TICKET_DEFAULTS.welcomeMessage;
-  const embedTitle = panel?.welcomeEmbedTitle ?? TICKET_DEFAULTS.welcomeEmbedTitle;
+  // ── Welcome embed: チケット番号とユーザー名のみ表示 ──────────────────────
   const colorInt   = panel?.welcomeEmbedColor ? hexToInt(panel.welcomeEmbedColor) : TICKET_DEFAULTS.welcomeEmbedColor;
+  const member = interaction.guild.members.cache.get(interaction.user.id)
+    ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const displayName = member?.displayName ?? interaction.user.displayName;
   const embed = new EmbedBuilder()
-    .setTitle(embedTitle)
     .setColor(colorInt)
-    .setDescription(`<@${interaction.user.id}> からのチケットです。\n${welcome}`)
-    .setTimestamp();
+    .setDescription(`🎫 チケット **#${ticket.id}** — ${displayName}`);
 
   // ── Close button: per-panel settings > defaults ───────────────────────────
   const closeLabel = panel?.closeButtonLabel ?? TICKET_DEFAULTS.closeButtonLabel;
