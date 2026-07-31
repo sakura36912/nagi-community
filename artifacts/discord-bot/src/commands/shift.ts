@@ -402,36 +402,6 @@ export const shiftCommand: Command = {
     .setDescription("シフト管理")
     .addSubcommand((sub) =>
       sub
-        .setName("add")
-        .setDescription("シフトを登録する")
-        .addStringOption((opt) =>
-          opt
-            .setName("date")
-            .setDescription("日付（例: 2026-07-14 または 7/14）")
-            .setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName("start")
-            .setDescription("開始時刻（例: 10:00）")
-            .setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName("end")
-            .setDescription("終了時刻（例: 18:00）")
-            .setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName("note")
-            .setDescription("備考（任意、最大100文字）")
-            .setRequired(false)
-            .setMaxLength(100),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
         .setName("remove")
         .setDescription("シフトを削除する（管理者は他人のシフトも削除可）")
         .addIntegerOption((opt) =>
@@ -551,65 +521,6 @@ export const shiftCommand: Command = {
     const guildId = interaction.guildId;
     const sub = interaction.options.getSubcommand();
     const isAdmin = !!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
-
-    // ── /shift add ────────────────────────────────────────────────────────────
-    if (sub === "add") {
-      const dateInput = interaction.options.getString("date", true);
-      const startInput = interaction.options.getString("start", true);
-      const endInput = interaction.options.getString("end", true);
-      const note = interaction.options.getString("note");
-
-      const date = parseDate(dateInput);
-      if (!date) {
-        await interaction.reply({
-          content: "❌ 日付の形式が正しくありません。`2026-07-14` または `7/14` の形式で入力してください。",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const start = parseTime(startInput);
-      if (!start) {
-        await interaction.reply({
-          content: "❌ 開始時刻の形式が正しくありません。`10:00` のように `HH:MM` で入力してください。",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const end = parseTime(endInput);
-      if (!end) {
-        await interaction.reply({
-          content: "❌ 終了時刻の形式が正しくありません。`18:00` のように `HH:MM` で入力してください。",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const mins = calcMinutes(start, end);
-      if (mins <= 0) {
-        await interaction.reply({
-          content: "❌ 終了時刻は開始時刻より後でなければなりません。深夜をまたぐシフトは2件に分けて登録してください。",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const shift = await addShift(guildId, interaction.user.id, date, start, end, note);
-
-      const embed = new EmbedBuilder()
-        .setTitle("✅ シフトを登録しました")
-        .setColor(0x57f287)
-        .addFields(
-          { name: "📅 日付", value: formatDateLabel(date), inline: true },
-          { name: "⏰ 時間", value: `${start}〜${end}（${formatDuration(mins)}）`, inline: true },
-          { name: "🔢 シフトID", value: `#${shift.id}`, inline: true },
-        );
-      if (note) embed.addFields({ name: "📝 備考", value: note, inline: false });
-
-      await interaction.reply({ embeds: [embed], ephemeral: true });
-      return;
-    }
 
     // ── /shift submit ─────────────────────────────────────────────────────────
     if (sub === "submit") {
