@@ -316,7 +316,7 @@ function buildSummaryEmbed(
   to: string,
 ): EmbedBuilder {
   const embed = new EmbedBuilder()
-    .setTitle(`📊 ${label} 勤務集計`)
+    .setTitle(`📊 ${label} 勤務回数集計`)
     .setColor(0xfee75c)
     .setDescription(`**${formatDateLabel(from)} 〜 ${formatDateLabel(to)}**`)
     .setTimestamp();
@@ -327,19 +327,16 @@ function buildSummaryEmbed(
   }
 
   // Aggregate by userId
-  const byUser = new Map<string, { count: number; minutes: number }>();
+  const byUser = new Map<string, number>();
   for (const s of shifts) {
-    if (!byUser.has(s.userId)) byUser.set(s.userId, { count: 0, minutes: 0 });
-    const rec = byUser.get(s.userId)!;
-    rec.count += 1;
-    rec.minutes += Math.max(0, calcMinutes(s.startTime, s.endTime));
+    byUser.set(s.userId, (byUser.get(s.userId) ?? 0) + 1);
   }
 
-  // Sort by total hours descending
-  const sorted = [...byUser.entries()].sort((a, b) => b[1].minutes - a[1].minutes);
-  const lines = sorted.map(([uid, rec], i) => {
+  // Sort by count descending
+  const sorted = [...byUser.entries()].sort((a, b) => b[1] - a[1]);
+  const lines = sorted.map(([uid, count], i) => {
     const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`;
-    return `${medal} <@${uid}> — **${formatDuration(rec.minutes)}** （${rec.count}件のシフト）`;
+    return `${medal} <@${uid}> — **${count}回**`;
   });
 
   embed.setDescription(`${embed.data.description ?? ""}\n\n${lines.join("\n").slice(0, 3800)}`);
@@ -442,7 +439,7 @@ export const shiftCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("summary")
-        .setDescription("月次の勤務時間を集計する")
+        .setDescription("月次の勤務回数を集計する")
         .addStringOption((opt) =>
           opt
             .setName("month")
