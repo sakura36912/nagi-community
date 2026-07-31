@@ -978,6 +978,12 @@ export async function setLeaveLogChannel(
   guildId: string,
   channelId: string | null,
 ): Promise<void> {
+  // `channelId: null` and `period: "all"` are placeholder values used only
+  // when this INSERT creates a brand-new guild row.  They are safe defaults:
+  //   - `channelId` (the ranking embed channel) is nullable, so null = disabled.
+  //   - `period` has a DB-level default of "all", so "all" matches that default.
+  // When a row already exists the onConflictDoUpdate path only touches
+  // `leaveLogChannelId`, leaving every other column completely undisturbed.
   await db
     .insert(communityRankingSettingsTable)
     .values({ guildId, channelId: null, period: "all", leaveLogChannelId: channelId })
@@ -1001,6 +1007,12 @@ export async function setAuditLogChannel(
   guildId: string,
   channelId: string | null,
 ): Promise<void> {
+  // `channelId: null` and `period: "all"` are placeholder values used only
+  // when this INSERT creates a brand-new guild row.  They are safe defaults:
+  //   - `channelId` (the ranking embed channel) is nullable, so null = disabled.
+  //   - `period` has a DB-level default of "all", so "all" matches that default.
+  // When a row already exists the onConflictDoUpdate path only touches
+  // `auditLogChannelId`, leaving every other column completely undisturbed.
   await db
     .insert(communityRankingSettingsTable)
     .values({ guildId, channelId: null, period: "all", auditLogChannelId: channelId })
