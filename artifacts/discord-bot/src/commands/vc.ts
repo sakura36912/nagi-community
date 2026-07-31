@@ -84,6 +84,14 @@ export const vcCommand = {
             )
             .setMaxLength(90)
             .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("user_limit")
+            .setDescription("生成VCの人数制限（1〜99。省略すると制限なし）")
+            .setMinValue(1)
+            .setMaxValue(99)
+            .setRequired(false),
         ),
     )
     // ── hub-remove ────────────────────────────────────────────────────────
@@ -186,6 +194,7 @@ export const vcCommand = {
       const channel      = interaction.options.getChannel("channel", true);
       const categoryOpt  = interaction.options.getChannel("category");
       const templateOpt  = interaction.options.getString("name_template");
+      const userLimit    = interaction.options.getInteger("user_limit") ?? null;
       const nameTemplate = templateOpt?.trim() || "{user}のVC";
 
       await addHubChannel(
@@ -193,16 +202,19 @@ export const vcCommand = {
         channel.id,
         categoryOpt?.id ?? null,
         nameTemplate,
+        userLimit,
       );
 
       const categoryDisplay = categoryOpt
         ? `<#${categoryOpt.id}>`
         : "（トリガーと同じカテゴリ）";
+      const limitDisplay = userLimit != null ? `${userLimit}人` : "なし";
       await interaction.reply({
         content:
           `✅ <#${channel.id}> を Hub チャンネルとして登録しました。\n` +
           `名前テンプレート: \`${nameTemplate}\`\n` +
-          `生成先カテゴリ: ${categoryDisplay}`,
+          `生成先カテゴリ: ${categoryDisplay}\n` +
+          `人数制限: ${limitDisplay}`,
         ephemeral: true,
       });
       return;
@@ -248,6 +260,7 @@ export const vcCommand = {
               h.categoryId
                 ? `生成先カテゴリ: <#${h.categoryId}>`
                 : "生成先カテゴリ: トリガーと同じ",
+              h.userLimit != null ? `人数制限: ${h.userLimit}人` : "人数制限: なし",
             ].join("\n"),
             inline: false,
           })),
@@ -320,6 +333,7 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       name: channelName,
       type: ChannelType.GuildVoice,
       parent: categoryId,
+      ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
     });
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);

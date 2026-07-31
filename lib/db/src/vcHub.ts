@@ -23,19 +23,20 @@ export async function getHubByChannelId(hubChannelId: string) {
   return rows[0] ?? null;
 }
 
-/** Hub チャンネルを追加（既存なら category / nameTemplate を上書き） */
+/** Hub チャンネルを追加（既存なら category / nameTemplate / userLimit を上書き） */
 export async function addHubChannel(
   guildId: string,
   hubChannelId: string,
   categoryId: string | null,
   nameTemplate: string,
+  userLimit: number | null,
 ) {
   const rows = await db
     .insert(vcHubChannelsTable)
-    .values({ guildId, hubChannelId, categoryId, nameTemplate })
+    .values({ guildId, hubChannelId, categoryId, nameTemplate, userLimit })
     .onConflictDoUpdate({
       target: vcHubChannelsTable.hubChannelId,
-      set: { categoryId, nameTemplate },
+      set: { categoryId, nameTemplate, userLimit },
     })
     .returning();
   return rows[0]!;

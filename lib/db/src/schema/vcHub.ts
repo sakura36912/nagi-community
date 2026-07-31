@@ -9,6 +9,8 @@ export const vcHubChannelsTable = pgTable("vc_hub_channels", {
   categoryId: text("category_id"),
   /** チャンネル名テンプレート。{user} をメンバーの表示名で置換 */
   nameTemplate: text("name_template").notNull().default("{user}のVC"),
+  /** 生成VCの人数制限 (null = 制限なし, 0 = 無制限) */
+  userLimit: integer("user_limit"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
