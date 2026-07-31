@@ -19,6 +19,7 @@ import {
   type Wallet,
   type ShopItem,
   type GuildSettings,
+  type InsertGuildSettings,
   type RoleReward,
   type PrivateVcSession,
   type SquadTreasury,
@@ -180,47 +181,48 @@ export async function getGuildSettings(guildId: string): Promise<GuildSettings> 
 }
 
 
+/**
+ * Upserts a guild settings row atomically.
+ *
+ * Creates the row with schema defaults if it doesn't exist yet, then applies
+ * `patch` in the same statement — safe under concurrent first-guild-join races
+ * because the entire operation is a single `INSERT … ON CONFLICT DO UPDATE`.
+ */
+async function upsertGuildSetting(
+  guildId: string,
+  patch: Partial<Omit<InsertGuildSettings, "guildId">>,
+): Promise<GuildSettings> {
+  const [settings] = await db
+    .insert(guildSettingsTable)
+    .values({ guildId, ...patch })
+    .onConflictDoUpdate({
+      target: guildSettingsTable.guildId,
+      set: patch,
+    })
+    .returning();
+  if (!settings) throw new Error("Failed to upsert guild settings");
+  return settings;
+}
+
 export async function setVcCategoryId(
   guildId: string,
   vcCategoryId: string | null,
 ): Promise<GuildSettings> {
-  await getGuildSettings(guildId); // ensure row exists
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ vcCategoryId })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-  if (!settings) throw new Error("Failed to update vc_category_id");
-  return settings;
+  return upsertGuildSetting(guildId, { vcCategoryId });
 }
 
 export async function setVcWarnBeforeMinutes(
   guildId: string,
   vcWarnBeforeMinutes: number,
 ): Promise<GuildSettings> {
-  await getGuildSettings(guildId); // ensure row exists
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ vcWarnBeforeMinutes })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-  if (!settings) throw new Error("Failed to update vc_warn_before_minutes");
-  return settings;
+  return upsertGuildSetting(guildId, { vcWarnBeforeMinutes });
 }
-
 
 export async function setLeaveLogChannelId(
   guildId: string,
   leaveLogChannelId: string | null,
 ): Promise<GuildSettings> {
-  await getGuildSettings(guildId);
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ leaveLogChannelId })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-  if (!settings) throw new Error("Failed to update leave_log_channel_id");
-  return settings;
+  return upsertGuildSetting(guildId, { leaveLogChannelId });
 }
 
 // ─── 入退出履歴 ───────────────────────────────────────────────────────────────
@@ -256,14 +258,7 @@ export async function setBanLogChannelId(
   guildId: string,
   banLogChannelId: string | null,
 ): Promise<GuildSettings> {
-  await getGuildSettings(guildId);
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ banLogChannelId })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-  if (!settings) throw new Error("Failed to update ban_log_channel_id");
-  return settings;
+  return upsertGuildSetting(guildId, { banLogChannelId });
 }
 
 export async function createOrUpdateCurrency(
@@ -566,35 +561,13 @@ export async function listRoleRewards(guildId: string): Promise<RoleReward[]> {
 }
 
 export async function setRewardInterval(guildId: string, minutes: number): Promise<GuildSettings> {
-  await getGuildSettings(guildId);
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ rewardIntervalMinutes: minutes, rewardDayOfMonth: null })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-
-  if (!settings) {
-    throw new Error("Failed to update reward interval");
-  }
-
-  return settings;
+  return upsertGuildSetting(guildId, { rewardIntervalMinutes: minutes, rewardDayOfMonth: null });
 }
 
 // Set a fixed calendar day (1–31) for monthly salary distribution.
 // Clears the interval mode — the two are mutually exclusive.
 export async function setRewardDayOfMonth(guildId: string, day: number): Promise<GuildSettings> {
-  await getGuildSettings(guildId);
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ rewardDayOfMonth: day })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-
-  if (!settings) {
-    throw new Error("Failed to update reward day of month");
-  }
-
-  return settings;
+  return upsertGuildSetting(guildId, { rewardDayOfMonth: day });
 }
 
 // Returns true when calendar-day mode is active and today is the configured
