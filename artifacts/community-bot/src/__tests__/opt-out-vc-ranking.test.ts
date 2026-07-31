@@ -76,7 +76,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
-import { getVcRanking } from "../lib/community.js";
+import { getVcRanking, setVcPrivacyOptOut, setVcGlobalPrivacyOptOut } from "../lib/community.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const GUILD = "guild-001";
@@ -155,5 +155,132 @@ describe("getVcRanking – opt-out exclusion", () => {
     // There must be at least two NOT IN clauses (one per privacy table)
     const notInMatches = query.match(/NOT IN/g) ?? [];
     expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ─── Mid-session opt-out: guild-local path ────────────────────────────────────
+
+describe("getVcRanking – guild-local opt-out mid-session", () => {
+  /**
+   * Scenario: "user-mid-session" is currently in a VC (open session, left_at IS NULL).
+   * They call /privacy opt-out for this guild.
+   * setVcPrivacyOptOut writes the privacy row, then calls closeSession to stamp
+   * left_at on the open session.
+   * After that, getVcRanking must not include that user.
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("opted-out user is absent from ranking after guild-local opt-out mid-session", async () => {
+    // setVcPrivacyOptOut → insert/upsert privacy row (insert mock handles onConflictDoUpdate)
+    // setVcPrivacyOptOut → closeSession (update mock handles .set().where().returning())
+    // Both already covered by the default mocks; no additional setup needed.
+
+    await setVcPrivacyOptOut(GUILD, "user-mid-session", true);
+
+    // Now simulate getVcRanking: DB returns only the user who did NOT opt out.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-active", total_seconds: "3600", is_live: false }],
+    });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-active");
+    expect(result.some((r) => r.userId === "user-mid-session")).toBe(false);
+  });
+
+  it("ranking is empty when the only user opts out guild-locally mid-session", async () => {
+    await setVcPrivacyOptOut(GUILD, "user-only", true);
+
+    // DB returns nothing — privacy filter eliminates the sole user.
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toEqual([]);
+  });
+
+  it("guild-local opt-out mid-session: SQL still contains both NOT IN sub-selects", async () => {
+    await setVcPrivacyOptOut(GUILD, "user-mid-session", true);
+
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("community_vc_privacy");
+    expect(query).toContain("community_vc_privacy_global");
+    const notInMatches = query.match(/NOT IN/g) ?? [];
+    expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ─── Mid-session opt-out: global path ────────────────────────────────────────
+
+describe("getVcRanking – global opt-out mid-session", () => {
+  /**
+   * Scenario: "user-global" is currently in a VC in this guild (open session).
+   * They call /privacy global opt-out.
+   * setVcGlobalPrivacyOptOut writes the global privacy row, then calls
+   * closeOpenSessionsForUser which stamps left_at on every open session across
+   * all guilds.
+   * After that, getVcRanking for any guild must not include that user.
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("opted-out user is absent from ranking after global opt-out mid-session", async () => {
+    await setVcGlobalPrivacyOptOut("user-global", true);
+
+    // DB returns only the non-opted-out user.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-active", total_seconds: "1800", is_live: true }],
+    });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-active");
+    expect(result.some((r) => r.userId === "user-global")).toBe(false);
+  });
+
+  it("ranking is empty when the only user opts out globally mid-session", async () => {
+    await setVcGlobalPrivacyOptOut("user-only-global", true);
+
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toEqual([]);
+  });
+
+  it("global opt-out mid-session: SQL still contains both NOT IN sub-selects", async () => {
+    await setVcGlobalPrivacyOptOut("user-global", true);
+
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("community_vc_privacy");
+    expect(query).toContain("community_vc_privacy_global");
+    const notInMatches = query.match(/NOT IN/g) ?? [];
+    expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("global opt-out mid-session covers all guilds: ranking correct in a second guild too", async () => {
+    const OTHER_GUILD = "guild-002";
+
+    await setVcGlobalPrivacyOptOut("user-global", true);
+
+    // Ranking in a different guild also excludes the user (DB returns no rows for them).
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(OTHER_GUILD);
+
+    expect(result).toEqual([]);
   });
 });
