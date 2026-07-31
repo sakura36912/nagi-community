@@ -69,7 +69,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Import under test (resolved after mocks) ────────────────────────────────
-import { pruneOldVcSessions } from "../lib/community.js";
+import { pruneOldVcSessions, pruneGuildVcSessions } from "../lib/community.js";
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -321,5 +321,169 @@ describe("pruneOldVcSessions", () => {
     // leftAt < cutoff — it IS targeted for deletion.
     const rowAgedMs = before - 120 * 24 * 60 * 60 * 1000;
     expect(rowAgedMs).toBeLessThan(cutoffMs);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// pruneGuildVcSessions – guild-scoped prune
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("pruneGuildVcSessions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("passes the sessions table to db.delete()", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneGuildVcSessions("guild-1", 90);
+
+    const [tableArg] = mocks.del.mock.calls[0] as unknown as [Record<string, string>];
+    expect(tableArg["leftAt"]).toBe("sessions.leftAt");
+  });
+
+  it("returns the number of deleted rows", async () => {
+    mocks.returning.mockResolvedValueOnce([{ id: 10 }, { id: 11 }]);
+    const count = await pruneGuildVcSessions("guild-1", 90);
+    expect(count).toBe(2);
+  });
+
+  it("returns 0 when no rows fall outside the retention window", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    const count = await pruneGuildVcSessions("guild-1", 90);
+    expect(count).toBe(0);
+  });
+
+  it("WHERE clause is AND with three conditions (eq, isNotNull, lt)", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneGuildVcSessions("guild-1", 90);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string }[] }
+    ];
+    expect(whereArg.op).toBe("and");
+    expect(whereArg.args.some((a) => a.op === "eq")).toBe(true);
+    expect(whereArg.args.some((a) => a.op === "isNotNull")).toBe(true);
+    expect(whereArg.args.some((a) => a.op === "lt")).toBe(true);
+  });
+
+  it("scopes the delete to the specified guildId via eq()", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneGuildVcSessions("guild-abc", 90);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const eqClause = whereArg.args.find((a) => a.op === "eq") as
+      | { op: string; col: string; val: string }
+      | undefined;
+
+    expect(eqClause).toBeDefined();
+    expect(eqClause!.col).toBe("sessions.guildId");
+    expect(eqClause!.val).toBe("guild-abc");
+  });
+
+  it("excludes active sessions via isNotNull(leftAt)", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneGuildVcSessions("guild-1", 90);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown }[] }
+    ];
+    const isNotNullClause = whereArg.args.find((a) => a.op === "isNotNull") as
+      | { op: string; col: string }
+      | undefined;
+
+    expect(isNotNullClause).toBeDefined();
+    expect(isNotNullClause!.col).toBe("sessions.leftAt");
+  });
+
+  it("applies lt(leftAt, cutoff) to target only old rows", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneGuildVcSessions("guild-1", 90);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const ltClause = whereArg.args.find((a) => a.op === "lt") as
+      | { op: string; col: string; val: Date }
+      | undefined;
+
+    expect(ltClause).toBeDefined();
+    expect(ltClause!.col).toBe("sessions.leftAt");
+    expect(ltClause!.val).toBeInstanceOf(Date);
+  });
+
+  it("cutoff is approximately retentionDays days ago", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    const retentionDays = 90;
+    const before = Date.now();
+    await pruneGuildVcSessions("guild-1", retentionDays);
+    const after = Date.now();
+
+    const expectedCutoffMin = before - retentionDays * 24 * 60 * 60 * 1000;
+    const expectedCutoffMax = after  - retentionDays * 24 * 60 * 60 * 1000;
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const ltClause = whereArg.args.find((a) => a.op === "lt") as
+      | { op: string; col: string; val: Date }
+      | undefined;
+
+    expect(ltClause!.val.getTime()).toBeGreaterThanOrEqual(expectedCutoffMin);
+    expect(ltClause!.val.getTime()).toBeLessThanOrEqual(expectedCutoffMax);
+  });
+
+  /**
+   * A guild with retentionDays=90 must not have sessions aged 91–179 days
+   * protected by the global 180-day catch-all — pruneGuildVcSessions always
+   * uses the supplied retentionDays, never the 180-day default.
+   */
+  it("uses the custom cutoff so sessions in the 91–179-day gap ARE targeted (not shielded by 180-day default)", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    const customDays = 90;
+    const before = Date.now();
+    await pruneGuildVcSessions("guild-1", customDays);
+    const after = Date.now();
+
+    const expectedCutoffMin = before - customDays * 24 * 60 * 60 * 1000;
+    const expectedCutoffMax = after  - customDays * 24 * 60 * 60 * 1000;
+    const defaultCutoff     = before - 180        * 24 * 60 * 60 * 1000;
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const ltClause = whereArg.args.find((a) => a.op === "lt") as
+      | { op: string; col: string; val: Date }
+      | undefined;
+
+    const cutoffMs = ltClause!.val.getTime();
+
+    // Cutoff is in the 90-day range
+    expect(cutoffMs).toBeGreaterThanOrEqual(expectedCutoffMin);
+    expect(cutoffMs).toBeLessThanOrEqual(expectedCutoffMax);
+
+    // Cutoff is newer than the 180-day default → function did NOT fall back to 180
+    expect(cutoffMs).toBeGreaterThan(defaultCutoff);
+
+    // A session aged 100 days (between 90 d and 180 d) has leftAt < cutoff
+    // and IS targeted for deletion.
+    const rowAgedMs = before - 100 * 24 * 60 * 60 * 1000;
+    expect(rowAgedMs).toBeLessThan(cutoffMs);
+  });
+
+  it("does not touch another guild's sessions (guildId is scoped to the argument)", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneGuildVcSessions("guild-xyz", 30);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const eqClause = whereArg.args.find((a) => a.op === "eq") as
+      | { op: string; col: string; val: string }
+      | undefined;
+
+    // The eq clause must target exactly "guild-xyz", not some other guild
+    expect(eqClause!.val).toBe("guild-xyz");
   });
 });
