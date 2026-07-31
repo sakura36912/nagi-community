@@ -34,8 +34,6 @@ import {
   TIMED_VC_DURATIONS,
   VC_EXTEND_DURATIONS,
   VC_EXTEND_1D_EFFECT,
-  URA_EXTEND_DURATIONS,
-  URA_EXTEND_1D_EFFECT,
   EVAL_EXTEND_DAYS,
   PERM_ROLE_EFFECT,
   EVAL_RESURFACE_EFFECT,
@@ -52,8 +50,6 @@ import {
   recordGroupShopSale,
   getGroupShopSalesSummary,
   setVcCategoryId,
-  setUraCategoryId,
-  setUraChannelId,
   buyItem,
   claimDaily,
   createOrUpdateCurrency,
@@ -304,79 +300,6 @@ async function purchaseAndCreatePrivateVc(
   }
 }
 
-/** Grant ViewChannel on the ura access channel. Non-throwing. */
-async function grantUraChannelAccess(guild: Guild, userId: string, uraChannelId: string): Promise<void> {
-  try {
-    const ch = guild.channels.cache.get(uraChannelId)
-      ?? await guild.channels.fetch(uraChannelId).catch(() => null);
-    if (!ch || !("permissionOverwrites" in ch)) return;
-    await ch.permissionOverwrites.edit(userId, { ViewChannel: true });
-    logger.info(`[ura] Granted ViewChannel on ${uraChannelId} to user ${userId}`);
-  } catch (err) {
-    logger.error(`[ura] Failed to grant channel access to ${userId}`, err);
-  }
-}
-
-/** 裏フリールーム専用: 購入のたびに必ず新規VCを作成する。 */
-async function purchaseAndCreateUraVc(
-  guild: Guild,
-  member: GuildMember,
-  itemId: number,
-  currencyName: string,
-  durationMs: number,
-  vcCategoryId?: string | null,
-  uraChannelId?: string | null,
-): Promise<
-  | { ok: true; item: ShopItem; channelId: string; expiresAt: Date }
-  | { ok: false; reason: string }
-> {
-  const me = guild.members.me;
-  if (!me?.permissions.has("ManageChannels")) {
-    return { ok: false, reason: "BotにManageChannels権限がないため、VCを作成できません。" };
-  }
-
-  const result = await buyItem(guild.id, member.id, itemId, currencyName);
-  if (!result.ok) return result;
-
-  try {
-    const expiresAt = new Date(Date.now() + durationMs);
-    const label =
-      durationMs <= 24 * 60 * 60 * 1000 ? "1日" :
-      durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月";
-
-    const parentCategory = vcCategoryId
-      ? (guild.channels.cache.get(vcCategoryId) ?? await guild.channels.fetch(vcCategoryId).catch(() => null))
-      : null;
-
-    const channel = await guild.channels.create({
-      name: `🔒 ${member.displayName}(${label})`.slice(0, 100),
-      type: ChannelType.GuildVoice,
-      userLimit: 0,
-      ...(parentCategory ? { parent: parentCategory.id } : {}),
-      permissionOverwrites: [
-        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-        { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak, PermissionFlagsBits.Stream, PermissionFlagsBits.SendMessages] },
-      ],
-    });
-
-    await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, "ura");
-    if (uraChannelId) await grantUraChannelAccess(guild, member.id, uraChannelId);
-
-    // ボイステキストに期限を通知
-    const ts = Math.floor(expiresAt.getTime() / 1000);
-    channel.send(
-      `🌙 <@${member.id}> の裏フリールームが作成されました。\n` +
-      `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）\n` +
-      `メンバーを招待: \`/shop invite\` | 期限延長: \`/shop buy\`（延長券）`,
-    ).catch((err) => logger.error("[ura] Failed to send expiry notice to VC text", err));
-
-    return { ok: true, item: result.item, channelId: channel.id, expiresAt };
-  } catch (err) {
-    try { await refundPurchase(guild.id, member.id, result.item); } catch { /* best-effort */ }
-    logger.error("[ura] Failed to create VC", err);
-    return { ok: false, reason: "VCの作成に失敗したため、購入を取り消し、返金しました。" };
-  }
-}
 
 function buildShopPanel(items: ShopItem[], currencyName: string, title = "🛒 ショップ", color: number = 0xf5a623) {
   const embed = new EmbedBuilder()
@@ -449,11 +372,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
-    const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
-    const isUra = item.category === "ura" && vcDuration !== undefined;
-    const result = isUra
-      ? await purchaseAndCreateUraVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration!, vcCatId, settings.uraChannelId)
-      : await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
+    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
@@ -627,11 +546,7 @@ async function applyShopPurchase(
   const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
-    const isUra = item.category === "ura" && vcDuration !== undefined;
-    const result = isUra
-      ? await purchaseAndCreateUraVc(interaction.guild, member, itemId, settings.currencyName, vcDuration!, vcCatId, settings.uraChannelId)
-      : await purchaseAndCreatePrivateVc(interaction.guild, member, itemId, settings.currencyName, vcDuration, vcCatId);
+    const result = await purchaseAndCreatePrivateVc(interaction.guild, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
@@ -752,26 +667,6 @@ async function applyShopPurchase(
     return;
   }
 
-  const uraExtendDuration = URA_EXTEND_DURATIONS[item.effectType ?? ""];
-  if (uraExtendDuration !== undefined) {
-    const session = await getActivePrivateVcSession(interaction.guildId, interaction.user.id, "ura");
-    if (!session) {
-      await interaction.editReply("❌ 有効な裏フリールームがありません。先に購入してください。");
-      return;
-    }
-    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
-    if (!result.ok) { await interaction.editReply(result.reason); return; }
-    try {
-      const updated = await extendPrivateVcSession(session.id, uraExtendDuration);
-      const ts = Math.floor(updated.expiresAt.getTime() / 1000);
-      await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n裏フリールームの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
-    } catch {
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
-    }
-    return;
-  }
-
   if (item.effectType === SHOP_LICENSE_EFFECT) {
     const configs = await listShopLicenseConfigs(interaction.guildId);
     const member = await interaction.guild.members.fetch(interaction.user.id);
@@ -862,8 +757,7 @@ export async function handleVcRenameModalSubmit(interaction: ModalSubmitInteract
     // notify this user before the channel is automatically deleted.
     try {
       const session =
-        (await getActivePrivateVcSession(interaction.guild.id, userId, "vc")) ??
-        (await getActivePrivateVcSession(interaction.guild.id, userId, "ura"));
+        (await getActivePrivateVcSession(interaction.guild.id, userId, "vc"));
       if (session?.expiresAt) {
         await saveSchedule(
           interaction.guild.id,
@@ -1212,14 +1106,12 @@ const COMBINED_EFFECT_CHOICES: EffectChoice[] = [
   { name: "非公開VC/裏部屋（1ヶ月）",  value: PRIVATE_VC_1M_EFFECT     },
   { name: "VCリネーム",                  value: VC_RENAME_EFFECT         },
   { name: "非公開VC延長（1日）",        value: VC_EXTEND_1D_EFFECT      },
-  { name: "裏フリールーム延長（1日）",  value: URA_EXTEND_1D_EFFECT     },
 ];
 
 const CATEGORY_CHOICES = [
   { name: "🛒 ショップ",               value: "general" },
   { name: "⚔️ 隊別ショップ",          value: "group"   },
   { name: "🔒 非公開VCショップ",       value: "vc"      },
-  { name: "🌙 裏フリールームショップ", value: "ura"     },
 ];
 
 interface ShopGroupConfig {
@@ -1233,7 +1125,6 @@ const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
   general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623 },
   group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c },
   vc:      { displayName: "非公開VCショップ",       emoji: "🔒", category: "vc",      color: 0x3498db },
-  ura:     { displayName: "裏フリールームショップ", emoji: "🌙", category: "ura",     color: 0x9b59b6 },
 };
 
 const shopCommand: Command = {
@@ -1285,23 +1176,11 @@ const shopCommand: Command = {
         ),
     )
     .addSubcommand((sub) =>
-      sub.setName("ura-category").setDescription("裏フリールームVCを作成するカテゴリを設定します（管理者）")
-        .addChannelOption((opt) =>
-          opt.setName("channel").setDescription("カテゴリチャンネルを選択").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub.setName("ura-channel").setDescription("裏フリールーム購入者にアクセス権を付与するチャンネルを設定します（管理者）")
-        .addChannelOption((opt) =>
-          opt.setName("channel").setDescription("テキスト・ボイスチャンネルを選択").setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub.setName("invite").setDescription("裏フリールームに別のメンバーを招待します")
+      sub.setName("invite").setDescription("非公開VCに別のメンバーを招待します")
         .addUserOption((opt) => opt.setName("member").setDescription("招待するメンバー").setRequired(true)),
     )
     .addSubcommand((sub) =>
-      sub.setName("kick").setDescription("裏フリールームからメンバーのアクセスを取り消します")
+      sub.setName("kick").setDescription("非公開VCからメンバーのアクセスを取り消します")
         .addUserOption((opt) => opt.setName("member").setDescription("取り消すメンバー").setRequired(true)),
     )
     .addSubcommand((sub) =>
@@ -1371,11 +1250,7 @@ const shopCommand: Command = {
         const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
         if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
           const member = await interaction.guild!.members.fetch(interaction.user.id);
-          const vcCatId = item.category === "ura" ? settings.uraCategoryId : settings.vcCategoryId;
-          const isUra = item.category === "ura" && vcDuration !== undefined;
-          const result = isUra
-            ? await purchaseAndCreateUraVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration!, vcCatId, settings.uraChannelId)
-            : await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, vcCatId);
+          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
           if (result.ok) {
             const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
             const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
@@ -1496,27 +1371,6 @@ const shopCommand: Command = {
             const updated = await extendPrivateVcSession(session.id, vcExtendDurationBuy);
             const ts = Math.floor(updated.expiresAt.getTime() / 1000);
             await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
-          } catch {
-            await refundPurchase(guildId, interaction.user.id, result.item);
-            await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
-          }
-          return;
-        }
-
-        // 裏フリールーム延長
-        const uraExtendDurationBuy = URA_EXTEND_DURATIONS[item.effectType ?? ""];
-        if (uraExtendDurationBuy !== undefined) {
-          const session = await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
-          if (!session) {
-            await interaction.editReply("❌ 有効な裏フリールームがありません。先に購入してください。");
-            return;
-          }
-          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-          if (!result.ok) { await interaction.editReply(result.reason); return; }
-          try {
-            const updated = await extendPrivateVcSession(session.id, uraExtendDurationBuy);
-            const ts = Math.floor(updated.expiresAt.getTime() / 1000);
-            await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n裏フリールームの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
           } catch {
             await refundPurchase(guildId, interaction.user.id, result.item);
             await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
@@ -1662,34 +1516,9 @@ const shopCommand: Command = {
       return;
     }
 
-    if (sub === "ura-category") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-        return;
-      }
-      const channel = interaction.options.getChannel("channel", true);
-      await setUraCategoryId(guildId, channel.id);
-      await interaction.reply(`✅ 裏フリールームVCの作成先カテゴリを <#${channel.id}> に設定しました。`);
-      return;
-    }
-
-    if (sub === "ura-channel") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-        return;
-      }
-      const channel = interaction.options.getChannel("channel", true);
-      await setUraChannelId(guildId, channel.id);
-      await interaction.reply(`✅ 裏フリールーム購入者のアクセス先チャンネルを <#${channel.id}> に設定しました。`);
-      return;
-    }
-
     if (sub === "invite") {
       await interaction.deferReply({ ephemeral: true });
-      // vc・ura どちらのセッションでも対応
-      const session =
-        await getActivePrivateVcSession(guildId, interaction.user.id, "vc") ??
-        await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+      const session = await getActivePrivateVcSession(guildId, interaction.user.id, "vc");
       if (!session) {
         await interaction.editReply("❌ 有効な非公開VCが見つかりません。先に購入してください。");
         return;
@@ -1708,16 +1537,13 @@ const shopCommand: Command = {
       await ch.permissionOverwrites.edit(targetUser.id, {
         ViewChannel: true, Connect: true, Speak: true, Stream: true, SendMessages: true,
       });
-      const label = session.category === "ura" ? "裏フリールーム" : "非公開VC";
-      await interaction.editReply(`✅ <@${targetUser.id}> を${label}に招待しました。`);
+      await interaction.editReply(`✅ <@${targetUser.id}> を非公開VCに招待しました。`);
       return;
     }
 
     if (sub === "kick") {
       await interaction.deferReply({ ephemeral: true });
-      const session =
-        await getActivePrivateVcSession(guildId, interaction.user.id, "vc") ??
-        await getActivePrivateVcSession(guildId, interaction.user.id, "ura");
+      const session = await getActivePrivateVcSession(guildId, interaction.user.id, "vc");
       if (!session) {
         await interaction.editReply("❌ 有効な非公開VCが見つかりません。");
         return;

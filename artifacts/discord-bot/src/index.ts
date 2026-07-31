@@ -67,7 +67,6 @@ import {
   markRewardDistributed,
   seedDefaultShopItems,
   seedDefaultVcShopItems,
-  seedDefaultUraShopItems,
   getEvalSheetSettings,
   createEvalSheet,
   getSheetVcSeconds,
@@ -500,9 +499,6 @@ client.once(Events.ClientReady, (readyClient) => {
     );
     seedDefaultVcShopItems(guild.id).catch((err) =>
       logger.error(`[seed] Failed to seed VC shop items for guild ${guild.id}`, err),
-    );
-    seedDefaultUraShopItems(guild.id).catch((err) =>
-      logger.error(`[seed] Failed to seed ura shop items for guild ${guild.id}`, err),
     );
   }
 

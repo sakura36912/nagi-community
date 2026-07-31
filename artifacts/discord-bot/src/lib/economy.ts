@@ -48,7 +48,6 @@ export const EVAL_EXTEND_1M_EFFECT = "eval_extend_1m"; // +30 days
 export const PERM_ROLE_EFFECT      = "perm_role";       // assign a role permanently
 export const EVAL_RESURFACE_EFFECT = "eval_resurface";  // create new eval sheet after failure
 export const SHOP_LICENSE_EFFECT   = "shop_license";    // assign squad-specific shop-license role
-export const URA_EXTEND_1D_EFFECT  = "ura_extend_1d";   // extend existing ura VC by 1 day (no create)
 
 // Duration in milliseconds for each timed VC effect type.
 export const TIMED_VC_DURATIONS: Record<string, number> = {
@@ -63,10 +62,6 @@ export const VC_EXTEND_DURATIONS: Record<string, number> = {
   [VC_EXTEND_1D_EFFECT]: 24 * 60 * 60 * 1000,
 };
 
-/** 裏フリールーム延長専用。既存セッションがある場合のみ延長（新規作成なし）。 */
-export const URA_EXTEND_DURATIONS: Record<string, number> = {
-  [URA_EXTEND_1D_EFFECT]: 24 * 60 * 60 * 1000,
-};
 
 /** Maps eval-extend effect type → number of days to add to endDate. */
 export const EVAL_EXTEND_DAYS: Record<string, number> = {
@@ -169,7 +164,6 @@ export async function getGuildSettings(guildId: string): Promise<GuildSettings> 
     // Seed default shop items for brand-new guilds.
     await seedDefaultShopItems(guildId);
     await seedDefaultVcShopItems(guildId);
-    await seedDefaultUraShopItems(guildId);
     return created;
   }
 
@@ -185,33 +179,6 @@ export async function getGuildSettings(guildId: string): Promise<GuildSettings> 
   return settings;
 }
 
-export async function setUraCategoryId(
-  guildId: string,
-  uraCategoryId: string | null,
-): Promise<GuildSettings> {
-  await getGuildSettings(guildId);
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ uraCategoryId })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-  if (!settings) throw new Error("Failed to update ura_category_id");
-  return settings;
-}
-
-export async function setUraChannelId(
-  guildId: string,
-  uraChannelId: string | null,
-): Promise<GuildSettings> {
-  await getGuildSettings(guildId);
-  const [settings] = await db
-    .update(guildSettingsTable)
-    .set({ uraChannelId })
-    .where(eq(guildSettingsTable.guildId, guildId))
-    .returning();
-  if (!settings) throw new Error("Failed to update ura_channel_id");
-  return settings;
-}
 
 export async function setVcCategoryId(
   guildId: string,
@@ -692,55 +659,6 @@ export async function distributeRoleRewards(
   return { paidCount, totalPaid };
 }
 
-// Inserts the default ura (裏フリールーム) shop items for a guild.
-// Safe to call multiple times — uses effectType guard so it never duplicates.
-export async function seedDefaultUraShopItems(guildId: string): Promise<void> {
-  const defaults: Array<{ name: string; description: string; price: number; effectType: string }> = [
-    {
-      name: "裏フリールーム（1日）",
-      description: "自分だけが見える専用VCを1日間作成します。期間終了後に自動削除されます。",
-      price: 1000,
-      effectType: PRIVATE_VC_1D_EFFECT,
-    },
-    {
-      name: "裏フリールーム（1週間）",
-      description: "自分だけが見える専用VCを1週間作成します。期間終了後に自動削除されます。",
-      price: 5000,
-      effectType: PRIVATE_VC_1W_EFFECT,
-    },
-    {
-      name: "裏フリールーム（1ヶ月）",
-      description: "自分だけが見える専用VCを1ヶ月間作成します。期間終了後に自動削除されます。",
-      price: 15000,
-      effectType: PRIVATE_VC_1M_EFFECT,
-    },
-    {
-      name: "裏フリールーム延長（1日）",
-      description: "既存の裏フリールームの期限を1日延長します。部屋がない場合は使用できません。",
-      price: 800,
-      effectType: URA_EXTEND_1D_EFFECT,
-    },
-    {
-      name: "裏フリールーム名前変更",
-      description: "自分の裏フリールームの名前を変更します。",
-      price: 500,
-      effectType: VC_RENAME_EFFECT,
-    },
-  ];
-
-  const existing = await db
-    .select({ effectType: shopItemsTable.effectType })
-    .from(shopItemsTable)
-    .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "ura")));
-  const existingEffects = new Set(existing.map((r) => r.effectType));
-
-  const toInsert = defaults.filter((d) => !existingEffects.has(d.effectType));
-  if (toInsert.length === 0) return;
-
-  await db.insert(shopItemsTable).values(
-    toInsert.map((d) => ({ ...d, guildId, category: "ura" })),
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Private VC session management (timed channels)
