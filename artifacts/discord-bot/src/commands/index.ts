@@ -320,7 +320,7 @@ function buildShopPanel(items: ShopItem[], currencyName: string, title = "🛒 �
 
   embed.setDescription(
     items
-      .map((i) => `**#${i.id} ${i.name}** — ${i.price}${currencyName}${i.description ? `\n${i.description}` : ""}`)
+      .map((i) => `**#${i.id} ${i.name}** — ${i.price.toLocaleString()}${currencyName}${i.description ? `\n${i.description}` : ""}`)
       .join("\n\n"),
   );
 
@@ -333,7 +333,7 @@ function buildShopPanel(items: ShopItem[], currencyName: string, title = "🛒 �
           .setLabel(item.name.slice(0, 100))
           .setValue(String(item.id))
           .setDescription(
-            `${item.price}${currencyName}${item.description ? ` — ${item.description}` : ""}`.slice(0, 100),
+            `${item.price.toLocaleString()}${currencyName}${item.description ? ` — ${item.description}` : ""}`.slice(0, 100),
           ),
       ),
     );
@@ -858,7 +858,7 @@ const dailyCommand: Command = {
     const result = await claimDaily(guildId, interaction.user.id, settings.dailyAmount);
     if (result.ok) {
       await interaction.reply(
-        `${settings.dailyAmount}${settings.currencyName}を受け取りました!現在の残高: **${result.balance}${settings.currencyName}**`,
+        `${settings.dailyAmount.toLocaleString()}${settings.currencyName}を受け取りました!現在の残高: **${result.balance.toLocaleString()}${settings.currencyName}**`,
       );
     } else {
       await interaction.reply({
@@ -1078,7 +1078,7 @@ const leaderboardCommand: Command = {
     }
 
     const lines = wallets.map(
-      (w, i) => `**${i + 1}位** <@${w.userId}> — ${w.balance}${settings.currencyName}`,
+      (w, i) => `**${i + 1}位** <@${w.userId}> — ${w.balance.toLocaleString()}${settings.currencyName}`,
     );
 
     const header = showAll ? `## 💰 全員の所持通貨(${wallets.length}人)` : "## 🏆 ランキング";
@@ -1243,7 +1243,7 @@ const shopCommand: Command = {
         getGuildSettings(guildId),
       ]);
       await interaction.reply(
-        `アイテム **#${item.id} ${item.name}**(${item.price}${settings.currencyName})を${cfg.displayName}に追加しました。`,
+        `アイテム **#${item.id} ${item.name}**(${item.price.toLocaleString()}${settings.currencyName})を${cfg.displayName}に追加しました。`,
       );
       return;
     }
@@ -1264,7 +1264,7 @@ const shopCommand: Command = {
         return;
       }
       await interaction.reply(
-        `**#${updated.id} ${updated.name}** の価格を **${newPrice}${settings.currencyName}** に変更しました。`,
+        `**#${updated.id} ${updated.name}** の価格を **${newPrice.toLocaleString()}${settings.currencyName}** に変更しました。`,
       );
       return;
     }
@@ -1456,7 +1456,7 @@ const rewardCommand: Command = {
         await interaction.reply("自動報酬は設定されていません。");
         return;
       }
-      const lines = rewards.map((r) => `<@&${r.roleId}> — ${r.amount}${settings.currencyName}`);
+      const lines = rewards.map((r) => `<@&${r.roleId}> — ${r.amount.toLocaleString()}${settings.currencyName}`);
       const scheduleLabel = settings.rewardDayOfMonth ? `毎月${settings.rewardDayOfMonth}日` : "未設定";
       await interaction.reply({
         content: `## 💰 自動報酬設定(給料日: ${scheduleLabel})\n${lines.join("\n")}`,
@@ -1475,7 +1475,7 @@ const rewardCommand: Command = {
       ]);
       const scheduleLabel = settings.rewardDayOfMonth ? `毎月${settings.rewardDayOfMonth}日` : "未設定";
       await interaction.reply(
-        `<@&${reward.roleId}> の自動報酬を **${amount}${settings.currencyName}** に設定しました(給料日: ${scheduleLabel})。`,
+        `<@&${reward.roleId}> の自動報酬を **${amount.toLocaleString()}${settings.currencyName}** に設定しました(給料日: ${scheduleLabel})。`,
       );
       return;
     }
