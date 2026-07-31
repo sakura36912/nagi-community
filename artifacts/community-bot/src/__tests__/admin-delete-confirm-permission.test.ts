@@ -84,6 +84,13 @@ function makeInteraction(opts: {
   guildId?: string | null;
   targetUserId?: string;
   hasManageGuild?: boolean;
+  guild?: {
+    name?: string;
+    channels: {
+      cache: { get: ReturnType<typeof vi.fn> };
+      fetch?: ReturnType<typeof vi.fn>;
+    };
+  } | null;
 }) {
   const {
     userId = "admin-user",
@@ -91,11 +98,13 @@ function makeInteraction(opts: {
     guildId = "guild-123",
     targetUserId = "target-user-456",
     hasManageGuild = true,
+    guild = null,
   } = opts;
 
   return {
     user: { id: userId, tag: userTag },
     guildId,
+    guild,
     customId: `${COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX}${targetUserId}`,
     member: {
       permissions: {
@@ -199,5 +208,102 @@ describe("handlePrivacyAdminDeleteConfirm – permission gate", () => {
     const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { footer?: { text: string } } }[] }]];
     const footer = replyArg.embeds[0]?.data?.footer?.text ?? "";
     expect(footer).toContain("admin-111");
+  });
+});
+
+// ─── Audit log tests ──────────────────────────────────────────────────────────
+
+describe("handlePrivacyAdminDeleteConfirm – audit log", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends an audit embed with actor, target, and record count when a channel is configured", async () => {
+    const AUDIT_CHANNEL_ID = "audit-channel-999";
+
+    // db.delete returns 3 deleted rows
+    mocks.returning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }, { id: 3 }]);
+
+    // db.select returns a row with the audit channel ID
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: AUDIT_CHANNEL_ID }]);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = {
+      isTextBased: () => true,
+      send,
+    };
+
+    const interaction = makeInteraction({
+      hasManageGuild: true,
+      userId: "admin-111",
+      userTag: "Moderator#1234",
+      guildId: "guild-abc",
+      targetUserId: "target-xyz",
+      guild: {
+        name: "Test Guild",
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(auditChannel) },
+          fetch: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    expect(send).toHaveBeenCalledOnce();
+
+    const [[sendArg]] = send.mock.calls as [[{ embeds: { data: { fields?: { name: string; value: string }[]; footer?: { text: string } } }[] }]];
+    const embedData = sendArg.embeds[0]?.data;
+    const fields = embedData?.fields ?? [];
+
+    // Actor field contains the admin's user ID
+    const actorField = fields.find((f) => f.name === "操作者");
+    expect(actorField?.value).toContain("admin-111");
+
+    // Target field contains the target user ID
+    const targetField = fields.find((f) => f.name === "対象ユーザー");
+    expect(targetField?.value).toContain("target-xyz");
+
+    // Record count field reflects the number of deleted rows
+    const countField = fields.find((f) => f.name === "削除件数");
+    expect(countField?.value).toContain("3");
+
+    // Footer contains both the actor ID and the target ID
+    const footer = embedData?.footer?.text ?? "";
+    expect(footer).toContain("admin-111");
+    expect(footer).toContain("target-xyz");
+  });
+
+  it("does NOT send any audit message when no audit channel is configured", async () => {
+    // db.delete returns 1 deleted row
+    mocks.returning.mockResolvedValueOnce([{ id: 1 }]);
+
+    // db.select returns an empty array (no audit channel configured)
+    mocks.selectWhere.mockResolvedValueOnce([]);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = {
+      isTextBased: () => true,
+      send,
+    };
+
+    const interaction = makeInteraction({
+      hasManageGuild: true,
+      guild: {
+        name: "Test Guild",
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(auditChannel) },
+          fetch: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    // The success reply still goes through
+    expect(interaction.editReply).toHaveBeenCalled();
+
+    // But no audit message is sent
+    expect(send).not.toHaveBeenCalled();
   });
 });
