@@ -450,38 +450,17 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   if (item.effectType === EVAL_RESURFACE_EFFECT) {
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
     if (!result.ok) { await interaction.editReply(result.reason); return; }
-    const sheetSettings = await getEvalSheetSettings(interaction.guildId);
-    if (!sheetSettings?.forumChannelId) {
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ 評価フォーラムが設定されていません。購入を取り消し、返金しました。");
-      return;
-    }
-    const forum = interaction.guild!.channels.cache.get(sheetSettings.forumChannelId)
-      ?? await interaction.guild!.channels.fetch(sheetSettings.forumChannelId).catch(() => null);
-    if (!forum || forum.type !== ChannelType.GuildForum) {
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ 評価フォーラムが見つかりません。購入を取り消し、返金しました。");
-      return;
-    }
-    try {
-      const evalDays = sheetSettings.evalPeriodDays ?? 14;
-      const startDate = new Date();
-      const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
-      const targetUser = await interaction.client.users.fetch(interaction.user.id);
-      const member = await interaction.guild!.members.fetch(interaction.user.id);
-      const displayName = member.displayName;
-      const [vcSeconds, selfIntro] = await Promise.all([
-        getSheetVcSeconds(interaction.guildId, interaction.user.id, startDate, endDate).catch(() => 0),
-        findSelfIntro(interaction.guild!, interaction.user.id, sheetSettings.rosterCategoryId).catch(() => null),
-      ]);
-      const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
-      const thread = await forum.threads.create({ name: buildSheetThreadName(displayName, endDate), message: { embeds: [embed] } });
-      await createEvalSheet(interaction.guildId, interaction.user.id, startDate, endDate, forum.id, thread.id);
-      const ts = Math.floor(endDate.getTime() / 1000);
-      await interaction.editReply(`✅ **${result.item.name}**を使用しました！評価シートが新規作成されました。期限: **<t:${ts}:D>**`);
-    } catch {
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ 評価シートの作成に失敗しました。購入を取り消し、返金しました。");
+    if (item.targetRoleId) {
+      try {
+        const member = await interaction.guild!.members.fetch(interaction.user.id);
+        await member.roles.add(item.targetRoleId);
+        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+      } catch {
+        await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+        await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+      }
+    } else {
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！`);
     }
     return;
   }
@@ -628,38 +607,17 @@ async function applyShopPurchase(
   if (item.effectType === EVAL_RESURFACE_EFFECT) {
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
     if (!result.ok) { await interaction.editReply(result.reason); return; }
-    const sheetSettings = await getEvalSheetSettings(interaction.guildId);
-    if (!sheetSettings?.forumChannelId) {
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ 評価フォーラムが設定されていません。購入を取り消し、返金しました。");
-      return;
-    }
-    const forum = interaction.guild.channels.cache.get(sheetSettings.forumChannelId)
-      ?? await interaction.guild.channels.fetch(sheetSettings.forumChannelId).catch(() => null);
-    if (!forum || forum.type !== ChannelType.GuildForum) {
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ 評価フォーラムが見つかりません。購入を取り消し、返金しました。");
-      return;
-    }
-    try {
-      const evalDays = sheetSettings.evalPeriodDays ?? 14;
-      const startDate = new Date();
-      const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
-      const targetUser = await interaction.client.users.fetch(interaction.user.id);
-      const member = await interaction.guild.members.fetch(interaction.user.id);
-      const displayName = member.displayName;
-      const [vcSeconds, selfIntro] = await Promise.all([
-        getSheetVcSeconds(interaction.guildId, interaction.user.id, startDate, endDate).catch(() => 0),
-        findSelfIntro(interaction.guild!, interaction.user.id, sheetSettings.rosterCategoryId).catch(() => null),
-      ]);
-      const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
-      const thread = await forum.threads.create({ name: buildSheetThreadName(displayName, endDate), message: { embeds: [embed] } });
-      await createEvalSheet(interaction.guildId, interaction.user.id, startDate, endDate, forum.id, thread.id);
-      const ts = Math.floor(endDate.getTime() / 1000);
-      await interaction.editReply(`✅ **${result.item.name}**を使用しました！評価シートが新規作成されました。期限: **<t:${ts}:D>**`);
-    } catch {
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ 評価シートの作成に失敗しました。購入を取り消し、返金しました。");
+    if (item.targetRoleId) {
+      try {
+        const member = await interaction.guild.members.fetch(interaction.user.id);
+        await member.roles.add(item.targetRoleId);
+        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+      } catch {
+        await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+        await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+      }
+    } else {
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！`);
     }
     return;
   }
