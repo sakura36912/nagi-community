@@ -18,7 +18,7 @@ import {
   SHIFT_CONFIRM_PREFIX,
   SHIFT_CANCEL_PREFIX,
   SHIFT_TIME_PREFIX,
-  SHIFT_PANEL_OPEN,
+  SHIFT_PANEL_OPEN_PREFIX,
   handleShiftToggle,
   handleShiftConfirm,
   handleShiftCancel,
@@ -1152,7 +1152,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleShiftCancel(interaction);
       return;
     }
-    if (interaction.isButton() && interaction.customId === SHIFT_PANEL_OPEN) {
+    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_PANEL_OPEN_PREFIX)) {
       await handleShiftPanelOpen(interaction);
       return;
     }

@@ -1928,7 +1928,7 @@ export {
   handleShiftConfirm,
   handleShiftCancel,
   handleShiftTime,
-  SHIFT_PANEL_OPEN,
+  SHIFT_PANEL_OPEN_PREFIX,
   handleShiftPanelOpen,
 } from "./shift";
 import { vcsalaryCommand } from "./vcsalary";

@@ -31,7 +31,7 @@ export const SHIFT_TOGGLE_PREFIX  = "shift:toggle:";   // shift:toggle:{sid}:{da
 export const SHIFT_CONFIRM_PREFIX = "shift:confirm:"; // shift:confirm:{sid}
 export const SHIFT_CANCEL_PREFIX  = "shift:cancel:";  // shift:cancel:{sid}
 export const SHIFT_TIME_PREFIX    = "shift:time:";    // shift:time:{sid}:{time}
-export const SHIFT_PANEL_OPEN     = "shift:panel:open"; // パネルボタン → submit起動
+export const SHIFT_PANEL_OPEN_PREFIX = "shift:panel:open:"; // shift:panel:open:{weekOffset}
 
 /** 選択肢として表示する時刻一覧 */
 const SHIFT_TIME_OPTIONS = ["21:00", "22:00", "23:00"];
@@ -640,18 +640,26 @@ export const shiftCommand: Command = {
       const embed = new EmbedBuilder()
         .setTitle("📋 シフト提出")
         .setColor(0x5865f2)
-        .setDescription("下のボタンを押すと今週のシフト提出フォームが開きます。");
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(SHIFT_PANEL_OPEN)
-          .setLabel("📋 シフトを提出する")
-          .setStyle(ButtonStyle.Primary),
-      );
+        .setDescription("提出する週を選んでボタンを押してください。");
       const ch = interaction.channel;
       if (!ch || !("send" in ch)) {
         await interaction.reply({ content: "このチャンネルにはメッセージを送信できません。", ephemeral: true });
         return;
       }
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}-1`)
+          .setLabel("先週")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}0`)
+          .setLabel("今週")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}1`)
+          .setLabel("来週")
+          .setStyle(ButtonStyle.Secondary),
+      );
       await ch.send({ embeds: [embed], components: [row] });
       await interaction.reply({ content: "✅ シフト提出パネルを設置しました。", ephemeral: true });
       return;
@@ -943,9 +951,11 @@ export async function handleShiftPanelOpen(interaction: ButtonInteraction): Prom
     }
   }
 
+  const weekOffset = parseInt(interaction.customId.slice(SHIFT_PANEL_OPEN_PREFIX.length), 10) || 0;
+
   cleanExpiredSessions();
   const sessionId = interaction.id;
-  const dates = getWeekDates(0);
+  const dates = getWeekDates(weekOffset);
   const session: SubmitSession = {
     guildId,
     userId: interaction.user.id,
