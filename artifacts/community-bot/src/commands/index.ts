@@ -63,6 +63,7 @@ import {
   getAllTempVcDeletions,
   getAuditLogChannel,
   setAuditLogChannel,
+  countCompletedSessionsOlderThan,
   type CommunityTicketSettings,
   type CommunityTicketPanel,
 } from "../lib/community.js";
@@ -82,6 +83,8 @@ export const COMM_PRIVACY_GLOBAL_OPTOUT_DELETE = "comm:privacy:global:optout:del
 export const COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX = "comm:privacy:admin-delete:confirm:";
 export const COMM_PRIVACY_ADMIN_DELETE_CANCEL_PREFIX = "comm:privacy:admin-delete:cancel:";
 export const COMM_BOTSTATUS_REFRESH = "comm:botstatus:refresh";
+export const COMM_RETENTION_CONFIRM_PREFIX = "comm:retention:confirm:";
+export const COMM_RETENTION_CANCEL_PREFIX = "comm:retention:cancel:";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -406,6 +409,39 @@ const rankingCommand: Command = {
           content: "VCセッションの保持期間をデフォルト（**180日**）にリセットしました。",
           ephemeral: true,
         });
+        return;
+      }
+
+      // days < 30 → show a warning with a dry-run count and ask for confirmation
+      if (days < 30) {
+        await interaction.deferReply({ ephemeral: true });
+        const wouldDelete = await countCompletedSessionsOlderThan(guildId, days);
+
+        const warningEmbed = new EmbedBuilder()
+          .setTitle("⚠️ 保持期間が短すぎる可能性があります")
+          .setColor(0xfee75c)
+          .setDescription(
+            `保持期間を **${days}日** に設定しようとしています。\n\n` +
+            `この設定を適用すると、次回のプルーン実行時に **約${wouldDelete}件** の` +
+            `完了済みVCセッションが削除されます。\n\n` +
+            "30日未満の保持期間は最近のVC履歴を失う可能性があります。\n" +
+            "本当にこの設定を適用しますか？",
+          )
+          .setFooter({ text: "「確定する」を押すと保持期間が変更されます" })
+          .setTimestamp();
+
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`${COMM_RETENTION_CONFIRM_PREFIX}${days}`)
+            .setLabel("確定する ⚠️")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(`${COMM_RETENTION_CANCEL_PREFIX}${days}`)
+            .setLabel("キャンセル")
+            .setStyle(ButtonStyle.Secondary),
+        );
+
+        await interaction.editReply({ embeds: [warningEmbed], components: [row] });
         return;
       }
 
@@ -1615,6 +1651,58 @@ export async function handlePrivacyAdminDeleteCancel(interaction: ButtonInteract
     .setTitle("✅ キャンセルしました")
     .setColor(0x57f287)
     .setDescription("VC記録の削除をキャンセルしました。データはそのまま保持されます。")
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+// ─── /ranking retention-days confirmation buttons ─────────────────────────────
+
+/**
+ * Admin clicked "確定する" on the short-retention warning embed.
+ * The days value is encoded in the custom ID after the prefix.
+ * Only the original admin (Administrator permission) may confirm.
+ */
+export async function handleRetentionConfirm(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+  const member = interaction.member as GuildMember | null;
+  if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "このボタンはサーバー管理者のみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const daysStr = interaction.customId.slice(COMM_RETENTION_CONFIRM_PREFIX.length);
+  const days = parseInt(daysStr, 10);
+  if (isNaN(days) || days < 1) {
+    await interaction.reply({ content: "無効なデータです。コマンドを再実行してください。", ephemeral: true });
+    return;
+  }
+
+  await interaction.deferUpdate();
+  await setVcSessionRetentionDays(interaction.guildId, days);
+
+  const embed = new EmbedBuilder()
+    .setTitle("✅ 保持期間を変更しました")
+    .setColor(0xed4245)
+    .setDescription(
+      `VCセッションの保持期間を **${days}日** に設定しました。\n\n` +
+      "次回のプルーン実行時に、この日数より古い完了済みセッションが削除されます。",
+    )
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed], components: [] });
+}
+
+/**
+ * Admin clicked "キャンセル" on the short-retention warning embed.
+ */
+export async function handleRetentionCancel(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferUpdate();
+  const embed = new EmbedBuilder()
+    .setTitle("✅ キャンセルしました")
+    .setColor(0x57f287)
+    .setDescription("保持期間の変更をキャンセルしました。設定はそのまま変わりません。")
     .setTimestamp();
   await interaction.editReply({ embeds: [embed], components: [] });
 }

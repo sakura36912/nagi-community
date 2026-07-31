@@ -51,6 +51,8 @@ import {
   COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX,
   COMM_PRIVACY_ADMIN_DELETE_CANCEL_PREFIX,
   COMM_BOTSTATUS_REFRESH,
+  COMM_RETENTION_CONFIRM_PREFIX,
+  COMM_RETENTION_CANCEL_PREFIX,
   handleEventJoin,
   handleEventCancel,
   handleTicketCreate,
@@ -65,6 +67,8 @@ import {
   handlePrivacyAdminDeleteCancel,
   handleBotstatusRefresh,
   handleRoleButton,
+  handleRetentionConfirm,
+  handleRetentionCancel,
   COMM_ROLEBUTTON_PREFIX,
 } from "./commands/index.js";
 
@@ -605,6 +609,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id.startsWith(COMM_PRIVACY_ADMIN_DELETE_CANCEL_PREFIX)) {
         await handlePrivacyAdminDeleteCancel(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_RETENTION_CONFIRM_PREFIX)) {
+        await handleRetentionConfirm(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_RETENTION_CANCEL_PREFIX)) {
+        await handleRetentionCancel(interaction);
         return;
       }
       if (id.startsWith(COMM_ROLEBUTTON_PREFIX)) {

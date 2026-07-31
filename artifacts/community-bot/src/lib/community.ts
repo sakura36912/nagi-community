@@ -957,6 +957,23 @@ export async function getAllTempVcDeletions(
   }));
 }
 
+/**
+ * Counts completed VC sessions for a guild whose left_at is older than the
+ * given number of days.  Active sessions (left_at IS NULL) are never counted.
+ * Used to show admins a dry-run impact count before they apply a short retention window.
+ */
+export async function countCompletedSessionsOlderThan(guildId: string, days: number): Promise<number> {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const rows = await db.execute<{ cnt: string }>(sql`
+    SELECT COUNT(*)::bigint AS cnt
+    FROM community_vc_sessions
+    WHERE guild_id = ${guildId}
+      AND left_at IS NOT NULL
+      AND left_at < ${cutoff}
+  `);
+  return Number(rows.rows[0]?.cnt ?? 0);
+}
+
 export async function setLeaveLogChannel(
   guildId: string,
   channelId: string | null,
