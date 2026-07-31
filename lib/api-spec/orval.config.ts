@@ -28,6 +28,7 @@ export default defineConfig({
       mode: "split",
       baseUrl: "/api",
       clean: true,
+      // @ts-ignore -- `prettier` is a valid orval output option but missing from its TS typings
       prettier: true,
       override: {
         fetch: {
@@ -54,6 +55,7 @@ export default defineConfig({
       schemas: { path: "generated/types", type: "typescript" },
       mode: "split",
       clean: true,
+      // @ts-ignore -- `prettier` is a valid orval output option but missing from its TS typings
       prettier: true,
       override: {
         zod: {
