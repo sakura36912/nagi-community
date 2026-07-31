@@ -1146,13 +1146,6 @@ const shopCommand: Command = {
         ),
     )
     .addSubcommand((sub) =>
-      sub.setName("buy").setDescription("アイテムを購入します")
-        .addIntegerOption((opt) =>
-          opt.setName("item_id").setDescription("アイテムID（/shop list で確認）").setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) => sub.setName("inventory").setDescription("自分の所持アイテムを表示します"))
-    .addSubcommand((sub) =>
       sub.setName("add").setDescription("アイテムを追加します（管理者）")
         .addStringOption((opt) =>
           opt.setName("category").setDescription("追加先ショップ").setRequired(true).addChoices(...CATEGORY_CHOICES),
@@ -1191,13 +1184,6 @@ const shopCommand: Command = {
         .addUserOption((opt) => opt.setName("member").setDescription("取り消すメンバー").setRequired(true)),
     )
     .addSubcommand((sub) =>
-      sub.setName("license-setup").setDescription("隊ロール→ショップ開業ロールのマッピングを設定します（管理者）")
-        .addRoleOption((opt) => opt.setName("squad_role").setDescription("隊ロール").setRequired(true))
-        .addRoleOption((opt) => opt.setName("shop_role").setDescription("付与するショップ開業ロール").setRequired(true)),
-    )
-    .addSubcommand((sub) => sub.setName("license-list").setDescription("隊→開業ロールのマッピング一覧を表示します（管理者）"))
-    .addSubcommand((sub) => sub.setName("sales").setDescription("隊ごとの売上を表示します"))
-    .addSubcommand((sub) =>
       sub.setName("set-role").setDescription("アイテムの付与ロールを設定・変更します（管理者）")
         .addIntegerOption((opt) =>
           opt.setName("item_id").setDescription("アイテムID（/shop list で確認）").setRequired(true),
@@ -1231,201 +1217,6 @@ const shopCommand: Command = {
       ]);
       const panel = buildShopPanel(items, settings.currencyName, `${cfg.emoji} ${cfg.displayName}`, cfg.color);
       await interaction.reply(panel);
-      return;
-    }
-
-    if (sub === "buy") {
-      const itemId = interaction.options.getInteger("item_id", true);
-      const item = await getShopItem(guildId, itemId);
-      if (!item) {
-        await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
-        return;
-      }
-
-      if (item.effectType === NICKNAME_CHANGE_EFFECT) {
-        await interaction.showModal(buildNicknameModal(item.id));
-        return;
-      }
-      if (item.effectType === VC_RENAME_EFFECT) {
-        await interaction.showModal(buildVcRenameModal(item.id));
-        return;
-      }
-
-      await interaction.deferReply({ ephemeral: true });
-      const settings = await getGuildSettings(guildId);
-
-        const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
-        if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
-          const member = await interaction.guild!.members.fetch(interaction.user.id);
-          const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
-          if (result.ok) {
-            const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
-            const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
-            await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
-          } else {
-            await interaction.editReply(result.reason);
-          }
-          return;
-        }
-
-        // Eval-sheet extension券
-        const extendDays = EVAL_EXTEND_DAYS[item.effectType ?? ""];
-        if (extendDays !== undefined) {
-          // ① 評価中ロールを持っていない人は購入不可
-          const sheetSettingsForExt = await getEvalSheetSettings(guildId);
-          const triggerRoleIdsForExt = sheetSettingsForExt?.triggerRoleIds?.split(",").map((r) => r.trim()).filter(Boolean) ?? [];
-          if (triggerRoleIdsForExt.length > 0) {
-            const memberForExt = await interaction.guild!.members.fetch(interaction.user.id);
-            if (!memberForExt.roles.cache.hasAny(...triggerRoleIdsForExt)) {
-              await interaction.editReply("❌ この商品は評価中のメンバーのみ購入できます。");
-              return;
-            }
-          }
-          // ② 評価中ロールを持っている人は1回のみ購入可
-          const currentSheetForExt = await getLatestEvalSheet(guildId, interaction.user.id);
-          if ((currentSheetForExt?.extensionCount ?? 0) >= 1) {
-            await interaction.editReply("❌ 評価延長券は評価シート1枚につき1回しか購入できません。");
-            return;
-          }
-          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-          if (!result.ok) { await interaction.editReply(result.reason); return; }
-          const extended = await extendCommunitySheet(guildId, interaction.user.id, extendDays);
-          if (extended) {
-            const ts = Math.floor(extended.newEndDate.getTime() / 1000);
-            await interaction.editReply(
-              `✅ **${result.item.name}**を購入しました！\n評価シートの期限を **<t:${ts}:D>** まで延長しました。`,
-            );
-            applySheetEmbedUpdate(interaction.client, guildId, extended).catch((err) => logger.error("[sheet] applySheetEmbedUpdate error", err));
-          } else {
-            await refundPurchase(guildId, interaction.user.id, result.item);
-            await interaction.editReply(
-              "❌ 評価シートが見つかりませんでした。購入を取り消し、返金しました。\n管理者に評価シートの作成を依頼してください。",
-            );
-          }
-          return;
-        }
-
-        // 永久ロール付与
-        if (item.effectType === PERM_ROLE_EFFECT) {
-          if (!item.targetRoleId) {
-            await interaction.editReply("❌ このアイテムにはロールが設定されていません。管理者に連絡してください。");
-            return;
-          }
-          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-          if (!result.ok) { await interaction.editReply(result.reason); return; }
-          try {
-            const member = await interaction.guild!.members.fetch(interaction.user.id);
-            await member.roles.add(item.targetRoleId);
-            await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
-          } catch {
-            await refundPurchase(guildId, interaction.user.id, result.item);
-            await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
-          }
-          return;
-        }
-
-        // 評価落ち浮上券
-        if (item.effectType === EVAL_RESURFACE_EFFECT) {
-          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-          if (!result.ok) { await interaction.editReply(result.reason); return; }
-          const sheetSettings = await getEvalSheetSettings(guildId);
-          if (!sheetSettings?.forumChannelId) {
-            await refundPurchase(guildId, interaction.user.id, result.item);
-            await interaction.editReply("❌ 評価フォーラムが設定されていません。購入を取り消し、返金しました。");
-            return;
-          }
-          const forum = interaction.guild!.channels.cache.get(sheetSettings.forumChannelId)
-            ?? await interaction.guild!.channels.fetch(sheetSettings.forumChannelId).catch(() => null);
-          if (!forum || forum.type !== ChannelType.GuildForum) {
-            await refundPurchase(guildId, interaction.user.id, result.item);
-            await interaction.editReply("❌ 評価フォーラムが見つかりません。購入を取り消し、返金しました。");
-            return;
-          }
-          try {
-            const evalDays = sheetSettings.evalPeriodDays ?? 14;
-            const startDate = new Date();
-            const endDate = new Date(startDate.getTime() + evalDays * 24 * 60 * 60 * 1000);
-            const targetUser = await interaction.client.users.fetch(interaction.user.id);
-            const member = await interaction.guild!.members.fetch(interaction.user.id);
-            const displayName = member.displayName;
-            const [vcSeconds, selfIntro] = await Promise.all([
-              getSheetVcSeconds(guildId, interaction.user.id, startDate, endDate).catch(() => 0),
-              findSelfIntro(interaction.guild!, interaction.user.id, sheetSettings.rosterCategoryId).catch(() => null),
-            ]);
-            const embed = buildSheetEmbed({ targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl: sheetSettings.nameboardUrl, selfIntro, createdByLabel: "評価落ち浮上券で再開" });
-            const thread = await forum.threads.create({ name: buildSheetThreadName(displayName, endDate), message: { embeds: [embed] } });
-            await createEvalSheet(guildId, interaction.user.id, startDate, endDate, forum.id, thread.id);
-            const ts = Math.floor(endDate.getTime() / 1000);
-            await interaction.editReply(`✅ **${result.item.name}**を使用しました！評価シートが新規作成されました。期限: **<t:${ts}:D>**`);
-          } catch {
-            await refundPurchase(guildId, interaction.user.id, result.item);
-            await interaction.editReply("❌ 評価シートの作成に失敗しました。購入を取り消し、返金しました。");
-          }
-          return;
-        }
-
-        // 非公開VC延長
-        const vcExtendDurationBuy = VC_EXTEND_DURATIONS[item.effectType ?? ""];
-        if (vcExtendDurationBuy !== undefined) {
-          const session = await getActivePrivateVcSession(guildId, interaction.user.id, "vc");
-          if (!session) {
-            await interaction.editReply("❌ 有効な非公開VCがありません。先に購入してください。");
-            return;
-          }
-          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-          if (!result.ok) { await interaction.editReply(result.reason); return; }
-          try {
-            const updated = await extendPrivateVcSession(session.id, vcExtendDurationBuy);
-            const ts = Math.floor(updated.expiresAt.getTime() / 1000);
-            await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
-          } catch {
-            await refundPurchase(guildId, interaction.user.id, result.item);
-            await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
-          }
-          return;
-        }
-
-        // 個人ショップ開業券
-        if (item.effectType === SHOP_LICENSE_EFFECT) {
-          const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-          if (!result.ok) { await interaction.editReply(result.reason); return; }
-          try {
-            const member = await interaction.guild!.members.fetch(interaction.user.id);
-            const userRoleIds = [...member.roles.cache.keys()];
-            const config = await getShopLicenseForUser(guildId, userRoleIds);
-            if (!config) {
-              await refundPurchase(guildId, interaction.user.id, result.item);
-              await interaction.editReply("❌ あなたの隊ロールに対応するショップ開業設定が見つかりません。購入を取り消し、返金しました。");
-              return;
-            }
-            await member.roles.add(config.licenseRoleId);
-            await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`);
-            tryRecordGroupSale(interaction.guild!, guildId, interaction.user.id, result.item).catch(() => {});
-          } catch {
-            await refundPurchase(guildId, interaction.user.id, result.item);
-            await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
-          }
-          return;
-        }
-
-      const result = await buyItem(guildId, interaction.user.id, itemId, settings.currencyName);
-      if (result.ok) {
-        await interaction.editReply(`**${result.item.name}**を購入しました!`);
-        if (item.category === "group") tryRecordGroupSale(interaction.guild!, guildId, interaction.user.id, result.item).catch(() => {});
-      } else {
-        await interaction.editReply(result.reason);
-      }
-      return;
-    }
-
-    if (sub === "inventory") {
-      const items = await listInventory(guildId, interaction.user.id);
-      if (items.length === 0) {
-        await interaction.reply({ content: "所持アイテムはありません。", ephemeral: true });
-        return;
-      }
-      const lines = items.map((row) => `**${row.item.name}** x${row.quantity}`);
-      await interaction.reply({ content: `## 🎒 所持アイテム\n${lines.join("\n")}`, ephemeral: true });
       return;
     }
 
@@ -1499,30 +1290,6 @@ const shopCommand: Command = {
       return;
     }
 
-    if (sub === "sales") {
-      const [summary, treasuries, settings] = await Promise.all([
-        getGroupShopSalesSummary(guildId),
-        listSquadTreasuries(guildId),
-        getGuildSettings(guildId),
-      ]);
-      if (summary.length === 0) {
-        await interaction.reply({ content: "まだ売上データがありません。", ephemeral: false });
-        return;
-      }
-      const medals = ["🥇", "🥈", "🥉"];
-      const lines = summary.map((row: typeof summary[number], i: number) => {
-        const treasury = treasuries.find((t: typeof treasuries[number]) => t.roleId === row.squadRoleId);
-        const name = treasury ? treasury.name : `<@&${row.squadRoleId}>`;
-        const rank = medals[i] ?? `${i + 1}位`;
-        return `${rank} **${name}**: ${row.totalAmount.toLocaleString()}${settings.currencyName}（${row.purchaseCount}件）`;
-      });
-      const total = summary.reduce((s: number, r: typeof summary[number]) => s + r.totalAmount, 0);
-      const totalCount = summary.reduce((s: number, r: typeof summary[number]) => s + r.purchaseCount, 0);
-      lines.push(`\n合計: **${total.toLocaleString()}${settings.currencyName}**（${totalCount}件）`);
-      await interaction.reply({ content: `## ⚔️ 隊別売上\n${lines.join("\n")}` });
-      return;
-    }
-
     if (sub === "invite") {
       await interaction.deferReply({ ephemeral: true });
       const session = await getActivePrivateVcSession(guildId, interaction.user.id, "vc");
@@ -1572,35 +1339,6 @@ const shopCommand: Command = {
         if (kicked.voice.channelId === session.channelId) await kicked.voice.disconnect();
       } catch { /* non-fatal */ }
       await interaction.editReply(`✅ <@${targetUser.id}> のアクセスを取り消しました。`);
-      return;
-    }
-
-    if (sub === "license-setup") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-        return;
-      }
-      const squadRole = interaction.options.getRole("squad_role", true);
-      const shopRole  = interaction.options.getRole("shop_role", true);
-      await setShopLicenseConfig(guildId, squadRole.id, shopRole.id);
-      await interaction.reply(
-        `✅ 隊ロール <@&${squadRole.id}> → 開業ロール <@&${shopRole.id}> のマッピングを設定しました。`,
-      );
-      return;
-    }
-
-    if (sub === "license-list") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-        return;
-      }
-      const configs = await listShopLicenseConfigs(guildId);
-      if (configs.length === 0) {
-        await interaction.reply({ content: "開業ロールの設定がまだありません。`/shop license-setup` で設定してください。", ephemeral: true });
-        return;
-      }
-      const lines = configs.map((c) => `<@&${c.squadRoleId}> → <@&${c.licenseRoleId}>`);
-      await interaction.reply({ content: `## ⚔️ 隊別ショップ開業ロール設定\n${lines.join("\n")}`, ephemeral: true });
       return;
     }
 
