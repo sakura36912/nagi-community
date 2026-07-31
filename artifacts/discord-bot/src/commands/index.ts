@@ -1765,6 +1765,8 @@ export {
   handleShiftTime,
   SHIFT_PANEL_OPEN_PREFIX,
   handleShiftPanelOpen,
+  SHIFT_LIST_NAV_PREFIX,
+  handleShiftListNav,
 } from "./shift";
 import { vcsalaryCommand } from "./vcsalary";
 import { vclogCommand } from "./vclog";

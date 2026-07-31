@@ -19,11 +19,13 @@ import {
   SHIFT_CANCEL_PREFIX,
   SHIFT_TIME_PREFIX,
   SHIFT_PANEL_OPEN_PREFIX,
+  SHIFT_LIST_NAV_PREFIX,
   handleShiftToggle,
   handleShiftConfirm,
   handleShiftCancel,
   handleShiftTime,
   handleShiftPanelOpen,
+  handleShiftListNav,
 } from "./commands";
 import { handleHubJoin, handleHubLeave } from "./commands/vc";
 import {
@@ -1159,6 +1161,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         interaction.customId.startsWith(SHIFT_PANEL_OPEN_PREFIX))
     ) {
       await handleShiftPanelOpen(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_LIST_NAV_PREFIX)) {
+      await handleShiftListNav(interaction);
       return;
     }
 

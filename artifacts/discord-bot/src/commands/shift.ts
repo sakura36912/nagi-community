@@ -32,6 +32,7 @@ export const SHIFT_CONFIRM_PREFIX = "shift:confirm:"; // shift:confirm:{sid}
 export const SHIFT_CANCEL_PREFIX  = "shift:cancel:";  // shift:cancel:{sid}
 export const SHIFT_TIME_PREFIX    = "shift:time:";    // shift:time:{sid}:{time}
 export const SHIFT_PANEL_OPEN_PREFIX = "shift:panel:open:"; // shift:panel:open:{weekOffset}
+export const SHIFT_LIST_NAV_PREFIX   = "shift:list:nav:";   // shift:list:nav:{weekOffset}
 
 /** 選択肢として表示する時刻一覧 */
 const SHIFT_TIME_OPTIONS = ["21:00", "22:00", "23:00"];
@@ -257,15 +258,56 @@ function buildSubmitEmbed(session: SubmitSession): EmbedBuilder {
 
 // ─── Embed builders ──────────────────────────────────────────────────────────
 
-/** Build one or more embeds showing shifts grouped by date. */
+/** Build one or more embeds showing shifts grouped by date.
+ *  Week mode (isWeekMode=true): compact description with all 7 days and nav hint.
+ *  Month mode: field-per-day layout.
+ */
 export function buildShiftEmbeds(
   shifts: Shift[],
   title: string,
   from: string,
   to: string,
+  isWeekMode = false,
 ): EmbedBuilder[] {
   const header = `**${formatDateLabel(from)} 〜 ${formatDateLabel(to)}**`;
 
+  if (isWeekMode) {
+    // Generate all 7 days in range
+    const days: string[] = [];
+    const startD = new Date(`${from}T00:00:00+09:00`);
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(startD);
+      d.setUTCDate(startD.getUTCDate() + i);
+      days.push(d.toISOString().slice(0, 10));
+    }
+
+    const byDate = new Map<string, Shift[]>();
+    for (const s of shifts) {
+      if (!byDate.has(s.date)) byDate.set(s.date, []);
+      byDate.get(s.date)!.push(s);
+    }
+
+    const lines = days.map((date) => {
+      const d = new Date(`${date}T00:00:00+09:00`);
+      const dow = WEEKDAY_JA[d.getDay()]!;
+      const label = `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+      const dayShifts = byDate.get(date) ?? [];
+      const entries = dayShifts.length > 0
+        ? dayShifts.map((s) => `<@${s.userId}> ${s.startTime}`).join("　")
+        : "─";
+      return `**${dow}** ${label}　${entries}`;
+    });
+
+    return [
+      new EmbedBuilder()
+        .setTitle(title)
+        .setColor(0x5865f2)
+        .setDescription(`${header}\n\n${lines.join("\n")}`.slice(0, 4096))
+        .setTimestamp(),
+    ];
+  }
+
+  // ── Month mode: field per day ─────────────────────────────────────────────
   if (shifts.length === 0) {
     return [
       new EmbedBuilder()
@@ -276,7 +318,6 @@ export function buildShiftEmbeds(
     ];
   }
 
-  // Group by date (map preserves insertion order)
   const byDate = new Map<string, Shift[]>();
   for (const s of shifts) {
     if (!byDate.has(s.date)) byDate.set(s.date, []);
@@ -295,7 +336,6 @@ export function buildShiftEmbeds(
     });
   }
 
-  // Discord allows max 25 fields per embed; split if necessary
   const embeds: EmbedBuilder[] = [];
   for (let i = 0; i < fields.length; i += 25) {
     const embed = new EmbedBuilder()
@@ -307,6 +347,20 @@ export function buildShiftEmbeds(
     embeds.push(embed);
   }
   return embeds;
+}
+
+/** ◀ 先週 / 来週 ▶ navigation row for /shift list week view. */
+export function buildListNavRow(weekOffset: number): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${SHIFT_LIST_NAV_PREFIX}${weekOffset - 1}`)
+      .setLabel("◀ 先週")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`${SHIFT_LIST_NAV_PREFIX}${weekOffset + 1}`)
+      .setLabel("来週 ▶")
+      .setStyle(ButtonStyle.Secondary),
+  );
 }
 
 function buildSummaryEmbed(
@@ -377,7 +431,7 @@ export async function postWeeklyShifts(client: Client): Promise<void> {
       if (!channel?.isTextBased()) continue;
 
       const shifts = await getShiftsInRange(setting.guildId, from, to);
-      const embeds = buildShiftEmbeds(shifts, "📅 今週のシフト", from, to);
+      const embeds = buildShiftEmbeds(shifts, "📅 今週のシフト", from, to, true);
       await channel.send({ embeds });
       logger.info(`[shift] Posted weekly schedule to ${setting.channelId} in guild ${setting.guildId}`);
     } catch (err) {
@@ -419,15 +473,12 @@ export const shiftCommand: Command = {
             .setDescription("表示期間（デフォルト: 今週）")
             .setRequired(false)
             .addChoices(
-              { name: "今週", value: "week" },
-              { name: "今月", value: "month" },
+              { name: "先週",   value: "week_-1" },
+              { name: "今週",   value: "week_0"  },
+              { name: "来週",   value: "week_1"  },
+              { name: "再来週", value: "week_2"  },
+              { name: "今月",   value: "month"   },
             ),
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName("date")
-            .setDescription("基準日（YYYY-MM-DD）。省略時は今日基準")
-            .setRequired(false),
         )
         .addUserOption((opt) =>
           opt
@@ -589,27 +640,31 @@ export const shiftCommand: Command = {
     if (sub === "list") {
       await interaction.deferReply();
 
-      const period = interaction.options.getString("period") ?? "week";
-      const dateOpt = interaction.options.getString("date") ?? undefined;
+      const period = interaction.options.getString("period") ?? "week_0";
       const userOpt = interaction.options.getUser("user");
 
       let from: string, to: string, title: string;
+      let weekOffset: number | undefined;
 
       if (period === "month") {
-        const range = getMonthRange(dateOpt);
+        const range = getMonthRange();
         from = range.from;
         to = range.to;
         title = `📅 ${range.label} シフト一覧`;
       } else {
-        const range = getWeekRange(dateOpt);
-        from = range.from;
-        to = range.to;
-        title = "📅 週間シフト一覧";
+        const offset = period.startsWith("week_") ? (parseInt(period.slice(5), 10) || 0) : 0;
+        const dates = getWeekDates(offset);
+        from = dates[0]!;
+        to = dates[6]!;
+        const label = offset === -1 ? "先週" : offset === 0 ? "今週" : offset === 1 ? "来週" : "再来週";
+        title = `📅 ${label}のシフト`;
+        weekOffset = offset;
       }
 
       const shifts = await getShiftsInRange(guildId, from, to, userOpt?.id);
-      const embeds = buildShiftEmbeds(shifts, title, from, to);
-      await interaction.editReply({ embeds });
+      const embeds = buildShiftEmbeds(shifts, title, from, to, weekOffset !== undefined);
+      const components = weekOffset !== undefined ? [buildListNavRow(weekOffset)] : [];
+      await interaction.editReply({ embeds, components });
       return;
     }
 
@@ -976,4 +1031,25 @@ export async function handleShiftPanelOpen(interaction: ButtonInteraction): Prom
     components: buildSubmitComponents(sessionId, session),
     ephemeral: true,
   });
+}
+
+/** ◀先週 / 来週▶ ボタン押下: 対応する週のシフト一覧に更新 */
+export async function handleShiftListNav(interaction: ButtonInteraction): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const weekOffset = parseInt(interaction.customId.slice(SHIFT_LIST_NAV_PREFIX.length), 10) || 0;
+  const dates = getWeekDates(weekOffset);
+  const from = dates[0]!;
+  const to   = dates[6]!;
+  const label = weekOffset === -1 ? "先週" : weekOffset === 0 ? "今週" : weekOffset === 1 ? "来週" : "再来週";
+  const title = `📅 ${label}のシフト`;
+
+  await interaction.deferUpdate();
+  const shifts = await getShiftsInRange(guildId, from, to);
+  const embeds = buildShiftEmbeds(shifts, title, from, to, true);
+  await interaction.editReply({ embeds, components: [buildListNavRow(weekOffset)] });
 }
