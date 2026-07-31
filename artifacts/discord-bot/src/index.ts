@@ -558,13 +558,31 @@ function getVcChannelName(guild: VoiceState["guild"], channelId: string): string
   return guild.channels.cache.get(channelId)?.name ?? `チャンネル(${channelId})`;
 }
 
+/** 秒数を「X時間Y分Z秒」形式に変換 */
+function formatDuration(totalSecs: number): string {
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+  if (h > 0) return `${h}時間${m}分${s}秒`;
+  if (m > 0) return `${m}分${s}秒`;
+  return `${s}秒`;
+}
+
 async function sendVcNotifyJoin(guild: VoiceState["guild"], userId: string, channelId: string, notifyChannelId: string): Promise<void> {
   try {
     const ch = guild.channels.cache.get(notifyChannelId);
     if (!ch || !("send" in ch)) return;
-    const memberName  = getMemberDisplayName(guild, userId);
+    const member      = guild.members.cache.get(userId);
+    const memberName  = member?.displayName ?? `ユーザー(${userId})`;
+    const avatarUrl   = member?.displayAvatarURL() ?? undefined;
     const channelName = getVcChannelName(guild, channelId);
-    await (ch as TextChannel).send({ content: `🔊 ${memberName} が「${channelName}」に参加しました`, allowedMentions: { parse: [] } });
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setAuthor({ name: memberName, iconURL: avatarUrl })
+      .setDescription(`🔊 **${channelName}** に参加しました`)
+      .setTimestamp();
+    if (avatarUrl) embed.setThumbnail(avatarUrl);
+    await (ch as TextChannel).send({ embeds: [embed], allowedMentions: { parse: [] } });
   } catch {
     // 通知失敗は無視
   }
@@ -574,16 +592,21 @@ async function sendVcNotifyLeave(guild: VoiceState["guild"], userId: string, cha
   try {
     const ch = guild.channels.cache.get(notifyChannelId);
     if (!ch || !("send" in ch)) return;
-    const memberName  = getMemberDisplayName(guild, userId);
+    const member      = guild.members.cache.get(userId);
+    const memberName  = member?.displayName ?? `ユーザー(${userId})`;
+    const avatarUrl   = member?.displayAvatarURL() ?? undefined;
     const channelName = getVcChannelName(guild, channelId);
-    let suffix = "";
+    const embed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setAuthor({ name: memberName, iconURL: avatarUrl })
+      .setDescription(`🔇 **${channelName}** から退出しました`)
+      .setTimestamp();
+    if (avatarUrl) embed.setThumbnail(avatarUrl);
     if (joinedAt) {
       const secs = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
-      const m = Math.floor(secs / 60);
-      const s = secs % 60;
-      suffix = `（滞在: ${m}分${s}秒）`;
+      embed.addFields({ name: "⏱ 滞在時間", value: formatDuration(secs), inline: true });
     }
-    await (ch as TextChannel).send({ content: `🔇 ${memberName} が「${channelName}」から退出しました${suffix}`, allowedMentions: { parse: [] } });
+    await (ch as TextChannel).send({ embeds: [embed], allowedMentions: { parse: [] } });
   } catch {
     // 通知失敗は無視
   }
