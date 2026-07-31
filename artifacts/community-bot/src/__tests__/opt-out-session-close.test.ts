@@ -18,11 +18,30 @@ const mocks = vi.hoisted(() => {
   const update = vi.fn(() => ({ set }));
 
   // ── insert chain: db.insert(table).values({}).onConflictDoUpdate({}) ─────────
+  //    OR            db.insert(table).values({}).returning()
   const onConflictDoUpdate = vi.fn().mockResolvedValue([]);
-  const values = vi.fn(() => ({ onConflictDoUpdate }));
+  const returningFromInsert = vi.fn().mockResolvedValue([]);
+  const values = vi.fn(() => ({ onConflictDoUpdate, returning: returningFromInsert }));
   const insert = vi.fn(() => ({ values }));
 
-  return { returning, where, set, update, onConflictDoUpdate, values, insert };
+  // ── select chain: db.select().from(table).where(...) → Promise ───────────────
+  const selectWhere = vi.fn().mockResolvedValue([]);
+  const selectFrom = vi.fn(() => ({ where: selectWhere }));
+  const select = vi.fn(() => ({ from: selectFrom }));
+
+  return {
+    returning,
+    where,
+    set,
+    update,
+    onConflictDoUpdate,
+    returningFromInsert,
+    values,
+    insert,
+    selectWhere,
+    selectFrom,
+    select,
+  };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -40,6 +59,7 @@ vi.mock("@workspace/db", () => {
     db: {
       update: mocks.update,
       insert: mocks.insert,
+      select: mocks.select,
     },
     communityVcSessionsTable: tbl("sessions"),
     communityVcPrivacyGlobalTable: tbl("global"),
@@ -79,7 +99,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
-import { closeOpenSessionsForUser, setVcPrivacyOptOut } from "../lib/community.js";
+import { closeOpenSessionsForUser, openSession, setVcPrivacyOptOut } from "../lib/community.js";
 import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutKeep } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
@@ -356,5 +376,98 @@ describe("setVcPrivacyOptOut – return value", () => {
 
     const result = await setVcPrivacyOptOut("guild-rv-2", "user-rv-2", true);
     expect(result).toBe(false);
+  });
+});
+
+// ─── setVcPrivacyOptOut – opt-in path ────────────────────────────────────────
+
+describe("setVcPrivacyOptOut – opt-in path (optedOut=false)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns false (no session is ever closed on opt-in)", async () => {
+    // Only the insert/upsert runs; no update path is taken.
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    const result = await setVcPrivacyOptOut("guild-in-1", "user-in-1", false);
+    expect(result).toBe(false);
+  });
+
+  it("never calls db.update() (the close-session path is skipped)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    await setVcPrivacyOptOut("guild-in-2", "user-in-2", false);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("upserts the privacy row with optedOut=false", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    await setVcPrivacyOptOut("guild-in-3", "user-in-3", false);
+
+    // db.insert() must have been called once
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+
+    // values() payload must carry optedOut: false and correct identifiers
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { guildId: string; userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.guildId).toBe("guild-in-3");
+    expect(valuesArg.userId).toBe("user-in-3");
+    expect(valuesArg.optedOut).toBe(false);
+  });
+
+  it("the onConflictDoUpdate payload also carries optedOut=false", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    await setVcPrivacyOptOut("guild-in-4", "user-in-4", false);
+
+    const [conflictArg] = mocks.onConflictDoUpdate.mock.calls[0] as unknown as [
+      { set: { optedOut: boolean } }
+    ];
+    expect(conflictArg.set.optedOut).toBe(false);
+  });
+
+  it("openSession succeeds after opt-in (user is no longer blocked)", async () => {
+    // Step 1: opt the user back in
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    await setVcPrivacyOptOut("guild-in-5", "user-in-5", false);
+
+    // Step 2: openSession — isVcTrackingOptedOut does two selects (global + guild).
+    // Both return empty arrays so the user is NOT opted out.
+    mocks.selectWhere.mockResolvedValueOnce([]); // global table → no row
+    mocks.selectWhere.mockResolvedValueOnce([]); // per-guild table → optedOut=false row absent
+
+    // The insert inside openSession uses .values().returning()
+    const fakeSession = {
+      id: 1,
+      guildId: "guild-in-5",
+      userId: "user-in-5",
+      channelId: "channel-in-5",
+      joinedAt: new Date(),
+      leftAt: null,
+    };
+    mocks.returningFromInsert.mockResolvedValueOnce([fakeSession]);
+
+    const session = await openSession("guild-in-5", "user-in-5", "channel-in-5");
+
+    // A real session should be returned — not null
+    expect(session).not.toBeNull();
+    expect(session?.userId).toBe("user-in-5");
+    expect(session?.guildId).toBe("guild-in-5");
+  });
+
+  it("openSession still returns null when the user is opted out (regression guard)", async () => {
+    // Ensure the opt-out=true path still blocks openSession.
+    // isVcTrackingOptedOut finds an opted-out row in the per-guild table.
+    mocks.selectWhere.mockResolvedValueOnce([]); // global → no row
+    mocks.selectWhere.mockResolvedValueOnce([{ guildId: "guild-rg", userId: "user-rg", optedOut: true }]);
+
+    const session = await openSession("guild-rg", "user-rg", "channel-rg");
+    expect(session).toBeNull();
+    // db.insert() must NOT have been called (session was not created)
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 });
