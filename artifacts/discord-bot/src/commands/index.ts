@@ -921,58 +921,6 @@ export async function handleNicknameModalSubmit(interaction: ModalSubmitInteract
   }
 }
 
-const currencyCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("currency")
-    .setDescription("このサーバー専用の通貨を設定します")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addSubcommand((sub) =>
-      sub
-        .setName("create")
-        .setDescription("通貨を作成・設定します(管理者用)")
-        .addStringOption((opt) =>
-          opt.setName("name").setDescription("通貨の名前(例: コイン)").setRequired(true).setMaxLength(20),
-        )
-        .addIntegerOption((opt) =>
-          opt
-            .setName("daily_amount")
-            .setDescription(`/daily で受け取れる額(デフォルト: ${DEFAULT_DAILY_AMOUNT})`)
-            .setRequired(false)
-            .setMinValue(1),
-        ),
-    )
-    .addSubcommand((sub) => sub.setName("info").setDescription("現在の通貨設定を表示します")),
-  async execute(interaction) {
-    const guildId = requireGuild(interaction);
-    const sub = interaction.options.getSubcommand();
-
-    if (sub === "create") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-        return;
-      }
-      const name = interaction.options.getString("name", true).trim();
-      if (name.length === 0) {
-        await interaction.reply({ content: "通貨名を入力してください。", ephemeral: true });
-        return;
-      }
-      const dailyAmount = interaction.options.getInteger("daily_amount") ?? undefined;
-      const settings = await createOrUpdateCurrency(guildId, name, dailyAmount);
-      await interaction.reply(
-        `このサーバーの通貨を **${settings.currencyName}** に設定しました。\`/daily\` で1日あたり **${settings.dailyAmount}${settings.currencyName}** 受け取れます。`,
-      );
-      return;
-    }
-
-    if (sub === "info") {
-      const settings = await getGuildSettings(guildId);
-      await interaction.reply(
-        `現在の通貨: **${settings.currencyName}**\nデイリーボーナス: **${settings.dailyAmount}${settings.currencyName}**`,
-      );
-      return;
-    }
-  },
-};
 
 const balanceCommand: Command = {
   data: new SlashCommandBuilder()
@@ -2188,7 +2136,6 @@ import { pointconfigCommand } from "./pointconfig";
 import { pointCommand } from "./point";
 
 export const commands: Command[] = [
-  currencyCommand,
   balanceCommand,
   dailyCommand,
   payCommand,
