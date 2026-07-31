@@ -225,6 +225,18 @@ export async function setVcLogNotifyChannel(
 
 // ─── VC Log Presence ──────────────────────────────────────────────────────────
 
+/** Read the current log-presence record without modifying it. Returns undefined if none. */
+export async function getVcLogPresence(
+  guildId: string,
+  userId: string,
+): Promise<{ joinedAt: Date } | undefined> {
+  const [row] = await db
+    .select({ joinedAt: vcLogPresenceTable.joinedAt })
+    .from(vcLogPresenceTable)
+    .where(and(eq(vcLogPresenceTable.guildId, guildId), eq(vcLogPresenceTable.userId, userId)));
+  return row;
+}
+
 export async function recordVcLogJoin(
   guildId: string,
   userId: string,
@@ -243,16 +255,16 @@ export async function recordVcLogJoin(
 export async function recordVcLogLeave(
   guildId: string,
   userId: string,
-): Promise<void> {
+): Promise<{ durationSeconds: number } | undefined> {
   const [presence] = await db
     .delete(vcLogPresenceTable)
     .where(and(eq(vcLogPresenceTable.guildId, guildId), eq(vcLogPresenceTable.userId, userId)))
     .returning();
-  if (!presence) return;
+  if (!presence) return undefined;
 
   const leftAt = new Date();
   const durationSeconds = Math.floor((leftAt.getTime() - presence.joinedAt.getTime()) / 1000);
-  if (durationSeconds <= 0) return;
+  if (durationSeconds <= 0) return undefined;
 
   await db.insert(vcSessionLogsTable).values({
     guildId,
@@ -263,4 +275,6 @@ export async function recordVcLogLeave(
     leftAt,
     durationSeconds,
   });
+
+  return { durationSeconds };
 }

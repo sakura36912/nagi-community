@@ -46,6 +46,7 @@ import {
   setVcLogNotifyChannel,
   recordVcLogJoin,
   recordVcLogLeave,
+  getVcLogPresence,
 } from "./lib/vcReward";
 import {
   recordPointVcJoin,
@@ -727,9 +728,12 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       (async () => {
         try {
           const logSettings = await getVcLogSettings(guild.id);
-          await recordVcLogLeave(guild.id, userId);
+          const leaveResult = await recordVcLogLeave(guild.id, userId);
           if (logSettings.notifyChannelId) {
-            await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId);
+            const joinedAt = leaveResult
+              ? new Date(Date.now() - leaveResult.durationSeconds * 1000)
+              : undefined;
+            await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId, joinedAt);
           }
         } catch (err) {
           logger.error(`[vclog] recordVcLogLeave error for ${userId}`, err);
@@ -788,9 +792,12 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           const wasLogCat = getLogCategoryId(oldState.channelId!, logSettings.categoryIds, guild);
           const nowLogCat = getLogCategoryId(newState.channelId!, logSettings.categoryIds, guild);
           if (wasLogCat && !nowLogCat) {
-            await recordVcLogLeave(guild.id, userId);
+            const leaveResult = await recordVcLogLeave(guild.id, userId);
             if (logSettings.notifyChannelId) {
-              await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId);
+              const joinedAt = leaveResult
+                ? new Date(Date.now() - leaveResult.durationSeconds * 1000)
+                : undefined;
+              await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId, joinedAt);
             }
           } else if (!wasLogCat && nowLogCat) {
             await recordVcLogJoin(guild.id, userId, newState.channelId!, nowLogCat);
@@ -798,8 +805,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
               await sendVcNotifyJoin(guild, userId, newState.channelId!, logSettings.notifyChannelId);
             }
           } else if (wasLogCat && nowLogCat && logSettings.notifyChannelId) {
-            // Both tracked: notify move
-            await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId);
+            // Both tracked: notify move only (session tracking continues uninterrupted)
+            const presence = await getVcLogPresence(guild.id, userId);
+            await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId, presence?.joinedAt);
             await sendVcNotifyJoin(guild, userId, newState.channelId!, logSettings.notifyChannelId);
           }
         } catch (err) {
