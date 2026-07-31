@@ -1645,6 +1645,17 @@ export async function handlePrivacyAdminDeleteConfirm(interaction: ButtonInterac
 }
 
 export async function handlePrivacyAdminDeleteCancel(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+  // Mirror the confirm handler's gate so a non-admin cannot replay the cancel button
+  const member = interaction.member as GuildMember | null;
+  if (!member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    await interaction.reply({ content: "このボタンはサーバー管理（ManageGuild）権限を持つメンバーのみ使用できます。", ephemeral: true });
+    return;
+  }
+
   await interaction.deferUpdate();
   const embed = new EmbedBuilder()
     .setTitle("✅ キャンセルしました")
