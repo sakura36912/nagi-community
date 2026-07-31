@@ -119,12 +119,14 @@ async function runVcDeleteScheduler(
                 .send(
                   `⏰ VCチャンネル「**${schedule.channelName}**」は <t:${expiresTs}:R>（<t:${expiresTs}:T>）に自動削除されます。必要であれば会話を引き続き行ってください。`,
                 )
+                .then(() => {
+                  logger.info(
+                    `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
+                  );
+                })
                 .catch(() => {
                   // DMs closed — ignore silently.
                 });
-              logger.info(
-                `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
-              );
             }
           }
         } catch (err) {
@@ -329,6 +331,21 @@ describe("runVcDeleteScheduler – pre-expiry warning", () => {
     // The DM failure is swallowed by .catch(() => {}); only markScheduleNotified
     // runs — no logger.error for the DM path.
     expect(mocks.loggerError).not.toHaveBeenCalled();
+  });
+
+  it("does NOT log 'DM sent' when DMs are closed", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
+
+    const client = makeClient({
+      userSend: vi.fn().mockRejectedValue(new Error("Cannot send messages to this user")),
+    });
+
+    await runVcDeleteScheduler(client);
+
+    // The info log must only fire after a successful send — not when DMs are closed.
+    expect(mocks.loggerInfo).not.toHaveBeenCalledWith(
+      expect.stringContaining("[vc-schedule] Sent expiry warning to"),
+    );
   });
 
   it("skips the DM when schedule has no userId", async () => {

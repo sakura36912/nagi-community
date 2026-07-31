@@ -409,14 +409,18 @@ async function runVcDeleteScheduler(): Promise<void> {
             const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
             const user = await client.users.fetch(schedule.userId).catch(() => null);
             if (user) {
-              await user.send(
-                `⏰ VCチャンネル「**${schedule.channelName}**」は <t:${expiresTs}:R>（<t:${expiresTs}:T>）に自動削除されます。必要であれば会話を引き続き行ってください。`,
-              ).catch(() => {
-                // DMs closed — ignore silently.
-              });
-              logger.info(
-                `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
-              );
+              await user
+                .send(
+                  `⏰ VCチャンネル「**${schedule.channelName}**」は <t:${expiresTs}:R>（<t:${expiresTs}:T>）に自動削除されます。必要であれば会話を引き続き行ってください。`,
+                )
+                .then(() => {
+                  logger.info(
+                    `[vc-schedule] Sent expiry warning to ${schedule.userId} for channel ${schedule.channelId}`,
+                  );
+                })
+                .catch(() => {
+                  // DMs closed — ignore silently.
+                });
             }
           }
         } catch (err) {
