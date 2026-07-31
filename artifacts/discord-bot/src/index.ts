@@ -1152,7 +1152,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleShiftCancel(interaction);
       return;
     }
-    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_PANEL_OPEN_PREFIX)) {
+    // Also match the legacy bare ID ("shift:panel:open") posted by older panel messages.
+    if (
+      interaction.isButton() &&
+      (interaction.customId === "shift:panel:open" ||
+        interaction.customId.startsWith(SHIFT_PANEL_OPEN_PREFIX))
+    ) {
       await handleShiftPanelOpen(interaction);
       return;
     }

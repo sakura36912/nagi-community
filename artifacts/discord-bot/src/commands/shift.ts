@@ -951,7 +951,13 @@ export async function handleShiftPanelOpen(interaction: ButtonInteraction): Prom
     }
   }
 
-  const weekOffset = parseInt(interaction.customId.slice(SHIFT_PANEL_OPEN_PREFIX.length), 10) || 0;
+  // Legacy panels posted before the week-offset scheme used the bare ID "shift:panel:open"
+  // (no trailing colon or digit). Treat those as offset 0 so they keep working.
+  const VALID_OFFSETS = [0, 1, 2] as const;
+  const rawOffset = parseInt(interaction.customId.slice(SHIFT_PANEL_OPEN_PREFIX.length), 10);
+  const weekOffset: (typeof VALID_OFFSETS)[number] = VALID_OFFSETS.includes(rawOffset as 0 | 1 | 2)
+    ? (rawOffset as 0 | 1 | 2)
+    : 0;
 
   cleanExpiredSessions();
   const sessionId = interaction.id;
