@@ -553,13 +553,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         logger.warn(`Unknown command: ${interaction.commandName}`);
         return;
       }
-      // 島民ロール制限: vc時間のみ許可
+      // 島民・追放者ロール制限: vc時間のみ許可
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
-        const shimaminRole = interaction.guild?.roles.cache.find((r) => r.name === "島民");
-        const SHIMAMIN_ALLOWED = new Set(["vc時間"]);
-        if (shimaminRole && member.roles.cache.has(shimaminRole.id) && !SHIMAMIN_ALLOWED.has(interaction.commandName)) {
-          await interaction.reply({ content: "島民ロールでは `/vc時間` のみ使用できます。", ephemeral: true });
+        const RESTRICTED_ROLES = ["島民", "追放者"];
+        const RESTRICTED_ALLOWED = new Set(["vc時間"]);
+        const hasRestrictedRole = RESTRICTED_ROLES.some((name) =>
+          interaction.guild?.roles.cache.some((r) => r.name === name && member.roles.cache.has(r.id)),
+        );
+        if (hasRestrictedRole && !RESTRICTED_ALLOWED.has(interaction.commandName)) {
+          await interaction.reply({ content: "このロールでは `/vc時間` のみ使用できます。", ephemeral: true });
           return;
         }
       }

@@ -1330,13 +1330,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         logger.warn(`Unknown command: ${interaction.commandName}`);
         return;
       }
-      // 島民ロール制限: 送金・残高確認のみ許可
+      // 島民・追放者ロール制限: 送金・残高確認のみ許可
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
-        const shimaminRole = interaction.guild?.roles.cache.find((r) => r.name === "島民");
-        const SHIMAMIN_ALLOWED = new Set(["送金", "残高確認"]);
-        if (shimaminRole && member.roles.cache.has(shimaminRole.id) && !SHIMAMIN_ALLOWED.has(interaction.commandName)) {
-          await interaction.reply({ content: "島民ロールでは `/送金` と `/残高確認` のみ使用できます。", ephemeral: true });
+        const RESTRICTED_ROLES = ["島民", "追放者"];
+        const RESTRICTED_ALLOWED = new Set(["送金", "残高確認"]);
+        const hasRestrictedRole = RESTRICTED_ROLES.some((name) =>
+          interaction.guild?.roles.cache.some((r) => r.name === name && member.roles.cache.has(r.id)),
+        );
+        if (hasRestrictedRole && !RESTRICTED_ALLOWED.has(interaction.commandName)) {
+          await interaction.reply({ content: "このロールでは `/送金` と `/残高確認` のみ使用できます。", ephemeral: true });
           return;
         }
       }
