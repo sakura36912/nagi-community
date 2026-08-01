@@ -1774,75 +1774,38 @@ export async function handleVcPanelExtendSel(interaction: StringSelectMenuIntera
 
 const VC_PANEL_RENAME_INPUT_ID = "vc-panel-new-name";
 
-function buildRenameModal(channelId: string, ownerId: string, itemId: number) {
-  return new ModalBuilder()
-    .setCustomId(`${VC_PANEL_RENAME_MODAL}${channelId}:${ownerId}:${itemId}`)
-    .setTitle("VC名変更")
-    .addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId(VC_PANEL_RENAME_INPUT_ID)
-          .setLabel("新しいVC名（🔒 は自動で付きます）")
-          .setStyle(TextInputStyle.Short)
-          .setMaxLength(90)
-          .setRequired(true),
-      ),
-    );
-}
-
 export async function handleVcPanelRenameBtn(interaction: ButtonInteraction): Promise<void> {
-  if (!interaction.guild) return;
   const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_RENAME, interaction.customId);
   if (!checkOwner(interaction, ownerId)) return;
-  const allVcItems = await listShopItems(interaction.guild.id, "vc");
-  const renameItems = allVcItems.filter((i) => i.effectType === VC_RENAME_EFFECT);
-  if (renameItems.length === 0) {
-    await interaction.reply({ content: "❌ このサーバーには名前変更券が設定されていません。", ephemeral: true });
-    return;
-  }
-  if (renameItems.length === 1) {
-    // アイテムが1種類のみ → 直接モーダル表示
-    await interaction.showModal(buildRenameModal(channelId, ownerId, renameItems[0]!.id));
-    return;
-  }
-  // 複数ある場合はまずアイテムを選ばせる
-  const settings = await getGuildSettings(interaction.guild.id);
-  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(vcPanelId(VC_PANEL_SEL_RENAME, channelId, ownerId))
-      .setPlaceholder("使用する名前変更券を選択")
-      .addOptions(renameItems.map((i) => ({
-        label: i.name,
-        description: `${i.price.toLocaleString()} ${settings.currencyName}`,
-        value: String(i.id),
-      }))),
+  await interaction.showModal(
+    new ModalBuilder()
+      .setCustomId(`${VC_PANEL_RENAME_MODAL}${channelId}:${ownerId}`)
+      .setTitle("VC名変更")
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId(VC_PANEL_RENAME_INPUT_ID)
+            .setLabel("新しいVC名（🔒 は自動で付きます）")
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(90)
+            .setRequired(true),
+        ),
+      ),
   );
-  await interaction.reply({ content: "使用する名前変更券を選んでください：", components: [row], ephemeral: true });
-}
-
-export async function handleVcPanelRenameSel(interaction: StringSelectMenuInteraction): Promise<void> {
-  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_SEL_RENAME, interaction.customId);
-  if (!checkOwner(interaction, ownerId)) return;
-  const itemId = parseInt(interaction.values[0]!, 10);
-  await interaction.showModal(buildRenameModal(channelId, ownerId, itemId));
 }
 
 export async function handleVcPanelRenameModal(interaction: ModalSubmitInteraction): Promise<void> {
   if (!interaction.guild) return;
   const payload = interaction.customId.slice(VC_PANEL_RENAME_MODAL.length);
-  const parts = payload.split(":");
-  const channelId = parts[0]!;
-  const ownerId   = parts[1]!;
-  const itemId    = parseInt(parts[2]!, 10);
+  const sep = payload.lastIndexOf(":");
+  const channelId = payload.slice(0, sep);
+  const ownerId   = payload.slice(sep + 1);
   if (interaction.user.id !== ownerId) {
     await interaction.reply({ content: "❌ VCオーナーのみ操作できます。", ephemeral: true }); return;
   }
   const newName = interaction.fields.getTextInputValue(VC_PANEL_RENAME_INPUT_ID).trim();
   if (!newName) { await interaction.reply({ content: "❌ VC名を入力してください。", ephemeral: true }); return; }
   await interaction.deferReply({ ephemeral: true });
-  const settings = await getGuildSettings(interaction.guild.id);
-  const result = await buyItem(interaction.guild.id, interaction.user.id, itemId, settings.currencyName);
-  if (!result.ok) { await interaction.editReply(result.reason); return; }
   const renamedName = `🔒 ${newName}`.slice(0, 100);
   try {
     const ch = interaction.guild.channels.cache.get(channelId)
@@ -1858,10 +1821,9 @@ export async function handleVcPanelRenameModal(interaction: ModalSubmitInteracti
     } catch (scheduleErr) {
       logger.error("[vc-panel] Failed to save schedule after rename", scheduleErr);
     }
-    await interaction.editReply(`✅ **${result.item.name}**を使用しました！VCを「${renamedName}」にリネームしました。`);
+    await interaction.editReply(`✅ VCを「${renamedName}」にリネームしました。`);
   } catch {
-    await refundPurchase(interaction.guild.id, interaction.user.id, result.item);
-    await interaction.editReply("❌ チャンネルのリネームに失敗しました。購入を取り消し、返金しました。");
+    await interaction.editReply("❌ チャンネルのリネームに失敗しました。しばらくしてから再試行してください。");
   }
 }
 
