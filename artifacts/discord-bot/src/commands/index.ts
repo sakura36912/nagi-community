@@ -475,6 +475,32 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     return;
   }
 
+  // 非公開VC延長（category="vc"）
+  const vcExtendDuration = VC_EXTEND_DURATIONS[item.effectType ?? ""];
+  if (vcExtendDuration !== undefined) {
+    const session = await getActivePrivateVcSession(interaction.guildId, interaction.user.id, "vc");
+    if (!session) {
+      await interaction.editReply("❌ 有効な非公開VCがありません。先に購入してください。");
+      return;
+    }
+    const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
+    if (!result.ok) { await interaction.editReply(result.reason); return; }
+    try {
+      const updated = await extendPrivateVcSession(session.id, vcExtendDuration);
+      // Propagate the new deadline to the VC schedule row and re-arm the
+      // pre-expiry warning so the scheduler DMs the owner at the right time.
+      await extendSchedule(session.channelId, updated.expiresAt).catch((err) =>
+        logger.error(`[vc-extend] Failed to update schedule for channel ${session.channelId}`, err),
+      );
+      const ts = Math.floor(updated.expiresAt.getTime() / 1000);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
+    } catch {
+      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+      await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
+    }
+    return;
+  }
+
   // 個人ショップ開業券
   if (item.effectType === SHOP_LICENSE_EFFECT) {
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
