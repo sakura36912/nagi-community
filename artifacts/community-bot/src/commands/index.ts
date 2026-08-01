@@ -851,7 +851,7 @@ const ticketCommand: Command = {
 
 const mystatsCommand: Command = {
   data: new SlashCommandBuilder()
-    .setName("mystats")
+    .setName("vcランク")
     .setDescription("自分（または指定メンバー）のVC滞在時間を確認します")
     .addUserOption((opt) =>
       opt
@@ -1074,7 +1074,7 @@ const privacyCommand: Command = {
         .setColor(0xfee75c)
         .setDescription(
           "このサーバーにおけるあなたの**すべてのVC滞在記録**を削除します。\n\n" +
-          "• ランキングや `/mystats` から完全に除外されます\n" +
+          "• ランキングや `/vcランク` から完全に除外されます\n" +
           "• この操作は**取り消せません**\n" +
           "• 同時にトラッキングも停止します\n\n" +
           "本当に削除しますか？",
@@ -1486,7 +1486,7 @@ export async function handlePrivacyOptin(interaction: ChatInputCommandInteractio
     .setDescription(
       "VCの滞在時間の記録を**再開**しました。\n\n" +
       "• これ以降のVCセッションが記録されます（このサーバー＆グローバル設定を解除）\n" +
-      "• `/ranking` や `/mystats` にあなたのデータが表示されます\n\n" +
+      "• `/ranking` や `/VCランク` にあなたのデータが表示されます\n\n" +
       "停止するには `/privacy optout`（このサーバー）または `/privacy optout-all`（全サーバー）を使用してください。",
     )
     .setTimestamp();
