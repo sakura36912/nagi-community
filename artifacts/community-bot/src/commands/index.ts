@@ -1401,11 +1401,17 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
   const finalChannelName = `${prefix}-${sanitizedNick}-${ticket.id}`;
   await channel.setName(finalChannelName).catch(() => {/* rename失敗は無視して続行 */});
 
-  // ── Welcome embed: チケット番号とユーザー名のみ表示 ──────────────────────
-  const colorInt = panel?.welcomeEmbedColor ? hexToInt(panel.welcomeEmbedColor) : TICKET_DEFAULTS.welcomeEmbedColor;
+  // ── Welcome embed ────────────────────────────────────────────────────────
+  const colorInt    = panel?.welcomeEmbedColor ?? settings?.welcomeEmbedColor
+    ? hexToInt((panel?.welcomeEmbedColor ?? settings?.welcomeEmbedColor)!)
+    : TICKET_DEFAULTS.welcomeEmbedColor;
+  const embedTitle  = panel?.welcomeEmbedTitle ?? settings?.welcomeEmbedTitle ?? TICKET_DEFAULTS.welcomeEmbedTitle;
+  const welcomeMsg  = panel?.welcomeMessage    ?? settings?.welcomeMessage    ?? TICKET_DEFAULTS.welcomeMessage;
   const embed = new EmbedBuilder()
     .setColor(colorInt)
-    .setDescription(`🎫 チケット **#${ticket.id}** — ${displayName}`);
+    .setTitle(embedTitle)
+    .setDescription(welcomeMsg)
+    .setFooter({ text: `チケット #${ticket.id} · ${displayName}` });
 
   // ── Close button: per-panel settings > defaults ───────────────────────────
   const closeLabel = panel?.closeButtonLabel ?? TICKET_DEFAULTS.closeButtonLabel;
