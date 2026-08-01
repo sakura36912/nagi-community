@@ -34,8 +34,10 @@ export function buildSheetEmbed(opts: {
   nameboardUrl: string | null | undefined;
   selfIntro: string | null | undefined;
   createdByLabel: string;
+  /** サーバーアイコンURL。指定時はサムネイルにサーバーアイコンを使用する */
+  guildIconUrl?: string | null;
 }): EmbedBuilder {
-  const { targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl, selfIntro, createdByLabel } = opts;
+  const { targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl, selfIntro, createdByLabel, guildIconUrl } = opts;
   const startTs = Math.floor(startDate.getTime() / 1000);
   const endTs = Math.floor(endDate.getTime() / 1000);
   const nameboardValue = nameboardUrl ? `[名簿を見る](${nameboardUrl})` : "未設定";
@@ -43,7 +45,7 @@ export function buildSheetEmbed(opts: {
   const embed = new EmbedBuilder()
     .setTitle(`📋 評価シート — ${displayName}`)
     .setColor(0x2ecc71)
-    .setThumbnail(targetUser.displayAvatarURL())
+    .setThumbnail(guildIconUrl ?? targetUser.displayAvatarURL())
     .addFields(
       { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
       { name: "📋 名簿", value: nameboardValue, inline: false },
@@ -157,6 +159,7 @@ export async function applySheetEmbedUpdate(
       nameboardUrl: settings?.nameboardUrl,
       selfIntro,
       createdByLabel: "評価期間延長券により更新",
+      guildIconUrl: guild?.iconURL() ?? null,
     });
 
     await message.edit({ embeds: [embed] });
@@ -196,14 +199,15 @@ export async function refreshSheetEmbedForUser(
     if (!targetUser) return;
 
     const settings = await getEvalSheetSettings(guildId);
+    let guildForIcon: import("discord.js").Guild | null = null;
+    try {
+      guildForIcon = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
+    } catch { /* fallback */ }
     const [vcSeconds, selfIntro] = await Promise.all([
       getSheetVcSeconds(guildId, userId, sheet.startDate, sheet.endDate),
-      (async () => {
-        try {
-          const guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
-          return findSelfIntro(guild, userId, settings?.rosterCategoryId);
-        } catch { return null; }
-      })(),
+      guildForIcon
+        ? findSelfIntro(guildForIcon, userId, settings?.rosterCategoryId)
+        : Promise.resolve(null),
     ]);
 
     const embed = buildSheetEmbed({
@@ -215,6 +219,7 @@ export async function refreshSheetEmbedForUser(
       nameboardUrl: settings?.nameboardUrl,
       selfIntro,
       createdByLabel: "ニックネーム変更により更新",
+      guildIconUrl: guildForIcon?.iconURL() ?? null,
     });
 
     await message.edit({ embeds: [embed] });

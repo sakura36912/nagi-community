@@ -304,21 +304,19 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
       if (!targetUser) continue;
 
       let displayName = targetUser.displayName;
+      let sheetGuild: import("discord.js").Guild | null = null;
       try {
-        const guild = bot.guilds.cache.get(sheet.guildId) ?? await bot.guilds.fetch(sheet.guildId);
-        const mem = await guild.members.fetch(sheet.userId).catch(() => null);
+        sheetGuild = bot.guilds.cache.get(sheet.guildId) ?? await bot.guilds.fetch(sheet.guildId);
+        const mem = await sheetGuild.members.fetch(sheet.userId).catch(() => null);
         if (mem) displayName = mem.displayName;
       } catch { /* use user displayName */ }
 
       const settings = await getEvalSheetSettings(sheet.guildId);
       const [vcSeconds, selfIntro] = await Promise.all([
         getSheetVcSeconds(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
-        (async () => {
-          try {
-            const guild = bot.guilds.cache.get(sheet.guildId) ?? await bot.guilds.fetch(sheet.guildId);
-            return findSelfIntro(guild, sheet.userId, settings?.rosterCategoryId);
-          } catch { return null; }
-        })(),
+        sheetGuild
+          ? findSelfIntro(sheetGuild, sheet.userId, settings?.rosterCategoryId)
+          : Promise.resolve(null),
       ]);
 
       const embed = buildSheetEmbed({
@@ -330,6 +328,7 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
         nameboardUrl: settings?.nameboardUrl,
         selfIntro,
         createdByLabel: "自動更新（定期集計）",
+        guildIconUrl: sheetGuild?.iconURL() ?? null,
       });
 
       await message.edit({ embeds: [embed] });
@@ -929,6 +928,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       nameboardUrl: globalSettings?.nameboardUrl ?? null,
       selfIntro,
       createdByLabel: `ロール付与により自動生成（${roleName}）`,
+      guildIconUrl: newMember.guild.iconURL() ?? null,
     });
 
     try {
