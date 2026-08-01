@@ -215,6 +215,26 @@ describe("getVcRanking – guild-local opt-out mid-session", () => {
     const notInMatches = query.match(/NOT IN/g) ?? [];
     expect(notInMatches.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("after guild-local opt-out mid-session, the row for that user has is_live=false", async () => {
+    /**
+     * closeSession stamps left_at, so bool_or(left_at IS NULL) = false in SQL.
+     * Simulate the DB returning the user's row with is_live: false (left_at is
+     * now set) and assert the RankingEntry mapping honours that flag correctly.
+     */
+    await setVcPrivacyOptOut(GUILD, "user-mid-session", true);
+
+    // DB returns the row with is_live: false because left_at was stamped by closeSession.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-mid-session", total_seconds: "1800", is_live: false }],
+    });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-mid-session");
+    expect(result[0]?.isLive).toBe(false);
+  });
 });
 
 // ─── Mid-session opt-out: global path ────────────────────────────────────────
@@ -282,5 +302,26 @@ describe("getVcRanking – global opt-out mid-session", () => {
     const result = await getVcRanking(OTHER_GUILD);
 
     expect(result).toEqual([]);
+  });
+
+  it("after global opt-out mid-session, the row for that user has is_live=false", async () => {
+    /**
+     * closeOpenSessionsForUser stamps left_at on every open session.
+     * bool_or(left_at IS NULL) therefore evaluates to false in SQL.
+     * Simulate the DB returning the user's row with is_live: false and assert
+     * the RankingEntry mapping honours that flag correctly.
+     */
+    await setVcGlobalPrivacyOptOut("user-global", true);
+
+    // DB returns the row with is_live: false because left_at was stamped by closeOpenSessionsForUser.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-global", total_seconds: "3600", is_live: false }],
+    });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-global");
+    expect(result[0]?.isLive).toBe(false);
   });
 });
