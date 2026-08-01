@@ -867,7 +867,7 @@ export async function handleNicknameModalSubmit(interaction: ModalSubmitInteract
 
 const balanceCommand: Command = {
   data: new SlashCommandBuilder()
-    .setName("balance")
+    .setName("残高確認")
     .setDescription("自分の残高を表示します"),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -907,7 +907,7 @@ const dailyCommand: Command = {
 
 const payCommand: Command = {
   data: new SlashCommandBuilder()
-    .setName("pay")
+    .setName("送金")
     .setDescription("他のユーザーに送金します")
     .addUserOption((opt) =>
       opt.setName("user").setDescription("送金先のユーザー").setRequired(true),
