@@ -38,6 +38,11 @@ type PrivacyRow = {
   opted_out: boolean;
 };
 
+type GlobalPrivacyRow = {
+  user_id: string;
+  opted_out: boolean;
+};
+
 // ─── Hoist: stateful session + privacy store + DB fakes ───────────────────────
 //
 // vi.hoisted runs before vi.mock() factories and module imports so both the
@@ -45,8 +50,9 @@ type PrivacyRow = {
 
 const store = vi.hoisted(() => {
   // ── In-memory stores ───────────────────────────────────────────────────────
-  let sessions: SessionRow[]    = [];
-  let privacyRows: PrivacyRow[] = [];
+  let sessions: SessionRow[]             = [];
+  let privacyRows: PrivacyRow[]          = [];
+  let globalRows: GlobalPrivacyRow[]     = [];
 
   // ── Condition evaluators for delete WHERE clauses ─────────────────────────
   // The drizzle-orm mock returns plain objects: { op, col, val } / { op, args }.
@@ -79,10 +85,24 @@ const store = vi.hoisted(() => {
     return true;
   }
 
+  function matchesGlobal(row: GlobalPrivacyRow, cond: Record<string, unknown>): boolean {
+    if (cond["op"] === "eq") {
+      const col = cond["col"] as string;
+      const val = cond["val"];
+      if (col === "global.userId") return row.user_id === val;
+      return true;
+    }
+    if (cond["op"] === "and") {
+      return (cond["args"] as Record<string, unknown>[]).every((a) => matchesGlobal(row, a));
+    }
+    return true;
+  }
+
   // ── db.delete stateful implementation ─────────────────────────────────────
   // Routes to the correct store based on the table proxy's guildId sentinel:
   //   sessions table → (table as Record)["guildId"] === "sessions.guildId"
   //   privacy table  → (table as Record)["guildId"] === "privacy.guildId"
+  //   global table   → (table as Record)["guildId"] === "global.guildId"
   const del = vi.fn((table: unknown) => ({
     where: (cond: Record<string, unknown>) => ({
       returning: (_shape: unknown) => {
@@ -91,6 +111,10 @@ const store = vi.hoisted(() => {
         if (tableName === "privacy") {
           const removed = privacyRows.filter((r) => matchesPrivacy(r, cond));
           privacyRows   = privacyRows.filter((r) => !matchesPrivacy(r, cond));
+          return Promise.resolve(removed.map((_, i) => ({ id: i })));
+        } else if (tableName === "global") {
+          const removed = globalRows.filter((r) => matchesGlobal(r, cond));
+          globalRows    = globalRows.filter((r) => !matchesGlobal(r, cond));
           return Promise.resolve(removed.map((_, i) => ({ id: i })));
         } else {
           const removed = sessions.filter((r) => matchesSession(r, cond));
@@ -138,12 +162,21 @@ const store = vi.hoisted(() => {
     return [...privacyRows];
   }
 
+  function seedGlobal(rows: GlobalPrivacyRow[]): void {
+    globalRows = [...rows];
+  }
+
+  function getGlobalRows(): GlobalPrivacyRow[] {
+    return [...globalRows];
+  }
+
   function reset(): void {
     sessions    = [];
     privacyRows = [];
+    globalRows  = [];
   }
 
-  return { del, execute, seed, seedPrivacy, getPrivacyRows, reset };
+  return { del, execute, seed, seedPrivacy, getPrivacyRows, seedGlobal, getGlobalRows, reset };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -303,23 +336,22 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       expect(result).toHaveLength(0);
     });
 
-    it("deletes with a userId-only filter (no guildId constraint)", async () => {
+    it("deletes with a userId-only filter (no guildId constraint) for sessions, and also removes the global opt-out row", async () => {
       store.seed([makeRow("wiped-user", "guild-A")]);
 
       await deleteAllUserVcSessions("wiped-user");
 
-      expect(store.del).toHaveBeenCalledTimes(1);
-      // The WHERE condition must be a simple eq on userId, not an and-with-guildId
-      const whereArg = store.del.mock.results[0]?.value as { where: (c: unknown) => unknown };
-      // Capture the condition passed to .where()
-      let capturedCond: Record<string, unknown> | null = null;
-      (whereArg.where as (c: Record<string, unknown>) => unknown)({ op: "__capture__", col: "", val: "" });
-      // We need to spy differently — inspect the execute call count instead
-      // The global wipe should only target userId, not guildId
-      const delCallArg = store.del.mock.calls[0]?.[0] as Record<string, string>;
-      // The table arg must be the sessions table proxy
-      expect(delCallArg?.["userId"]).toBe("sessions.userId");
-      void capturedCond; // unused but keeps TS happy
+      // Two db.delete calls: first for sessions, second for the global opt-out row.
+      expect(store.del).toHaveBeenCalledTimes(2);
+      const tables = store.del.mock.calls.map((c) => c[0] as Record<string, string>);
+
+      // First delete must target the sessions table with userId only (no guildId constraint)
+      const sessionsTableArg = tables[0];
+      expect(sessionsTableArg?.["userId"]).toBe("sessions.userId");
+
+      // Second delete must target the global opt-out table
+      const globalTableArg = tables[1];
+      expect(globalTableArg?.["userId"]).toBe("global.userId");
     });
 
     it("returns the count of deleted rows", async () => {
@@ -340,6 +372,74 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       const count = await deleteAllUserVcSessions("no-sessions-user");
 
       expect(count).toBe(0);
+    });
+  });
+
+  // ── Global wipe clears the global opt-out row (clean re-tracking) ───────
+  //
+  // deleteAllUserVcSessions deletes session rows AND removes the matching
+  // community_vc_privacy_global row so the user can be re-tracked automatically
+  // after the full data wipe without needing an explicit re-opt-in.
+
+  describe("global wipe clears the global opt-out row (clean re-tracking)", () => {
+    it("global opt-out row is removed after deleteAllUserVcSessions", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      // Sessions are gone from the export
+      const sessions = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
+      expect(sessions).toHaveLength(0);
+
+      // Global opt-out row is also cleared — the user can be re-tracked.
+      const global = store.getGlobalRows();
+      expect(global).toHaveLength(0);
+    });
+
+    it("global opt-out is cleared even when the user had no sessions", async () => {
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      expect(store.getGlobalRows()).toHaveLength(0);
+    });
+
+    it("only the wiped user's global opt-out row is removed; other users' rows survive", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedGlobal([
+        { user_id: "wiped-user", opted_out: true },
+        { user_id: "other-user", opted_out: true },
+      ]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      const global = store.getGlobalRows();
+      expect(global).toHaveLength(1);
+      expect(global[0]).toMatchObject({ user_id: "other-user" });
+    });
+
+    it("wipe works cleanly when no global opt-out row exists for the user", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      // No global row seeded — should not throw and should return correct count.
+
+      await expect(deleteAllUserVcSessions("wiped-user")).resolves.toBe(1);
+      expect(store.getGlobalRows()).toHaveLength(0);
+    });
+
+    it("db.delete is called twice — once for sessions, once for global opt-out", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      expect(store.del).toHaveBeenCalledTimes(2);
+      const tables = store.del.mock.calls.map((c) => {
+        const t = c[0] as Record<string, string>;
+        return (t["guildId"] ?? t["userId"] ?? "").split(".")[0];
+      });
+      expect(tables).toContain("sessions");
+      expect(tables).toContain("global");
     });
   });
 

@@ -1596,10 +1596,12 @@ export async function handlePrivacyGlobalOptoutKeep(interaction: ButtonInteracti
 export async function handlePrivacyGlobalOptoutDelete(interaction: ButtonInteraction): Promise<void> {
   await interaction.deferUpdate();
   const userId = interaction.user.id;
-  const [deleted] = await Promise.all([
-    deleteAllUserVcSessions(userId),
-    setVcGlobalPrivacyOptOut(userId, true),
-  ]);
+  // Run sequentially so the opt-out write always wins:
+  //   1. deleteAllUserVcSessions wipes session rows and clears the global opt-out row.
+  //   2. setVcGlobalPrivacyOptOut re-sets the global opt-out to true so the user
+  //      stays opted out after the wipe (deterministic final state).
+  const deleted = await deleteAllUserVcSessions(userId);
+  await setVcGlobalPrivacyOptOut(userId, true);
   const embed = new EmbedBuilder()
     .setTitle("🗑️ 全サーバーでトラッキングを停止し、全データを削除しました")
     .setColor(0xed4245)

@@ -448,14 +448,24 @@ export async function isVcTrackingOptedOut(guildId: string, userId: string): Pro
 }
 
 /**
- * Permanently deletes all VC session rows for a user across ALL guilds.
- * Returns the number of rows deleted.
+ * Permanently deletes all VC session rows for a user across ALL guilds and
+ * clears their global opt-out record so future sessions can be recorded
+ * without requiring an explicit re-opt-in.
+ * Returns the number of session rows deleted.
  */
 export async function deleteAllUserVcSessions(userId: string): Promise<number> {
   const result = await db
     .delete(communityVcSessionsTable)
     .where(eq(communityVcSessionsTable.userId, userId))
     .returning({ id: communityVcSessionsTable.id });
+
+  // Clear the global privacy opt-out row so the user starts with a clean slate
+  // and new sessions are recorded automatically after the full data wipe.
+  await db
+    .delete(communityVcPrivacyGlobalTable)
+    .where(eq(communityVcPrivacyGlobalTable.userId, userId))
+    .returning({ userId: communityVcPrivacyGlobalTable.userId });
+
   return result.length;
 }
 

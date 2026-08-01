@@ -1068,15 +1068,17 @@ describe("deleteAllUserVcSessions – global wipe scoped to one user only", () =
 
   it("WHERE clause carries only the target userId (eq filter)", async () => {
     mocks.deleteReturning.mockResolvedValueOnce([]);
+    // Second call is for the global opt-out delete; return empty array.
+    mocks.deleteReturning.mockResolvedValueOnce([]);
 
     await deleteAllUserVcSessions("user-dav-2");
 
-    // db.delete() must have been called once
-    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+    // db.delete() is called twice: once for sessions, once for the global opt-out row.
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
 
-    // The where() argument is a single eq node (not wrapped in AND because there
-    // is only one filter – userId).  Accept both a bare eq and an AND that
-    // contains an eq so the test stays resilient to minor refactors.
+    // Check the FIRST call (sessions) – its WHERE must carry only the userId.
+    // Accept both a bare eq and an AND that contains an eq so the test stays
+    // resilient to minor refactors.
     const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
       { op: string; col?: string; val?: string; args?: { op: string; val: string }[] }
     ];
@@ -1156,12 +1158,13 @@ describe("deleteAllUserVcSessions – global wipe scoped to one user only", () =
 
 // ─── handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path ────────
 //
-// This handler calls Promise.all([deleteAllUserVcSessions, setVcGlobalPrivacyOptOut])
-// so both operations run in parallel.  deleteAllUserVcSessions issues a cross-guild
-// DELETE scoped only to userId; we verify:
-//   - db.delete() is called with a WHERE that carries only the userId (no guildId)
+// This handler runs deleteAllUserVcSessions then setVcGlobalPrivacyOptOut sequentially
+// so the final opt-out state is deterministic.  deleteAllUserVcSessions issues a
+// cross-guild DELETE for sessions and also clears the global opt-out row; then
+// setVcGlobalPrivacyOptOut re-sets the global opt-out to true.  We verify:
+//   - db.delete() is called twice (sessions + global opt-out row)
 //   - The embed description shows the correct deleted-row count
-//   - db.insert() is called (for setVcGlobalPrivacyOptOut)
+//   - db.insert() is called (for setVcGlobalPrivacyOptOut re-set)
 //   - components:[] clears the opt-out buttons
 
 describe("handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path", () => {
@@ -1170,22 +1173,29 @@ describe("handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path", 
   });
 
   // Helper: stage mocks for one successful invocation.
-  // deleteAllUserVcSessions → db.delete().where().returning()      → `deletedRows`
+  // deleteAllUserVcSessions:
+  //   → db.delete(sessions).where().returning()      → `deletedRows`
+  //   → db.delete(global).where().returning()        → [] (clear global opt-out row)
   // setVcGlobalPrivacyOptOut → db.insert().values().onConflictDoUpdate() (upsert)
   //                          → db.update().set().where().returning() (closeOpenSessionsForUser)
   function setupMocks(deletedRows: { id: number }[]) {
-    mocks.deleteReturning.mockResolvedValueOnce(deletedRows);
-    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global opt-out upsert
-    mocks.returning.mockResolvedValueOnce([]);           // closeOpenSessionsForUser (no open sessions)
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows); // session rows deleted
+    mocks.deleteReturning.mockResolvedValueOnce([]);           // global opt-out row cleared
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);        // global opt-out upsert (re-set)
+    mocks.returning.mockResolvedValueOnce([]);                 // closeOpenSessionsForUser (no open sessions)
   }
 
-  it("calls db.delete() exactly once (for deleteAllUserVcSessions)", async () => {
+  it("calls db.delete() twice — once for sessions, once to clear the global opt-out row", async () => {
     setupMocks([]);
 
     const interaction = makeInteraction("user-god-1");
     await handlePrivacyGlobalOptoutDelete(interaction as never);
 
-    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+    // deleteAllUserVcSessions performs two deletes: sessions + global opt-out row.
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
+    const tables = (mocks.deleteFn.mock.calls as unknown as [Record<string, string>][]).map((c) => c[0]?.["userId"]);
+    expect(tables).toContain("sessions.userId");
+    expect(tables).toContain("global.userId");
   });
 
   it("WHERE clause on the delete carries only the userId (not a guildId)", async () => {
