@@ -688,7 +688,10 @@ export const slotCommand: Command = {
     const focused = interaction.options.getFocused().toLowerCase();
 
     // キャッシュ確保（並列）
-    const [stickers] = await Promise.all([
+    const [emojis, stickers] = await Promise.all([
+      interaction.guild.emojis.cache.size > 0
+        ? Promise.resolve(interaction.guild.emojis.cache)
+        : interaction.guild.emojis.fetch().catch(() => interaction.guild!.emojis.cache),
       interaction.guild.stickers.cache.size > 0
         ? Promise.resolve(interaction.guild.stickers.cache)
         : interaction.guild.stickers.fetch().catch(() => interaction.guild!.stickers.cache),
@@ -702,7 +705,7 @@ export const slotCommand: Command = {
 
       // 登録済み絵文字
       for (const id of settings.fixedEmojiIds) {
-        const e = interaction.guild.emojis.cache.get(id);
+        const e = emojis.get(id);
         if (!e?.name) continue;
         const sym = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
         if (e.name.toLowerCase().includes(focused)) choices.push({ name: `🎨 ${e.name}`, value: sym });
@@ -715,7 +718,7 @@ export const slotCommand: Command = {
       }
     } else {
       // add: 全絵文字＋全スタンプ
-      for (const e of interaction.guild.emojis.cache.values()) {
+      for (const e of emojis.values()) {
         if (!e.name || e.managed) continue;
         if (!e.name.toLowerCase().includes(focused)) continue;
         const sym = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
