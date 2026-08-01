@@ -23,23 +23,35 @@ export async function getHubByChannelId(hubChannelId: string) {
   return rows[0] ?? null;
 }
 
-/** Hub チャンネルを追加（既存なら category / nameTemplate / userLimit を上書き） */
+/** Hub チャンネルを追加（既存なら設定を上書き） */
 export async function addHubChannel(
   guildId: string,
   hubChannelId: string,
   categoryId: string | null,
   nameTemplate: string,
   userLimit: number | null,
+  salaryRatePerHour: number | null = null,
+  salaryMinMinutes: number = 1,
 ) {
   const rows = await db
     .insert(vcHubChannelsTable)
-    .values({ guildId, hubChannelId, categoryId, nameTemplate, userLimit })
+    .values({ guildId, hubChannelId, categoryId, nameTemplate, userLimit, salaryRatePerHour, salaryMinMinutes })
     .onConflictDoUpdate({
       target: vcHubChannelsTable.hubChannelId,
-      set: { categoryId, nameTemplate, userLimit },
+      set: { categoryId, nameTemplate, userLimit, salaryRatePerHour, salaryMinMinutes },
     })
     .returning();
   return rows[0]!;
+}
+
+/** Hub ID（PK）からHub設定を取得 */
+export async function getHubChannelById(id: number) {
+  const rows = await db
+    .select()
+    .from(vcHubChannelsTable)
+    .where(eq(vcHubChannelsTable.id, id))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 /** Hub チャンネル設定を削除 */

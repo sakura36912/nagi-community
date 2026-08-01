@@ -28,6 +28,8 @@ import {
   handleShiftListNav,
 } from "./commands";
 import { handleHubJoin, handleHubLeave } from "./commands/vc";
+import { getHubSession, getHubChannelById, db, walletsTable, transactionsTable } from "@workspace/db";
+import { sql as drizzleSql } from "drizzle-orm";
 import {
   getExpiredSchedules,
   getSchedulesExpiringSoon,
@@ -50,6 +52,7 @@ import {
   recordVcLogJoin,
   recordVcLogLeave,
   getVcLogPresence,
+  updateVcPresenceChannel,
 } from "./lib/vcReward";
 import {
   recordPointVcJoin,
@@ -633,28 +636,57 @@ function isEligibleChannel(
  * Credit a user's wallet for a completed VC session and notify them via DM.
  * Silently no-ops when the reward comes out to 0 (below minMinutes, rate=0).
  */
+/** Hub チャンネルIDが hub-salary VC なら { ratePerHour, minMinutes } を返す。それ以外は null。 */
+async function getHubSalaryForChannel(
+  channelId: string,
+): Promise<{ ratePerHour: number; minMinutes: number } | null> {
+  try {
+    const session = await getHubSession(channelId);
+    if (!session) return null;
+    const hub = await getHubChannelById(session.hubId);
+    if (!hub?.salaryRatePerHour || hub.salaryRatePerHour <= 0) return null;
+    return { ratePerHour: hub.salaryRatePerHour, minMinutes: hub.salaryMinMinutes };
+  } catch {
+    return null;
+  }
+}
+
 async function handleVcLeave(
   guild: VoiceState["guild"],
   userId: string,
   joinedAt: Date,
+  /** Hub チャンネルの分給設定。指定時はギルドデフォルト設定の代わりに使用。 */
+  hubSalaryOverride?: { ratePerHour: number; minMinutes: number },
 ): Promise<void> {
   try {
-    const [settings, guildSettings] = await Promise.all([
-      getVcRewardSettings(guild.id),
-      getGuildSettings(guild.id),
-    ]);
-    const reward = await payVcReward(
-      guild.id,
-      userId,
-      joinedAt,
-      guildSettings.currencyName,
-      settings,
-    );
-    if (reward <= 0) return;
+    const guildSettings = await getGuildSettings(guild.id);
+    let reward: number;
+
+    if (hubSalaryOverride) {
+      // Hub 分給: guild 設定を使わず hub 設定で直接計算
+      const minutes = (Date.now() - joinedAt.getTime()) / 60_000;
+      if (minutes < hubSalaryOverride.minMinutes) return;
+      reward = Math.floor((minutes / 60) * hubSalaryOverride.ratePerHour);
+      if (reward <= 0) return;
+
+      const reason = `Hub VC滞在報酬（${Math.floor(minutes)}分）`;
+      await db
+        .insert(walletsTable)
+        .values({ guildId: guild.id, userId, balance: reward })
+        .onConflictDoUpdate({
+          target: [walletsTable.guildId, walletsTable.userId],
+          set: { balance: drizzleSql`${walletsTable.balance} + ${reward}` },
+        });
+      await db.insert(transactionsTable).values({ guildId: guild.id, userId, amount: reward, reason });
+    } else {
+      const settings = await getVcRewardSettings(guild.id);
+      reward = await payVcReward(guild.id, userId, joinedAt, guildSettings.currencyName, settings);
+      if (reward <= 0) return;
+    }
 
     const minutes = Math.floor((Date.now() - joinedAt.getTime()) / 60_000);
     logger.info(
-      `[vcsalary] ${userId} in ${guild.id}: +${reward}${guildSettings.currencyName} for ${minutes}min VC`,
+      `[vcsalary] ${userId} in ${guild.id}: +${reward}${guildSettings.currencyName} for ${minutes}min VC${hubSalaryOverride ? " (hub)" : ""}`,
     );
 
     // DM the user (best-effort; closed DMs are silently ignored).
@@ -707,12 +739,17 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // ── Joined VC (from nothing or from AFK) ─────────────────────────────────
   if (isInVc && !isInAfk && (!wasInVc || wasInAfk)) {
     await Promise.all([
-      // Reward tracking
+      // Reward tracking (hub salary takes priority over general eligibility)
       (async () => {
         try {
-          const settings = await getVcRewardSettings(guild.id);
-          if (settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild)) {
+          const hubSalary = await getHubSalaryForChannel(newState.channelId!);
+          if (hubSalary) {
             await recordVcJoin(guild.id, userId, newState.channelId!);
+          } else {
+            const settings = await getVcRewardSettings(guild.id);
+            if (settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild)) {
+              await recordVcJoin(guild.id, userId, newState.channelId!);
+            }
           }
         } catch (err) {
           logger.error(`[vcsalary] recordVcJoin error for ${userId}`, err);
@@ -751,13 +788,16 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // ── Left VC (to nothing or to AFK) ───────────────────────────────────────
   if (wasInVc && !wasInAfk && (!isInVc || isInAfk)) {
     await Promise.all([
-      // Reward payout
+      // Reward payout (use hub salary if the channel was a hub-salary VC)
       (async () => {
         const presence = await clearVcPresence(guild.id, userId).catch((err) => {
           logger.error(`[vcsalary] clearVcPresence error for ${userId}`, err);
           return undefined;
         });
-        if (presence) await handleVcLeave(guild, userId, presence.joinedAt);
+        if (presence) {
+          const hubSalary = await getHubSalaryForChannel(presence.channelId);
+          await handleVcLeave(guild, userId, presence.joinedAt, hubSalary ?? undefined);
+        }
       })(),
       // Point VC settlement
       settlePointVcSession(guild.id, userId).catch((err) =>
@@ -789,18 +829,39 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // ── Moved between two non-AFK VCs ────────────────────────────────────────
   if (wasInVc && !wasInAfk && isInVc && !isInAfk && oldState.channelId !== newState.channelId) {
     await Promise.all([
-      // Reward tracking – category eligibility may have changed
+      // Reward tracking – hub salary and/or category eligibility may have changed
       (async () => {
         try {
-          const settings = await getVcRewardSettings(guild.id);
-          if (settings.ratePerHour <= 0) return;
-          const wasEligible = isEligibleChannel(oldState.channelId!, settings.includedCategoryIds, guild);
-          const nowEligible = isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild);
-          if (wasEligible && !nowEligible) {
+          const [oldHubSalary, newHubSalary, settings] = await Promise.all([
+            getHubSalaryForChannel(oldState.channelId!),
+            getHubSalaryForChannel(newState.channelId!),
+            getVcRewardSettings(guild.id),
+          ]);
+          const wasGeneralEligible = settings.ratePerHour > 0 && isEligibleChannel(oldState.channelId!, settings.includedCategoryIds, guild);
+          const nowGeneralEligible = settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild);
+          const wasTracked = oldHubSalary != null || wasGeneralEligible;
+          const nowTracked = newHubSalary != null || nowGeneralEligible;
+
+          if (wasTracked && !nowTracked) {
+            // 報酬対象外に移動 → 精算
             const presence = await clearVcPresence(guild.id, userId).catch(() => undefined);
-            if (presence) await handleVcLeave(guild, userId, presence.joinedAt);
-          } else if (!wasEligible && nowEligible) {
+            if (presence) await handleVcLeave(guild, userId, presence.joinedAt, oldHubSalary ?? undefined);
+          } else if (!wasTracked && nowTracked) {
+            // 報酬対象に移動 → 計測開始
             await recordVcJoin(guild.id, userId, newState.channelId!);
+          } else if (wasTracked && nowTracked) {
+            const typeChanged = (oldHubSalary != null) !== (newHubSalary != null);
+            const rateChanged = (oldHubSalary?.ratePerHour ?? settings.ratePerHour) !== (newHubSalary?.ratePerHour ?? settings.ratePerHour);
+            if (typeChanged || rateChanged) {
+              // 報酬レート変化 → 旧セッション精算 → 新セッション開始
+              const presence = await clearVcPresence(guild.id, userId).catch(() => undefined);
+              if (presence) await handleVcLeave(guild, userId, presence.joinedAt, oldHubSalary ?? undefined);
+              await recordVcJoin(guild.id, userId, newState.channelId!);
+            } else if (newHubSalary != null) {
+              // 同レートのHub VC間移動 → channelId だけ更新（joinedAt は保持）
+              await updateVcPresenceChannel(guild.id, userId, newState.channelId!);
+            }
+            // else: 同カテゴリのgeneral VC間移動 → 何もしない（既存の蓄積を継続）
           }
         } catch (err) {
           logger.error(`[vcsalary] channel-move handling error for ${userId}`, err);

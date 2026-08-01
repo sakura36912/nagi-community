@@ -11,6 +11,10 @@ export const vcHubChannelsTable = pgTable("vc_hub_channels", {
   nameTemplate: text("name_template").notNull().default("{user}のVC"),
   /** 生成VCの人数制限 (null = 制限なし, 0 = 無制限) */
   userLimit: integer("user_limit"),
+  /** この Hub の生成VC に滞在しているときの時給 (null = 分給なし) */
+  salaryRatePerHour: integer("salary_rate_per_hour"),
+  /** 分給の最低滞在時間（分）。デフォルト1分 */
+  salaryMinMinutes: integer("salary_min_minutes").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

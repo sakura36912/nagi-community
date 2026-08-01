@@ -124,6 +124,18 @@ export async function getAllVcPresences(): Promise<VcPresence[]> {
   return db.select().from(vcPresenceTable);
 }
 
+/** Update only the channelId of an existing presence (preserves joinedAt for cross-room moves). */
+export async function updateVcPresenceChannel(
+  guildId: string,
+  userId: string,
+  channelId: string,
+): Promise<void> {
+  await db
+    .update(vcPresenceTable)
+    .set({ channelId })
+    .where(and(eq(vcPresenceTable.guildId, guildId), eq(vcPresenceTable.userId, userId)));
+}
+
 // ─── Reward payout ───────────────────────────────────────────────────────────
 
 /**

@@ -19,6 +19,7 @@ import {
   getHubChannels,
   removeHubChannel,
   getHubByChannelId,
+  getHubChannelById,
   createHubSession,
   getHubSession,
   deleteHubSession,
@@ -91,6 +92,21 @@ export const vcCommand = {
             .setDescription("生成VCの人数制限（1〜99。省略すると制限なし）")
             .setMinValue(1)
             .setMaxValue(99)
+            .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("salary_rate")
+            .setDescription("この Hub の生成VCでの時給（コイン/時間）。省略すると分給なし")
+            .setMinValue(1)
+            .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("salary_min_minutes")
+            .setDescription("分給発生の最低滞在時間（分、デフォルト: 1）")
+            .setMinValue(1)
+            .setMaxValue(1440)
             .setRequired(false),
         ),
     )
@@ -191,11 +207,13 @@ export const vcCommand = {
 
     // ── hub-add ───────────────────────────────────────────────────────────
     if (sub === "hub-add") {
-      const channel      = interaction.options.getChannel("channel", true);
-      const categoryOpt  = interaction.options.getChannel("category");
-      const templateOpt  = interaction.options.getString("name_template");
-      const userLimit    = interaction.options.getInteger("user_limit") ?? null;
-      const nameTemplate = templateOpt?.trim() || "{user}のVC";
+      const channel         = interaction.options.getChannel("channel", true);
+      const categoryOpt     = interaction.options.getChannel("category");
+      const templateOpt     = interaction.options.getString("name_template");
+      const userLimit       = interaction.options.getInteger("user_limit") ?? null;
+      const salaryRate      = interaction.options.getInteger("salary_rate") ?? null;
+      const salaryMinMin    = interaction.options.getInteger("salary_min_minutes") ?? 1;
+      const nameTemplate    = templateOpt?.trim() || "{user}のVC";
 
       await addHubChannel(
         interaction.guildId,
@@ -203,18 +221,22 @@ export const vcCommand = {
         categoryOpt?.id ?? null,
         nameTemplate,
         userLimit,
+        salaryRate,
+        salaryMinMin,
       );
 
-      const categoryDisplay = categoryOpt
-        ? `<#${categoryOpt.id}>`
-        : "（トリガーと同じカテゴリ）";
-      const limitDisplay = userLimit != null ? `${userLimit}人` : "なし";
+      const categoryDisplay = categoryOpt ? `<#${categoryOpt.id}>` : "（トリガーと同じカテゴリ）";
+      const limitDisplay    = userLimit != null ? `${userLimit}人` : "なし";
+      const salaryDisplay   = salaryRate != null
+        ? `${salaryRate.toLocaleString()} コイン/時間（最低 ${salaryMinMin} 分）`
+        : "なし";
       await interaction.reply({
         content:
           `✅ <#${channel.id}> を Hub チャンネルとして登録しました。\n` +
           `名前テンプレート: \`${nameTemplate}\`\n` +
           `生成先カテゴリ: ${categoryDisplay}\n` +
-          `人数制限: ${limitDisplay}`,
+          `人数制限: ${limitDisplay}\n` +
+          `分給: ${salaryDisplay}`,
         ephemeral: true,
       });
       return;
@@ -261,6 +283,9 @@ export const vcCommand = {
                 ? `生成先カテゴリ: <#${h.categoryId}>`
                 : "生成先カテゴリ: トリガーと同じ",
               h.userLimit != null ? `人数制限: ${h.userLimit}人` : "人数制限: なし",
+              h.salaryRatePerHour != null
+                ? `💰 分給: ${h.salaryRatePerHour.toLocaleString()} コイン/時間（最低 ${h.salaryMinMinutes} 分）`
+                : "💰 分給: なし",
             ].join("\n"),
             inline: false,
           })),
