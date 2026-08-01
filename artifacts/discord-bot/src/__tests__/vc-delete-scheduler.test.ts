@@ -729,3 +729,83 @@ describe("getSchedulesExpiringSoon – query filter assertions", () => {
     expect(mocks.getSchedulesExpiringSoon).toHaveBeenCalledOnce();
   });
 });
+
+describe("runVcDeleteScheduler – per-guild warn time isolation", () => {
+  /** Build a two-guild client so each guild can have its own settings. */
+  function makeTwoGuildClient() {
+    const makeChannel = () => ({ delete: vi.fn().mockResolvedValue(undefined) });
+    const makeGuild = (channelId: string) => ({
+      channels: {
+        cache: new Map([[channelId, makeChannel()]]),
+        fetch: vi.fn().mockResolvedValue(null),
+      },
+    });
+    return {
+      users: { fetch: vi.fn().mockResolvedValue(null) },
+      guilds: {
+        cache: new Map([
+          ["guild-A", makeGuild("channel-A")],
+          ["guild-B", makeGuild("channel-B")],
+        ]),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getExpiredSchedules.mockResolvedValue([]);
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
+    // Default: no expiring schedules for either guild
+    mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
+  });
+
+  it("calls getSchedulesExpiringSoon with the correct warnBeforeMs for each guild independently", async () => {
+    // guild-A uses 10 min, guild-B uses 30 min
+    mocks.getGuildSettings
+      .mockImplementation((guildId: string) => {
+        if (guildId === "guild-A") return Promise.resolve({ vcWarnBeforeMinutes: 10 });
+        if (guildId === "guild-B") return Promise.resolve({ vcWarnBeforeMinutes: 30 });
+        return Promise.resolve({ vcWarnBeforeMinutes: 10 });
+      });
+
+    await runVcDeleteScheduler(makeTwoGuildClient());
+
+    // Should have been called exactly twice — once per guild
+    expect(mocks.getSchedulesExpiringSoon).toHaveBeenCalledTimes(2);
+
+    // Find the call for each guild regardless of iteration order
+    const calls = mocks.getSchedulesExpiringSoon.mock.calls as [string, Date, number][];
+    const callA = calls.find(([guildId]) => guildId === "guild-A");
+    const callB = calls.find(([guildId]) => guildId === "guild-B");
+
+    expect(callA).toBeDefined();
+    expect(callB).toBeDefined();
+
+    // guild-A must use its own 10-minute window
+    expect(callA![2]).toBe(10 * 60 * 1000);
+
+    // guild-B must use its own 30-minute window
+    expect(callB![2]).toBe(30 * 60 * 1000);
+  });
+
+  it("does not bleed guild-A's warn time into guild-B", async () => {
+    // Intentionally give guild-A a short window; guild-B must not inherit it
+    mocks.getGuildSettings
+      .mockImplementation((guildId: string) => {
+        if (guildId === "guild-A") return Promise.resolve({ vcWarnBeforeMinutes: 5 });
+        if (guildId === "guild-B") return Promise.resolve({ vcWarnBeforeMinutes: 60 });
+        return Promise.resolve({ vcWarnBeforeMinutes: 5 });
+      });
+
+    await runVcDeleteScheduler(makeTwoGuildClient());
+
+    const calls = mocks.getSchedulesExpiringSoon.mock.calls as [string, Date, number][];
+    const callB = calls.find(([guildId]) => guildId === "guild-B");
+
+    expect(callB).toBeDefined();
+    // guild-B must NOT receive guild-A's 5-minute window
+    expect(callB![2]).not.toBe(5 * 60 * 1000);
+    expect(callB![2]).toBe(60 * 60 * 1000);
+  });
+});
