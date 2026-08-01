@@ -35,6 +35,7 @@ import {
   markScheduleNotified,
 } from "./lib/vc";
 import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
+import { getStickyMessage, updateStickyLastMessageId } from "./lib/sticky";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 
 import { logger } from "./lib/logger";
@@ -1025,6 +1026,28 @@ const INITIAL_ISSUE_TRIGGER = "初期発行お願いします。";
 const INITIAL_ISSUE_AMOUNT  = 1000;
 
 const INITIAL_ISSUE_CHANNEL_ID = "1526673304327291050";
+
+// ─── MessageCreate — スティッキーメッセージ ───────────────────────────────────
+
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot) return;
+  if (!message.guildId)   return;
+
+  const sticky = await getStickyMessage(message.guildId, message.channelId).catch(() => null);
+  if (sticky) {
+    // Delete the previous sticky post
+    if (sticky.lastMessageId) {
+      await message.channel.messages.delete(sticky.lastMessageId).catch(() => null);
+    }
+    // Re-post at the bottom
+    try {
+      const posted = await message.channel.send({ content: sticky.content, allowedMentions: { parse: [] } });
+      await updateStickyLastMessageId(message.guildId, message.channelId, posted.id);
+    } catch (err) {
+      logger.warn(`[sticky] Failed to re-post sticky in ${message.channelId}`, err);
+    }
+  }
+});
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;

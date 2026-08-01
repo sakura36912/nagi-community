@@ -28,4 +28,5 @@ export * from "./triggers";
 export * from "./vcHub";
 export * from "./points";
 export * from "./guide";
+export * from "./sticky";
 

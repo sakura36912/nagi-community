@@ -1521,6 +1521,7 @@ import { leavelogCommand } from "./leavelog";
 import { pointconfigCommand } from "./pointconfig";
 import { pointCommand } from "./point";
 import { interviewCommand } from "./interview";
+import { stickyCommand } from "./sticky";
 
 export const commands: Command[] = [
   interviewCommand,
@@ -1544,4 +1545,5 @@ export const commands: Command[] = [
 
   pointconfigCommand,
   pointCommand,
+  stickyCommand,
 ];
