@@ -8,6 +8,7 @@ interface Command {
 }
 
 const ADVICE_ROLE_NAME = "評価員アドバイス券";
+const ALLOWED_ROLE_NAMES = ["航海士", "提督", "大提督"];
 
 export const adviceEndCommand: Command = {
   data: new SlashCommandBuilder()
@@ -20,6 +21,17 @@ export const adviceEndCommand: Command = {
   async execute(interaction: ChatInputCommandInteraction) {
     if (!interaction.guild) {
       await interaction.reply({ content: "このコマンドはサーバー内でのみ使用できます。", ephemeral: true });
+      return;
+    }
+
+    // 実行者のロール確認
+    const executor = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    const hasAllowedRole = executor?.roles.cache.some((r) => ALLOWED_ROLE_NAMES.includes(r.name));
+    if (!hasAllowedRole) {
+      await interaction.reply({
+        content: `❌ このコマンドは ${ALLOWED_ROLE_NAMES.map((n) => `「${n}」`).join("・")} ロールのみ実行できます。`,
+        ephemeral: true,
+      });
       return;
     }
 
