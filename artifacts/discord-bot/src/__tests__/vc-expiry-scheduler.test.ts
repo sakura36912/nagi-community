@@ -805,3 +805,76 @@ describe("runVcExpiryScheduler – cross-session isolation (50013 on one session
     );
   });
 });
+
+// ─── DB cleanup failure ───────────────────────────────────────────────────────
+
+describe("runVcExpiryScheduler – deletePrivateVcSession failure is logged without crashing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deleteSchedule.mockResolvedValue(true);
+  });
+
+  it("logs an error containing the session id when deletePrivateVcSession rejects", async () => {
+    const dbError = new Error("DB connection lost");
+    mocks.deletePrivateVcSession.mockRejectedValueOnce(dbError);
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession({ id: 42 })]);
+
+    await runVcExpiryScheduler(makeClient());
+
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("42"),
+      dbError,
+    );
+  });
+
+  it("still processes subsequent sessions after a DB cleanup failure on the first session", async () => {
+    const dbError = new Error("DB connection lost");
+    // First call rejects, second resolves.
+    mocks.deletePrivateVcSession
+      .mockRejectedValueOnce(dbError)
+      .mockResolvedValueOnce(undefined);
+
+    const sessionA = makeSession({ id: 1, channelId: "channel-1" });
+    const sessionB = makeSession({ id: 2, channelId: "channel-2" });
+
+    // Build a client that has both channels available.
+    const channelBDelete = vi.fn().mockResolvedValue(undefined);
+    const channelB: MockChannel = { delete: channelBDelete };
+    const client: MockClient = {
+      guilds: {
+        cache: new Map<string, MockGuild>([
+          [
+            "guild-1",
+            {
+              channels: {
+                cache: new Map<string, MockChannel>([
+                  ["channel-1", { delete: vi.fn().mockResolvedValue(undefined) }],
+                  ["channel-2", channelB],
+                ]),
+                fetch: vi.fn().mockResolvedValue(null),
+              },
+            },
+          ],
+        ]),
+      },
+    };
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+
+    await runVcExpiryScheduler(client);
+
+    // deletePrivateVcSession must have been attempted for both sessions.
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledTimes(2);
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(1);
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(2);
+  });
+
+  it("does not throw when deletePrivateVcSession rejects — scheduler run resolves normally", async () => {
+    const dbError = new Error("DB connection lost");
+    mocks.deletePrivateVcSession.mockRejectedValueOnce(dbError);
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    // Must not throw.
+    await expect(runVcExpiryScheduler(makeClient())).resolves.toBeUndefined();
+  });
+});
