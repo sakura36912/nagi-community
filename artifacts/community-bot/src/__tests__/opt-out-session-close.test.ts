@@ -108,7 +108,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
-import { closeOpenSessionsForUser, openSession, setVcPrivacyOptOut } from "../lib/community.js";
+import { closeOpenSessionsForUser, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
 import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
@@ -605,5 +605,140 @@ describe('handlePrivacyOptoutDelete – per-guild opt-out + wipe path', () => {
     expect(interaction.editReply).toHaveBeenCalledWith(
       expect.objectContaining({ components: [] }),
     );
+  });
+});
+
+// ─── Global opt-out + per-guild opt-in interaction ────────────────────────────
+//
+// Full stateful call chains: each test runs setters → openSession in one
+// uninterrupted sequence without clearing mocks in the middle.
+// The selectWhere responses are staged to reflect what the preceding setter
+// calls would have persisted, so a regression in either setter would surface.
+
+describe("global opt-out + per-guild opt-in interaction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // ─── Scenario A ─────────────────────────────────────────────────────────────
+  // 1. setVcGlobalPrivacyOptOut(user, true)   → global row: optedOut=true
+  // 2. setVcPrivacyOptOut(guild, user, false) → per-guild row: optedOut=false
+  // 3. openSession(...)                        → must still return null
+  //    (global flag wins; per-guild opt-in alone cannot lift it)
+  it("openSession is still blocked after per-guild opt-in while global opt-out is active", async () => {
+    // Step 1: setVcGlobalPrivacyOptOut(user, true)
+    //   → insert.values().onConflictDoUpdate()  [persists global optedOut=true]
+    //   → update.set().where().returning()       [closeOpenSessionsForUser — no open sessions]
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global insert
+    mocks.returning.mockResolvedValueOnce([]);           // closeOpenSessionsForUser
+
+    // Step 2: setVcPrivacyOptOut(guild, user, false)
+    //   → insert.values().onConflictDoUpdate()  [persists per-guild optedOut=false]
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // per-guild insert
+
+    // Step 3: openSession → isVcTrackingOptedOut → two parallel selects
+    // The staged values reflect what was persisted by steps 1 & 2.
+    mocks.selectWhere.mockResolvedValueOnce([{ userId: "user-gi-A", optedOut: true }]);  // global row
+    mocks.selectWhere.mockResolvedValueOnce([{ guildId: "guild-gi-A", userId: "user-gi-A", optedOut: false }]); // per-guild row
+
+    // Execute the full chain without clearing mocks between steps
+    await setVcGlobalPrivacyOptOut("user-gi-A", true);
+    await setVcPrivacyOptOut("guild-gi-A", "user-gi-A", false);
+    const session = await openSession("guild-gi-A", "user-gi-A", "channel-gi-A");
+
+    // Global flag must win — session must not be created
+    expect(session).toBeNull();
+    // db.insert() was called only twice (the two setters), not a third time for the session row
+    expect(mocks.insert).toHaveBeenCalledTimes(2);
+  });
+
+  it("per-guild opt-in does not write or delete the global privacy row", async () => {
+    // Run only setVcPrivacyOptOut(guild, user, false) and verify the insert
+    // targets the per-guild table (communityVcPrivacyTable → proxy prefix "privacy.")
+    // and NOT the global table (communityVcPrivacyGlobalTable → prefix "global.").
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    await setVcPrivacyOptOut("guild-gi-B", "user-gi-B", false);
+
+    // Exactly one insert call
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+
+    // The table stub passed to db.insert() must be from communityVcPrivacyTable
+    // (the proxy returns "privacy.<prop>" for every property on that table).
+    const [tableArg] = mocks.insert.mock.calls[0] as unknown as [Record<string, string>];
+    // communityVcPrivacyTable stub: any property returns "privacy.<prop>"
+    expect(tableArg["guildId"]).toBe("privacy.guildId");
+    // It must NOT be the global table
+    expect(tableArg["guildId"]).not.toBe("global.guildId");
+
+    // db.delete() must not have been called
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+  });
+
+  // ─── Scenario B ─────────────────────────────────────────────────────────────
+  // 1. setVcGlobalPrivacyOptOut(user, true)   → global row: optedOut=true
+  // 2. setVcPrivacyOptOut(guild, user, false) → per-guild row: optedOut=false
+  // 3. setVcGlobalPrivacyOptOut(user, false)  → global row: optedOut=false
+  // 4. openSession(...)                        → must succeed
+  //    (global opt-out cleared; per-guild row has optedOut=false → no block)
+  it("openSession succeeds after clearing the global opt-out, with per-guild opt-in row already present", async () => {
+    // Step 1: setVcGlobalPrivacyOptOut(user, true)
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global insert
+    mocks.returning.mockResolvedValueOnce([]);           // closeOpenSessionsForUser
+
+    // Step 2: setVcPrivacyOptOut(guild, user, false)
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // per-guild insert
+
+    // Step 3: setVcGlobalPrivacyOptOut(user, false)
+    //   → insert.values().onConflictDoUpdate()  [persists global optedOut=false]
+    //   → no closeOpenSessionsForUser (optedOut=false path)
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global insert (opt-in)
+
+    // Step 4: openSession → isVcTrackingOptedOut → two parallel selects
+    // Staged to reflect persisted state: global=false, per-guild=false → not blocked
+    mocks.selectWhere.mockResolvedValueOnce([{ userId: "user-gi-C", optedOut: false }]);  // global row now cleared
+    mocks.selectWhere.mockResolvedValueOnce([{ guildId: "guild-gi-C", userId: "user-gi-C", optedOut: false }]); // per-guild row
+
+    const fakeSession = {
+      id: 1,
+      guildId: "guild-gi-C",
+      userId: "user-gi-C",
+      channelId: "channel-gi-C",
+      joinedAt: new Date(),
+      leftAt: null,
+    };
+    mocks.returningFromInsert.mockResolvedValueOnce([fakeSession]);
+
+    // Execute the full chain without clearing mocks between steps
+    await setVcGlobalPrivacyOptOut("user-gi-C", true);
+    await setVcPrivacyOptOut("guild-gi-C", "user-gi-C", false);
+    await setVcGlobalPrivacyOptOut("user-gi-C", false);
+    const session = await openSession("guild-gi-C", "user-gi-C", "channel-gi-C");
+
+    expect(session).not.toBeNull();
+    expect(session?.userId).toBe("user-gi-C");
+    expect(session?.guildId).toBe("guild-gi-C");
+    // The session row insert is the 4th insert call (after the 3 setter inserts)
+    expect(mocks.insert).toHaveBeenCalledTimes(4);
+  });
+
+  it("setVcGlobalPrivacyOptOut(false) does not call closeOpenSessionsForUser (no update on opt-in path)", async () => {
+    // Clearing the global opt-out must only upsert the flag — it must not
+    // attempt to close any sessions (that would be the opt-out=true path).
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    const closed = await setVcGlobalPrivacyOptOut("user-gi-D", false);
+
+    expect(closed).toBe(0);
+    // db.update() (closeOpenSessionsForUser) must NOT have been called
+    expect(mocks.update).not.toHaveBeenCalled();
+    // The insert must target the global table (proxy prefix "global.")
+    const [tableArg] = mocks.insert.mock.calls[0] as unknown as [Record<string, string>];
+    expect(tableArg["userId"]).toBe("global.userId");
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.userId).toBe("user-gi-D");
+    expect(valuesArg.optedOut).toBe(false);
   });
 });
