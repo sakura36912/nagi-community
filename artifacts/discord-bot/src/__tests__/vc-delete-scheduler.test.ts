@@ -111,7 +111,7 @@ async function runVcDeleteScheduler(
 
       for (const schedule of soon) {
         try {
-          if (schedule.userId) {
+          if (schedule.userId && schedule.channelName) {
             const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
             const user = await client.users.fetch(schedule.userId).catch(() => null);
             if (user) {
@@ -346,6 +346,32 @@ describe("runVcDeleteScheduler – pre-expiry warning", () => {
     expect(mocks.loggerInfo).not.toHaveBeenCalledWith(
       expect.stringContaining("[vc-schedule] Sent expiry warning to"),
     );
+  });
+
+  it("skips the DM when channelName is null", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule({ channelName: null })]);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    // A null channelName would produce a malformed 「**null**」 message —
+    // the scheduler must skip the send entirely.
+    expect(client._userSend).not.toHaveBeenCalled();
+    // The schedule is still marked notified to prevent re-processing.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+  });
+
+  it("skips the DM when channelName is an empty string", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule({ channelName: "" })]);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    // An empty channelName would produce a malformed 「****」 message —
+    // the scheduler must skip the send entirely.
+    expect(client._userSend).not.toHaveBeenCalled();
+    // The schedule is still marked notified to prevent re-processing.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
   });
 
   it("skips the DM when schedule has no userId", async () => {

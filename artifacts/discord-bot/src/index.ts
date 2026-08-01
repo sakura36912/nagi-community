@@ -436,7 +436,7 @@ async function runVcDeleteScheduler(): Promise<void> {
 
       for (const schedule of soon) {
         try {
-          if (schedule.userId) {
+          if (schedule.userId && schedule.channelName) {
             const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
             const user = await client.users.fetch(schedule.userId).catch(() => null);
             if (user) {
