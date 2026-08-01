@@ -109,7 +109,7 @@ vi.mock("drizzle-orm", () => ({
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
 import { closeOpenSessionsForUser, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
-import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm } from "../commands/index.js";
+import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyAdminDeleteConfirm, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
 function makeInteraction(userId: string, guildId?: string) {
@@ -869,5 +869,162 @@ describe("global opt-out + per-guild opt-in interaction", () => {
     ];
     expect(valuesArg.userId).toBe("user-gi-D");
     expect(valuesArg.optedOut).toBe(false);
+  });
+});
+
+// ─── handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe ───────
+//
+// An admin uses /privacy admin-delete <user> which stages a confirmation button
+// whose customId encodes the target user's id.  When the admin confirms:
+//   • deleteUserVcSessions(guildId, targetUserId) is called — guild-scoped DELETE
+//   • The embed description shows the number of deleted rows
+//   • components:[] clears the confirmation buttons
+//
+// We verify:
+//   - DM guard: no guildId → ephemeral error, no DB calls
+//   - Permission guard: member without ManageGuild → ephemeral error, no DB calls
+//   - WHERE clause carries both the admin's guildId AND the targetUserId
+//   - WHERE clause does NOT reference another guild
+//   - Embed shows the correct deleted-row count
+//   - components:[] is returned so buttons are removed
+
+describe('handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Build a fake ButtonInteraction for the admin-delete confirm button.
+   * `targetUserId`  is encoded in the customId (mirrors the real handler).
+   * `isAdmin`       controls whether member.permissions.has() returns true.
+   */
+  function makeAdminInteraction(
+    adminUserId: string,
+    guildId: string | undefined,
+    targetUserId: string,
+    isAdmin = true,
+  ) {
+    return {
+      user: { id: adminUserId, tag: `${adminUserId}#0000` },
+      guildId: guildId ?? null,
+      customId: `${COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX}${targetUserId}`,
+      member: {
+        permissions: {
+          has: vi.fn().mockReturnValue(isAdmin),
+        },
+      },
+      guild: { name: "Test Guild", channels: { cache: { get: vi.fn().mockReturnValue(null) } } },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it("does nothing (except reply ephemerally) when guildId is absent (DM context guard)", async () => {
+    const interaction = makeAdminInteraction("admin-ad-0", undefined, "target-ad-0");
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+  });
+
+  it("does nothing (except reply ephemerally) when member lacks ManageGuild permission", async () => {
+    const interaction = makeAdminInteraction("non-admin-ad-1", "guild-ad-1", "target-ad-1", false);
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+  });
+
+  it("calls deleteUserVcSessions with the admin's guildId and the target userId", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+
+    const interaction = makeAdminInteraction("admin-ad-2", "guild-ad-2", "target-ad-2");
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+
+    // The WHERE argument must be AND( eq(guildId), eq(userId) )
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    expect(whereArg.op).toBe("and");
+    const eqVals = whereArg.args
+      .filter((a) => a.op === "eq")
+      .map((a) => a.val);
+    expect(eqVals).toContain("guild-ad-2");
+    expect(eqVals).toContain("target-ad-2");
+  });
+
+  it("scopes the delete to only the admin's guild (another guild must not appear in WHERE)", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+
+    const interaction = makeAdminInteraction("admin-ad-3", "guild-ad-3", "target-ad-3");
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    expect(mocks.deleteWhere).toHaveBeenCalledTimes(1);
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    const eqVals = whereArg.args.filter((a) => a.op === "eq").map((a) => a.val);
+    expect(eqVals).toContain("guild-ad-3");
+    // A different guild's id must NOT appear in the WHERE clause
+    expect(eqVals).not.toContain("some-other-guild");
+  });
+
+  it("embed description contains the correct deleted-row count (3 rows)", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 10 }, { id: 11 }, { id: 12 }]);
+
+    const interaction = makeAdminInteraction("admin-ad-4", "guild-ad-4", "target-ad-4");
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("3件");
+  });
+
+  it("embed description contains the correct deleted-row count (0 rows)", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+
+    const interaction = makeAdminInteraction("admin-ad-5", "guild-ad-5", "target-ad-5");
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("0件");
+  });
+
+  it("replies with components:[] so the confirmation buttons are cleared", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 99 }]);
+
+    const interaction = makeAdminInteraction("admin-ad-6", "guild-ad-6", "target-ad-6");
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("does not touch another user's sessions (targetUserId in WHERE, not adminUserId)", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+
+    const interaction = makeAdminInteraction("admin-ad-7", "guild-ad-7", "target-ad-7");
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    const eqVals = whereArg.args.filter((a) => a.op === "eq").map((a) => a.val);
+    // The target's id must be in the WHERE clause
+    expect(eqVals).toContain("target-ad-7");
+    // The admin's own id must NOT be used as the userId filter
+    expect(eqVals).not.toContain("admin-ad-7");
   });
 });
