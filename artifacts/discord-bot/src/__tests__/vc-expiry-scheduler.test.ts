@@ -566,3 +566,133 @@ describe("runVcExpiryScheduler – deleteSchedule called to prevent ghost warnin
     expect(mocks.deleteSchedule).not.toHaveBeenCalled();
   });
 });
+
+// ─── Cross-session isolation ──────────────────────────────────────────────────
+
+describe("runVcExpiryScheduler – cross-session isolation (50013 on one session does not block the other)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deletePrivateVcSession.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
+  });
+
+  /**
+   * Build a two-channel client where channel-A throws 50013 and channel-B
+   * succeeds, both in the same guild.
+   */
+  function makeTwoSessionClient(opts: {
+    channelADelete: ReturnType<typeof vi.fn>;
+    channelBDelete: ReturnType<typeof vi.fn>;
+  }): MockClient {
+    const channelA: MockChannel = { delete: opts.channelADelete };
+    const channelB: MockChannel = { delete: opts.channelBDelete };
+
+    return {
+      guilds: {
+        cache: new Map<string, MockGuild>([
+          [
+            "guild-1",
+            {
+              channels: {
+                cache: new Map<string, MockChannel>([
+                  ["channel-A", channelA],
+                  ["channel-B", channelB],
+                ]),
+                fetch: vi.fn().mockImplementation((id: string) => {
+                  if (id === "channel-A") return Promise.resolve(channelA);
+                  if (id === "channel-B") return Promise.resolve(channelB);
+                  return Promise.resolve(null);
+                }),
+              },
+            },
+          ],
+        ]),
+      },
+    };
+  }
+
+  it("calls deletePrivateVcSession exactly once (for session B) when session A throws 50013", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi.fn().mockRejectedValue(permError);
+    const deleteB = vi.fn().mockResolvedValue(undefined);
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+
+    await runVcExpiryScheduler(makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB }));
+
+    // Session A's 50013 must not prevent session B from being cleaned up.
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledOnce();
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(20);
+  });
+
+  it("does NOT call deletePrivateVcSession for session A (50013 row left for retry)", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi.fn().mockRejectedValue(permError);
+    const deleteB = vi.fn().mockResolvedValue(undefined);
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+
+    await runVcExpiryScheduler(makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB }));
+
+    const calledIds = mocks.deletePrivateVcSession.mock.calls.map(([id]: [number]) => id);
+    expect(calledIds).not.toContain(10);
+  });
+
+  it("cleans up session A on the next tick once permissions are restored", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi
+      .fn()
+      .mockRejectedValueOnce(permError)   // tick 1: 50013
+      .mockResolvedValueOnce(undefined);   // tick 2: success
+    const deleteB = vi.fn().mockResolvedValue(undefined);
+
+    const client = makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB });
+
+    // Tick 1: A fails, B succeeds.
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+    await runVcExpiryScheduler(client);
+
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledOnce();
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(20);
+
+    vi.clearAllMocks();
+    mocks.deletePrivateVcSession.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
+
+    // Tick 2: only session A remains (B was already removed from DB).
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA]);
+    await runVcExpiryScheduler(client);
+
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledOnce();
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(10);
+  });
+
+  it("logs the 50013 error for session A but does not log an error for session B", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi.fn().mockRejectedValue(permError);
+    const deleteB = vi.fn().mockResolvedValue(undefined);
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+
+    await runVcExpiryScheduler(makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB }));
+
+    // Exactly one error logged — for session A's 50013.
+    expect(mocks.loggerError).toHaveBeenCalledOnce();
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("channel-A"),
+      permError,
+    );
+  });
+});
