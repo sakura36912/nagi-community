@@ -34,6 +34,7 @@ import {
   VC_PANEL_SEL_KICK,
   VC_PANEL_SEL_EXTEND,
   VC_PANEL_BTN_RENAME,
+  VC_PANEL_SEL_RENAME,
   VC_PANEL_RENAME_MODAL,
   handleVcPanelAddBtn,
   handleVcPanelKickBtn,
@@ -43,6 +44,7 @@ import {
   handleVcPanelAddSel,
   handleVcPanelKickSel,
   handleVcPanelExtendSel,
+  handleVcPanelRenameSel,
   handleVcPanelRenameModal,
 } from "./commands";
 import { handleHubJoin, handleHubLeave } from "./commands/vc";
@@ -1405,6 +1407,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_RENAME)) {
       await handleVcPanelRenameBtn(interaction); return;
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_RENAME)) {
+      await handleVcPanelRenameSel(interaction); return;
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith(VC_PANEL_RENAME_MODAL)) {
       await handleVcPanelRenameModal(interaction); return;

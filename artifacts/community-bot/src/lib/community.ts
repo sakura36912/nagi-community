@@ -1024,3 +1024,26 @@ export async function setAuditLogChannel(
 
 // Re-export awardVcTime so tests can mock it from this module
 export { awardVcTime } from "./points.js";
+
+/**
+ * Converts a TempVcDeletionRow array into a CSV string.
+ *
+ * Columns (in order):
+ *   id, user_id, channel_id, joined_at, left_at, duration_seconds, opted_out
+ *
+ * `opted_out` is the last column and contains the literal string "true" or
+ * "false" so downstream tooling can filter privacy-sensitive rows without
+ * needing a secondary lookup.
+ */
+export function buildTempVcCsv(rows: TempVcDeletionRow[]): string {
+  const header = "id,user_id,channel_id,joined_at,left_at,duration_seconds,opted_out";
+  const lines = rows.map((r) => {
+    const joinedIso = r.joinedAt.toISOString();
+    const leftIso   = r.leftAt.toISOString();
+    const durationSec = Math.floor(
+      (r.leftAt.getTime() - r.joinedAt.getTime()) / 1000,
+    );
+    return `${r.id},${r.userId},${r.channelId},${joinedIso},${leftIso},${durationSec},${r.optedOut}`;
+  });
+  return [header, ...lines].join("\n");
+}

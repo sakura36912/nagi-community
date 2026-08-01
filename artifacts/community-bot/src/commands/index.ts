@@ -64,6 +64,7 @@ import {
   getAuditLogChannel,
   setAuditLogChannel,
   countCompletedSessionsOlderThan,
+  buildTempVcCsv,
   type CommunityTicketSettings,
   type CommunityTicketPanel,
 } from "../lib/community.js";
@@ -2046,20 +2047,6 @@ const leavelogCommand: Command = {
  * `opted_out` is "true" when the user currently has an active opt-out (per-guild
  * or global), allowing admins to identify privacy-sensitive rows at a glance.
  */
-function buildTempVcCsv(
-  rows: Awaited<ReturnType<typeof getAllTempVcDeletions>>,
-): string {
-  const header = "id,user_id,channel_id,joined_at,left_at,duration_seconds,opted_out";
-  const lines = rows.map((r) => {
-    const joinedIso = r.joinedAt.toISOString();
-    const leftIso   = r.leftAt.toISOString();
-    const durationSec = Math.floor(
-      (r.leftAt.getTime() - r.joinedAt.getTime()) / 1000,
-    );
-    return `${r.id},${r.userId},${r.channelId},${joinedIso},${leftIso},${durationSec},${r.optedOut}`;
-  });
-  return [header, ...lines].join("\n");
-}
 
 const tempvcCommand: Command = {
   data: new SlashCommandBuilder()
