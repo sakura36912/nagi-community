@@ -1094,22 +1094,7 @@ const privacyCommand: Command = {
     }
 
     if (sub === "optin") {
-      // Clear both global and per-guild opt-out so the user resumes tracking everywhere.
-      await Promise.all([
-        setVcGlobalPrivacyOptOut(userId, false),
-        setVcPrivacyOptOut(guildId, userId, false),
-      ]);
-      const embed = new EmbedBuilder()
-        .setTitle("🔓 トラッキングを再開しました")
-        .setColor(0x57f287)
-        .setDescription(
-          "VCの滞在時間の記録を**再開**しました。\n\n" +
-          "• これ以降のVCセッションが記録されます（このサーバー＆グローバル設定を解除）\n" +
-          "• `/ranking` や `/mystats` にあなたのデータが表示されます\n\n" +
-          "停止するには `/privacy optout`（このサーバー）または `/privacy optout-all`（全サーバー）を使用してください。",
-        )
-        .setTimestamp();
-      await interaction.editReply({ embeds: [embed] });
+      await handlePrivacyOptin(interaction);
       return;
     }
 
@@ -1468,6 +1453,31 @@ export async function handleBotstatusRefresh(interaction: ButtonInteraction): Pr
   await interaction.deferUpdate();
   const { embed, row } = await buildBotstatusContent(interaction.guild, interaction.client);
   await interaction.editReply({ embeds: [embed], components: [row] });
+}
+
+export async function handlePrivacyOptin(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.editReply("このコマンドはサーバー内でのみ使用できます。");
+    return;
+  }
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+  // Clear both global and per-guild opt-out so the user resumes tracking everywhere.
+  await Promise.all([
+    setVcGlobalPrivacyOptOut(userId, false),
+    setVcPrivacyOptOut(guildId, userId, false),
+  ]);
+  const embed = new EmbedBuilder()
+    .setTitle("🔓 トラッキングを再開しました")
+    .setColor(0x57f287)
+    .setDescription(
+      "VCの滞在時間の記録を**再開**しました。\n\n" +
+      "• これ以降のVCセッションが記録されます（このサーバー＆グローバル設定を解除）\n" +
+      "• `/ranking` や `/mystats` にあなたのデータが表示されます\n\n" +
+      "停止するには `/privacy optout`（このサーバー）または `/privacy optout-all`（全サーバー）を使用してください。",
+    )
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed] });
 }
 
 export async function handlePrivacyOptoutKeep(interaction: ButtonInteraction): Promise<void> {
