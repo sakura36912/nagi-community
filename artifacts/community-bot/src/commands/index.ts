@@ -1351,8 +1351,19 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
 
   // ── Channel name: global prefix setting ───────────────────────────────────
   const prefix = settings?.channelNamePrefix ?? TICKET_DEFAULTS.channelNamePrefix;
-  const suffix = Date.now().toString(36).slice(-4);
-  const channelName = `${prefix}-${interaction.user.username.slice(0, 20)}-${suffix}`;
+  // チャンネル名用にニックネームをサニタイズ（Discord チャンネル名規則: 小文字・英数字・ハイフンのみ）
+  const member = interaction.guild.members.cache.get(interaction.user.id)
+    ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const displayName = member?.displayName ?? interaction.user.displayName;
+  const sanitizedNick = displayName
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9\-_]/g, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 20) || interaction.user.username.slice(0, 20).toLowerCase();
+  // チャンネルはまず仮名で作成し、ticket.id 確定後にリネーム
+  const tempChannelName = `${prefix}-${sanitizedNick}-new`;
 
   const overwrites: OverwriteResolvable[] = [
     { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -1372,7 +1383,7 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
   let channel;
   try {
     channel = await interaction.guild.channels.create({
-      name: channelName,
+      name: tempChannelName,
       type: ChannelType.GuildText,
       parent: categoryId,
       permissionOverwrites: overwrites,
@@ -1385,11 +1396,12 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
 
   const ticket = await createTicket(guildId, channel.id, interaction.user.id);
 
+  // チケットID確定後にチャンネル名をリネーム（プレフィックス-ニックネーム-番号）
+  const finalChannelName = `${prefix}-${sanitizedNick}-${ticket.id}`;
+  await channel.setName(finalChannelName).catch(() => {/* rename失敗は無視して続行 */});
+
   // ── Welcome embed: チケット番号とユーザー名のみ表示 ──────────────────────
-  const colorInt   = panel?.welcomeEmbedColor ? hexToInt(panel.welcomeEmbedColor) : TICKET_DEFAULTS.welcomeEmbedColor;
-  const member = interaction.guild.members.cache.get(interaction.user.id)
-    ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  const displayName = member?.displayName ?? interaction.user.displayName;
+  const colorInt = panel?.welcomeEmbedColor ? hexToInt(panel.welcomeEmbedColor) : TICKET_DEFAULTS.welcomeEmbedColor;
   const embed = new EmbedBuilder()
     .setColor(colorInt)
     .setDescription(`🎫 チケット **#${ticket.id}** — ${displayName}`);
