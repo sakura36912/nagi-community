@@ -14,6 +14,9 @@
  *   6. Non-permission error (e.g. 10003) → deletePrivateVcSession IS called (channel already gone).
  *   7. ura sessions: permission revocation attempted after channel deletion.
  *   8. ura sessions: permission revocation failure is logged but does not block session cleanup.
+ *   9. deleteSchedule is called alongside deletePrivateVcSession so the warning DM scheduler
+ *      never sees a stale schedule row for an already-deleted channel.
+ *  10. deleteSchedule is NOT called when the bot has missing permissions (channel still alive).
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -42,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   getExpiredPrivateVcSessions: vi.fn(),
   deletePrivateVcSession: vi.fn(),
   getGuildSettings: vi.fn(),
+  deleteSchedule: vi.fn(),
   loggerInfo: vi.fn(),
   loggerError: vi.fn(),
 }));
@@ -51,6 +55,11 @@ vi.mock("../lib/economy.js", () => ({
   getExpiredPrivateVcSessions: mocks.getExpiredPrivateVcSessions,
   deletePrivateVcSession: mocks.deletePrivateVcSession,
   getGuildSettings: mocks.getGuildSettings,
+}));
+
+// ─── Mock lib/vc ─────────────────────────────────────────────────────────────
+vi.mock("../lib/vc.js", () => ({
+  deleteSchedule: mocks.deleteSchedule,
 }));
 
 // ─── Mock logger ─────────────────────────────────────────────────────────────
@@ -67,6 +76,7 @@ import {
   deletePrivateVcSession,
   getGuildSettings,
 } from "../lib/economy.js";
+import { deleteSchedule } from "../lib/vc.js";
 import { logger } from "../lib/logger.js";
 
 // ─── Inline scheduler ────────────────────────────────────────────────────────
@@ -167,6 +177,11 @@ async function runVcExpiryScheduler(client: MockClient): Promise<void> {
     await deletePrivateVcSession(session.id).catch((err: unknown) =>
       logger.error(`[vc-expiry] Failed to delete session ${session.id}`, err),
     );
+    // Remove the schedule row so the pre-expiry warning scheduler does not
+    // attempt to DM the user for an already-deleted channel.
+    await deleteSchedule(session.channelId).catch((err: unknown) =>
+      logger.error(`[vc-expiry] Failed to remove schedule row for ${session.channelId}`, err),
+    );
   }
 }
 
@@ -251,6 +266,7 @@ describe("runVcExpiryScheduler – successful deletion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.deletePrivateVcSession.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
   });
 
   it("calls channel.delete() with the correct reason when a session has expired", async () => {
@@ -312,6 +328,7 @@ describe("runVcExpiryScheduler – 50013 retry path (two-tick)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.deletePrivateVcSession.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
   });
 
   it("does NOT call deletePrivateVcSession on tick 1 when channel.delete() throws 50013", async () => {
@@ -380,6 +397,7 @@ describe("runVcExpiryScheduler – non-permission errors", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.deletePrivateVcSession.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
   });
 
   it("calls deletePrivateVcSession even when channel.delete() throws a non-50013 error", async () => {
@@ -409,6 +427,7 @@ describe("runVcExpiryScheduler – ura session permission revocation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.deletePrivateVcSession.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
     mocks.getGuildSettings.mockResolvedValue({ uraChannelId: "ura-channel-1" });
   });
 
@@ -478,5 +497,72 @@ describe("runVcExpiryScheduler – ura session permission revocation", () => {
     expect(uraPermDelete).not.toHaveBeenCalled();
     // Session is still cleaned up.
     expect(mocks.deletePrivateVcSession).toHaveBeenCalledOnce();
+  });
+});
+
+// ─── deleteSchedule – ghost-warning-DM prevention ────────────────────────────
+
+describe("runVcExpiryScheduler – deleteSchedule called to prevent ghost warning DMs", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deletePrivateVcSession.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
+  });
+
+  it("calls deleteSchedule with the channelId after a successful channel.delete()", async () => {
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    await runVcExpiryScheduler(makeClient());
+
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+  });
+
+  it("calls deleteSchedule even when the channel is already gone (no channel in cache)", async () => {
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    await runVcExpiryScheduler(makeClient({ noChannel: true }));
+
+    // Channel was already gone — but the schedule row must still be cleaned up.
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+  });
+
+  it("calls deleteSchedule even when the guild is not in the cache", async () => {
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    await runVcExpiryScheduler(makeClient({ noGuild: true }));
+
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+  });
+
+  it("does NOT call deleteSchedule when the bot lacks permissions (50013 — channel still alive)", async () => {
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    await runVcExpiryScheduler(makeClient({ channelDeleteError: permError }));
+
+    // Channel is still alive — leave the schedule row intact so the warning DM
+    // can still fire once permissions are restored and the channel is deleted.
+    expect(mocks.deleteSchedule).not.toHaveBeenCalled();
+  });
+
+  it("calls deleteSchedule for a non-50013 error (channel treated as already gone)", async () => {
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    const otherError = makeDiscordAPIError(10003, "Unknown Channel");
+    await runVcExpiryScheduler(makeClient({ channelDeleteError: otherError }));
+
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+  });
+
+  it("does nothing when there are no expired sessions", async () => {
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([]);
+
+    await runVcExpiryScheduler(makeClient());
+
+    expect(mocks.deleteSchedule).not.toHaveBeenCalled();
   });
 });

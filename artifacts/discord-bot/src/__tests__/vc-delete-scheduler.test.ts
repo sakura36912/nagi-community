@@ -14,6 +14,8 @@
  *   5. markScheduleNotified is NOT called a second time for an already-notified schedule.
  *   6. deleteSchedule is called for an expired channel that can be deleted.
  *   7. deleteSchedule is NOT called when the bot is missing channel permissions (code 50013).
+ *   8. Ghost warning DM: if the channel is already gone when the warning fires, the DM is
+ *      skipped and deleteSchedule cleans up the stale row; markScheduleNotified is NOT called.
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -118,6 +120,43 @@ async function runVcDeleteScheduler(
       const soon = await getSchedulesExpiringSoon(guildId, now, warnBeforeMs);
 
       for (const schedule of soon) {
+        // Guard: distinguish confirmed absence from transient lookup failure.
+        const cachedCh = guild.channels.cache.get(schedule.channelId);
+        let channelConfirmedGone = false;
+        let channelLookupFailed = false;
+
+        if (!cachedCh) {
+          try {
+            const fetched = await guild.channels.fetch(schedule.channelId);
+            if (fetched === null) channelConfirmedGone = true;
+          } catch (err) {
+            if (err instanceof DiscordAPIError && (err as DiscordAPIError).code === 10003) {
+              channelConfirmedGone = true;
+            } else {
+              logger.error(
+                `[vc-schedule] Could not look up channel ${schedule.channelId} — will retry on next tick`,
+                err,
+              );
+              channelLookupFailed = true;
+            }
+          }
+        }
+
+        if (channelLookupFailed) continue;
+
+        if (channelConfirmedGone) {
+          logger.info(
+            `[vc-schedule] Channel ${schedule.channelId} no longer exists — removing stale schedule row`,
+          );
+          await deleteSchedule(schedule.channelId).catch((err) =>
+            logger.error(
+              `[vc-schedule] Failed to remove stale schedule for ${schedule.channelId}`,
+              err,
+            ),
+          );
+          continue;
+        }
+
         try {
           if (schedule.userId && schedule.channelName) {
             const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
@@ -148,8 +187,6 @@ async function runVcDeleteScheduler(
     } catch (err) {
       logger.error(`[vc-schedule] Failed to process expiry warnings for guild ${guildId}`, err);
     }
-    // suppress unused var warning
-    void guild;
   }
 
   // ── Delete expired channels ──────────────────────────────────────────────
@@ -211,9 +248,16 @@ function makeClient(
     userSend?: ReturnType<typeof vi.fn>;
     channelDelete?: ReturnType<typeof vi.fn>;
     channelDeleteError?: Error;
+    /** Channel is absent from the cache AND fetch returns null (confirmed gone). */
+    noChannel?: boolean;
+    /**
+     * Channel is absent from the cache AND fetch throws this error.
+     * Use a DiscordAPIError(10003) to simulate "Unknown Channel" (confirmed gone),
+     * or any other error to simulate a transient failure (retry-preserving path).
+     */
+    channelFetchError?: Error;
     noUser?: boolean;
     noGuild?: boolean;
-    noChannel?: boolean;
   } = {},
 ) {
   const userSend = opts.userSend ?? vi.fn().mockResolvedValue(undefined);
@@ -224,6 +268,16 @@ function makeClient(
         delete: vi.fn().mockRejectedValue(opts.channelDeleteError),
       }
     : { delete: channelDelete };
+
+  // Build the channels.fetch mock.
+  // noChannel   → resolves null  (Discord returned nothing — confirmed gone)
+  // channelFetchError → rejects  (network / permission error)
+  // default     → resolves channel object (channel found)
+  const channelFetchMock = opts.noChannel
+    ? vi.fn().mockResolvedValue(null)
+    : opts.channelFetchError
+      ? vi.fn().mockRejectedValue(opts.channelFetchError)
+      : vi.fn().mockResolvedValue(channel);
 
   return {
     _userSend: userSend,
@@ -241,10 +295,13 @@ function makeClient(
               "guild-1",
               {
                 channels: {
-                  cache: opts.noChannel
-                    ? new Map()
-                    : new Map([["channel-1", channel]]),
-                  fetch: vi.fn().mockResolvedValue(opts.noChannel ? null : channel),
+                  // When noChannel or channelFetchError is set, the channel is
+                  // absent from the cache so the scheduler falls through to fetch().
+                  cache:
+                    opts.noChannel || opts.channelFetchError
+                      ? new Map()
+                      : new Map([["channel-1", channel]]),
+                  fetch: channelFetchMock,
                 },
               },
             ],
@@ -835,5 +892,102 @@ describe("runVcDeleteScheduler – per-guild warn time isolation", () => {
     // guild-B must NOT receive guild-A's 5-minute window
     expect(callB![2]).not.toBe(5 * 60 * 1000);
     expect(callB![2]).toBe(60 * 60 * 1000);
+  });
+});
+
+// ─── Ghost warning DM prevention ─────────────────────────────────────────────
+
+describe("runVcDeleteScheduler – ghost warning DM prevention (channel already deleted)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
+    mocks.getExpiredSchedules.mockResolvedValue([]);
+  });
+
+  it("skips the warning DM and calls deleteSchedule when fetch returns null (channel confirmed gone)", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
+
+    // noChannel: true → cache is empty and fetch returns null
+    const client = makeClient({ noChannel: true });
+
+    await runVcDeleteScheduler(client);
+
+    // DM must NOT be sent — channel is already gone.
+    expect(client._userSend).not.toHaveBeenCalled();
+    // The stale schedule row must be removed.
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+    // markScheduleNotified must NOT be called — the row is gone.
+    expect(mocks.markScheduleNotified).not.toHaveBeenCalled();
+  });
+
+  it("skips the warning DM and calls deleteSchedule when fetch throws DiscordAPIError 10003 (Unknown Channel)", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
+
+    const unknownChannelErr = makeDiscordAPIError(10003, "Unknown Channel");
+    const client = makeClient({ channelFetchError: unknownChannelErr });
+
+    await runVcDeleteScheduler(client);
+
+    // Channel confirmed gone via 10003 — DM skipped, row cleaned up.
+    expect(client._userSend).not.toHaveBeenCalled();
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+    expect(mocks.markScheduleNotified).not.toHaveBeenCalled();
+  });
+
+  it("logs an info message when the channel is confirmed gone", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
+
+    await runVcDeleteScheduler(makeClient({ noChannel: true }));
+
+    expect(mocks.loggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining("Channel channel-1 no longer exists"),
+    );
+  });
+
+  it("skips the DM but does NOT call deleteSchedule when fetch throws a transient error (retains row for next tick)", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
+
+    // A non-10003 error (e.g. 50013 Missing Access, or a network timeout)
+    const transientErr = makeDiscordAPIError(50013, "Missing Access");
+    const client = makeClient({ channelFetchError: transientErr });
+
+    await runVcDeleteScheduler(client);
+
+    // DM must not fire — channel state is unknown.
+    expect(client._userSend).not.toHaveBeenCalled();
+    // The row must be left intact so the next tick can retry.
+    expect(mocks.deleteSchedule).not.toHaveBeenCalled();
+    expect(mocks.markScheduleNotified).not.toHaveBeenCalled();
+  });
+
+  it("logs an error when the channel fetch fails with a transient error", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
+
+    const transientErr = makeDiscordAPIError(50013, "Missing Access");
+    await runVcDeleteScheduler(makeClient({ channelFetchError: transientErr }));
+
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("Could not look up channel channel-1"),
+      transientErr,
+    );
+  });
+
+  it("sends the DM normally when the channel is in cache (no fetch needed)", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
+
+    // Default makeClient: channel-1 IS in the cache.
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    // Channel exists → DM proceeds as normal.
+    expect(client._userSend).toHaveBeenCalledOnce();
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+    // deleteSchedule should NOT have been called during the warning phase.
+    expect(mocks.deleteSchedule).not.toHaveBeenCalled();
   });
 });

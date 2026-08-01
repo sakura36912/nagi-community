@@ -304,6 +304,11 @@ async function runVcExpiryScheduler(): Promise<void> {
     await deletePrivateVcSession(session.id).catch((err) =>
       logger.error(`[vc-expiry] Failed to delete session ${session.id}`, err),
     );
+    // Remove the schedule row so the pre-expiry warning scheduler does not
+    // attempt to DM the user for an already-deleted channel.
+    await deleteSchedule(session.channelId).catch((err) =>
+      logger.error(`[vc-expiry] Failed to remove schedule row for ${session.channelId}`, err),
+    );
   }
 }
 
@@ -445,6 +450,49 @@ async function runVcDeleteScheduler(): Promise<void> {
       const soon = await getSchedulesExpiringSoon(guild.id, now, warnBeforeMs);
 
       for (const schedule of soon) {
+        // Guard: if the channel was deleted without calling deleteSchedule the
+        // row may still be here.  Distinguish a confirmed absence from a
+        // transient lookup failure so we don't accidentally destroy a live row.
+        const cachedCh = guild.channels.cache.get(schedule.channelId);
+        let channelConfirmedGone = false;
+        let channelLookupFailed = false;
+
+        if (!cachedCh) {
+          try {
+            const fetched = await guild.channels.fetch(schedule.channelId);
+            // fetch() returns null when the channel is not found (some d.js versions)
+            if (fetched === null) channelConfirmedGone = true;
+          } catch (err) {
+            if (err instanceof DiscordAPIError && err.code === 10003) {
+              // Unknown Channel — confirmed deleted on Discord's side
+              channelConfirmedGone = true;
+            } else {
+              // Transient failure (network issue, 50013 Missing Access, etc.)
+              // Leave the schedule row intact so the next tick can retry.
+              logger.error(
+                `[vc-schedule] Could not look up channel ${schedule.channelId} — will retry on next tick`,
+                err,
+              );
+              channelLookupFailed = true;
+            }
+          }
+        }
+
+        if (channelLookupFailed) continue;
+
+        if (channelConfirmedGone) {
+          logger.info(
+            `[vc-schedule] Channel ${schedule.channelId} no longer exists — removing stale schedule row`,
+          );
+          await deleteSchedule(schedule.channelId).catch((err) =>
+            logger.error(
+              `[vc-schedule] Failed to remove stale schedule for ${schedule.channelId}`,
+              err,
+            ),
+          );
+          continue;
+        }
+
         try {
           if (schedule.userId && schedule.channelName) {
             const expiresTs = Math.floor(schedule.expiresAt.getTime() / 1000);
