@@ -108,8 +108,8 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
-import { closeOpenSessionsForUser, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
-import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyAdminDeleteConfirm, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
+import { closeOpenSessionsForUser, deleteAllUserVcSessions, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
+import { handlePrivacyGlobalOptoutDelete, handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyAdminDeleteConfirm, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
 function makeInteraction(userId: string, guildId?: string) {
@@ -1026,5 +1026,266 @@ describe('handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe',
     expect(eqVals).toContain("target-ad-7");
     // The admin's own id must NOT be used as the userId filter
     expect(eqVals).not.toContain("admin-ad-7");
+  });
+});
+
+// ─── deleteAllUserVcSessions – global wipe scoped to one user only ────────────
+//
+// This function issues a DELETE WHERE userId = <target> across ALL guilds.
+// We verify:
+//   - The WHERE clause carries exactly the target userId (no guildId)
+//   - Another user's id must NOT appear in the WHERE clause
+//   - The returned count equals the number of rows the mock reports as deleted
+//   - Returns 0 when there are no rows to delete
+
+describe("deleteAllUserVcSessions – global wipe scoped to one user only", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 0 when the user has no session rows", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+
+    const count = await deleteAllUserVcSessions("user-dav-0");
+
+    expect(count).toBe(0);
+  });
+
+  it("returns the number of rows deleted when sessions exist", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }, { id: 3 }]);
+
+    const count = await deleteAllUserVcSessions("user-dav-1");
+
+    expect(count).toBe(3);
+  });
+
+  it("WHERE clause carries only the target userId (eq filter)", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+
+    await deleteAllUserVcSessions("user-dav-2");
+
+    // db.delete() must have been called once
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+
+    // The where() argument is a single eq node (not wrapped in AND because there
+    // is only one filter – userId).  Accept both a bare eq and an AND that
+    // contains an eq so the test stays resilient to minor refactors.
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; col?: string; val?: string; args?: { op: string; val: string }[] }
+    ];
+
+    // Collect all eq values regardless of nesting depth
+    const collectEqVals = (node: { op: string; val?: string; args?: unknown[] }): string[] => {
+      if (node.op === "eq") return [node.val as string];
+      if (node.op === "and" && Array.isArray(node.args)) {
+        return (node.args as { op: string; val?: string; args?: unknown[] }[]).flatMap(collectEqVals);
+      }
+      return [];
+    };
+    const eqVals = collectEqVals(whereArg as { op: string; val?: string; args?: unknown[] });
+
+    expect(eqVals).toContain("user-dav-2");
+  });
+
+  it("WHERE clause does NOT include a guildId (global scope – all guilds)", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 10 }]);
+
+    await deleteAllUserVcSessions("user-dav-3");
+
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; col?: string; val?: string; args?: { op: string; val: string }[] }
+    ];
+
+    // The WHERE must not reference any guildId value.  Since the mock table proxy
+    // returns "sessions.<column>" for column access, a guildId eq filter would
+    // carry the column string "sessions.guildId".  Verify that is absent.
+    const collectCols = (node: { op: string; col?: string; args?: unknown[] }): string[] => {
+      if (node.op === "eq") return [node.col as string];
+      if (node.op === "and" && Array.isArray(node.args)) {
+        return (node.args as { op: string; col?: string; args?: unknown[] }[]).flatMap(collectCols);
+      }
+      return [];
+    };
+    const cols = collectCols(whereArg as { op: string; col?: string; args?: unknown[] });
+
+    expect(cols).not.toContain("sessions.guildId");
+  });
+
+  it("targets the vc sessions table (not another table)", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+
+    await deleteAllUserVcSessions("user-dav-4");
+
+    // The table stub passed to db.delete() must be communityVcSessionsTable
+    // (proxy returns "sessions.<prop>" for any property access on that stub).
+    const [tableArg] = mocks.deleteFn.mock.calls[0] as unknown as [Record<string, string>];
+    expect(tableArg["userId"]).toBe("sessions.userId");
+  });
+
+  it("another user's id does not appear in the WHERE clause", async () => {
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+
+    await deleteAllUserVcSessions("user-dav-5");
+
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; val?: string; args?: { op: string; val: string }[] }
+    ];
+
+    const collectEqVals = (node: { op: string; val?: string; args?: unknown[] }): string[] => {
+      if (node.op === "eq") return [node.val as string];
+      if (node.op === "and" && Array.isArray(node.args)) {
+        return (node.args as { op: string; val?: string; args?: unknown[] }[]).flatMap(collectEqVals);
+      }
+      return [];
+    };
+    const eqVals = collectEqVals(whereArg as { op: string; val?: string; args?: unknown[] });
+
+    // Only the target user must appear
+    expect(eqVals).toContain("user-dav-5");
+    // A different user must NOT appear
+    expect(eqVals).not.toContain("user-other");
+  });
+});
+
+// ─── handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path ────────
+//
+// This handler calls Promise.all([deleteAllUserVcSessions, setVcGlobalPrivacyOptOut])
+// so both operations run in parallel.  deleteAllUserVcSessions issues a cross-guild
+// DELETE scoped only to userId; we verify:
+//   - db.delete() is called with a WHERE that carries only the userId (no guildId)
+//   - The embed description shows the correct deleted-row count
+//   - db.insert() is called (for setVcGlobalPrivacyOptOut)
+//   - components:[] clears the opt-out buttons
+
+describe("handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Helper: stage mocks for one successful invocation.
+  // deleteAllUserVcSessions → db.delete().where().returning()      → `deletedRows`
+  // setVcGlobalPrivacyOptOut → db.insert().values().onConflictDoUpdate() (upsert)
+  //                          → db.update().set().where().returning() (closeOpenSessionsForUser)
+  function setupMocks(deletedRows: { id: number }[]) {
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows);
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global opt-out upsert
+    mocks.returning.mockResolvedValueOnce([]);           // closeOpenSessionsForUser (no open sessions)
+  }
+
+  it("calls db.delete() exactly once (for deleteAllUserVcSessions)", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-god-1");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("WHERE clause on the delete carries only the userId (not a guildId)", async () => {
+    setupMocks([{ id: 1 }, { id: 2 }]);
+
+    const interaction = makeInteraction("user-god-2");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; col?: string; val?: string; args?: { op: string; col?: string; val?: string }[] }
+    ];
+
+    const collectEqVals = (node: { op: string; val?: string; args?: unknown[] }): string[] => {
+      if (node.op === "eq") return [node.val as string];
+      if (node.op === "and" && Array.isArray(node.args)) {
+        return (node.args as { op: string; val?: string; args?: unknown[] }[]).flatMap(collectEqVals);
+      }
+      return [];
+    };
+    const collectCols = (node: { op: string; col?: string; args?: unknown[] }): string[] => {
+      if (node.op === "eq") return [node.col as string];
+      if (node.op === "and" && Array.isArray(node.args)) {
+        return (node.args as { op: string; col?: string; args?: unknown[] }[]).flatMap(collectCols);
+      }
+      return [];
+    };
+
+    const eqVals = collectEqVals(whereArg as { op: string; val?: string; args?: unknown[] });
+    const cols = collectCols(whereArg as { op: string; col?: string; args?: unknown[] });
+
+    // The calling user's id must be the userId filter
+    expect(eqVals).toContain("user-god-2");
+    // No guildId column must appear (this is a cross-guild delete)
+    expect(cols).not.toContain("sessions.guildId");
+  });
+
+  it("embed description shows the correct deleted-row count (5 rows)", async () => {
+    setupMocks([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }]);
+
+    const interaction = makeInteraction("user-god-3");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("5件");
+  });
+
+  it("embed description shows the correct deleted-row count (0 rows)", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-god-4");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("0件");
+  });
+
+  it("also calls setVcGlobalPrivacyOptOut (db.insert is called with optedOut=true)", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-god-5");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    // db.insert() must have been called by setVcGlobalPrivacyOptOut
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.userId).toBe("user-god-5");
+    expect(valuesArg.optedOut).toBe(true);
+  });
+
+  it("replies with components:[] so the opt-out buttons are removed", async () => {
+    setupMocks([{ id: 99 }]);
+
+    const interaction = makeInteraction("user-god-6");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("does not touch another user's sessions (only the calling userId appears in WHERE)", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-god-7");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; val?: string; args?: { op: string; val?: string }[] }
+    ];
+
+    const collectEqVals = (node: { op: string; val?: string; args?: unknown[] }): string[] => {
+      if (node.op === "eq") return [node.val as string];
+      if (node.op === "and" && Array.isArray(node.args)) {
+        return (node.args as { op: string; val?: string; args?: unknown[] }[]).flatMap(collectEqVals);
+      }
+      return [];
+    };
+    const eqVals = collectEqVals(whereArg as { op: string; val?: string; args?: unknown[] });
+
+    // Only the invoking user's id must appear in the WHERE clause
+    expect(eqVals).toContain("user-god-7");
+    // A different user's id must NOT appear
+    expect(eqVals).not.toContain("user-other-god");
   });
 });
