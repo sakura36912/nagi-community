@@ -402,8 +402,10 @@ async function runSheetReminderScheduler(bot: Client<true>): Promise<void> {
         await markSheetReminderSent(sheet.id);
         continue;
       }
-      await (thread as import("discord.js").TextChannel).send({ content: `<@${sheet.userId}>`, embeds: [embed] });
-      logger.info(`[sheet-reminder] Sent reminder for sheet ${sheet.id} (user ${sheet.userId})`);
+      await (thread as import("discord.js").TextChannel).send({ content: `<@${sheet.userId}>`, embeds: [embed] })
+        .then(() => {
+          logger.info(`[sheet-reminder] Sent reminder for sheet ${sheet.id} (user ${sheet.userId})`);
+        });
     } catch (err) {
       logger.error(`[sheet-reminder] Failed to send reminder for sheet ${sheet.id}`, err);
     }
