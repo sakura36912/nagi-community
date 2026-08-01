@@ -3,6 +3,7 @@ import {
   MessageFlags,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
+  type GuildMember,
 } from "discord.js";
 import {
   getPointSettings,
@@ -187,7 +188,7 @@ export const pointCommand: Command = {
       const embed = new EmbedBuilder()
         .setTitle("🏆 ポイント残高")
         .setColor(0xf5a623)
-        .setThumbnail(interaction.guild?.iconURL() ?? null)
+        .setThumbnail((interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
         .addFields({ name: "メンバー", value: `<@${target.id}>`, inline: true })
         .addFields({ name: "ポイント", value: `**${balance.toLocaleString()} pt**`, inline: true });
       await interaction.editReply({ embeds: [embed] });

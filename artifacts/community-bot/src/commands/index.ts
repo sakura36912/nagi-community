@@ -328,7 +328,7 @@ const rankingCommand: Command = {
       const embed = new EmbedBuilder()
         .setTitle(`🏆 あなたのVCランク（${periodLabel}）`)
         .setColor(activeSession ? 0xed4245 : 0xf5a623)
-        .setThumbnail(interaction.guild?.iconURL() ?? null)
+        .setThumbnail((interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
         .addFields(
           { name: "順位", value: rankText, inline: true },
           { name: "滞在時間", value: timeText, inline: true },
@@ -925,7 +925,7 @@ const mystatsCommand: Command = {
     const embed = new EmbedBuilder()
       .setTitle(`🎙️ VCスタッツ — ${displayName}`)
       .setColor(activeSession ? 0xed4245 : 0x5865f2)
-      .setThumbnail(interaction.guild?.iconURL() ?? null)
+      .setThumbnail(interaction.guild?.members.cache.get(target.id)?.displayAvatarURL() ?? target.displayAvatarURL())
       .addFields(
         { name: "📅 今日", value: formatSeconds(todaySeconds), inline: true },
         { name: "📆 今週", value: formatSeconds(weekSeconds), inline: true },

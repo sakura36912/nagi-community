@@ -492,7 +492,7 @@ client.on(Events.GuildMemberRemove, async (member) => {
     const embed = new EmbedBuilder()
       .setTitle("👋 メンバー退出")
       .setColor(0x95a5a6)
-      .setThumbnail(member.guild.iconURL() ?? null)
+      .setThumbnail(user.displayAvatarURL())
       .addFields(
         { name: "ユーザー", value: `<@${user.id}> (${user.tag})`, inline: false },
         { name: "アカウント作成", value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
