@@ -112,16 +112,16 @@ export async function seedDefaultVcShopItems(guildId: string): Promise<void> {
       effectType: PRIVATE_VC_1D_EFFECT,
     },
     {
-      name: "非公開VC（3日）",
-      description: "自分だけが見える専用VCを3日間作成します。期間終了後に自動削除されます。",
-      price: 2500,
-      effectType: PRIVATE_VC_3D_EFFECT,
-    },
-    {
       name: "非公開VC（1週間）",
       description: "自分だけが見える専用VCを1週間作成します。期間終了後に自動削除されます。",
       price: 5000,
       effectType: PRIVATE_VC_1W_EFFECT,
+    },
+    {
+      name: "非公開VC（1ヶ月）",
+      description: "自分だけが見える専用VCを1ヶ月間作成します。期間終了後に自動削除されます。",
+      price: 15000,
+      effectType: PRIVATE_VC_1M_EFFECT,
     },
     {
       name: "非公開VC延長（1日）",
