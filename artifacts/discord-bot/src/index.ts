@@ -33,13 +33,19 @@ import {
   VC_PANEL_SEL_ADD,
   VC_PANEL_SEL_KICK,
   VC_PANEL_SEL_EXTEND,
+  VC_PANEL_BTN_RENAME,
+  VC_PANEL_SEL_RENAME,
+  VC_PANEL_RENAME_MODAL,
   handleVcPanelAddBtn,
   handleVcPanelKickBtn,
   handleVcPanelExtendBtn,
   handleVcPanelExpiryBtn,
+  handleVcPanelRenameBtn,
   handleVcPanelAddSel,
   handleVcPanelKickSel,
   handleVcPanelExtendSel,
+  handleVcPanelRenameSel,
+  handleVcPanelRenameModal,
 } from "./commands";
 import { handleHubJoin, handleHubLeave } from "./commands/vc";
 import { getHubSession, getHubChannelById, db, walletsTable, transactionsTable } from "@workspace/db";
@@ -1398,6 +1404,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_EXTEND)) {
       await handleVcPanelExtendSel(interaction); return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_RENAME)) {
+      await handleVcPanelRenameBtn(interaction); return;
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_RENAME)) {
+      await handleVcPanelRenameSel(interaction); return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(VC_PANEL_RENAME_MODAL)) {
+      await handleVcPanelRenameModal(interaction); return;
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith(NICKNAME_MODAL_PREFIX)) {
