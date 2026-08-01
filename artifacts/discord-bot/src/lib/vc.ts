@@ -90,3 +90,22 @@ export async function markScheduleNotified(id: number, at: Date): Promise<void> 
     .set({ notifiedAt: at })
     .where(eq(vcSchedulesTable.id, id));
 }
+
+/**
+ * Move a schedule's expiry deadline forward and re-arm the pre-expiry warning.
+ *
+ * Called after a user purchases a VC extension so the scheduler reads the
+ * updated deadline and sends a fresh warning DM at the right time.
+ * Returns the updated row, or null if no schedule exists for this channel.
+ */
+export async function extendSchedule(
+  channelId: string,
+  newExpiresAt: Date,
+): Promise<VcSchedule | null> {
+  const [row] = await db
+    .update(vcSchedulesTable)
+    .set({ expiresAt: newExpiresAt, notifiedAt: null })
+    .where(eq(vcSchedulesTable.channelId, channelId))
+    .returning();
+  return row ?? null;
+}

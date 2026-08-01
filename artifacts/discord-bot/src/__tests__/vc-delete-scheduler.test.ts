@@ -582,6 +582,107 @@ describe("runVcDeleteScheduler – retry after permission is restored", () => {
   });
 });
 
+// ─── Extended expiry: DM timestamp accuracy ──────────────────────────────────
+
+describe("runVcDeleteScheduler – extended expiry DM timestamp accuracy", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.getExpiredSchedules.mockResolvedValue([]);
+  });
+
+  it("DM content reflects the updated expiresAt timestamp when a fresh warning fires after extension", async () => {
+    // The schedule was warned at the original deadline, then the owner extended
+    // the VC.  extendSchedule cleared notifiedAt and wrote the new expiresAt.
+    // On the next tick the scheduler sees the re-armed row and must embed the
+    // *new* (extended) expiry in the DM — not the original one.
+    const extendedExpiresAt = new Date("2026-08-01T14:00:00.000Z"); // 2 h later than original
+    const expectedTs = Math.floor(extendedExpiresAt.getTime() / 1000);
+
+    // notifiedAt has been cleared by extendSchedule → row re-enters warning list.
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: extendedExpiresAt, notifiedAt: null }),
+    ]);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    expect(client._userSend).toHaveBeenCalledOnce();
+    const dmText: string = client._userSend.mock.calls[0][0];
+    // Both Discord timestamp tokens must use the extended expiresAt Unix second.
+    expect(dmText).toContain(`<t:${expectedTs}:R>`);
+    expect(dmText).toContain(`<t:${expectedTs}:T>`);
+  });
+
+  it("markScheduleNotified is called with the current tick time (not the extended expiresAt) after extension re-arms the warning", async () => {
+    const extendedExpiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000); // 3 h from now
+
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: extendedExpiresAt, notifiedAt: null }),
+    ]);
+
+    const before = Date.now();
+    await runVcDeleteScheduler(makeClient());
+    const after = Date.now();
+
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+    const [, notifiedDate] = mocks.markScheduleNotified.mock.calls[0] as [number, Date];
+    expect(notifiedDate).toBeInstanceOf(Date);
+    // The timestamp passed must be the current-tick time, not the extended expiresAt.
+    expect(notifiedDate.getTime()).toBeGreaterThanOrEqual(before);
+    expect(notifiedDate.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it("two-tick: sends original DM, then re-sends with updated timestamp after extension re-arms the schedule", async () => {
+    // ── Setup ──────────────────────────────────────────────────────────────────
+    const originalExpiresAt = new Date("2026-08-01T12:00:00.000Z");
+    const extendedExpiresAt = new Date("2026-08-01T14:00:00.000Z"); // +2 h
+    const originalTs = Math.floor(originalExpiresAt.getTime() / 1000);
+    const extendedTs = Math.floor(extendedExpiresAt.getTime() / 1000);
+
+    // ── Tick 1: original schedule within warning window ────────────────────────
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: originalExpiresAt, notifiedAt: null }),
+    ]);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    // DM was sent with original expiry.
+    expect(client._userSend).toHaveBeenCalledOnce();
+    expect(client._userSend.mock.calls[0][0]).toContain(`<t:${originalTs}:R>`);
+    // notifiedAt was set.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.getExpiredSchedules.mockResolvedValue([]);
+
+    // Between ticks the user purchased an extension:
+    //   extendSchedule(channelId, extendedExpiresAt) set expiresAt = extendedExpiresAt,
+    //   notifiedAt = null — re-arming the schedule for a fresh warning.
+
+    // ── Tick 2: re-armed schedule with new deadline ────────────────────────────
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: extendedExpiresAt, notifiedAt: null }),
+    ]);
+
+    await runVcDeleteScheduler(client);
+
+    // A new DM must fire using the extended expiry timestamp.
+    expect(client._userSend).toHaveBeenCalledOnce();
+    const dmText: string = client._userSend.mock.calls[0][0];
+    expect(dmText).toContain(`<t:${extendedTs}:R>`);
+    expect(dmText).toContain(`<t:${extendedTs}:T>`);
+    // The stale original timestamp must NOT appear.
+    expect(dmText).not.toContain(`<t:${originalTs}:R>`);
+    // notifiedAt updated again on this tick.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+  });
+});
+
 // ─── Unit tests for the DB query helpers (no Discord client needed) ───────────
 
 describe("getSchedulesExpiringSoon – query filter assertions", () => {

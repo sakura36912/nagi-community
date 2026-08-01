@@ -1,5 +1,5 @@
 import { applySheetEmbedUpdate, buildSheetEmbed, buildSheetThreadName, findSelfIntro, refreshSheetEmbedForUser } from "../lib/sheet";
-import { saveSchedule } from "../lib/vc";
+import { extendSchedule, saveSchedule } from "../lib/vc";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -657,6 +657,11 @@ async function applyShopPurchase(
     if (!result.ok) { await interaction.editReply(result.reason); return; }
     try {
       const updated = await extendPrivateVcSession(session.id, vcExtendDuration);
+      // Propagate the new deadline to the VC schedule row and re-arm the
+      // pre-expiry warning so the scheduler DMs the owner at the right time.
+      await extendSchedule(session.channelId, updated.expiresAt).catch((err) =>
+        logger.error(`[vc-extend] Failed to update schedule for channel ${session.channelId}`, err),
+      );
       const ts = Math.floor(updated.expiresAt.getTime() / 1000);
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
     } catch {
