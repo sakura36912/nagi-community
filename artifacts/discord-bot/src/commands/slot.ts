@@ -708,7 +708,7 @@ export const slotCommand: Command = {
         const e = emojis.get(id);
         if (!e?.name) continue;
         const sym = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
-        if (e.name.toLowerCase().includes(focused)) choices.push({ name: `🎨 ${e.name}`, value: sym });
+        if (e.name.toLowerCase().includes(focused)) choices.push({ name: `${sym} ${e.name}`, value: sym });
       }
       // 登録済みスタンプ
       for (const id of settings.stickerIds) {
@@ -722,7 +722,7 @@ export const slotCommand: Command = {
         if (!e.name || e.managed) continue;
         if (!e.name.toLowerCase().includes(focused)) continue;
         const sym = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
-        choices.push({ name: `🎨 ${e.name}`, value: sym });
+        choices.push({ name: `${sym} ${e.name}`, value: sym });
       }
       for (const s of stickers.values()) {
         if (s.format === StickerFormatType.Lottie) continue;
