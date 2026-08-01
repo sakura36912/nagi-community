@@ -681,6 +681,16 @@ export async function getActivePrivateVcSession(
   return session ?? null;
 }
 
+// Returns the private VC session for a given channel, or null if not found.
+export async function getPrivateVcSessionByChannelId(channelId: string): Promise<PrivateVcSession | null> {
+  const [session] = await db
+    .select()
+    .from(privateVcSessionsTable)
+    .where(eq(privateVcSessionsTable.channelId, channelId))
+    .limit(1);
+  return session ?? null;
+}
+
 // Extends the session's expiresAt by additionalMs (base = max(current expiresAt, now)).
 export async function extendPrivateVcSession(
   id: number,

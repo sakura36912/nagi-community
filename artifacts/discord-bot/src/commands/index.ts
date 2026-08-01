@@ -13,11 +13,13 @@ import {
   StringSelectMenuOptionBuilder,
   TextInputBuilder,
   TextInputStyle,
+  UserSelectMenuBuilder,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type GuildMember,
   type ModalSubmitInteraction,
   type StringSelectMenuInteraction,
+  type UserSelectMenuInteraction,
 } from "discord.js";
 import type { ShopItem } from "@workspace/db";
 import type { Guild } from "discord.js";
@@ -78,6 +80,7 @@ import {
   setRewardInterval,
   setRoleReward,
   transfer,
+  getPrivateVcSessionByChannelId,
 } from "../lib/economy";
 import { upsertTimedRoleGrant } from "@workspace/db";
 
@@ -285,16 +288,11 @@ async function purchaseAndCreatePrivateVc(
         // Best-effort — schedule tracking failure does not affect VC creation.
         logger.error("[privateVC] Failed to save VC schedule after creation", scheduleErr);
       }
-
-      // ボイステキストに期限を通知
-      const ts = Math.floor(expiresAt.getTime() / 1000);
-      channel.send(
-        `🔒 <@${member.id}> の非公開VCが作成されました。\n` +
-        `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）\n` +
-        `👥 メンバーを招待: \`/shop invite\` | 追い出し: \`/shop kick\`\n` +
-        `🔁 期限延長: \`/shop buy\`（延長券）`,
-      ).catch((err) => logger.error("[privateVC] Failed to send expiry notice to VC text", err));
     }
+
+    // ボイステキストにコントロールパネルを投稿（期限あり・無期限どちらでも）
+    channel.send(buildVcPanelMessage(channel.id, member.id, expiresAt))
+      .catch((err) => logger.error("[privateVC] Failed to send VC panel to text", err));
 
     return { ok: true, item: result.item, channelId: channel.id, expiresAt };
   } catch (err) {
@@ -1560,6 +1558,210 @@ import { pointconfigCommand } from "./pointconfig";
 import { pointCommand } from "./point";
 import { interviewCommand } from "./interview";
 import { stickyCommand } from "./sticky";
+
+// ─── VC コントロールパネル ────────────────────────────────────────────────────
+
+export const VC_PANEL_BTN_ADD    = "vc:panel:add:";
+export const VC_PANEL_BTN_KICK   = "vc:panel:kick:";
+export const VC_PANEL_BTN_EXTEND = "vc:panel:extend:";
+export const VC_PANEL_BTN_EXPIRY = "vc:panel:expiry:";
+export const VC_PANEL_SEL_ADD    = "vc:panel:adds:";
+export const VC_PANEL_SEL_KICK   = "vc:panel:kicks:";
+export const VC_PANEL_SEL_EXTEND = "vc:panel:exts:";
+
+/** custom ID のペイロードを "{channelId}:{ownerId}" 形式でエンコード */
+export function vcPanelId(prefix: string, channelId: string, ownerId: string) {
+  return `${prefix}${channelId}:${ownerId}`;
+}
+/** "{channelId}:{ownerId}" を分解して返す */
+export function parseVcPanelId(prefix: string, customId: string): { channelId: string; ownerId: string } {
+  const payload = customId.slice(prefix.length);
+  const sep = payload.lastIndexOf(":");
+  return { channelId: payload.slice(0, sep), ownerId: payload.slice(sep + 1) };
+}
+
+export function buildVcPanelMessage(channelId: string, ownerId: string, expiresAt?: Date) {
+  const ts = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
+  const expText = ts
+    ? `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>）`
+    : "⏳ 期限: 無期限";
+  const embed = new EmbedBuilder()
+    .setTitle("🔒 非公開VC コントロールパネル")
+    .setColor(0x5865f2)
+    .setDescription(`<@${ownerId}> の非公開VCです。\n${expText}`)
+    .setFooter({ text: "VCオーナーのみ操作できます" });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_BTN_ADD, channelId, ownerId))
+      .setLabel("メンバーを追加")
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji("👤"),
+    new ButtonBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_BTN_KICK, channelId, ownerId))
+      .setLabel("キック")
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji("👢"),
+    new ButtonBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_BTN_EXTEND, channelId, ownerId))
+      .setLabel("期間延長")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("⏰"),
+    new ButtonBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_BTN_EXPIRY, channelId, ownerId))
+      .setLabel("期限確認")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("📅"),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+/** ownerId をボタン custom ID から取り出してオーナー確認 */
+function checkOwner(
+  interaction: ButtonInteraction | StringSelectMenuInteraction | UserSelectMenuInteraction,
+  ownerId: string,
+): boolean {
+  if (interaction.user.id !== ownerId) {
+    interaction.reply({ content: "❌ VCオーナーのみ操作できます。", ephemeral: true }).catch(() => {});
+    return false;
+  }
+  return true;
+}
+
+export async function handleVcPanelAddBtn(interaction: ButtonInteraction): Promise<void> {
+  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_ADD, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+  const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+    new UserSelectMenuBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_SEL_ADD, channelId, ownerId))
+      .setPlaceholder("追加するメンバーを選択"),
+  );
+  await interaction.reply({ content: "追加するメンバーを選んでください：", components: [row], ephemeral: true });
+}
+
+export async function handleVcPanelKickBtn(interaction: ButtonInteraction): Promise<void> {
+  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_KICK, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+  const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+    new UserSelectMenuBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_SEL_KICK, channelId, ownerId))
+      .setPlaceholder("キックするメンバーを選択"),
+  );
+  await interaction.reply({ content: "キックするメンバーを選んでください：", components: [row], ephemeral: true });
+}
+
+export async function handleVcPanelExtendBtn(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_EXTEND, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+  // 延長にはDB sessionが必要（無期限VCはセッション無し）
+  const session = await getPrivateVcSessionByChannelId(channelId);
+  if (!session) {
+    await interaction.reply({ content: "❌ このVCは無期限のため期間延長できません。", ephemeral: true });
+    return;
+  }
+  const allVcItems = await listShopItems(interaction.guild.id, "vc");
+  const extendItems = allVcItems.filter((i) => i.effectType && VC_EXTEND_DURATIONS[i.effectType] !== undefined);
+  if (extendItems.length === 0) {
+    await interaction.reply({ content: "❌ このサーバーには延長券が設定されていません。", ephemeral: true });
+    return;
+  }
+  const settings = await getGuildSettings(interaction.guild.id);
+  const options = extendItems.map((i) => ({
+    label: i.name,
+    description: `${i.price.toLocaleString()} ${settings.currencyName}`,
+    value: String(i.id),
+  }));
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_SEL_EXTEND, channelId, ownerId))
+      .setPlaceholder("使用する延長券を選択")
+      .addOptions(options),
+  );
+  await interaction.reply({ content: "使用する延長券を選んでください：", components: [row], ephemeral: true });
+}
+
+export async function handleVcPanelExpiryBtn(interaction: ButtonInteraction): Promise<void> {
+  const { channelId } = parseVcPanelId(VC_PANEL_BTN_EXPIRY, interaction.customId);
+  const session = await getPrivateVcSessionByChannelId(channelId);
+  if (!session) {
+    await interaction.reply({ content: "⏳ このVCは無期限です。", ephemeral: true });
+    return;
+  }
+  const ts = Math.floor(session.expiresAt.getTime() / 1000);
+  await interaction.reply({ content: `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>）`, ephemeral: true });
+}
+
+export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_SEL_ADD, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+  const targetId = interaction.values[0];
+  if (!targetId) { await interaction.reply({ content: "❌ ユーザーが選択されていません。", ephemeral: true }); return; }
+  if (targetId === interaction.user.id) { await interaction.reply({ content: "❌ 自分自身を追加することはできません。", ephemeral: true }); return; }
+  const ch = interaction.guild.channels.cache.get(channelId)
+    ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
+  if (!ch || !("permissionOverwrites" in ch)) {
+    await interaction.reply({ content: "❌ VCチャンネルが見つかりませんでした。", ephemeral: true }); return;
+  }
+  await ch.permissionOverwrites.edit(targetId, { ViewChannel: true, Connect: true, Speak: true, Stream: true, SendMessages: true });
+  await interaction.reply({ content: `✅ <@${targetId}> をVCに追加しました。`, ephemeral: true });
+}
+
+export async function handleVcPanelKickSel(interaction: UserSelectMenuInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_SEL_KICK, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+  const targetId = interaction.values[0];
+  if (!targetId) { await interaction.reply({ content: "❌ ユーザーが選択されていません。", ephemeral: true }); return; }
+  if (targetId === interaction.user.id) { await interaction.reply({ content: "❌ 自分自身をキックすることはできません。", ephemeral: true }); return; }
+  const ch = interaction.guild.channels.cache.get(channelId)
+    ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
+  if (!ch || !("permissionOverwrites" in ch)) {
+    await interaction.reply({ content: "❌ VCチャンネルが見つかりませんでした。", ephemeral: true }); return;
+  }
+  await ch.permissionOverwrites.delete(targetId);
+  try {
+    const member = await interaction.guild.members.fetch(targetId);
+    if (member.voice.channelId === channelId) await member.voice.disconnect();
+  } catch { /* non-fatal */ }
+  await interaction.reply({ content: `✅ <@${targetId}> をキックしました。`, ephemeral: true });
+}
+
+export async function handleVcPanelExtendSel(interaction: StringSelectMenuInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_SEL_EXTEND, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+  const session = await getPrivateVcSessionByChannelId(channelId);
+  if (!session) { await interaction.reply({ content: "❌ セッションが見つかりません。", ephemeral: true }); return; }
+  const itemId = parseInt(interaction.values[0]!, 10);
+  const item = await getShopItem(interaction.guild.id, itemId);
+  if (!item?.effectType) { await interaction.reply({ content: "❌ アイテムが見つかりません。", ephemeral: true }); return; }
+  const duration = VC_EXTEND_DURATIONS[item.effectType];
+  if (duration === undefined) { await interaction.reply({ content: "❌ 無効な延長券です。", ephemeral: true }); return; }
+  await interaction.deferReply({ ephemeral: true });
+  const settings = await getGuildSettings(interaction.guild.id);
+  const result = await buyItem(interaction.guild.id, interaction.user.id, itemId, settings.currencyName);
+  if (!result.ok) { await interaction.editReply(result.reason); return; }
+  const updated = await extendPrivateVcSession(session.id, duration);
+  await extendSchedule(channelId, updated.expiresAt).catch((err) =>
+    logger.error("[vc-panel] Failed to update schedule after extend", err),
+  );
+  // パネルの期限表示を更新（best-effort）
+  try {
+    const textCh = interaction.guild.channels.cache.get(channelId)
+      ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
+    if (textCh && "messages" in textCh) {
+      const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
+      const panelMsg = msgs.find(
+        (m) => m.author.id === interaction.client.user?.id
+          && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+      );
+      if (panelMsg) await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt));
+    }
+  } catch { /* best-effort */ }
+  const ts = Math.floor(updated.expiresAt.getTime() / 1000);
+  await interaction.editReply(`✅ **${result.item.name}**を使用しました！期限が <t:${ts}:F> まで延長されました。`);
+}
 
 export const commands: Command[] = [
   interviewCommand,

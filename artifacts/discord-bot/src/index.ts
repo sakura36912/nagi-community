@@ -26,6 +26,20 @@ import {
   handleShiftTime,
   handleShiftPanelOpen,
   handleShiftListNav,
+  VC_PANEL_BTN_ADD,
+  VC_PANEL_BTN_KICK,
+  VC_PANEL_BTN_EXTEND,
+  VC_PANEL_BTN_EXPIRY,
+  VC_PANEL_SEL_ADD,
+  VC_PANEL_SEL_KICK,
+  VC_PANEL_SEL_EXTEND,
+  handleVcPanelAddBtn,
+  handleVcPanelKickBtn,
+  handleVcPanelExtendBtn,
+  handleVcPanelExpiryBtn,
+  handleVcPanelAddSel,
+  handleVcPanelKickSel,
+  handleVcPanelExtendSel,
 } from "./commands";
 import { handleHubJoin, handleHubLeave } from "./commands/vc";
 import { getHubSession, getHubChannelById, db, walletsTable, transactionsTable } from "@workspace/db";
@@ -1353,6 +1367,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith(SHIFT_LIST_NAV_PREFIX)) {
       await handleShiftListNav(interaction);
       return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_ADD)) {
+      await handleVcPanelAddBtn(interaction); return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_KICK)) {
+      await handleVcPanelKickBtn(interaction); return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_EXTEND)) {
+      await handleVcPanelExtendBtn(interaction); return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_EXPIRY)) {
+      await handleVcPanelExpiryBtn(interaction); return;
+    }
+    if (interaction.isUserSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_ADD)) {
+      await handleVcPanelAddSel(interaction); return;
+    }
+    if (interaction.isUserSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_KICK)) {
+      await handleVcPanelKickSel(interaction); return;
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_EXTEND)) {
+      await handleVcPanelExtendSel(interaction); return;
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith(NICKNAME_MODAL_PREFIX)) {
