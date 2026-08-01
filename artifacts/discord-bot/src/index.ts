@@ -35,6 +35,7 @@ import {
   getSchedulesExpiringSoon,
   deleteSchedule,
   markScheduleNotified,
+  NOTIFY_BEFORE_MS,
 } from "./lib/vc";
 import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
 import { getStickyMessage, updateStickyLastMessageId } from "./lib/sticky";
@@ -433,7 +434,14 @@ async function runVcDeleteScheduler(): Promise<void> {
   for (const guild of client.guilds.cache.values()) {
     try {
       const guildSettings = await getGuildSettings(guild.id);
-      const warnBeforeMs = guildSettings.vcWarnBeforeMinutes * 60 * 1000;
+      const configuredMinutes = guildSettings.vcWarnBeforeMinutes;
+      const warnBeforeMs =
+        configuredMinutes != null
+          ? configuredMinutes * 60 * 1000
+          : (logger.info(
+              `[vc-schedule] vcWarnBeforeMinutes not set for guild ${guild.id}; falling back to default ${NOTIFY_BEFORE_MS / 60000} min`,
+            ),
+            NOTIFY_BEFORE_MS);
       const soon = await getSchedulesExpiringSoon(guild.id, now, warnBeforeMs);
 
       for (const schedule of soon) {
