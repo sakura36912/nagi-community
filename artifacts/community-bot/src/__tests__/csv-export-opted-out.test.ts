@@ -277,6 +277,112 @@ describe("getAllTempVcDeletions – opted_out column in CSV export", () => {
     expect(hasDateValue).toBe(false);
   });
 
+  // ── Re-opt-in: SQL predicate correctness ─────────────────────────────────
+  //
+  // These tests prove that the EXISTS subqueries require `opted_out = true` in
+  // both the global and per-guild tables.  That predicate is what makes re-opt-in
+  // safe: a row with `opted_out = false` (or a deleted row) will not satisfy the
+  // EXISTS condition, so the computed column resolves to false.
+  //
+  // Because the mock intercepts db.execute before SQL reaches a real database, we
+  // inspect the SQL template string that getAllTempVcDeletions builds and passes to
+  // db.execute.  If either predicate is missing or weakened (e.g. changed to
+  // `IS NOT NULL`), the relevant assertion below will catch it.
+
+  it("global EXISTS subquery requires opted_out = true so a re-opted-in global row is excluded", async () => {
+    // A global privacy row with opted_out=false (or a deleted row) must NOT satisfy
+    // the global EXISTS subquery.  The SQL must contain the `opted_out = true`
+    // predicate correlated on g.user_id = s.user_id inside the global table scan.
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getAllTempVcDeletions("guild-test");
+
+    const sqlArg = mocks.execute.mock.calls[0]?.[0] as { strings: string[] };
+    const text = sqlString(sqlArg);
+
+    // The global subquery must reference the global table and require opted_out = true.
+    // Without this predicate a user who re-opted-in globally would still appear opted out.
+    expect(text).toContain("community_vc_privacy_global");
+    expect(text).toMatch(/community_vc_privacy_global[^)]*opted_out\s*=\s*true/s);
+
+    // The subquery must be correlated on user_id so it only matches the session's user.
+    expect(text).toMatch(/community_vc_privacy_global[^)]*user_id\s*=\s*s\.user_id/s);
+  });
+
+  it("per-guild EXISTS subquery requires opted_out = true so a re-opted-in per-guild row is excluded", async () => {
+    // A per-guild privacy row with opted_out=false must NOT satisfy the per-guild
+    // EXISTS subquery.  The SQL must contain the `opted_out = true` predicate
+    // correlated on both p.guild_id = s.guild_id and p.user_id = s.user_id.
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getAllTempVcDeletions("guild-test");
+
+    const sqlArg = mocks.execute.mock.calls[0]?.[0] as { strings: string[] };
+    const text = sqlString(sqlArg);
+
+    // The per-guild subquery must reference the per-guild table and require opted_out = true.
+    expect(text).toContain("community_vc_privacy");
+    expect(text).toMatch(/community_vc_privacy\b[^)]*opted_out\s*=\s*true/s);
+
+    // Correlation must cover both guild_id and user_id to avoid cross-guild leakage.
+    expect(text).toMatch(/community_vc_privacy\b[^)]*guild_id\s*=\s*s\.guild_id/s);
+    expect(text).toMatch(/community_vc_privacy\b[^)]*user_id\s*=\s*s\.user_id/s);
+  });
+
+  it("combines global and per-guild subqueries with OR so either source triggers opted-out", async () => {
+    // The computed opted_out column is the OR of both EXISTS subqueries.
+    // If the OR is missing, one re-opt-in path could leave the other source active
+    // and the flag would still clear incorrectly.
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getAllTempVcDeletions("guild-test");
+
+    const sqlArg = mocks.execute.mock.calls[0]?.[0] as { strings: string[] };
+    const text = sqlString(sqlArg);
+
+    // Both EXISTS clauses must appear.
+    expect(text).toContain("community_vc_privacy_global");
+    expect(text).toContain("community_vc_privacy");
+
+    // They must be joined by OR (may have surrounding whitespace/newlines).
+    expect(text).toMatch(/\bOR\b/);
+
+    // Both are wrapped in EXISTS so the computed column is their disjunction.
+    const existsMatches = [...text.matchAll(/\bEXISTS\b/g)];
+    expect(existsMatches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("mapper returns optedOut:false when DB resolves the subquery to false (per-guild re-opt-in path)", async () => {
+    // This confirms the mapper correctly passes through false from the DB-evaluated
+    // subquery.  The SQL predicate tests above prove the subquery only returns false
+    // when opted_out is not true, making this the end-to-end picture: SQL filters
+    // correctly → DB returns false → mapper returns false.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [makeDbRow("re-opted-in-guild-user", { opted_out: false })],
+    });
+
+    const result = await getAllTempVcDeletions("guild-test");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("re-opted-in-guild-user");
+    expect(result[0]?.optedOut).toBe(false);
+  });
+
+  it("mapper returns optedOut:false when DB resolves the subquery to null (global re-opt-in: row deleted)", async () => {
+    // When a user deletes their global opt-out row entirely, the EXISTS finds no matching
+    // row and the computed column evaluates to null/false.  The mapper must treat null
+    // as false (not throw or silently coerce to true).
+    const row = makeDbRow("re-opted-in-global-user");
+    (row as Record<string, unknown>)["opted_out"] = null; // simulate deleted row → null from DB
+    mocks.execute.mockResolvedValueOnce({ rows: [row] });
+
+    const result = await getAllTempVcDeletions("guild-test");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("re-opted-in-global-user");
+    expect(result[0]?.optedOut).toBe(false);
+  });
+
   // ── Return value passthrough ───────────────────────────────────────────────
 
   it("returns an empty array when no rows exist", async () => {
