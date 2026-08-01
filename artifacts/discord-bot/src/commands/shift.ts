@@ -292,10 +292,17 @@ export function buildShiftEmbeds(
       const dow = WEEKDAY_JA[d.getDay()]!;
       const label = `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
       const dayShifts = byDate.get(date) ?? [];
-      const entries = dayShifts.length > 0
-        ? dayShifts.map((s) => `<@${s.userId}> ${s.startTime}`).join("　")
-        : "─";
-      return `**${dow}** ${label}　${entries}`;
+      if (dayShifts.length === 0) {
+        return `**${dow} ${label}**　─`;
+      }
+      // Sort by start time
+      dayShifts.sort((a, b) => a.startTime.localeCompare(b.startTime));
+      const entries = dayShifts.map((s) => {
+        const time = s.endTime ? `${s.startTime}〜${s.endTime}` : s.startTime;
+        const note = s.note ? ` _[${s.note}]_` : "";
+        return `　└ <@${s.userId}> \`${time}\`${note}`;
+      }).join("\n");
+      return `**${dow} ${label}**（${dayShifts.length}名）\n${entries}`;
     });
 
     return [
