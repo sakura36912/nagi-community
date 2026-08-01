@@ -109,7 +109,7 @@ vi.mock("drizzle-orm", () => ({
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
 import { closeOpenSessionsForUser, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
-import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep } from "../commands/index.js";
+import { handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
 function makeInteraction(userId: string, guildId?: string) {
@@ -118,6 +118,7 @@ function makeInteraction(userId: string, guildId?: string) {
     guildId: guildId ?? null,
     deferUpdate: vi.fn().mockResolvedValue(undefined),
     editReply: vi.fn().mockResolvedValue(undefined),
+    reply: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -605,6 +606,134 @@ describe('handlePrivacyOptoutDelete – per-guild opt-out + wipe path', () => {
     expect(interaction.editReply).toHaveBeenCalledWith(
       expect.objectContaining({ components: [] }),
     );
+  });
+});
+
+// ─── handlePrivacyDeleteConfirm – two-step delete confirm path ───────────────
+//
+// This is the handler shown after the user taps "delete + opt-out" and confirms
+// via the second button. It runs the same Promise.all pattern as
+// handlePrivacyOptoutDelete but is a separate exported function.
+// We verify:
+//   - DM guard: no guildId → reply with ephemeral error and return early
+//   - WHERE clause carries both guildId and userId (guild-scope)
+//   - Embed description shows the correct deleted-row count
+//   - components:[] so the confirmation buttons are cleared
+
+describe('handlePrivacyDeleteConfirm – two-step delete confirm path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Helper: stage mock results for one successful invocation.
+  // deleteUserVcSessions  → db.delete().where().returning()  → `deletedRows`
+  // setVcPrivacyOptOut    → db.insert().values().onConflictDoUpdate() (upsert)
+  //                       → db.update().set().where().returning() → [] (no open session)
+  function setupMocks(deletedRows: { id: number }[]) {
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows);
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // setVcPrivacyOptOut upsert
+    mocks.returning.mockResolvedValueOnce([]);           // closeSession inside setVcPrivacyOptOut
+  }
+
+  it("does nothing (except reply ephemerally) when guildId is absent (DM context guard)", async () => {
+    const interaction = makeInteraction("user-dc-0");
+    await handlePrivacyDeleteConfirm(interaction as never);
+
+    // Must not touch the database
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    // Must not defer — must reply directly with the ephemeral error
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+  });
+
+  it("calls deleteUserVcSessions scoped to the confirming guild (WHERE carries guildId)", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-dc-1", "guild-dc-1");
+    await handlePrivacyDeleteConfirm(interaction as never);
+
+    // db.delete() must have been called once (by deleteUserVcSessions)
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+
+    // The WHERE argument must be an AND that includes both guildId and userId
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    expect(whereArg.op).toBe("and");
+    const eqVals = whereArg.args
+      .filter((a) => a.op === "eq")
+      .map((a) => a.val);
+    expect(eqVals).toContain("guild-dc-1");
+    expect(eqVals).toContain("user-dc-1");
+  });
+
+  it("scopes the delete to one guild only (another guild's id must not appear in WHERE)", async () => {
+    setupMocks([{ id: 1 }, { id: 2 }]);
+
+    const interaction = makeInteraction("user-dc-2", "guild-dc-2");
+    await handlePrivacyDeleteConfirm(interaction as never);
+
+    expect(mocks.deleteWhere).toHaveBeenCalledTimes(1);
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    const eqVals = whereArg.args.filter((a) => a.op === "eq").map((a) => a.val);
+    expect(eqVals).toContain("guild-dc-2");
+    expect(eqVals).not.toContain("some-other-guild");
+  });
+
+  it("embed description contains the correct deleted-row count (2 rows)", async () => {
+    setupMocks([{ id: 10 }, { id: 11 }]);
+
+    const interaction = makeInteraction("user-dc-3", "guild-dc-3");
+    await handlePrivacyDeleteConfirm(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("2件");
+  });
+
+  it("embed description contains the correct deleted-row count (0 rows)", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-dc-4", "guild-dc-4");
+    await handlePrivacyDeleteConfirm(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("0件");
+  });
+
+  it("replies with components:[] so the confirm buttons are cleared after deletion", async () => {
+    setupMocks([{ id: 99 }]);
+
+    const interaction = makeInteraction("user-dc-5", "guild-dc-5");
+    await handlePrivacyDeleteConfirm(interaction as never);
+
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("also calls setVcPrivacyOptOut (insert) scoped to the same guild", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-dc-6", "guild-dc-6");
+    await handlePrivacyDeleteConfirm(interaction as never);
+
+    // db.insert() must have been called by setVcPrivacyOptOut
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { guildId: string; userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.guildId).toBe("guild-dc-6");
+    expect(valuesArg.userId).toBe("user-dc-6");
+    expect(valuesArg.optedOut).toBe(true);
   });
 });
 
