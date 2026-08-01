@@ -264,6 +264,7 @@ async function runVcExpiryScheduler(): Promise<void> {
 
   for (const session of expired) {
     let missingPermissions = false;
+    let uraRevocationFailed = false;
     try {
       const guild = client.guilds.cache.get(session.guildId);
       if (guild) {
@@ -281,13 +282,20 @@ async function runVcExpiryScheduler(): Promise<void> {
             const settings = await getGuildSettings(session.guildId);
             if (settings.uraChannelId) {
               const accessCh = guild.channels.cache.get(settings.uraChannelId)
-                ?? await guild.channels.fetch(settings.uraChannelId).catch(() => null);
+                ?? await guild.channels.fetch(settings.uraChannelId);
               if (accessCh && "permissionOverwrites" in accessCh) {
                 await accessCh.permissionOverwrites.delete(session.userId, "裏フリールームVC期限切れ");
                 logger.info(`[vc-expiry] Revoked ura channel access for user ${session.userId}`);
               }
             }
           } catch (err) {
+            // Do NOT remove the DB row when ura revocation fails — leave the
+            // session record intact so the next scheduler tick retries the
+            // revocation.  The VC channel may already be gone, but the session
+            // row drives the retry: on the next tick the channel fetch returns
+            // null (skipped silently) and revocation is attempted again until
+            // it succeeds.
+            uraRevocationFailed = true;
             logger.error(`[vc-expiry] Failed to revoke ura channel access for ${session.userId}`, err);
           }
         }
@@ -310,9 +318,10 @@ async function runVcExpiryScheduler(): Promise<void> {
       }
     }
 
-    // Skip DB cleanup when the channel is still alive but we lack permission —
-    // leave the row so the session is retried on the next tick.
-    if (missingPermissions) continue;
+    // Skip DB cleanup when the channel is still alive but we lack permission,
+    // or when the ura access-channel revocation has not yet succeeded — leave
+    // the row so the session is retried on the next tick.
+    if (missingPermissions || uraRevocationFailed) continue;
 
     // Remove the session record (channel was deleted or was already gone).
     await deletePrivateVcSession(session.id).catch((err) =>

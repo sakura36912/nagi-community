@@ -115,6 +115,7 @@ async function runVcExpiryScheduler(client: MockClient): Promise<void> {
     category: string | null;
   }>) {
     let missingPermissions = false;
+    let uraRevocationFailed = false;
     try {
       const guild = client.guilds.cache.get(session.guildId);
       if (guild) {
@@ -135,7 +136,7 @@ async function runVcExpiryScheduler(client: MockClient): Promise<void> {
             if (settings.uraChannelId) {
               const accessCh =
                 guild.channels.cache.get(settings.uraChannelId) ??
-                (await guild.channels.fetch(settings.uraChannelId).catch(() => null));
+                (await guild.channels.fetch(settings.uraChannelId));
               if (accessCh && "permissionOverwrites" in accessCh && accessCh.permissionOverwrites) {
                 await accessCh.permissionOverwrites.delete(session.userId, "裏フリールームVC期限切れ");
                 logger.info(
@@ -144,6 +145,14 @@ async function runVcExpiryScheduler(client: MockClient): Promise<void> {
               }
             }
           } catch (err) {
+            // Do NOT remove the DB row when ura revocation fails — leave the
+            // session record intact so the next scheduler tick retries the
+            // revocation.  This covers both a transient fetch failure (bot
+            // temporarily cannot reach the ura access channel) and a
+            // permissionOverwrites.delete failure.  The session row drives the
+            // retry: on the next tick the channel is refetched and revocation
+            // is attempted again until it succeeds.
+            uraRevocationFailed = true;
             logger.error(
               `[vc-expiry] Failed to revoke ura channel access for ${session.userId}`,
               err,
@@ -169,9 +178,10 @@ async function runVcExpiryScheduler(client: MockClient): Promise<void> {
       }
     }
 
-    // Skip DB cleanup when the channel is still alive but we lack permission —
-    // leave the row so the session is retried on the next tick.
-    if (missingPermissions) continue;
+    // Skip DB cleanup when the channel is still alive but we lack permission,
+    // or when the ura access-channel revocation has not yet succeeded — leave
+    // the row so the session is retried on the next tick.
+    if (missingPermissions || uraRevocationFailed) continue;
 
     // Remove the session record (channel was deleted or was already gone).
     await deletePrivateVcSession(session.id).catch((err: unknown) =>
@@ -207,6 +217,13 @@ function makeClient(
     uraChannelId?: string;
     uraPermOverwriteDelete?: ReturnType<typeof vi.fn>;
     uraPermOverwriteDeleteError?: Error;
+    /**
+     * When set the ura channel is kept out of the channel cache so the
+     * scheduler always goes through guild.channels.fetch() for it.  The
+     * provided function is used as the fetch implementation, which lets tests
+     * simulate a transient failure on tick 1 and a successful fetch on tick 2.
+     */
+    uraChannelFetch?: ReturnType<typeof vi.fn>;
   } = {},
 ): MockClient & { _channelDelete: ReturnType<typeof vi.fn> } {
   const channelDelete = opts.channelDelete ?? vi.fn().mockResolvedValue(undefined);
@@ -225,9 +242,13 @@ function makeClient(
     permissionOverwrites: { delete: uraPermDelete },
   };
 
+  // When a custom uraChannelFetch is provided the ura channel is intentionally
+  // left out of the cache so that guild.channels.fetch() is always invoked.
+  const uraInCache = opts.uraChannelId && !opts.uraChannelFetch;
+
   const channelCacheEntries: Array<[string, MockChannel]> = [
     ["channel-1", vcChannel],
-    ...(opts.uraChannelId ? [[opts.uraChannelId, uraChannel] as [string, MockChannel]] : []),
+    ...(uraInCache ? [[opts.uraChannelId as string, uraChannel] as [string, MockChannel]] : []),
   ];
 
   return {
@@ -248,8 +269,12 @@ function makeClient(
                     .mockImplementation((id: string) => {
                       if (opts.noChannel) return Promise.resolve(null);
                       if (id === "channel-1") return Promise.resolve(vcChannel);
-                      if (opts.uraChannelId && id === opts.uraChannelId)
+                      if (opts.uraChannelId && id === opts.uraChannelId) {
+                        // Use the custom fetch fn when provided (supports
+                        // first-fail-then-succeed two-tick scenarios).
+                        if (opts.uraChannelFetch) return opts.uraChannelFetch(id);
                         return Promise.resolve(uraChannel);
+                      }
                       return Promise.resolve(null);
                     }),
                 },
@@ -448,7 +473,7 @@ describe("runVcExpiryScheduler – ura session permission revocation", () => {
     );
   });
 
-  it("logs an error when ura permission revocation fails, but still calls deletePrivateVcSession", async () => {
+  it("logs an error and does NOT call deletePrivateVcSession when ura permission revocation fails (row kept for retry)", async () => {
     mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([
       makeSession({ category: "ura" }),
     ]);
@@ -465,8 +490,92 @@ describe("runVcExpiryScheduler – ura session permission revocation", () => {
       expect.stringContaining("[vc-expiry] Failed to revoke ura channel access for user-1"),
       revokeError,
     );
-    // The outer try/catch swallows the ura error; session cleanup must still run.
+    // The session row must be kept so the next tick retries the revocation.
+    expect(mocks.deletePrivateVcSession).not.toHaveBeenCalled();
+  });
+
+  it("retries ura revocation on tick 2 and cleans up the session row once it succeeds", async () => {
+    const session = makeSession({ category: "ura" });
+    const revokeError = new Error("Cannot edit permissions");
+
+    // Tick 1: revocation fails → session row is preserved.
+    const uraPermDelete = vi
+      .fn()
+      .mockRejectedValueOnce(revokeError)  // tick 1: fails
+      .mockResolvedValueOnce(undefined);   // tick 2: succeeds
+
+    const client = makeClient({
+      uraChannelId: "ura-channel-1",
+      uraPermOverwriteDelete: uraPermDelete,
+    });
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([session]);
+    await runVcExpiryScheduler(client);
+
+    // After tick 1: session row must NOT have been removed.
+    expect(mocks.deletePrivateVcSession).not.toHaveBeenCalled();
+
+    // Tick 2: same session reappears (row was kept); revocation succeeds.
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([session]);
+    await runVcExpiryScheduler(client);
+
+    // After tick 2: revocation succeeded, so the session row is now removed.
     expect(mocks.deletePrivateVcSession).toHaveBeenCalledOnce();
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(1);
+  });
+
+  it("does NOT call deletePrivateVcSession on tick 1 when the ura access-channel fetch fails (row kept for retry)", async () => {
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([
+      makeSession({ category: "ura" }),
+    ]);
+
+    const fetchError = new Error("Cannot reach channel");
+    // ura channel is not in cache; fetch always rejects on tick 1.
+    const uraChannelFetch = vi.fn().mockRejectedValue(fetchError);
+    const client = makeClient({ uraChannelId: "ura-channel-1", uraChannelFetch });
+
+    await runVcExpiryScheduler(client);
+
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("[vc-expiry] Failed to revoke ura channel access for user-1"),
+      fetchError,
+    );
+    // Session row must be preserved so the next tick can retry revocation.
+    expect(mocks.deletePrivateVcSession).not.toHaveBeenCalled();
+  });
+
+  it("retries ura revocation on tick 2 when the access-channel was unreachable on tick 1", async () => {
+    const session = makeSession({ category: "ura" });
+    const fetchError = new Error("Cannot reach channel");
+
+    const uraPermDelete = vi.fn().mockResolvedValue(undefined);
+    const uraChannel: MockChannel = {
+      delete: vi.fn().mockResolvedValue(undefined),
+      permissionOverwrites: { delete: uraPermDelete },
+    };
+
+    // Tick 1: fetch rejects → uraRevocationFailed, row kept.
+    // Tick 2: fetch resolves → revocation succeeds, row cleaned up.
+    const uraChannelFetch = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce(uraChannel);
+
+    const client = makeClient({ uraChannelId: "ura-channel-1", uraChannelFetch });
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([session]);
+    await runVcExpiryScheduler(client);
+
+    // After tick 1: fetch failed → session row must NOT have been removed.
+    expect(mocks.deletePrivateVcSession).not.toHaveBeenCalled();
+
+    // Tick 2: access channel now reachable; revocation and cleanup succeed.
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([session]);
+    await runVcExpiryScheduler(client);
+
+    expect(uraPermDelete).toHaveBeenCalledOnce();
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledOnce();
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(1);
   });
 
   it("does not attempt ura revocation for non-ura sessions", async () => {
