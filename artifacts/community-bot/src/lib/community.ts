@@ -568,8 +568,10 @@ export async function getActiveSession(
 }
 
 /**
- * Permanently deletes all VC session rows for a user in a guild.
- * Returns the number of rows deleted.
+ * Permanently deletes all VC session rows for a user in a guild and clears
+ * their per-guild privacy opt-out record so future sessions can be recorded
+ * without requiring an explicit re-opt-in.
+ * Returns the number of session rows deleted.
  */
 export async function deleteUserVcSessions(guildId: string, userId: string): Promise<number> {
   const result = await db
@@ -581,6 +583,19 @@ export async function deleteUserVcSessions(guildId: string, userId: string): Pro
       ),
     )
     .returning({ id: communityVcSessionsTable.id });
+
+  // Clear the per-guild privacy opt-out row so the user starts clean and new
+  // sessions are recorded automatically after the wipe.
+  await db
+    .delete(communityVcPrivacyTable)
+    .where(
+      and(
+        eq(communityVcPrivacyTable.guildId, guildId),
+        eq(communityVcPrivacyTable.userId, userId),
+      ),
+    )
+    .returning({ userId: communityVcPrivacyTable.userId });
+
   return result.length;
 }
 

@@ -1519,10 +1519,11 @@ export async function handlePrivacyOptoutDelete(interaction: ButtonInteraction):
   await interaction.deferUpdate();
   const guildId = interaction.guildId;
   const userId = interaction.user.id;
-  const [deleted] = await Promise.all([
-    deleteUserVcSessions(guildId, userId),
-    setVcPrivacyOptOut(guildId, userId, true),
-  ]);
+  // Sequential: wipe sessions (which also clears the privacy row) BEFORE re-setting
+  // opt-out, so the upsert never races against the DELETE and leaves the user
+  // in an unintentionally opted-in state.
+  const deleted = await deleteUserVcSessions(guildId, userId);
+  await setVcPrivacyOptOut(guildId, userId, true);
   const embed = new EmbedBuilder()
     .setTitle("🗑️ トラッキングを停止し、過去データを削除しました")
     .setColor(0xed4245)
@@ -1544,10 +1545,10 @@ export async function handlePrivacyDeleteConfirm(interaction: ButtonInteraction)
   const guildId = interaction.guildId;
   const userId = interaction.user.id;
 
-  const [deleted] = await Promise.all([
-    deleteUserVcSessions(guildId, userId),
-    setVcPrivacyOptOut(guildId, userId, true),
-  ]);
+  // Sequential: wipe sessions (which also clears the privacy row) BEFORE re-setting
+  // opt-out, so the upsert never races against the DELETE.
+  const deleted = await deleteUserVcSessions(guildId, userId);
+  await setVcPrivacyOptOut(guildId, userId, true);
 
   const embed = new EmbedBuilder()
     .setTitle("🗑️ VC記録を削除しました")

@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "discord.js";
+import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
 import type { ChatInputCommandInteraction } from "discord.js";
 import { logger } from "../lib/logger";
 
@@ -16,7 +16,11 @@ export const adviceEndCommand: Command = {
     .setDescription("指定したユーザーからアドバイス券ロールを剥奪します")
     .addUserOption((opt) =>
       opt.setName("ユーザー").setDescription("アドバイスを受けたユーザー").setRequired(true),
-    ) as SlashCommandBuilder,
+    )
+    // Baseline Discord permission gate — restricts the command to members with
+    // Manage Roles at the Discord level. The runtime check below further scopes
+    // access to specific server role names.
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction) {
     if (!interaction.guild) {
@@ -24,7 +28,8 @@ export const adviceEndCommand: Command = {
       return;
     }
 
-    // 実行者のロール確認
+    // Runtime authorization guard — defence-in-depth: require one of the
+    // designated server roles in addition to the Discord-level permission gate.
     const executor = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
     const hasAllowedRole = executor?.roles.cache.some((r) => ALLOWED_ROLE_NAMES.includes(r.name));
     if (!hasAllowedRole) {

@@ -32,41 +32,71 @@ type SessionRow = {
   opted_out: boolean;
 };
 
-// ─── Hoist: stateful session store + DB fakes ─────────────────────────────────
+type PrivacyRow = {
+  user_id: string;
+  guild_id: string;
+  opted_out: boolean;
+};
+
+// ─── Hoist: stateful session + privacy store + DB fakes ───────────────────────
 //
 // vi.hoisted runs before vi.mock() factories and module imports so both the
-// delete and execute implementations share the same `sessions` binding.
+// delete and execute implementations share the same bindings.
 
 const store = vi.hoisted(() => {
-  // ── In-memory session store ────────────────────────────────────────────────
-  let sessions: SessionRow[] = [];
+  // ── In-memory stores ───────────────────────────────────────────────────────
+  let sessions: SessionRow[]    = [];
+  let privacyRows: PrivacyRow[] = [];
 
-  // ── Condition evaluator for delete WHERE clauses ───────────────────────────
+  // ── Condition evaluators for delete WHERE clauses ─────────────────────────
   // The drizzle-orm mock returns plain objects: { op, col, val } / { op, args }.
   // The table proxy returns column names like "sessions.userId" (camelCase key).
-  function matches(row: SessionRow, cond: Record<string, unknown>): boolean {
+  function matchesSession(row: SessionRow, cond: Record<string, unknown>): boolean {
     if (cond["op"] === "eq") {
       const col  = cond["col"] as string;
       const val  = cond["val"];
-      // Map camelCase proxy column names to snake_case DB fields
       if (col === "sessions.userId")  return row.user_id  === val;
       if (col === "sessions.guildId") return row.guild_id === val;
       return true; // unknown column — don't filter
     }
     if (cond["op"] === "and") {
-      return (cond["args"] as Record<string, unknown>[]).every((a) => matches(row, a));
+      return (cond["args"] as Record<string, unknown>[]).every((a) => matchesSession(row, a));
     }
-    return true; // unknown op — don't filter
+    return true;
+  }
+
+  function matchesPrivacy(row: PrivacyRow, cond: Record<string, unknown>): boolean {
+    if (cond["op"] === "eq") {
+      const col  = cond["col"] as string;
+      const val  = cond["val"];
+      if (col === "privacy.userId")  return row.user_id  === val;
+      if (col === "privacy.guildId") return row.guild_id === val;
+      return true;
+    }
+    if (cond["op"] === "and") {
+      return (cond["args"] as Record<string, unknown>[]).every((a) => matchesPrivacy(row, a));
+    }
+    return true;
   }
 
   // ── db.delete stateful implementation ─────────────────────────────────────
-  // Captures the WHERE condition and on .returning() removes matching rows.
-  const del = vi.fn((_table: unknown) => ({
+  // Routes to the correct store based on the table proxy's guildId sentinel:
+  //   sessions table → (table as Record)["guildId"] === "sessions.guildId"
+  //   privacy table  → (table as Record)["guildId"] === "privacy.guildId"
+  const del = vi.fn((table: unknown) => ({
     where: (cond: Record<string, unknown>) => ({
       returning: (_shape: unknown) => {
-        const removed = sessions.filter((r) => matches(r, cond));
-        sessions     = sessions.filter((r) => !matches(r, cond));
-        return Promise.resolve(removed.map((r) => ({ id: r.id })));
+        const t = table as Record<string, string>;
+        const tableName = (t["guildId"] ?? "").split(".")[0];
+        if (tableName === "privacy") {
+          const removed = privacyRows.filter((r) => matchesPrivacy(r, cond));
+          privacyRows   = privacyRows.filter((r) => !matchesPrivacy(r, cond));
+          return Promise.resolve(removed.map((_, i) => ({ id: i })));
+        } else {
+          const removed = sessions.filter((r) => matchesSession(r, cond));
+          sessions      = sessions.filter((r) => !matchesSession(r, cond));
+          return Promise.resolve(removed.map((r) => ({ id: r.id })));
+        }
       },
     }),
   }));
@@ -100,11 +130,20 @@ const store = vi.hoisted(() => {
     sessions = [...rows];
   }
 
-  function reset(): void {
-    sessions = [];
+  function seedPrivacy(rows: PrivacyRow[]): void {
+    privacyRows = [...rows];
   }
 
-  return { del, execute, seed, reset };
+  function getPrivacyRows(): PrivacyRow[] {
+    return [...privacyRows];
+  }
+
+  function reset(): void {
+    sessions    = [];
+    privacyRows = [];
+  }
+
+  return { del, execute, seed, seedPrivacy, getPrivacyRows, reset };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -351,11 +390,14 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
 
       await deleteUserVcSessions("guild-A", "wiped-user");
 
-      expect(store.del).toHaveBeenCalledTimes(1);
-      // The table passed to db.delete must be the sessions table proxy
-      const tableArg = store.del.mock.calls[0]?.[0] as Record<string, string>;
-      expect(tableArg?.["userId"]).toBe("sessions.userId");
-      expect(tableArg?.["guildId"]).toBe("sessions.guildId");
+      // Two db.delete calls: first for sessions, second for the privacy opt-out row.
+      expect(store.del).toHaveBeenCalledTimes(2);
+      const firstTableArg  = store.del.mock.calls[0]?.[0] as Record<string, string>;
+      const secondTableArg = store.del.mock.calls[1]?.[0] as Record<string, string>;
+      expect(firstTableArg?.["guildId"]).toBe("sessions.guildId");
+      expect(firstTableArg?.["userId"]).toBe("sessions.userId");
+      expect(secondTableArg?.["guildId"]).toBe("privacy.guildId");
+      expect(secondTableArg?.["userId"]).toBe("privacy.userId");
     });
 
     it("per-guild wipe of multiple sessions removes them all", async () => {
@@ -431,6 +473,77 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       // guild-B: user-A's row is untouched
       expect(resultB).toHaveLength(1);
       expect(resultB[0]?.userId).toBe("user-A");
+    });
+  });
+
+  // ── Per-guild wipe clears the privacy opt-out row (clean re-opt-in) ─────
+  //
+  // deleteUserVcSessions deletes session rows AND removes the matching
+  // community_vc_privacy row so the user can be re-tracked automatically
+  // after the wipe without needing an explicit re-opt-in.
+
+  describe("per-guild wipe clears the privacy opt-out row (clean re-opt-in)", () => {
+    it("privacy opt-out row is removed after deleteUserVcSessions (stateful store check)", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedPrivacy([{ user_id: "wiped-user", guild_id: "guild-A", opted_out: true }]);
+
+      await deleteUserVcSessions("guild-A", "wiped-user");
+
+      // Session rows are gone from the export
+      const sessions = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
+      expect(sessions).toHaveLength(0);
+
+      // Privacy row is also cleared — the user can be re-tracked immediately.
+      const privacy = store.getPrivacyRows();
+      expect(privacy).toHaveLength(0);
+    });
+
+    it("only the wiped user's privacy row is removed; other users' rows survive", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedPrivacy([
+        { user_id: "wiped-user", guild_id: "guild-A", opted_out: true },
+        { user_id: "other-user", guild_id: "guild-A", opted_out: true },
+      ]);
+
+      await deleteUserVcSessions("guild-A", "wiped-user");
+
+      const privacy = store.getPrivacyRows();
+      expect(privacy).toHaveLength(1);
+      expect(privacy[0]).toMatchObject({ user_id: "other-user", guild_id: "guild-A" });
+    });
+
+    it("only the target guild's privacy row is removed; same user's row in another guild survives", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedPrivacy([
+        { user_id: "wiped-user", guild_id: "guild-A", opted_out: true },
+        { user_id: "wiped-user", guild_id: "guild-B", opted_out: true },
+      ]);
+
+      await deleteUserVcSessions("guild-A", "wiped-user");
+
+      const privacy = store.getPrivacyRows();
+      expect(privacy).toHaveLength(1);
+      expect(privacy[0]).toMatchObject({ user_id: "wiped-user", guild_id: "guild-B" });
+    });
+
+    it("db.delete is called twice — once for sessions, once for privacy", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedPrivacy([{ user_id: "wiped-user", guild_id: "guild-A", opted_out: true }]);
+
+      await deleteUserVcSessions("guild-A", "wiped-user");
+
+      expect(store.del).toHaveBeenCalledTimes(2);
+      const tables = store.del.mock.calls.map((c) => (c[0] as Record<string, string>)["guildId"]);
+      expect(tables).toContain("sessions.guildId");
+      expect(tables).toContain("privacy.guildId");
+    });
+
+    it("wipe works cleanly when no privacy row exists for the user", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      // No privacy row seeded — should not throw
+
+      await expect(deleteUserVcSessions("guild-A", "wiped-user")).resolves.toBe(1);
+      expect(store.getPrivacyRows()).toHaveLength(0);
     });
   });
 

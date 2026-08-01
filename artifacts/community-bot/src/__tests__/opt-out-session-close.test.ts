@@ -494,12 +494,14 @@ describe('handlePrivacyOptoutDelete – per-guild opt-out + wipe path', () => {
     vi.clearAllMocks();
   });
 
-  // Helper: set up the two mock results that every successful invocation needs.
-  // deleteUserVcSessions  → db.delete().where().returning() resolves to `deletedRows`
+  // Helper: set up the three mock results that every successful invocation needs.
+  // deleteUserVcSessions  → db.delete().where().returning() resolves to `deletedRows` (sessions)
+  //                       → db.delete().where().returning() resolves to []            (privacy row)
   // setVcPrivacyOptOut    → db.insert().values().onConflictDoUpdate() resolves (upsert)
   //                       → db.update().set().where().returning() resolves to [] (no open session)
   function setupMocks(deletedRows: { id: number }[]) {
-    mocks.deleteReturning.mockResolvedValueOnce(deletedRows);
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);          // privacy row delete
     mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // setVcPrivacyOptOut upsert
     mocks.returning.mockResolvedValueOnce([]); // closeSession inside setVcPrivacyOptOut
   }
@@ -519,11 +521,10 @@ describe('handlePrivacyOptoutDelete – per-guild opt-out + wipe path', () => {
     const interaction = makeInteraction("user-pd-1", "guild-pd-1");
     await handlePrivacyOptoutDelete(interaction as never);
 
-    // db.delete() must have been called once (by deleteUserVcSessions)
-    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+    // db.delete() is called twice by deleteUserVcSessions: once for sessions,
+    // once for the privacy opt-out row. The first WHERE must scope to guild+user.
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
 
-    // The WHERE clause must contain both the guildId and the userId eq-filters
-    // so that only guild-pd-1's rows are touched.
     const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
       { op: string; args: { op: string; col: string; val: string }[] }
     ];
@@ -541,10 +542,8 @@ describe('handlePrivacyOptoutDelete – per-guild opt-out + wipe path', () => {
     const interaction = makeInteraction("user-pd-2", "guild-pd-2");
     await handlePrivacyOptoutDelete(interaction as never);
 
-    // The delete chain's where() must have been called exactly once and the
-    // argument must carry the guildId value – confirming cross-guild rows
-    // are NOT targeted.
-    expect(mocks.deleteWhere).toHaveBeenCalledTimes(1);
+    // Both delete WHERE calls must carry guildId (sessions + privacy row).
+    expect(mocks.deleteWhere).toHaveBeenCalledTimes(2);
     const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
       { op: string; args: { op: string; col: string; val: string }[] }
     ];
@@ -554,15 +553,16 @@ describe('handlePrivacyOptoutDelete – per-guild opt-out + wipe path', () => {
     expect(vals).not.toContain("some-other-guild");
   });
 
-  it("calls setVcPrivacyOptOut in parallel with deleteUserVcSessions (insert occurs)", async () => {
+  it("calls setVcPrivacyOptOut after deleteUserVcSessions (sequential to avoid race)", async () => {
     setupMocks([]);
 
     const interaction = makeInteraction("user-pd-3", "guild-pd-3");
     await handlePrivacyOptoutDelete(interaction as never);
 
-    // If they ran in parallel via Promise.all, both delete and insert must have
-    // been triggered during the same handler call.
-    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+    // deleteUserVcSessions calls db.delete() twice (sessions + privacy row),
+    // then setVcPrivacyOptOut is called sequentially so the opt-out upsert
+    // cannot race against the privacy-row DELETE.
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
     expect(mocks.insert).toHaveBeenCalledTimes(1);
 
     // The insert must carry optedOut=true and the correct identifiers.
@@ -626,11 +626,13 @@ describe('handlePrivacyDeleteConfirm – two-step delete confirm path', () => {
   });
 
   // Helper: stage mock results for one successful invocation.
-  // deleteUserVcSessions  → db.delete().where().returning()  → `deletedRows`
+  // deleteUserVcSessions  → db.delete().where().returning()  → `deletedRows` (sessions)
+  //                       → db.delete().where().returning()  → []            (privacy row)
   // setVcPrivacyOptOut    → db.insert().values().onConflictDoUpdate() (upsert)
   //                       → db.update().set().where().returning() → [] (no open session)
   function setupMocks(deletedRows: { id: number }[]) {
-    mocks.deleteReturning.mockResolvedValueOnce(deletedRows);
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);          // privacy row delete
     mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // setVcPrivacyOptOut upsert
     mocks.returning.mockResolvedValueOnce([]);           // closeSession inside setVcPrivacyOptOut
   }
@@ -656,10 +658,10 @@ describe('handlePrivacyDeleteConfirm – two-step delete confirm path', () => {
     const interaction = makeInteraction("user-dc-1", "guild-dc-1");
     await handlePrivacyDeleteConfirm(interaction as never);
 
-    // db.delete() must have been called once (by deleteUserVcSessions)
-    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+    // db.delete() is called twice by deleteUserVcSessions: sessions + privacy row.
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
 
-    // The WHERE argument must be an AND that includes both guildId and userId
+    // The first WHERE argument must be an AND that includes both guildId and userId.
     const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
       { op: string; args: { op: string; col: string; val: string }[] }
     ];
@@ -677,7 +679,8 @@ describe('handlePrivacyDeleteConfirm – two-step delete confirm path', () => {
     const interaction = makeInteraction("user-dc-2", "guild-dc-2");
     await handlePrivacyDeleteConfirm(interaction as never);
 
-    expect(mocks.deleteWhere).toHaveBeenCalledTimes(1);
+    // Both WHERE calls (sessions + privacy) must scope to this guild.
+    expect(mocks.deleteWhere).toHaveBeenCalledTimes(2);
     const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
       { op: string; args: { op: string; col: string; val: string }[] }
     ];
@@ -943,14 +946,16 @@ describe('handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe',
   });
 
   it("calls deleteUserVcSessions with the admin's guildId and the target userId", async () => {
-    mocks.deleteReturning.mockResolvedValueOnce([]);
+    mocks.deleteReturning.mockResolvedValueOnce([]); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]); // privacy row delete
 
     const interaction = makeAdminInteraction("admin-ad-2", "guild-ad-2", "target-ad-2");
     await handlePrivacyAdminDeleteConfirm(interaction as never);
 
-    expect(mocks.deleteFn).toHaveBeenCalledTimes(1);
+    // db.delete() is called twice by deleteUserVcSessions: sessions + privacy row.
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
 
-    // The WHERE argument must be AND( eq(guildId), eq(userId) )
+    // The first WHERE argument must be AND( eq(guildId), eq(userId) )
     const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
       { op: string; args: { op: string; col: string; val: string }[] }
     ];
@@ -963,12 +968,14 @@ describe('handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe',
   });
 
   it("scopes the delete to only the admin's guild (another guild must not appear in WHERE)", async () => {
-    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]); // sessions
+    mocks.deleteReturning.mockResolvedValueOnce([]);                      // privacy row
 
     const interaction = makeAdminInteraction("admin-ad-3", "guild-ad-3", "target-ad-3");
     await handlePrivacyAdminDeleteConfirm(interaction as never);
 
-    expect(mocks.deleteWhere).toHaveBeenCalledTimes(1);
+    // Both WHERE calls (sessions + privacy) must scope to admin's guild.
+    expect(mocks.deleteWhere).toHaveBeenCalledTimes(2);
     const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
       { op: string; args: { op: string; col: string; val: string }[] }
     ];
