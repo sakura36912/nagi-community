@@ -106,6 +106,7 @@ export const shopItemsTable = pgTable("shop_items", {
   effectType: text("effect_type"),
   targetRoleId: text("target_role_id"),
   category: text("category").notNull().default("general"),
+  sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

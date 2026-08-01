@@ -104,30 +104,34 @@ export async function seedDefaultShopItems(guildId: string): Promise<void> {
 // Inserts the default VC shop items (timed private VCs) for a guild.
 // Safe to call multiple times — uses effectType guard so it never duplicates.
 export async function seedDefaultVcShopItems(guildId: string): Promise<void> {
-  const defaults: Array<{ name: string; description: string; price: number; effectType: string }> = [
+  const defaults: Array<{ name: string; description: string; price: number; effectType: string; sortOrder: number }> = [
     {
       name: "非公開VC（1日）",
       description: "自分だけが見える専用VCを1日間作成します。期間終了後に自動削除されます。",
       price: 1000,
       effectType: PRIVATE_VC_1D_EFFECT,
+      sortOrder: 1,
     },
     {
       name: "非公開VC（1週間）",
       description: "自分だけが見える専用VCを1週間作成します。期間終了後に自動削除されます。",
       price: 5000,
       effectType: PRIVATE_VC_1W_EFFECT,
+      sortOrder: 2,
     },
     {
       name: "非公開VC（1ヶ月）",
       description: "自分だけが見える専用VCを1ヶ月間作成します。期間終了後に自動削除されます。",
       price: 15000,
       effectType: PRIVATE_VC_1M_EFFECT,
+      sortOrder: 3,
     },
     {
       name: "非公開VC延長（1日）",
       description: "既存の非公開VCの期限を1日延長します。部屋がない場合は使用できません。",
       price: 800,
       effectType: VC_EXTEND_1D_EFFECT,
+      sortOrder: 4,
     },
   ];
 
@@ -732,7 +736,7 @@ export async function listShopItems(guildId: string, category = "general"): Prom
     .select()
     .from(shopItemsTable)
     .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, category)))
-    .orderBy(shopItemsTable.price);
+    .orderBy(shopItemsTable.sortOrder, shopItemsTable.price);
 }
 
 export async function getShopItem(guildId: string, itemId: number): Promise<ShopItem | undefined> {
