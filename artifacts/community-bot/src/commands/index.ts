@@ -2051,6 +2051,27 @@ const leavelogCommand: Command = {
  * or global), allowing admins to identify privacy-sensitive rows at a glance.
  */
 
+/**
+ * Build the CSV export filename from optional filter parameters.
+ * Exported for unit testing.
+ */
+export function buildTempVcCsvFilename(opts: {
+  startStr?: string | null;
+  endStr?: string | null;
+  userId?: string | null;
+}): string {
+  const { startStr, endStr, userId } = opts;
+  const datePart = startStr && endStr
+    ? `${startStr}_${endStr}`
+    : startStr
+      ? `from-${startStr}`
+      : endStr
+        ? `until-${endStr}`
+        : "all";
+  const userPart = userId ? `-${userId}` : "";
+  return `tempvc-log-${datePart}${userPart}.csv`;
+}
+
 const tempvcCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("tempvc")
@@ -2153,17 +2174,7 @@ const tempvcCommand: Command = {
 
       // Build CSV and filename
       const csv = buildTempVcCsv(rows);
-
-      // Build filename: include date range and/or user ID if specified
-      const datePart = startStr && endStr
-        ? `${startStr}_${endStr}`
-        : startStr
-          ? `from-${startStr}`
-          : endStr
-            ? `until-${endStr}`
-            : "all";
-      const userPart = targetUser ? `-${targetUser.id}` : "";
-      const filename = `tempvc-log-${datePart}${userPart}.csv`;
+      const filename = buildTempVcCsvFilename({ startStr, endStr, userId: targetUser?.id });
 
       await interaction.editReply({
         content: `✅ **${rows.length}件** のセッション記録をエクスポートしました。`,
