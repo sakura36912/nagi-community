@@ -413,36 +413,15 @@ const rankingCommand: Command = {
         return;
       }
 
-      // days < 30 → show a warning with a dry-run count and ask for confirmation
+      // days < 30 → reject; a floor of 30 prevents accidental data loss from typos
       if (days < 30) {
-        await interaction.deferReply({ ephemeral: true });
-        const wouldDelete = await countCompletedSessionsOlderThan(guildId, days);
-
-        const warningEmbed = new EmbedBuilder()
-          .setTitle("⚠️ 保持期間が短すぎる可能性があります")
-          .setColor(0xfee75c)
-          .setDescription(
-            `保持期間を **${days}日** に設定しようとしています。\n\n` +
-            `この設定を適用すると、次回のプルーン実行時に **約${wouldDelete}件** の` +
-            `完了済みVCセッションが削除されます。\n\n` +
-            "30日未満の保持期間は最近のVC履歴を失う可能性があります。\n" +
-            "本当にこの設定を適用しますか？",
-          )
-          .setFooter({ text: "「確定する」を押すと保持期間が変更されます" })
-          .setTimestamp();
-
-        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`${COMM_RETENTION_CONFIRM_PREFIX}${days}`)
-            .setLabel("確定する ⚠️")
-            .setStyle(ButtonStyle.Danger),
-          new ButtonBuilder()
-            .setCustomId(`${COMM_RETENTION_CANCEL_PREFIX}${days}`)
-            .setLabel("キャンセル")
-            .setStyle(ButtonStyle.Secondary),
-        );
-
-        await interaction.editReply({ embeds: [warningEmbed], components: [row] });
+        await interaction.reply({
+          content:
+            `⛔ 保持期間は最低 **30日** 以上に設定してください（入力値: **${days}日**）。\n\n` +
+            "30日未満に設定すると直近のVC履歴が次回プルーン時に失われる可能性があります。\n" +
+            "設定をリセットしたい場合は `0` を指定してください（デフォルト: **180日**）。",
+          ephemeral: true,
+        });
         return;
       }
 
@@ -1719,6 +1698,13 @@ export async function handleRetentionConfirm(interaction: ButtonInteraction): Pr
   const days = parseInt(daysStr, 10);
   if (isNaN(days) || days < 1) {
     await interaction.reply({ content: "無効なデータです。コマンドを再実行してください。", ephemeral: true });
+    return;
+  }
+  if (days < 30) {
+    await interaction.reply({
+      content: `⛔ 保持期間は最低 **30日** 以上に設定してください（入力値: **${days}日**）。`,
+      ephemeral: true,
+    });
     return;
   }
 
