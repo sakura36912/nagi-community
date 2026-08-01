@@ -1,4 +1,4 @@
-import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
+import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayIntentBits, GuildMember, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
 import { EmbedBuilder } from "discord.js";
@@ -1329,6 +1329,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!command) {
         logger.warn(`Unknown command: ${interaction.commandName}`);
         return;
+      }
+      // 島民ロール制限: 送金・残高確認のみ許可
+      if (interaction.inGuild()) {
+        const member = interaction.member as GuildMember;
+        const shimaminRole = interaction.guild?.roles.cache.find((r) => r.name === "島民");
+        const SHIMAMIN_ALLOWED = new Set(["送金", "残高確認"]);
+        if (shimaminRole && member.roles.cache.has(shimaminRole.id) && !SHIMAMIN_ALLOWED.has(interaction.commandName)) {
+          await interaction.reply({ content: "島民ロールでは `/送金` と `/残高確認` のみ使用できます。", ephemeral: true });
+          return;
+        }
       }
       await command.execute(interaction);
       return;
