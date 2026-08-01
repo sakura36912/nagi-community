@@ -87,7 +87,7 @@ import {
   countPastJoins,
   findWallet,
 } from "./lib/economy";
-import { getEvalSheetConfigsForRoles } from "@workspace/db";
+import { getEvalSheetConfigsForRoles, getExpiredTimedRoleGrants, deleteTimedRoleGrant } from "@workspace/db";
 
 import { appendFileSync } from "fs";
 const DEBUG_LOG = "/tmp/bot-debug.log";
@@ -212,6 +212,31 @@ async function runRewardScheduler(): Promise<void> {
     } catch (err) {
       logger.error(`[reward] Error processing guild ${guild.id}`, err);
     }
+  }
+}
+
+// ─── Timed role expiry scheduler ─────────────────────────────────────────────
+
+async function runTimedRoleExpiryScheduler(): Promise<void> {
+  const now = new Date();
+  const expired = await getExpiredTimedRoleGrants(now);
+  for (const grant of expired) {
+    try {
+      const guild = client.guilds.cache.get(grant.guildId);
+      if (guild) {
+        const member = guild.members.cache.get(grant.userId)
+          ?? await guild.members.fetch(grant.userId).catch(() => null);
+        if (member) {
+          await member.roles.remove(grant.roleId, "期限付きロール付与の期限切れ");
+          logger.info(`[role-expiry] Removed role ${grant.roleId} from ${grant.userId} in ${grant.guildId}`);
+        }
+      }
+    } catch (err) {
+      logger.error(`[role-expiry] Failed to remove role ${grant.roleId} from ${grant.userId}`, err);
+    }
+    await deleteTimedRoleGrant(grant.id).catch((err) =>
+      logger.error(`[role-expiry] Failed to delete grant record ${grant.id}`, err),
+    );
   }
 }
 
@@ -516,6 +541,7 @@ client.once(Events.ClientReady, (readyClient) => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
     runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
     runVcDeleteScheduler().catch((err) => logger.error("[vc-schedule] Scheduler error", err));
+    runTimedRoleExpiryScheduler().catch((err) => logger.error("[role-expiry] Scheduler error", err));
     runSheetReminderScheduler(readyClient).catch((err) => logger.error("[sheet-reminder] Scheduler error", err));
     runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Scheduler error", err));
   }, 60 * 1000);

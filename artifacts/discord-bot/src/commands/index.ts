@@ -79,6 +79,7 @@ import {
   setRoleReward,
   transfer,
 } from "../lib/economy";
+import { upsertTimedRoleGrant } from "@workspace/db";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -460,7 +461,10 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       try {
         const member = await interaction.guild!.members.fetch(interaction.user.id);
         await member.roles.add(item.targetRoleId);
-        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        await upsertTimedRoleGrant(interaction.guildId, interaction.user.id, item.targetRoleId, EVAL_RESURFACE_EFFECT, expiresAt);
+        const expTs = Math.floor(expiresAt.getTime() / 1000);
+        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。（<t:${expTs}:F> に自動解除）`);
       } catch {
         await refundPurchase(interaction.guildId, interaction.user.id, result.item);
         await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
@@ -627,7 +631,10 @@ async function applyShopPurchase(
       try {
         const member = await interaction.guild.members.fetch(interaction.user.id);
         await member.roles.add(item.targetRoleId);
-        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        await upsertTimedRoleGrant(interaction.guildId, interaction.user.id, item.targetRoleId, EVAL_RESURFACE_EFFECT, expiresAt);
+        const expTs = Math.floor(expiresAt.getTime() / 1000);
+        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。（<t:${expTs}:F> に自動解除）`);
       } catch {
         await refundPurchase(interaction.guildId, interaction.user.id, result.item);
         await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");

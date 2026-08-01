@@ -29,4 +29,5 @@ export * from "./vcHub";
 export * from "./points";
 export * from "./guide";
 export * from "./sticky";
+export * from "./timedRoleGrants";
 

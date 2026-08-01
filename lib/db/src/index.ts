@@ -17,3 +17,4 @@ export * from "./schema";
 export * from "./vcHub";
 export * from "./evalSheetConfig";
 export * from "./preban";
+export * from "./timedRoleGrants";
