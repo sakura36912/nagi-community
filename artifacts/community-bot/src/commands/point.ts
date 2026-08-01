@@ -187,7 +187,7 @@ export const pointCommand: Command = {
       const embed = new EmbedBuilder()
         .setTitle("🏆 ポイント残高")
         .setColor(0xf5a623)
-        .setThumbnail(target.displayAvatarURL())
+        .setThumbnail(interaction.guild?.iconURL() ?? null)
         .addFields({ name: "メンバー", value: `<@${target.id}>`, inline: true })
         .addFields({ name: "ポイント", value: `**${balance.toLocaleString()} pt**`, inline: true });
       await interaction.editReply({ embeds: [embed] });

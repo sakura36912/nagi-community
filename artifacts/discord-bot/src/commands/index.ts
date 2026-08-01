@@ -877,7 +877,7 @@ const balanceCommand: Command = {
     ]);
     const embed = new EmbedBuilder()
       .setColor(0x3498db)
-      .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+      .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: interaction.guild?.iconURL() ?? undefined })
       .setDescription(`残高: **${wallet.balance.toLocaleString()}${settings.currencyName}**`);
     await interaction.reply({ embeds: [embed], ephemeral: true });
   },
@@ -934,8 +934,8 @@ const payCommand: Command = {
     if (result.ok) {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
-        .setThumbnail(interaction.user.displayAvatarURL())
+        .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: interaction.guild?.iconURL() ?? undefined })
+        .setThumbnail(interaction.guild?.iconURL() ?? null)
         .setDescription(`<@${target.id}> に **${amount.toLocaleString()}${settings.currencyName}** を送金しました`);
       if (memo) embed.addFields({ name: "📝 メモ", value: memo });
       await interaction.reply({ embeds: [embed] });
@@ -1010,7 +1010,7 @@ const giveCommand: Command = {
         const verb = amount >= 0 ? "付与" : "没収";
         const embed = new EmbedBuilder()
           .setColor(amount >= 0 ? 0x2ecc71 : 0xe74c3c)
-          .setAuthor({ name: target.displayName ?? target.username, iconURL: target.displayAvatarURL() })
+          .setAuthor({ name: target.displayName ?? target.username, iconURL: interaction.guild?.iconURL() ?? undefined })
           .setDescription(`${verb}: **${Math.abs(amount).toLocaleString()}${settings.currencyName}**\n残高: **${result.balance.toLocaleString()}${settings.currencyName}**`);
         await interaction.reply({ embeds: [embed] });
       } else {

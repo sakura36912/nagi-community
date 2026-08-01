@@ -691,14 +691,14 @@ async function sendVcNotifyJoin(guild: VoiceState["guild"], userId: string, chan
     if (!ch || !("send" in ch)) return;
     const member      = guild.members.cache.get(userId);
     const memberName  = member?.displayName ?? `ユーザー(${userId})`;
-    const avatarUrl   = member?.displayAvatarURL() ?? undefined;
+    const guildIconUrl = guild.iconURL() ?? undefined;
     const channelName = getVcChannelName(guild, channelId);
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
-      .setAuthor({ name: memberName, iconURL: avatarUrl })
+      .setAuthor({ name: memberName, iconURL: guildIconUrl })
       .setDescription(`🔊 **${channelName}** に参加しました`)
       .setTimestamp();
-    if (avatarUrl) embed.setThumbnail(avatarUrl);
+    if (guildIconUrl) embed.setThumbnail(guildIconUrl);
     await (ch as TextChannel).send({ embeds: [embed], allowedMentions: { parse: [] } });
   } catch {
     // 通知失敗は無視
@@ -711,14 +711,14 @@ async function sendVcNotifyLeave(guild: VoiceState["guild"], userId: string, cha
     if (!ch || !("send" in ch)) return;
     const member      = guild.members.cache.get(userId);
     const memberName  = member?.displayName ?? `ユーザー(${userId})`;
-    const avatarUrl   = member?.displayAvatarURL() ?? undefined;
+    const guildIconUrl = guild.iconURL() ?? undefined;
     const channelName = getVcChannelName(guild, channelId);
     const embed = new EmbedBuilder()
       .setColor(0xed4245)
-      .setAuthor({ name: memberName, iconURL: avatarUrl })
+      .setAuthor({ name: memberName, iconURL: guildIconUrl })
       .setDescription(`🔇 **${channelName}** から退出しました`)
       .setTimestamp();
-    if (avatarUrl) embed.setThumbnail(avatarUrl);
+    if (guildIconUrl) embed.setThumbnail(guildIconUrl);
     if (joinedAt) {
       const secs = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
       embed.addFields({ name: "⏱ 滞在時間", value: formatDuration(secs), inline: true });
@@ -1178,7 +1178,7 @@ client.on(Events.GuildMemberRemove, async (member) => {
   const embed = new EmbedBuilder()
     .setTitle("🚪 メンバーが退出しました")
     .setColor(0x95a5a6)
-    .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+    .setThumbnail(member.guild.iconURL() ?? null)
     .addFields(
       { name: "ユーザー", value: `${member.user.tag}\n<@${member.id}>`, inline: true },
       { name: "ユーザーID", value: member.id, inline: true },
@@ -1292,7 +1292,7 @@ client.on(Events.GuildBanAdd, async (ban) => {
   const embed = new EmbedBuilder()
     .setTitle("🔨 メンバーがBANされました")
     .setColor(0xe74c3c)
-    .setThumbnail(user.displayAvatarURL({ size: 256 }))
+    .setThumbnail(ban.guild.iconURL() ?? null)
     .addFields(
       { name: "ユーザー", value: `${user.tag}\n<@${user.id}>`, inline: true },
       { name: "ユーザーID", value: user.id, inline: true },
