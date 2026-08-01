@@ -65,6 +65,11 @@ const store = vi.hoisted(() => {
       if (col === "sessions.guildId") return row.guild_id === val;
       return true; // unknown column — don't filter
     }
+    if (cond["op"] === "isNull") {
+      const col = cond["col"] as string;
+      if (col === "sessions.leftAt") return row.left_at === null;
+      return true;
+    }
     if (cond["op"] === "and") {
       return (cond["args"] as Record<string, unknown>[]).every((a) => matchesSession(row, a));
     }
@@ -97,6 +102,34 @@ const store = vi.hoisted(() => {
     }
     return true;
   }
+
+  // ── db.update stateful implementation ─────────────────────────────────────
+  // Used by closeSession: sets left_at on matching open session rows.
+  // The WHERE condition from closeSession contains eq(guildId), eq(userId), isNull(leftAt).
+  const update = vi.fn((table: unknown) => ({
+    set: (_values: unknown) => ({
+      where: (cond: Record<string, unknown>) => ({
+        returning: (_shape: unknown) => {
+          const t = table as Record<string, string>;
+          const tableName = (t["guildId"] ?? t["userId"] ?? "").split(".")[0];
+          if (tableName === "sessions") {
+            const now = new Date().toISOString();
+            const updated: SessionRow[] = [];
+            sessions = sessions.map((r) => {
+              if (matchesSession(r, cond)) {
+                const newRow = { ...r, left_at: now };
+                updated.push(newRow);
+                return newRow;
+              }
+              return r;
+            });
+            return Promise.resolve(updated.map((r) => ({ id: r.id })));
+          }
+          return Promise.resolve([]);
+        },
+      }),
+    }),
+  }));
 
   // ── db.delete stateful implementation ─────────────────────────────────────
   // Routes to the correct store based on the table proxy's guildId sentinel:
@@ -170,13 +203,17 @@ const store = vi.hoisted(() => {
     return [...globalRows];
   }
 
+  function getSessions(): SessionRow[] {
+    return [...sessions];
+  }
+
   function reset(): void {
     sessions    = [];
     privacyRows = [];
     globalRows  = [];
   }
 
-  return { del, execute, seed, seedPrivacy, getPrivacyRows, seedGlobal, getGlobalRows, reset };
+  return { del, update, execute, seed, seedPrivacy, getPrivacyRows, seedGlobal, getGlobalRows, getSessions, reset };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -189,6 +226,7 @@ vi.mock("@workspace/db", () => {
   return {
     db: {
       delete:  store.del,
+      update:  store.update,
       execute: store.execute,
     },
     communityVcSessionsTable:          tbl("sessions"),
@@ -230,6 +268,7 @@ import {
   getAllTempVcDeletions,
   deleteAllUserVcSessions,
   deleteUserVcSessions,
+  closeSession,
 } from "../lib/community.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -644,6 +683,64 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
 
       await expect(deleteUserVcSessions("guild-A", "wiped-user")).resolves.toBe(1);
       expect(store.getPrivacyRows()).toHaveLength(0);
+    });
+  });
+
+  // ── deleteUserVcSessions with only active (open) sessions ───────────────
+  //
+  // deleteUserVcSessions has no left_at guard — it deletes ALL session rows
+  // (open or closed) for the given user/guild.  These tests guard against a
+  // regression where the wipe silently skips active rows:
+  //
+  //   (a) The wipe must physically remove the active row from the store, not just
+  //       exclude it from the export query.  Without the delete, a later
+  //       closeSession call would produce a completed row that *would* appear in
+  //       the export — violating the privacy guarantee.
+  //
+  //   (b) After the wipe, a trailing closeSession call (e.g. the leave handler
+  //       fires after the admin has already wiped the data) must find no matching
+  //       row to update, so no exportable record is recreated.
+
+  describe("per-guild wipe handles users with only active (open) sessions", () => {
+    it("actually deletes the active row so it cannot become exportable later", async () => {
+      // Seed one open session (left_at = null).
+      store.seed([makeRow("wiped-user", "guild-A", { leftAt: null })]);
+
+      // Wipe while the session is still active.
+      const count = await deleteUserVcSessions("guild-A", "wiped-user");
+
+      // The wipe must have deleted the active row — not merely excluded it from
+      // the export query.  A count of 0 would indicate the row was skipped and
+      // could later become exportable once the user leaves the VC.
+      expect(count).toBe(1);
+
+      // The store must be empty — no row survives to be closed later.
+      expect(store.getSessions()).toHaveLength(0);
+
+      // Corroborating export check: nothing appears in the CSV view either.
+      const result = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
+      expect(result).toHaveLength(0);
+    });
+
+    it("a trailing closeSession after the wipe cannot recreate an exportable row", async () => {
+      // Seed one open session — user is still in VC when the admin wipes.
+      store.seed([makeRow("wiped-user", "guild-A", { leftAt: null })]);
+
+      // Admin wipes the data while the session is active.
+      const count = await deleteUserVcSessions("guild-A", "wiped-user");
+      expect(count).toBe(1); // sanity: active row was deleted
+
+      // The leave handler fires after the wipe (race condition).
+      // closeSession must find no matching row (it was already deleted) and
+      // must not insert or recreate any row.
+      await closeSession("guild-A", "wiped-user");
+
+      // Store must still be empty — no row was recreated by closeSession.
+      expect(store.getSessions()).toHaveLength(0);
+
+      // Export must return nothing — no completed row for the user exists.
+      const result = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
+      expect(result).toHaveLength(0);
     });
   });
 
