@@ -1205,8 +1205,8 @@ const INITIAL_ISSUE_CHANNEL_ID = "1526673304327291050";
 // ─── MessageCreate — スティッキーメッセージ ───────────────────────────────────
 
 client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
-  if (!message.guildId)   return;
+  if (message.author.id === client.user?.id) return; // ignore own sticky posts to prevent loops
+  if (!message.guildId) return;
 
   const sticky = await getStickyMessage(message.guildId, message.channelId).catch(() => null);
   if (sticky) {
