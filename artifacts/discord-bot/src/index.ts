@@ -411,36 +411,47 @@ async function runSheetReminderScheduler(bot: Client<true>): Promise<void> {
   const sheets = await listSheetsNeedingReminder();
   for (const sheet of sheets) {
     try {
-      // messageId holds the forum thread ID (thread.id == starterMessage.id).
-      if (!sheet.messageId) {
-        await markSheetReminderSent(sheet.id);
-        continue;
-      }
-
-      const thread = await bot.channels.fetch(sheet.messageId).catch(() => null);
-      if (!thread?.isTextBased()) {
-        await markSheetReminderSent(sheet.id);
-        continue;
-      }
-
       const endTs = Math.floor(sheet.endDate.getTime() / 1000);
-      const embed = new EmbedBuilder()
-        .setTitle("⏰ 評価期間が終了しました")
-        .setColor(0xe74c3c)
-        .setDescription(
-          `<@${sheet.userId}> さんの評価期間（〜<t:${endTs}:D>）が終了しました。\n` +
-          `評価を締めくくって結果を記録してください。`,
-        )
-        .setTimestamp();
 
-      if (!("send" in thread) || typeof thread.send !== "function") {
-        await markSheetReminderSent(sheet.id);
-        continue;
+      // ── 1. フォーラムスレッド内リマインダー ──────────────────────────────
+      if (sheet.messageId) {
+        const thread = await bot.channels.fetch(sheet.messageId).catch(() => null);
+        if (thread?.isTextBased() && "send" in thread && typeof thread.send === "function") {
+          const threadEmbed = new EmbedBuilder()
+            .setTitle("⏰ 評価期間が終了しました")
+            .setColor(0xe74c3c)
+            .setDescription(
+              `<@${sheet.userId}> さんの評価期間（〜<t:${endTs}:D>）が終了しました。\n` +
+              `評価を締めくくって結果を記録してください。`,
+            )
+            .setTimestamp();
+          await (thread as import("discord.js").TextChannel)
+            .send({ content: `<@${sheet.userId}>`, embeds: [threadEmbed] });
+          logger.info(`[sheet-reminder] Sent thread reminder for sheet ${sheet.id} (user ${sheet.userId})`);
+        }
       }
-      await (thread as import("discord.js").TextChannel).send({ content: `<@${sheet.userId}>`, embeds: [embed] })
-        .then(() => {
-          logger.info(`[sheet-reminder] Sent reminder for sheet ${sheet.id} (user ${sheet.userId})`);
-        });
+
+      // ── 2. 設定済みチャンネルへのロールメンション通知 ────────────────────
+      const guildSettings = await getEvalSheetSettings(sheet.guildId);
+      if (guildSettings?.deadlineNotifyChannelId) {
+        const notifChannel = await bot.channels.fetch(guildSettings.deadlineNotifyChannelId).catch(() => null);
+        if (notifChannel?.isTextBased() && "send" in notifChannel && typeof notifChannel.send === "function") {
+          const roleMention = guildSettings.deadlineNotifyRoleId
+            ? `<@&${guildSettings.deadlineNotifyRoleId}> `
+            : "";
+          const notifEmbed = new EmbedBuilder()
+            .setTitle("📋 評価期日のお知らせ")
+            .setColor(0xe67e22)
+            .setDescription(
+              `<@${sheet.userId}> さんの評価期間が本日（<t:${endTs}:D>）で終了します。\n` +
+              `評価を確認し、結果を記録してください。`,
+            )
+            .setTimestamp();
+          await (notifChannel as import("discord.js").TextChannel)
+            .send({ content: roleMention.trim() || undefined, embeds: [notifEmbed] });
+          logger.info(`[sheet-reminder] Sent channel notification for sheet ${sheet.id} to ${guildSettings.deadlineNotifyChannelId}`);
+        }
+      }
     } catch (err) {
       logger.error(`[sheet-reminder] Failed to send reminder for sheet ${sheet.id}`, err);
     }

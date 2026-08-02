@@ -1115,6 +1115,20 @@ export async function setRosterCategoryId(guildId: string, rosterCategoryId: str
     });
 }
 
+export async function setEvalDeadlineNotify(
+  guildId: string,
+  deadlineNotifyChannelId: string | null,
+  deadlineNotifyRoleId: string | null,
+): Promise<void> {
+  await db
+    .insert(communitySheetSettingsTable)
+    .values({ guildId, deadlineNotifyChannelId, deadlineNotifyRoleId, evalPeriodDays: 14 })
+    .onConflictDoUpdate({
+      target: communitySheetSettingsTable.guildId,
+      set: { deadlineNotifyChannelId, deadlineNotifyRoleId, updatedAt: new Date() },
+    });
+}
+
 export async function createEvalSheet(
   guildId: string,
   userId: string,

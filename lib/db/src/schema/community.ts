@@ -200,6 +200,16 @@ export const communitySheetSettingsTable = pgTable("community_sheet_settings", {
    * Null means the self-intro field is omitted.
    */
   rosterCategoryId: text("roster_category_id"),
+  /**
+   * Text channel ID where a role-mention notification is posted at the start of
+   * the deadline day (JST 0:00). Null disables the notification.
+   */
+  deadlineNotifyChannelId: text("deadline_notify_channel_id"),
+  /**
+   * Role ID to mention in the deadline notification message.
+   * Null posts without a role mention.
+   */
+  deadlineNotifyRoleId: text("deadline_notify_role_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

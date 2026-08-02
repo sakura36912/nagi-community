@@ -24,6 +24,7 @@ import {
   getEvalSheetSettings,
   setEvalNameboardUrl,
   setRosterCategoryId,
+  setEvalDeadlineNotify,
 } from "../lib/economy";
 
 export const evalsheetCommand = {
@@ -101,6 +102,26 @@ export const evalsheetCommand = {
             .setName("url")
             .setDescription("名簿へのURL")
             .setMaxLength(512)
+            .setRequired(false),
+        ),
+    )
+
+    // ── deadline-notify ─────────────────────────────────────────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName("deadline-notify")
+        .setDescription("評価期日当日 0:00 に通知するチャンネルとロールを設定します")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("通知を投稿するテキストチャンネル（省略で解除）")
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt
+            .setName("role")
+            .setDescription("通知でメンションするロール（省略でメンションなし）")
             .setRequired(false),
         ),
     )
@@ -205,6 +226,25 @@ export const evalsheetCommand = {
       return;
     }
 
+    // ── deadline-notify ───────────────────────────────────────────────────
+    if (sub === "deadline-notify") {
+      const channel = interaction.options.getChannel("channel");
+      const role    = interaction.options.getRole("role");
+      await setEvalDeadlineNotify(
+        interaction.guildId,
+        channel?.id ?? null,
+        role?.id ?? null,
+      );
+      const lines: string[] = [];
+      lines.push(channel ? `通知チャンネル: <#${channel.id}>` : "通知チャンネル: 解除");
+      lines.push(role ? `メンションロール: <@&${role.id}>` : "メンションロール: なし");
+      await interaction.reply({
+        content: `✅ 期日通知を設定しました\n${lines.join("\n")}`,
+        ephemeral: true,
+      });
+      return;
+    }
+
     // ── info ──────────────────────────────────────────────────────────────
     if (sub === "info") {
       const [configs, globalSettings] = await Promise.all([
@@ -251,6 +291,20 @@ export const evalsheetCommand = {
           value: globalSettings?.nameboardUrl
             ? `[リンク](${globalSettings.nameboardUrl})`
             : "未設定",
+          inline: true,
+        },
+        {
+          name: "期日通知チャンネル",
+          value: globalSettings?.deadlineNotifyChannelId
+            ? `<#${globalSettings.deadlineNotifyChannelId}>`
+            : "未設定",
+          inline: true,
+        },
+        {
+          name: "期日通知ロール",
+          value: globalSettings?.deadlineNotifyRoleId
+            ? `<@&${globalSettings.deadlineNotifyRoleId}>`
+            : "なし（メンションなし）",
           inline: true,
         },
       );
