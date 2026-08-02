@@ -75,17 +75,24 @@ export const stickyCommand = {
 
       await interaction.deferReply({ ephemeral: true });
 
-      // Save to DB
-      await setStickyMessage(guildId, channel.id, content);
-
-      // Fetch the text channel and post the sticky immediately
+      // Fetch the channel object first so we can delete/post
       const textChannel = interaction.guild.channels.cache.get(channel.id)
         ?? await interaction.guild.channels.fetch(channel.id).catch(() => null);
 
+      // Grab the existing sticky before overwriting so we can delete the old post
+      const existing = await getStickyMessage(guildId, channel.id);
+      if (existing?.lastMessageId && textChannel?.isTextBased()) {
+        await textChannel.messages.delete(existing.lastMessageId).catch(() => null);
+      }
+
+      // Save to DB (resets lastMessageId to null)
+      await setStickyMessage(guildId, channel.id, content);
+
+      // Post the new sticky at the bottom and record its ID
       if (textChannel?.isTextBased()) {
         try {
-          const msg = await textChannel.send({ content, allowedMentions: { parse: [] } });
           const { updateStickyLastMessageId } = await import("../lib/sticky");
+          const msg = await textChannel.send({ content, allowedMentions: { parse: [] } });
           await updateStickyLastMessageId(guildId, channel.id, msg.id);
         } catch (err) {
           logger.warn(`[sticky] Failed to post initial sticky in ${channel.id}`, err);
