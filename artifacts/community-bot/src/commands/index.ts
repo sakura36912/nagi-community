@@ -1981,6 +1981,16 @@ export async function handleRetentionConfirm(interaction: ButtonInteraction): Pr
  * invalidated — clicking "確定する" after cancelling will find no entry.
  */
 export async function handleRetentionCancel(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+  const member = interaction.member as GuildMember | null;
+  if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "このボタンはサーバー管理者のみ使用できます。", ephemeral: true });
+    return;
+  }
+
   // Consume the nonce so the confirm button can no longer be used.
   const nonce = interaction.customId.slice(COMM_RETENTION_CANCEL_PREFIX.length);
   retentionConfirmExpiry.delete(nonce);
