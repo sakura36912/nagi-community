@@ -30,6 +30,7 @@ import {
   pruneGuildVcSessions,
   pruneOrphanedVcSessions,
 } from "./lib/community.js";
+import { runPerGuildVcPrune } from "./lib/vc-prune-scheduler.js";
 import { awardVcTime, awardEventParticipation, runRoleTenureBatch } from "./lib/points.js";
 import { getPreban } from "@workspace/db";
 import {
@@ -389,19 +390,11 @@ client.once(Events.ClientReady, async (readyClient) => {
   //     sessions belonging to guilds the bot has since left.
   async function runVcSessionPrune(): Promise<void> {
     // Per-guild prune using each guild's custom retention window.
-    for (const guild of readyClient.guilds.cache.values()) {
-      try {
-        const retentionDays = await getVcSessionRetentionDays(guild.id);
-        const deleted = await pruneGuildVcSessions(guild.id, retentionDays);
-        if (deleted > 0) {
-          logger.info(
-            `[vc/prune] Pruned ${deleted} old VC session(s) for guild ${guild.id} (>${retentionDays} days)`,
-          );
-        }
-      } catch (err) {
-        logger.error(`[vc/prune] Failed to prune VC sessions for guild ${guild.id}`, err);
-      }
-    }
+    await runPerGuildVcPrune(
+      [...readyClient.guilds.cache.keys()],
+      getVcSessionRetentionDays,
+      pruneGuildVcSessions,
+    );
 
     // Catch-all: prune sessions from guilds the bot has left (orphans only).
     // Uses 180-day window. Scoped to guild IDs NOT in the current cache so
