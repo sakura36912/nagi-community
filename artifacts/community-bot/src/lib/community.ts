@@ -1047,6 +1047,43 @@ export async function setAuditLogChannel(
     });
 }
 
+// ─── Guild VC Reset ───────────────────────────────────────────────────────────
+
+/**
+ * Deletes ALL VC sessions (active and completed) for a single guild.
+ * Returns the number of rows deleted.
+ */
+export async function wipeGuildVcSessions(guildId: string): Promise<number> {
+  const result = await db
+    .delete(communityVcSessionsTable)
+    .where(eq(communityVcSessionsTable.guildId, guildId))
+    .returning({ id: communityVcSessionsTable.id });
+  return result.length;
+}
+
+// ─── Tracked VC Category Settings ────────────────────────────────────────────
+
+export async function getTrackedVcCategoryId(guildId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ trackedVcCategoryId: communityRankingSettingsTable.trackedVcCategoryId })
+    .from(communityRankingSettingsTable)
+    .where(eq(communityRankingSettingsTable.guildId, guildId));
+  return row?.trackedVcCategoryId ?? null;
+}
+
+export async function setTrackedVcCategoryId(
+  guildId: string,
+  categoryId: string | null,
+): Promise<void> {
+  await db
+    .insert(communityRankingSettingsTable)
+    .values({ guildId, channelId: null, period: "all", trackedVcCategoryId: categoryId })
+    .onConflictDoUpdate({
+      target: communityRankingSettingsTable.guildId,
+      set: { trackedVcCategoryId: categoryId, updatedAt: new Date() },
+    });
+}
+
 // Re-export awardVcTime so tests can mock it from this module
 export { awardVcTime } from "./points.js";
 

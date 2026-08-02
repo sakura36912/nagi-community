@@ -29,6 +29,7 @@ import {
   getVcSessionRetentionDays,
   pruneGuildVcSessions,
   pruneOrphanedVcSessions,
+  getTrackedVcCategoryId,
 } from "./lib/community.js";
 import { runPerGuildVcPrune } from "./lib/vc-prune-scheduler.js";
 import { awardVcTime, awardEventParticipation, runRoleTenureBatch } from "./lib/points.js";
@@ -528,9 +529,14 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 
   if (newChannelId) {
-    await openSession(guildId, userId, newChannelId).catch((err) =>
-      logger.error(`[vc] openSession error user=${userId}`, err),
-    );
+    const trackedCategoryId = await getTrackedVcCategoryId(guildId).catch(() => null);
+    const channelParentId = newState.channel?.parentId ?? null;
+    const isTracked = !trackedCategoryId || channelParentId === trackedCategoryId;
+    if (isTracked) {
+      await openSession(guildId, userId, newChannelId).catch((err) =>
+        logger.error(`[vc] openSession error user=${userId}`, err),
+      );
+    }
   }
 });
 

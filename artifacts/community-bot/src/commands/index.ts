@@ -65,6 +65,9 @@ import {
   setAuditLogChannel,
   countCompletedSessionsOlderThan,
   buildTempVcCsv,
+  wipeGuildVcSessions,
+  getTrackedVcCategoryId,
+  setTrackedVcCategoryId,
   type CommunityTicketSettings,
   type CommunityTicketPanel,
 } from "../lib/community.js";
@@ -279,6 +282,29 @@ const rankingCommand: Command = {
             .setMinValue(0)
             .setMaxValue(3650),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("tracked-category")
+        .setDescription("VC滞在時間を計測するカテゴリーを設定します（管理者用）")
+        .addChannelOption((opt) =>
+          opt
+            .setName("category")
+            .setDescription("追跡対象のカテゴリー（省略すると現在の設定を表示）")
+            .setRequired(false)
+            .addChannelTypes(ChannelType.GuildCategory),
+        )
+        .addBooleanOption((opt) =>
+          opt.setName("clear").setDescription("カテゴリー制限を解除して全チャンネルを追跡する").setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("reset")
+        .setDescription("このサーバーのVC滞在時間をすべてリセットします（管理者用・取り消し不可）")
+        .addBooleanOption((opt) =>
+          opt.setName("confirm").setDescription("true を指定するとリセットを実行します").setRequired(false),
+        ),
     ),
 
   async execute(interaction) {
@@ -430,6 +456,50 @@ const rankingCommand: Command = {
         content: `VCセッションの保持期間を **${days}日** に設定しました。180日より短い場合は古いセッションが次回のプルーン時に削除されます。`,
         ephemeral: true,
       });
+      return;
+    }
+
+    if (sub === "tracked-category") {
+      const clear = interaction.options.getBoolean("clear");
+      const category = interaction.options.getChannel("category");
+
+      if (clear) {
+        await setTrackedVcCategoryId(guildId, null);
+        await interaction.reply({ content: "✅ カテゴリー制限を解除しました。全チャンネルのVC滞在時間を記録します。", ephemeral: true });
+        return;
+      }
+
+      if (!category) {
+        const current = await getTrackedVcCategoryId(guildId);
+        const msg = current
+          ? `現在の追跡カテゴリー: <#${current}>\nすべてのチャンネルに戻すには \`clear: true\` を指定してください。`
+          : "現在カテゴリー制限はありません（全チャンネルを記録中）。";
+        await interaction.reply({ content: msg, ephemeral: true });
+        return;
+      }
+
+      await setTrackedVcCategoryId(guildId, category.id);
+      await interaction.reply({
+        content: `✅ VC滞在時間の追跡を <#${category.id}> カテゴリー内のチャンネルのみに設定しました。`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    if (sub === "reset") {
+      const confirm = interaction.options.getBoolean("confirm");
+      if (!confirm) {
+        await interaction.reply({
+          content:
+            "⚠️ このコマンドを実行するとこのサーバーの **全VC滞在時間データ** が削除されます。\n\n" +
+            "実行するには `confirm: true` を付けて再度実行してください。この操作は取り消せません。",
+          ephemeral: true,
+        });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true });
+      const deleted = await wipeGuildVcSessions(guildId);
+      await interaction.editReply(`✅ このサーバーのVC滞在時間データを **${deleted}件** 削除しました。`);
       return;
     }
   },

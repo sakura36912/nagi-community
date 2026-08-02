@@ -266,6 +266,8 @@ export const communityRankingSettingsTable = pgTable("community_ranking_settings
   vcSessionRetentionDays: integer("vc_session_retention_days"),
   /** Channel where admin VC record deletions are logged. Null = disabled. */
   auditLogChannelId: text("audit_log_channel_id"),
+  /** Discord category channel ID. When set, only VC sessions in this category are tracked. */
+  trackedVcCategoryId: text("tracked_vc_category_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
