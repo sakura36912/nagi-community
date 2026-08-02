@@ -927,19 +927,19 @@ const payCommand: Command = {
     .setName("送金")
     .setDescription("他のユーザーに送金します")
     .addUserOption((opt) =>
-      opt.setName("user").setDescription("送金先のユーザー").setRequired(true),
+      opt.setName("相手").setDescription("送金先のユーザー").setRequired(true),
     )
     .addIntegerOption((opt) =>
-      opt.setName("amount").setDescription("送金額").setRequired(true).setMinValue(1),
+      opt.setName("金額").setDescription("送金額").setRequired(true).setMinValue(1),
     )
     .addStringOption((opt) =>
-      opt.setName("memo").setDescription("メモ（任意、最大100文字）").setRequired(false).setMaxLength(100),
+      opt.setName("メモ").setDescription("メモ（任意、最大100文字）").setRequired(false).setMaxLength(100),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    const target = interaction.options.getUser("user", true);
-    const amount = interaction.options.getInteger("amount", true);
-    const memo   = interaction.options.getString("memo");
+    const target = interaction.options.getUser("相手", true);
+    const amount = interaction.options.getInteger("金額", true);
+    const memo   = interaction.options.getString("メモ");
 
     if (target.bot) {
       await interaction.reply({ content: "Botには送金できません。", ephemeral: true });
