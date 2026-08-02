@@ -1576,6 +1576,7 @@ import { pointCommand } from "./point";
 import { interviewCommand } from "./interview";
 import { stickyCommand } from "./sticky";
 import { adviceEndCommand } from "./advice";
+import { clearCommand } from "./clear";
 
 // ─── VC コントロールパネル ────────────────────────────────────────────────────
 
@@ -1905,4 +1906,5 @@ export const commands: Command[] = [
   pointCommand,
   stickyCommand,
   adviceEndCommand,
+  clearCommand,
 ];
