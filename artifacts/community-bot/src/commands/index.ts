@@ -90,6 +90,19 @@ export const COMM_BOTSTATUS_REFRESH = "comm:botstatus:refresh";
 export const COMM_RETENTION_CONFIRM_PREFIX = "comm:retention:confirm:";
 export const COMM_RETENTION_CANCEL_PREFIX = "comm:retention:cancel:";
 
+/**
+ * Server-side expiry registry for short-retention confirmation embeds.
+ *
+ * Key: a per-confirmation nonce (crypto.randomUUID()) embedded in the button
+ * custom ID.  Value: the originating guildId, requested days, and an expiry
+ * timestamp (ms).  Using a nonce instead of `guildId:days` means two
+ * concurrent confirmations for the same guild+days are independent — each has
+ * its own entry and neither invalidates the other.  The entry is consumed
+ * (deleted) when the admin clicks "確定する" or "キャンセル", or when the
+ * 60-second timeout fires.
+ */
+export const retentionConfirmExpiry = new Map<string, { guildId: string; days: number; expiry: number }>();
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 interface Command {
@@ -256,6 +269,18 @@ const rankingCommand: Command = {
         ),
     )
     .addSubcommand((sub) =>
+      sub
+        .setName("me")
+        .setDescription("自分のVC順位と滞在時間を確認します")
+        .addStringOption((opt) =>
+          opt
+            .setName("period")
+            .setDescription("集計期間（デフォルト: 全期間）")
+            .setRequired(false)
+            .addChoices(...RANKING_PERIOD_CHOICES),
+        ),
+    )
+    .addSubcommand((sub) =>
       sub.setName("disable").setDescription("毎日の自動投稿を停止します（管理者用）"),
     )
     .addSubcommand((sub) =>
@@ -298,6 +323,68 @@ const rankingCommand: Command = {
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub = interaction.options.getSubcommand();
+
+    // ── me ────────────────────────────────────────────────────────────────────
+    if (sub === "me") {
+      await interaction.deferReply({ ephemeral: true });
+
+      const [globalOptedOut, guildOptedOut] = await Promise.all([
+        isVcTrackingGloballyOptedOut(interaction.user.id),
+        isVcTrackingGuildLocalOptedOut(guildId, interaction.user.id),
+      ]);
+      if (globalOptedOut) {
+        await interaction.editReply("⏸ VCトラッキングを**全サーバーで停止中**です（グローバルオプトアウト）。`/privacy optin` で再開できます。");
+        return;
+      }
+      if (guildOptedOut) {
+        await interaction.editReply("🔒 このサーバーでVCトラッキングをオフにしています。`/privacy optin` で再開できます。");
+        return;
+      }
+
+      const period = (interaction.options.getString("period") ?? "all") as RankingPeriod;
+      const periodStart = buildRankingPeriodStart(period);
+      const now = new Date();
+
+      const [rank, seconds, activeSession] = await Promise.all([
+        getUserVcRank(guildId, interaction.user.id, periodStart),
+        getVcTimeInPeriod(
+          guildId,
+          interaction.user.id,
+          periodStart ?? new Date(0),
+          now,
+        ),
+        getActiveSession(guildId, interaction.user.id),
+      ]);
+
+      const periodLabel = RANKING_PERIOD_LABELS[period];
+      const rankText   = rank != null ? `第 **${rank}** 位` : "圏外（記録なし）";
+      const timeText   = formatSeconds(seconds);
+
+      const liveSeconds = activeSession
+        ? Math.floor((now.getTime() - activeSession.joinedAt.getTime()) / 1000)
+        : 0;
+
+      const embed = new EmbedBuilder()
+        .setTitle(`🏆 あなたのVCランク（${periodLabel}）`)
+        .setColor(activeSession ? 0xed4245 : 0xf5a623)
+        .setThumbnail((interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
+        .addFields(
+          { name: "順位", value: rankText, inline: true },
+          { name: "滞在時間", value: timeText, inline: true },
+        )
+        .setTimestamp();
+
+      if (activeSession) {
+        embed.addFields({
+          name: "現在VC中 🔴",
+          value: `<#${activeSession.channelId}> に参加中（${formatSeconds(liveSeconds)} 経過）`,
+          inline: false,
+        });
+      }
+
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
 
     // ── show ──────────────────────────────────────────────────────────────────
     if (sub === "show") {
@@ -377,9 +464,85 @@ const rankingCommand: Command = {
         return;
       }
 
+      // days >= 30 but < 180 → short-retention warning: show dry-run count and
+      // require explicit 2-step confirmation.  The embed expires after 60 s so
+      // a non-admin who gains the message after the original admin leaves cannot
+      // replay the confirm button.
+      if (days < 180) {
+        await interaction.deferReply({ ephemeral: true });
+        const affected = await countCompletedSessionsOlderThan(guildId, days);
+
+        const warnEmbed = new EmbedBuilder()
+          .setTitle("⚠️ 保持期間を短縮しますか？")
+          .setColor(0xfee75c)
+          .setDescription(
+            `保持期間を **${days}日** に設定しようとしています。\n\n` +
+            (affected > 0
+              ? `現在、**${affected}件** のVC記録がこの日数より古く、次回のプルーン時に削除されます。\n\n`
+              : `現在、この日数より古いVC記録はありません。\n\n`) +
+            "• 削除されたデータは復元できません\n" +
+            "• この操作は次回のプルーン実行時に効果を発揮します\n\n" +
+            "本当に設定を変更しますか？",
+          )
+          .setFooter({ text: "このボタンは60秒後に無効になります" })
+          .setTimestamp();
+
+        // Generate a per-confirmation nonce so two concurrent confirmations for
+        // the same guild+days are independent entries in the server-side registry
+        // and do not overwrite or invalidate each other.
+        const nonce = crypto.randomUUID();
+        retentionConfirmExpiry.set(nonce, { guildId, days, expiry: Date.now() + 60_000 });
+
+        const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`${COMM_RETENTION_CONFIRM_PREFIX}${nonce}`)
+            .setLabel("確定する")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(`${COMM_RETENTION_CANCEL_PREFIX}${nonce}`)
+            .setLabel("キャンセル")
+            .setStyle(ButtonStyle.Secondary),
+        );
+
+        await interaction.editReply({ embeds: [warnEmbed], components: [confirmRow] });
+
+        // Disable the buttons after 60 seconds to prevent stale replays by a
+        // non-admin who encounters the message after the admin's session ends.
+        setTimeout(async () => {
+          // Expire this specific confirmation's registry entry.  If the admin
+          // already confirmed or cancelled the entry has already been consumed,
+          // so deleting a missing key is a harmless no-op.
+          retentionConfirmExpiry.delete(nonce);
+          try {
+            const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`${COMM_RETENTION_CONFIRM_PREFIX}${nonce}`)
+                .setLabel("確定する")
+                .setStyle(ButtonStyle.Danger)
+                .setDisabled(true),
+              new ButtonBuilder()
+                .setCustomId(`${COMM_RETENTION_CANCEL_PREFIX}${nonce}`)
+                .setLabel("キャンセル")
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(true),
+            );
+            const expiredEmbed = new EmbedBuilder()
+              .setTitle("⏱️ タイムアウト")
+              .setColor(0x808080)
+              .setDescription("確認がタイムアウトしました。設定を変更する場合はコマンドを再実行してください。")
+              .setTimestamp();
+            await interaction.editReply({ embeds: [expiredEmbed], components: [disabledRow] });
+          } catch { /* ignore – token expired or the admin already confirmed/cancelled */ }
+        }, 60_000);
+
+        return;
+      }
+
+      // days >= 180 → at or above the default retention; persist directly (no
+      // data-loss risk relative to the default 180-day window).
       await setVcSessionRetentionDays(guildId, days);
       await interaction.reply({
-        content: `VCセッションの保持期間を **${days}日** に設定しました。180日より短い場合は古いセッションが次回のプルーン時に削除されます。`,
+        content: `VCセッションの保持期間を **${days}日** に設定しました。`,
         ephemeral: true,
       });
       return;
@@ -1752,8 +1915,11 @@ export async function handlePrivacyAdminDeleteCancel(interaction: ButtonInteract
 
 /**
  * Admin clicked "確定する" on the short-retention warning embed.
- * The days value is encoded in the custom ID after the prefix.
- * Only the original admin (Administrator permission) may confirm.
+ * The button custom ID encodes a per-confirmation nonce that is looked up in
+ * retentionConfirmExpiry to validate the originating guild, the requested
+ * days, and that the 60-second TTL has not elapsed.  The entry is consumed on
+ * the first valid click so the button cannot be used a second time.
+ * Only an Administrator may confirm.
  */
 export async function handleRetentionConfirm(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guildId) {
@@ -1766,12 +1932,27 @@ export async function handleRetentionConfirm(interaction: ButtonInteraction): Pr
     return;
   }
 
-  const daysStr = interaction.customId.slice(COMM_RETENTION_CONFIRM_PREFIX.length);
-  const days = parseInt(daysStr, 10);
-  if (isNaN(days) || days < 1) {
-    await interaction.reply({ content: "無効なデータです。コマンドを再実行してください。", ephemeral: true });
+  // The nonce is the suffix of the custom ID; look it up in the per-confirmation
+  // registry to get the originating guild, days, and expiry.
+  const nonce = interaction.customId.slice(COMM_RETENTION_CONFIRM_PREFIX.length);
+  const record = retentionConfirmExpiry.get(nonce);
+
+  if (!record || record.guildId !== interaction.guildId || Date.now() > record.expiry) {
+    retentionConfirmExpiry.delete(nonce); // remove stale entry if present
+    await interaction.reply({
+      content: "⏱️ この確認の有効期限が切れています。コマンドを再実行してください。",
+      ephemeral: true,
+    });
     return;
   }
+  // Consume the entry so the button cannot be clicked a second time.
+  retentionConfirmExpiry.delete(nonce);
+
+  const { days } = record;
+
+  // Defense-in-depth floor guard: the command handler already prevents values
+  // below 30 from being registered, but re-check here in case the registry was
+  // populated through an unexpected path.
   if (days < 30) {
     await interaction.reply({
       content: `⛔ 保持期間は最低 **30日** 以上に設定してください（入力値: **${days}日**）。`,
@@ -1796,8 +1977,14 @@ export async function handleRetentionConfirm(interaction: ButtonInteraction): Pr
 
 /**
  * Admin clicked "キャンセル" on the short-retention warning embed.
+ * Consumes the nonce registry entry so the paired confirm button is also
+ * invalidated — clicking "確定する" after cancelling will find no entry.
  */
 export async function handleRetentionCancel(interaction: ButtonInteraction): Promise<void> {
+  // Consume the nonce so the confirm button can no longer be used.
+  const nonce = interaction.customId.slice(COMM_RETENTION_CANCEL_PREFIX.length);
+  retentionConfirmExpiry.delete(nonce);
+
   await interaction.deferUpdate();
   const embed = new EmbedBuilder()
     .setTitle("✅ キャンセルしました")

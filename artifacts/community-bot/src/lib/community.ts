@@ -1054,9 +1054,15 @@ export async function setAuditLogChannel(
  * Returns the number of rows deleted.
  */
 export async function wipeGuildVcSessions(guildId: string): Promise<number> {
+  // Only delete completed sessions (left_at IS NOT NULL).
+  // Active sessions (left_at IS NULL) are skipped so ongoing tracking is not
+  // silently cleared — the bot would never close those sessions properly.
   const result = await db
     .delete(communityVcSessionsTable)
-    .where(eq(communityVcSessionsTable.guildId, guildId))
+    .where(and(
+      eq(communityVcSessionsTable.guildId, guildId),
+      isNotNull(communityVcSessionsTable.leftAt),
+    ))
     .returning({ id: communityVcSessionsTable.id });
   return result.length;
 }

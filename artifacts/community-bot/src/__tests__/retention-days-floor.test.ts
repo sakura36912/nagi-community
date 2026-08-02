@@ -5,8 +5,12 @@
  * Confirms that:
  *   (a) The command rejects any value < 30 with an ephemeral error and never
  *       reaches the DB.
- *   (b) The command accepts values >= 30 and persists them.
- *   (c) handleRetentionConfirm also rejects days < 30 (defense-in-depth floor
+ *   (b) The command sends a 2-step confirmation embed for values >= 30 but
+ *       < 180 (short-retention warning), and persists directly for values
+ *       >= 180 (at or above the safe default).
+ *   (c) The confirmation embed's buttons are disabled after 60 seconds so a
+ *       non-admin cannot replay them after the original admin's session ends.
+ *   (d) handleRetentionConfirm also rejects days < 30 (defense-in-depth floor
  *       guard against stale button replays).
  */
 
@@ -115,6 +119,7 @@ vi.mock("discord.js", async (importOriginal) => {
 import {
   handleRetentionConfirm,
   COMM_RETENTION_CONFIRM_PREFIX,
+  retentionConfirmExpiry,
 } from "../commands/index.js";
 
 // ─── Interaction factory helpers ─────────────────────────────────────────────
@@ -142,16 +147,22 @@ function makeCommandInteraction(opts: {
   };
 }
 
-/** Creates a minimal ButtonInteraction stub for the confirm button. */
+/**
+ * Creates a minimal ButtonInteraction stub for the confirm button.
+ * Pass `nonce` to embed a specific nonce in the custom ID (e.g. after
+ * registering it in `retentionConfirmExpiry`).  When omitted the custom ID
+ * uses a literal string that will NOT be found in the registry, which is
+ * correct for tests that expect rejection before the nonce lookup.
+ */
 function makeConfirmInteraction(opts: {
-  days?: number;
+  nonce?: string;
   guildId?: string | null;
   isAdmin?: boolean;
 }) {
-  const { days = 30, guildId = "guild-123", isAdmin = true } = opts;
+  const { nonce = "no-such-nonce", guildId = "guild-123", isAdmin = true } = opts;
   return {
     guildId,
-    customId: `${COMM_RETENTION_CONFIRM_PREFIX}${days}`,
+    customId: `${COMM_RETENTION_CONFIRM_PREFIX}${nonce}`,
     member: {
       permissions: {
         has: vi.fn().mockReturnValue(isAdmin),
@@ -163,6 +174,24 @@ function makeConfirmInteraction(opts: {
   };
 }
 
+/**
+ * Registers a valid server-side expiry entry in `retentionConfirmExpiry` and
+ * returns both the nonce and a matching interaction stub.  Use this in tests
+ * that expect `handleRetentionConfirm` to succeed.
+ */
+function registerAndMakeConfirmInteraction(opts: {
+  days?: number;
+  guildId?: string;
+  isAdmin?: boolean;
+  ttlOffset?: number; // ms from now (default: +60 000)
+}) {
+  const { days = 30, guildId = "guild-123", isAdmin = true, ttlOffset = 60_000 } = opts;
+  const nonce = `test-nonce-${Math.random().toString(36).slice(2)}`;
+  retentionConfirmExpiry.set(nonce, { guildId, days, expiry: Date.now() + ttlOffset });
+  const interaction = makeConfirmInteraction({ nonce, guildId, isAdmin });
+  return { nonce, interaction };
+}
+
 // ─── Tests: command execute – floor rejection ─────────────────────────────────
 
 // We import rankingCommand lazily after mocks are set up.
@@ -172,6 +201,8 @@ let rankingExecute: ((interaction: unknown) => Promise<void>) | undefined;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // Clear the server-side expiry registry so tests start with a clean slate.
+  retentionConfirmExpiry.clear();
   // Re-wire chains after clearAllMocks
   mocks.insertValues.mockReturnValue({ onConflictDoUpdate: mocks.onConflictDoUpdate });
   mocks.insert.mockReturnValue({ values: mocks.insertValues });
@@ -229,37 +260,103 @@ describe("/ranking retention-days – floor guard (command handler)", () => {
     expect(replyArg.content).toMatch(/14/);
   });
 
-  it("accepts exactly 30 days and persists the value", async () => {
+  it("accepts exactly 30 days and sends a confirmation embed instead of persisting directly", async () => {
     if (!rankingExecute) return;
     const interaction = makeCommandInteraction({ days: 30 });
     await rankingExecute(interaction as never);
 
-    expect(mocks.insert).toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(
-      expect.objectContaining({ ephemeral: true }),
+    // Short-retention path: must defer then edit with embed+buttons, NOT write to DB yet
+    expect(interaction.deferReply).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }));
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: expect.anything(), components: expect.anything() }),
     );
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 
-  it("accepts 180 days and persists the value without any error", async () => {
+  it("accepts exactly 90 days and sends a confirmation embed instead of persisting directly", async () => {
+    if (!rankingExecute) return;
+    const interaction = makeCommandInteraction({ days: 90 });
+    await rankingExecute(interaction as never);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }));
+    expect(interaction.editReply).toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("accepts 180 days and persists directly without a confirmation embed", async () => {
     if (!rankingExecute) return;
     const interaction = makeCommandInteraction({ days: 180 });
     await rankingExecute(interaction as never);
 
+    // >= 180 days is at or above the default — no data-loss risk, persist directly
     expect(mocks.insert).toHaveBeenCalled();
+    expect(interaction.deferReply).not.toHaveBeenCalled();
 
-    // If reply was called, it must NOT be an error (floor guard should not fire)
+    // Must not look like an error reply
     if (interaction.reply.mock.calls.length > 0) {
       const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string }]];
       expect(replyArg.content).not.toMatch(/30日以上/);
     }
   });
+
+  it("accepts 365 days and persists directly without a confirmation embed", async () => {
+    if (!rankingExecute) return;
+    const interaction = makeCommandInteraction({ days: 365 });
+    await rankingExecute(interaction as never);
+
+    expect(mocks.insert).toHaveBeenCalled();
+    expect(interaction.deferReply).not.toHaveBeenCalled();
+  });
 });
 
-// ─── Tests: handleRetentionConfirm – floor guard (button handler) ─────────────
+// ─── Tests: confirmation embed timeout ────────────────────────────────────────
 
-describe("handleRetentionConfirm – floor guard", () => {
-  it("rejects 1 day with an ephemeral error and does NOT touch the DB", async () => {
-    const interaction = makeConfirmInteraction({ days: 1 });
+describe("/ranking retention-days – confirmation embed timeout", () => {
+  it("disables buttons and edits the reply after 60 seconds", async () => {
+    if (!rankingExecute) return;
+    vi.useFakeTimers();
+    try {
+      const interaction = makeCommandInteraction({ days: 60 });
+      await rankingExecute(interaction as never);
+
+      // First editReply sent the warning embed with active buttons
+      expect(interaction.editReply).toHaveBeenCalledTimes(1);
+
+      // Advance clock by 60 seconds — the timeout callback should fire
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Second editReply should have been called (disabled buttons + timeout embed)
+      expect(interaction.editReply).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does NOT edit the reply a second time before 60 seconds have elapsed", async () => {
+    if (!rankingExecute) return;
+    vi.useFakeTimers();
+    try {
+      const interaction = makeCommandInteraction({ days: 60 });
+      await rankingExecute(interaction as never);
+
+      // Advance only 59 999 ms — the timeout must not have fired yet
+      await vi.advanceTimersByTimeAsync(59_999);
+
+      expect(interaction.editReply).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── Tests: handleRetentionConfirm – nonce registry + floor guard ─────────────
+
+describe("handleRetentionConfirm – nonce registry + floor guard", () => {
+  // ── registry checks ────────────────────────────────────────────────────────
+
+  it("rejects a confirm when no nonce entry exists (stale/replayed interaction)", async () => {
+    // Map is empty — customId nonce won't be found
+    const interaction = makeConfirmInteraction({});
     await handleRetentionConfirm(interaction as never);
 
     expect(interaction.reply).toHaveBeenCalledWith(
@@ -269,8 +366,8 @@ describe("handleRetentionConfirm – floor guard", () => {
     expect(mocks.insert).not.toHaveBeenCalled();
   });
 
-  it("rejects 29 days with an ephemeral error and does NOT touch the DB", async () => {
-    const interaction = makeConfirmInteraction({ days: 29 });
+  it("rejects a confirm after the server-side TTL has expired", async () => {
+    const { interaction } = registerAndMakeConfirmInteraction({ days: 30, ttlOffset: -1 });
     await handleRetentionConfirm(interaction as never);
 
     expect(interaction.reply).toHaveBeenCalledWith(
@@ -280,16 +377,21 @@ describe("handleRetentionConfirm – floor guard", () => {
     expect(mocks.insert).not.toHaveBeenCalled();
   });
 
-  it("floor error message for confirm handler mentions 30 days", async () => {
-    const interaction = makeConfirmInteraction({ days: 5 });
+  it("rejects a confirm from a different guild than the one that sent the embed", async () => {
+    const { nonce } = registerAndMakeConfirmInteraction({ days: 30, guildId: "guild-A" });
+    // Interaction arrives from guild-B with the same nonce
+    const interaction = makeConfirmInteraction({ nonce, guildId: "guild-B" });
     await handleRetentionConfirm(interaction as never);
 
-    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
-    expect(replyArg.content).toMatch(/30/);
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 
   it("accepts exactly 30 days and proceeds to deferUpdate + DB write", async () => {
-    const interaction = makeConfirmInteraction({ days: 30 });
+    const { interaction } = registerAndMakeConfirmInteraction({ days: 30 });
     await handleRetentionConfirm(interaction as never);
 
     expect(interaction.reply).not.toHaveBeenCalled();
@@ -298,11 +400,106 @@ describe("handleRetentionConfirm – floor guard", () => {
   });
 
   it("accepts 90 days and proceeds to deferUpdate + DB write", async () => {
-    const interaction = makeConfirmInteraction({ days: 90 });
+    const { interaction } = registerAndMakeConfirmInteraction({ days: 90 });
     await handleRetentionConfirm(interaction as never);
 
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.deferUpdate).toHaveBeenCalled();
     expect(mocks.insert).toHaveBeenCalled();
+  });
+
+  it("consumes the nonce entry so a second click on the same button is rejected", async () => {
+    const { nonce } = registerAndMakeConfirmInteraction({ days: 30 });
+    const interaction1 = makeConfirmInteraction({ nonce });
+
+    // First click: succeeds and consumes the nonce
+    await handleRetentionConfirm(interaction1 as never);
+    expect(interaction1.deferUpdate).toHaveBeenCalledTimes(1);
+
+    // Second click with the same nonce: entry is gone — must be rejected
+    vi.clearAllMocks();
+    mocks.insertValues.mockReturnValue({ onConflictDoUpdate: mocks.onConflictDoUpdate });
+    mocks.insert.mockReturnValue({ values: mocks.insertValues });
+    const interaction2 = makeConfirmInteraction({ nonce });
+    await handleRetentionConfirm(interaction2 as never);
+
+    expect(interaction2.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction2.deferUpdate).not.toHaveBeenCalled();
+  });
+
+  it("two concurrent confirmations for the same guild+days are independent", async () => {
+    // Admin A and Admin B both run /ranking retention-days 60 at the same time.
+    const { nonce: nonceA, interaction: ia } = registerAndMakeConfirmInteraction({ days: 60 });
+    const { nonce: nonceB, interaction: ib } = registerAndMakeConfirmInteraction({ days: 60 });
+
+    // They must be different nonces
+    expect(nonceA).not.toBe(nonceB);
+
+    // Expiring nonce A (simulating its timeout deleting it) must not affect B
+    retentionConfirmExpiry.delete(nonceA);
+
+    // Interaction A now finds no entry → rejected
+    await handleRetentionConfirm(ia as never);
+    expect(ia.deferUpdate).not.toHaveBeenCalled();
+
+    // Interaction B still has a valid entry → accepted
+    vi.clearAllMocks();
+    mocks.insertValues.mockReturnValue({ onConflictDoUpdate: mocks.onConflictDoUpdate });
+    mocks.insert.mockReturnValue({ values: mocks.insertValues });
+    await handleRetentionConfirm(ib as never);
+    expect(ib.deferUpdate).toHaveBeenCalled();
+    expect(mocks.insert).toHaveBeenCalled();
+  });
+
+  // ── defense-in-depth floor guard (runs after nonce lookup) ─────────────────
+
+  it("rejects days < 30 even when a valid nonce exists (floor guard in button handler)", async () => {
+    const { interaction } = registerAndMakeConfirmInteraction({ days: 5 });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    expect(replyArg.content).toMatch(/30/);
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("rejects 1 day (stale/no-nonce path) with an ephemeral error and does NOT touch the DB", async () => {
+    // No nonce registered — arrives as a stale interaction
+    const interaction = makeConfirmInteraction({});
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  // ── admin permission checks ────────────────────────────────────────────────
+
+  it("rejects a non-Administrator with an ephemeral error and does NOT touch the DB", async () => {
+    const interaction = makeConfirmInteraction({ isAdmin: false });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("non-Administrator cannot replay the button even with a valid nonce", async () => {
+    const { nonce } = registerAndMakeConfirmInteraction({ days: 30 });
+    const interaction = makeConfirmInteraction({ nonce, isAdmin: false });
+    await handleRetentionConfirm(interaction as never);
+
+    // Must be rejected before any DB write
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 });
