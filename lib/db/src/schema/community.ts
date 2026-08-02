@@ -201,6 +201,11 @@ export const communitySheetSettingsTable = pgTable("community_sheet_settings", {
    */
   rosterCategoryId: text("roster_category_id"),
   /**
+   * How many days before endDate the forum-thread reminder is posted.
+   * 0 (default) = on the deadline day itself.
+   */
+  reminderDaysBefore: integer("reminder_days_before").notNull().default(0),
+  /**
    * Text channel ID where a role-mention notification is posted at the start of
    * the deadline day (JST 0:00). Null disables the notification.
    */

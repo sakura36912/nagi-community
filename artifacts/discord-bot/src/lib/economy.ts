@@ -1129,6 +1129,16 @@ export async function setEvalDeadlineNotify(
     });
 }
 
+export async function setEvalReminderDaysBefore(guildId: string, days: number): Promise<void> {
+  await db
+    .insert(communitySheetSettingsTable)
+    .values({ guildId, reminderDaysBefore: days, evalPeriodDays: 14 })
+    .onConflictDoUpdate({
+      target: communitySheetSettingsTable.guildId,
+      set: { reminderDaysBefore: days, updatedAt: new Date() },
+    });
+}
+
 export async function createEvalSheet(
   guildId: string,
   userId: string,
@@ -1167,17 +1177,35 @@ export async function deleteEvalSheet(id: number): Promise<void> {
 }
 
 /**
- * Returns sheets whose endDate has passed and whose reminder has not yet been sent.
- * Used by the reminder scheduler to detect newly-expired eval periods.
+ * Returns sheets whose reminder day has arrived (endDate minus per-guild reminderDaysBefore)
+ * and whose reminder has not yet been sent.
+ * Uses a LEFT JOIN with community_sheet_settings so guilds without a settings row
+ * fall back to 0 (= fire on the deadline day itself).
  */
 export async function listSheetsNeedingReminder(): Promise<CommunitySheet[]> {
   return db
-    .select()
+    .select({
+      id: communitySheetsTable.id,
+      guildId: communitySheetsTable.guildId,
+      userId: communitySheetsTable.userId,
+      startDate: communitySheetsTable.startDate,
+      endDate: communitySheetsTable.endDate,
+      channelId: communitySheetsTable.channelId,
+      messageId: communitySheetsTable.messageId,
+      needsUpdate: communitySheetsTable.needsUpdate,
+      reminderSentAt: communitySheetsTable.reminderSentAt,
+      extensionCount: communitySheetsTable.extensionCount,
+      createdAt: communitySheetsTable.createdAt,
+    })
     .from(communitySheetsTable)
+    .leftJoin(
+      communitySheetSettingsTable,
+      eq(communitySheetsTable.guildId, communitySheetSettingsTable.guildId),
+    )
     .where(
       and(
-        // 終了日のJST日付が「今日のJST日付」と一致する行を対象にする
-        sql`(${communitySheetsTable.endDate} AT TIME ZONE 'Asia/Tokyo')::date = (now() AT TIME ZONE 'Asia/Tokyo')::date`,
+        // (endDate - reminderDaysBefore days) のJST日付が今日のJST日付と一致
+        sql`((${communitySheetsTable.endDate} - (COALESCE(${communitySheetSettingsTable.reminderDaysBefore}, 0) || ' days')::interval) AT TIME ZONE 'Asia/Tokyo')::date = (now() AT TIME ZONE 'Asia/Tokyo')::date`,
         sql`${communitySheetsTable.reminderSentAt} IS NULL`,
       ),
     );

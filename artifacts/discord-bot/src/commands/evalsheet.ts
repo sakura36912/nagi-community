@@ -25,6 +25,7 @@ import {
   setEvalNameboardUrl,
   setRosterCategoryId,
   setEvalDeadlineNotify,
+  setEvalReminderDaysBefore,
 } from "../lib/economy";
 
 export const evalsheetCommand = {
@@ -103,6 +104,21 @@ export const evalsheetCommand = {
             .setDescription("名簿へのURL")
             .setMaxLength(512)
             .setRequired(false),
+        ),
+    )
+
+    // ── reminder-timing ─────────────────────────────────────────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName("reminder-timing")
+        .setDescription("フォーラムスレッドへのリマインダーを期日の何日前に送るか設定します")
+        .addIntegerOption((opt) =>
+          opt
+            .setName("days")
+            .setDescription("期日の何日前に送るか（0 = 期日当日）")
+            .setMinValue(0)
+            .setMaxValue(30)
+            .setRequired(true),
         ),
     )
 
@@ -226,6 +242,19 @@ export const evalsheetCommand = {
       return;
     }
 
+    // ── reminder-timing ───────────────────────────────────────────────────
+    if (sub === "reminder-timing") {
+      const days = interaction.options.getInteger("days", true);
+      await setEvalReminderDaysBefore(interaction.guildId, days);
+      await interaction.reply({
+        content: days === 0
+          ? "✅ フォーラムリマインダーを **期日当日** に送るよう設定しました。"
+          : `✅ フォーラムリマインダーを **期日の ${days} 日前** に送るよう設定しました。`,
+        ephemeral: true,
+      });
+      return;
+    }
+
     // ── deadline-notify ───────────────────────────────────────────────────
     if (sub === "deadline-notify") {
       const channel = interaction.options.getChannel("channel");
@@ -291,6 +320,13 @@ export const evalsheetCommand = {
           value: globalSettings?.nameboardUrl
             ? `[リンク](${globalSettings.nameboardUrl})`
             : "未設定",
+          inline: true,
+        },
+        {
+          name: "フォーラムリマインダー",
+          value: globalSettings?.reminderDaysBefore
+            ? `期日の ${globalSettings.reminderDaysBefore} 日前`
+            : "期日当日",
           inline: true,
         },
         {
