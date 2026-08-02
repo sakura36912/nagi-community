@@ -256,18 +256,6 @@ const rankingCommand: Command = {
         ),
     )
     .addSubcommand((sub) =>
-      sub
-        .setName("vcランク")
-        .setDescription("自分のVC順位と滞在時間を確認します")
-        .addStringOption((opt) =>
-          opt
-            .setName("period")
-            .setDescription("集計期間（デフォルト: 全期間）")
-            .setRequired(false)
-            .addChoices(...RANKING_PERIOD_CHOICES),
-        ),
-    )
-    .addSubcommand((sub) =>
       sub.setName("disable").setDescription("毎日の自動投稿を停止します（管理者用）"),
     )
     .addSubcommand((sub) =>
@@ -310,68 +298,6 @@ const rankingCommand: Command = {
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub = interaction.options.getSubcommand();
-
-    // ── me ────────────────────────────────────────────────────────────────────
-    if (sub === "vcランク") {
-      await interaction.deferReply({ ephemeral: true });
-
-      const [globalOptedOut, guildOptedOut] = await Promise.all([
-        isVcTrackingGloballyOptedOut(interaction.user.id),
-        isVcTrackingGuildLocalOptedOut(guildId, interaction.user.id),
-      ]);
-      if (globalOptedOut) {
-        await interaction.editReply("⏸ VCトラッキングを**全サーバーで停止中**です（グローバルオプトアウト）。`/privacy optin` で再開できます。");
-        return;
-      }
-      if (guildOptedOut) {
-        await interaction.editReply("🔒 このサーバーでVCトラッキングをオフにしています。`/privacy optin` で再開できます。");
-        return;
-      }
-
-      const period = (interaction.options.getString("period") ?? "all") as RankingPeriod;
-      const periodStart = buildRankingPeriodStart(period);
-      const now = new Date();
-
-      const [rank, seconds, activeSession] = await Promise.all([
-        getUserVcRank(guildId, interaction.user.id, periodStart),
-        getVcTimeInPeriod(
-          guildId,
-          interaction.user.id,
-          periodStart ?? new Date(0),
-          now,
-        ),
-        getActiveSession(guildId, interaction.user.id),
-      ]);
-
-      const periodLabel = RANKING_PERIOD_LABELS[period];
-      const rankText   = rank != null ? `第 **${rank}** 位` : "圏外（記録なし）";
-      const timeText   = formatSeconds(seconds);
-
-      const liveSeconds = activeSession
-        ? Math.floor((now.getTime() - activeSession.joinedAt.getTime()) / 1000)
-        : 0;
-
-      const embed = new EmbedBuilder()
-        .setTitle(`🏆 あなたのVCランク（${periodLabel}）`)
-        .setColor(activeSession ? 0xed4245 : 0xf5a623)
-        .setThumbnail((interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
-        .addFields(
-          { name: "順位", value: rankText, inline: true },
-          { name: "滞在時間", value: timeText, inline: true },
-        )
-        .setTimestamp();
-
-      if (activeSession) {
-        embed.addFields({
-          name: "現在VC中 🔴",
-          value: `<#${activeSession.channelId}> に参加中（${formatSeconds(liveSeconds)} 経過）`,
-          inline: false,
-        });
-      }
-
-      await interaction.editReply({ embeds: [embed] });
-      return;
-    }
 
     // ── show ──────────────────────────────────────────────────────────────────
     if (sub === "show") {
@@ -988,6 +914,82 @@ const mystatsCommand: Command = {
       embed.addFields({
         name: "現在VC中 🔴",
         value: `セッション開始から **${formatSeconds(liveSeconds)}** 経過中（<#${activeSession.channelId}>）`,
+        inline: false,
+      });
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  },
+};
+
+// ─── /vcランク ───────────────────────────────────────────────────────────────
+
+const vcRankCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("vcランク")
+    .setDescription("自分のVC順位と滞在時間を確認します")
+    .addStringOption((opt) =>
+      opt
+        .setName("period")
+        .setDescription("集計期間（デフォルト: 全期間）")
+        .setRequired(false)
+        .addChoices(...RANKING_PERIOD_CHOICES),
+    ),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    await interaction.deferReply({ ephemeral: true });
+
+    const [globalOptedOut, guildOptedOut] = await Promise.all([
+      isVcTrackingGloballyOptedOut(interaction.user.id),
+      isVcTrackingGuildLocalOptedOut(guildId, interaction.user.id),
+    ]);
+    if (globalOptedOut) {
+      await interaction.editReply("⏸ VCトラッキングを**全サーバーで停止中**です（グローバルオプトアウト）。`/privacy optin` で再開できます。");
+      return;
+    }
+    if (guildOptedOut) {
+      await interaction.editReply("🔒 このサーバーでVCトラッキングをオフにしています。`/privacy optin` で再開できます。");
+      return;
+    }
+
+    const period = (interaction.options.getString("period") ?? "all") as RankingPeriod;
+    const periodStart = buildRankingPeriodStart(period);
+    const now = new Date();
+
+    const [rank, seconds, activeSession] = await Promise.all([
+      getUserVcRank(guildId, interaction.user.id, periodStart),
+      getVcTimeInPeriod(
+        guildId,
+        interaction.user.id,
+        periodStart ?? new Date(0),
+        now,
+      ),
+      getActiveSession(guildId, interaction.user.id),
+    ]);
+
+    const periodLabel = RANKING_PERIOD_LABELS[period];
+    const rankText   = rank != null ? `第 **${rank}** 位` : "圏外（記録なし）";
+    const timeText   = formatSeconds(seconds);
+
+    const liveSeconds = activeSession
+      ? Math.floor((now.getTime() - activeSession.joinedAt.getTime()) / 1000)
+      : 0;
+
+    const embed = new EmbedBuilder()
+      .setTitle(`🏆 あなたのVCランク（${periodLabel}）`)
+      .setColor(activeSession ? 0xed4245 : 0xf5a623)
+      .setThumbnail((interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
+      .addFields(
+        { name: "順位", value: rankText, inline: true },
+        { name: "滞在時間", value: timeText, inline: true },
+      )
+      .setTimestamp();
+
+    if (activeSession) {
+      embed.addFields({
+        name: "現在VC中 🔴",
+        value: `<#${activeSession.channelId}> に参加中（${formatSeconds(liveSeconds)} 経過）`,
         inline: false,
       });
     }
@@ -2258,6 +2260,7 @@ import { pointCommand } from "./point.js";
 
 export const commands: Command[] = [
   rankingCommand,
+  vcRankCommand,
   mystatsCommand,
   privacyCommand,
   ticketCommand,
