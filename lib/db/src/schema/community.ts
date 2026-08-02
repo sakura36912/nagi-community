@@ -122,6 +122,8 @@ export const communityVcSessionsTable = pgTable("community_vc_sessions", {
   channelId: text("channel_id").notNull(),
   joinedAt: timestamp("joined_at", { withTimezone: true }).notNull(),
   leftAt: timestamp("left_at", { withTimezone: true }),
+  /** True when the session belongs to a user with the 追放者 role — tracked separately from the main ranking. */
+  isExile: boolean("is_exile").notNull().default(false),
 });
 
 export type CommunityVcSession = typeof communityVcSessionsTable.$inferSelect;

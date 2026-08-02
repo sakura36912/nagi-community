@@ -475,13 +475,18 @@ export async function deleteAllUserVcSessions(userId: string): Promise<number> {
  * Opens a new VC session for the user if they have not opted out of tracking.
  * Returns the created session, or null if the user has opted out.
  */
-export async function openSession(guildId: string, userId: string, channelId: string): Promise<CommunityVcSession | null> {
+export async function openSession(
+  guildId: string,
+  userId: string,
+  channelId: string,
+  isExile = false,
+): Promise<CommunityVcSession | null> {
   const optedOut = await isVcTrackingOptedOut(guildId, userId);
   if (optedOut) return null;
 
   const [row] = await db
     .insert(communityVcSessionsTable)
-    .values({ guildId, userId, channelId, joinedAt: new Date() })
+    .values({ guildId, userId, channelId, joinedAt: new Date(), isExile })
     .returning();
   if (!row) throw new Error("Failed to open VC session");
   return row;
@@ -648,6 +653,7 @@ export async function getVcRanking(guildId: string, periodStart?: Date): Promise
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       ${periodFilter}
+      AND is_exile = false
       AND user_id NOT IN (
         SELECT user_id FROM community_vc_privacy
         WHERE guild_id = ${guildId} AND opted_out = true
@@ -668,13 +674,19 @@ export async function getVcRanking(guildId: string, periodStart?: Date): Promise
   }));
 }
 
-/** Total VC seconds for a user between two dates (for eval sheets). */
+/** Total VC seconds for a user between two dates (for eval sheets).
+ * Pass `isExile` to restrict to exile or non-exile sessions only.
+ */
 export async function getVcTimeInPeriod(
   guildId: string,
   userId: string,
   startDate: Date,
   endDate: Date,
+  isExile?: boolean,
 ): Promise<number> {
+  const exileFilter = isExile !== undefined
+    ? sql`AND is_exile = ${isExile}`
+    : sql``;
   const rows = await db.execute<{ total_seconds: string }>(sql`
     SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
       LEAST(COALESCE(left_at, NOW()), ${endDate})
@@ -685,6 +697,7 @@ export async function getVcTimeInPeriod(
       AND user_id = ${userId}
       AND joined_at < ${endDate}
       AND COALESCE(left_at, NOW()) > ${startDate}
+      ${exileFilter}
       AND user_id NOT IN (
         SELECT user_id FROM community_vc_privacy
         WHERE guild_id = ${guildId} AND opted_out = true
@@ -723,6 +736,7 @@ export async function getUserVcRank(
       FROM community_vc_sessions
       WHERE guild_id = ${guildId}
         ${periodFilter}
+        AND is_exile = false
         AND user_id NOT IN (
           SELECT user_id FROM community_vc_privacy
           WHERE guild_id = ${guildId} AND opted_out = true

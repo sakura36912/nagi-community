@@ -543,7 +543,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const channelParentId = newState.channel?.parentId ?? null;
     const isTracked = !trackedCategoryId || channelParentId === trackedCategoryId;
     if (isTracked) {
-      await openSession(guildId, userId, newChannelId).catch((err) =>
+      const isExile = newState.member?.roles.cache.some((r) => r.name === "追放者") ?? false;
+      await openSession(guildId, userId, newChannelId, isExile).catch((err) =>
         logger.error(`[vc] openSession error user=${userId}`, err),
       );
     }

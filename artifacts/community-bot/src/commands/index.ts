@@ -1116,23 +1116,32 @@ const vcRankCommand: Command = {
       return;
     }
 
+    const member = interaction.member as GuildMember;
+    const isExile = member?.roles.cache.some(
+      (r) => r.name === "追放者",
+    ) ?? false;
+
     const period = (interaction.options.getString("period") ?? "all") as RankingPeriod;
     const periodStart = buildRankingPeriodStart(period);
     const now = new Date();
 
     const [rank, seconds, activeSession] = await Promise.all([
-      getUserVcRank(guildId, interaction.user.id, periodStart),
+      // Exile users are excluded from the main ranking — always null
+      isExile ? Promise.resolve(null) : getUserVcRank(guildId, interaction.user.id, periodStart),
       getVcTimeInPeriod(
         guildId,
         interaction.user.id,
         periodStart ?? new Date(0),
         now,
+        isExile,
       ),
       getActiveSession(guildId, interaction.user.id),
     ]);
 
     const periodLabel = RANKING_PERIOD_LABELS[period];
-    const rankText   = rank != null ? `第 **${rank}** 位` : "圏外（記録なし）";
+    const rankText   = isExile
+      ? "追放者として別記録中"
+      : rank != null ? `第 **${rank}** 位` : "圏外（記録なし）";
     const timeText   = formatSeconds(seconds);
 
     const liveSeconds = activeSession
@@ -1142,7 +1151,7 @@ const vcRankCommand: Command = {
     const embed = new EmbedBuilder()
       .setTitle(`🏆 あなたのVCランク（${periodLabel}）`)
       .setColor(activeSession ? 0xed4245 : 0xf5a623)
-      .setThumbnail((interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
+      .setThumbnail(member?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
       .addFields(
         { name: "順位", value: rankText, inline: true },
         { name: "滞在時間", value: timeText, inline: true },
