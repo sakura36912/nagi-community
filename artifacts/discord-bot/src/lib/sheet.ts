@@ -45,7 +45,7 @@ export function buildSheetEmbed(opts: {
   const embed = new EmbedBuilder()
     .setTitle(`📋 評価シート — ${displayName}`)
     .setColor(0x2ecc71)
-    .setThumbnail(guildIconUrl ?? targetUser.displayAvatarURL())
+    .setThumbnail(targetUser.displayAvatarURL())
     .addFields(
       { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
       { name: "📋 名簿", value: nameboardValue, inline: false },
