@@ -254,7 +254,7 @@ const rankingCommand: Command = {
     )
     .addSubcommand((sub) =>
       sub
-        .setName("me")
+        .setName("vcランク")
         .setDescription("自分のVC順位と滞在時間を確認します")
         .addStringOption((opt) =>
           opt
@@ -286,7 +286,7 @@ const rankingCommand: Command = {
     const sub = interaction.options.getSubcommand();
 
     // ── me ────────────────────────────────────────────────────────────────────
-    if (sub === "me") {
+    if (sub === "vcランク") {
       await interaction.deferReply({ ephemeral: true });
 
       const [globalOptedOut, guildOptedOut] = await Promise.all([
