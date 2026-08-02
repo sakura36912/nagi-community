@@ -306,4 +306,47 @@ describe("handlePrivacyAdminDeleteConfirm – audit log", () => {
     // But no audit message is sent
     expect(send).not.toHaveBeenCalled();
   });
+
+  it("swallows the audit channel send error so the deletion result is unaffected", async () => {
+    const AUDIT_CHANNEL_ID = "audit-channel-err";
+
+    // db.delete returns 2 deleted rows
+    mocks.returning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+
+    // db.select returns a row with the audit channel ID
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: AUDIT_CHANNEL_ID }]);
+
+    // Simulate a network/permission error when posting the audit embed
+    const send = vi.fn().mockRejectedValue(new Error("Missing Permissions"));
+    const auditChannel = {
+      isTextBased: () => true,
+      send,
+    };
+
+    const interaction = makeInteraction({
+      hasManageGuild: true,
+      userId: "admin-222",
+      userTag: "Admin#9999",
+      guildId: "guild-err",
+      targetUserId: "target-err",
+      guild: {
+        name: "Error Guild",
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(auditChannel) },
+          fetch: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+
+    // The handler must not throw even though send() rejects
+    await expect(handlePrivacyAdminDeleteConfirm(interaction as never)).resolves.toBeUndefined();
+
+    // editReply must have been called (deletion result was reported) before the audit attempt
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+
+    // The audit send was indeed attempted and did throw
+    expect(send).toHaveBeenCalledOnce();
+  });
 });
