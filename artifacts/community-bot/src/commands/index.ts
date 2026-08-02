@@ -938,7 +938,7 @@ const vcRankCommand: Command = {
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply();
 
     const [globalOptedOut, guildOptedOut] = await Promise.all([
       isVcTrackingGloballyOptedOut(interaction.user.id),
