@@ -58,6 +58,7 @@ vi.mock("drizzle-orm", () => ({
   or: (...args: unknown[]) => ({ op: "or", args }),
   asc: (col: unknown) => ({ op: "asc", col }),
   desc: (col: unknown) => ({ op: "desc", col }),
+  notInArray: (col: unknown, vals: unknown[]) => ({ op: "notInArray", col, vals }),
   sql: Object.assign(
     (strings: TemplateStringsArray, ...values: unknown[]) => ({
       op: "sql",
@@ -69,7 +70,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Import under test (resolved after mocks) ────────────────────────────────
-import { pruneOldVcSessions, pruneGuildVcSessions } from "../lib/community.js";
+import { pruneOldVcSessions, pruneGuildVcSessions, pruneOrphanedVcSessions } from "../lib/community.js";
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -485,5 +486,111 @@ describe("pruneGuildVcSessions", () => {
 
     // The eq clause must target exactly "guild-xyz", not some other guild
     expect(eqClause!.val).toBe("guild-xyz");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// pruneOrphanedVcSessions – only wipes rows from guilds the bot has left
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("pruneOrphanedVcSessions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * When activeGuildIds is empty the function must short-circuit and return 0
+   * without touching the database.  If it proceeded with an empty list the
+   * notInArray predicate would match ALL rows, wiping sessions from every guild.
+   */
+  it("is a no-op when activeGuildIds is empty — returns 0 and never calls db.delete()", async () => {
+    const count = await pruneOrphanedVcSessions([]);
+    expect(count).toBe(0);
+    expect(mocks.del).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The WHERE clause must contain a notInArray predicate so only rows from
+   * guilds the bot has left are targeted.
+   */
+  it("WHERE clause contains a notInArray predicate targeting the supplied active guild IDs", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    const activeGuilds = ["guild-A", "guild-B"];
+    await pruneOrphanedVcSessions(activeGuilds);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; vals: unknown[] }[] }
+    ];
+    expect(whereArg.op).toBe("and");
+
+    const notInClause = whereArg.args.find((a) => a.op === "notInArray") as
+      | { op: string; col: string; vals: string[] }
+      | undefined;
+
+    expect(notInClause).toBeDefined();
+    expect(notInClause!.col).toBe("sessions.guildId");
+    expect(notInClause!.vals).toEqual(activeGuilds);
+  });
+
+  /**
+   * Active guild rows must never be part of the deletion predicate — the
+   * notInArray list must contain exactly the IDs passed in, so a guild that is
+   * still active cannot match the WHERE clause.
+   */
+  it("active-guild IDs appear in the notInArray exclusion list so their rows are never deleted", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    const activeGuilds = ["guild-live-1", "guild-live-2", "guild-live-3"];
+    await pruneOrphanedVcSessions(activeGuilds);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; vals: unknown[] }[] }
+    ];
+
+    const notInClause = whereArg.args.find((a) => a.op === "notInArray") as
+      | { op: string; col: string; vals: string[] }
+      | undefined;
+
+    expect(notInClause).toBeDefined();
+    // Every active guild ID must be present in the exclusion list
+    for (const guildId of activeGuilds) {
+      expect(notInClause!.vals).toContain(guildId);
+    }
+  });
+
+  it("returns the number of deleted rows", async () => {
+    mocks.returning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+    const count = await pruneOrphanedVcSessions(["guild-A"]);
+    expect(count).toBe(2);
+  });
+
+  it("WHERE clause also contains isNotNull(leftAt) so active sessions are excluded", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneOrphanedVcSessions(["guild-A"]);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown }[] }
+    ];
+    const isNotNullClause = whereArg.args.find((a) => a.op === "isNotNull") as
+      | { op: string; col: string }
+      | undefined;
+
+    expect(isNotNullClause).toBeDefined();
+    expect(isNotNullClause!.col).toBe("sessions.leftAt");
+  });
+
+  it("WHERE clause also contains lt(leftAt, cutoff) so only old closed sessions are deleted", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneOrphanedVcSessions(["guild-A"]);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const ltClause = whereArg.args.find((a) => a.op === "lt") as
+      | { op: string; col: string; val: Date }
+      | undefined;
+
+    expect(ltClause).toBeDefined();
+    expect(ltClause!.col).toBe("sessions.leftAt");
+    expect(ltClause!.val).toBeInstanceOf(Date);
   });
 });
