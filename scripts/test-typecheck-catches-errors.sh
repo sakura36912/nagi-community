@@ -1,20 +1,11 @@
 #!/bin/bash
 # Regression guard: confirms that `pnpm run typecheck` exits non-zero when a
-# type error is introduced into a shared library.  Run this on every merge to
-# make sure the typecheck script never silently drops the lib filter.
+# type error is introduced into each shared library covered by the typecheck
+# script.  Run this on every merge to make sure the typecheck script never
+# silently drops any of the lib filters.
 set -euo pipefail
 
-TARGET="lib/api-zod/src/index.ts"
-BACKUP="${TARGET}.bak"
 INJECTED_MARKER="DELIBERATE TYPE ERROR — injected by test-typecheck-catches-errors.sh"
-
-cleanup() {
-  if [ -f "$BACKUP" ]; then
-    mv "$BACKUP" "$TARGET"
-    echo "[typecheck-guard] Restored $TARGET"
-  fi
-}
-trap cleanup EXIT
 
 # ── Step 1: Baseline must be clean ─────────────────────────────────────────
 echo "[typecheck-guard] Running baseline typecheck (must pass)..."
@@ -30,33 +21,58 @@ if [ "$BASELINE_EXIT" -ne 0 ]; then
 fi
 echo "[typecheck-guard] Baseline clean."
 
-# ── Step 2: Inject a deliberate type error into the shared lib ─────────────
-cp "$TARGET" "$BACKUP"
-printf '\n// %s\nconst _badType: string = 42;\n' "$INJECTED_MARKER" >> "$TARGET"
-echo "[typecheck-guard] Type error injected into $TARGET"
+# ── Step 2: probe_file <target> ─────────────────────────────────────────────
+# Injects a deliberate type error, verifies typecheck exits non-zero and
+# references the mutated file, then restores the original.
+probe_file() {
+  local TARGET="$1"
+  local BACKUP="${TARGET}.bak"
 
-# ── Step 3: Typecheck must exit non-zero AND report the injected diagnostic ─
-set +e
-MUTANT_OUT=$(pnpm run typecheck 2>&1)
-MUTANT_EXIT=$?
-set -e
+  cleanup_probe() {
+    if [ -f "$BACKUP" ]; then
+      mv "$BACKUP" "$TARGET"
+      echo "[typecheck-guard] Restored $TARGET"
+    fi
+  }
+  trap cleanup_probe EXIT
 
-echo "$MUTANT_OUT"
+  cp "$TARGET" "$BACKUP"
+  printf '\n// %s\nconst _badType: string = 42;\n' "$INJECTED_MARKER" >> "$TARGET"
+  echo "[typecheck-guard] Type error injected into $TARGET"
 
-if [ "$MUTANT_EXIT" -eq 0 ]; then
-  echo "[typecheck-guard] FAIL: typecheck passed despite a type error in $TARGET" >&2
-  echo "[typecheck-guard] The typecheck script is not covering shared libs." >&2
-  exit 1
-fi
+  set +e
+  MUTANT_OUT=$(pnpm run typecheck 2>&1)
+  MUTANT_EXIT=$?
+  set -e
 
-# Confirm the failure is specifically about our injected line, not some
-# unrelated transient error introduced by the environment.
-# tsc reports errors as "<file>(line,col): error TSxxxx: ..." so we check
-# that the output references the target file we mutated.
-if ! echo "$MUTANT_OUT" | grep -qF "$TARGET"; then
-  echo "[typecheck-guard] FAIL: typecheck exited $MUTANT_EXIT but the output does not reference '$TARGET'." >&2
-  echo "[typecheck-guard] The failure may be unrelated to the injected error." >&2
-  exit 1
-fi
+  echo "$MUTANT_OUT"
 
-echo "[typecheck-guard] PASS: typecheck correctly exited $MUTANT_EXIT and reported the injected error in $TARGET"
+  if [ "$MUTANT_EXIT" -eq 0 ]; then
+    echo "[typecheck-guard] FAIL: typecheck passed despite a type error in $TARGET" >&2
+    echo "[typecheck-guard] The typecheck script is not covering this lib." >&2
+    exit 1
+  fi
+
+  # tsc reports paths relative to the package when run via `pnpm -r`, so the
+  # output may contain just the basename rather than the full workspace path.
+  local BASENAME
+  BASENAME=$(basename "$TARGET")
+  if ! echo "$MUTANT_OUT" | grep -qF "$BASENAME"; then
+    echo "[typecheck-guard] FAIL: typecheck exited $MUTANT_EXIT but the output does not reference '$BASENAME'." >&2
+    echo "[typecheck-guard] The failure may be unrelated to the injected error." >&2
+    exit 1
+  fi
+
+  # Restore immediately so subsequent probes start from a clean baseline.
+  mv "$BACKUP" "$TARGET"
+  trap - EXIT
+  echo "[typecheck-guard] Restored $TARGET"
+  echo "[typecheck-guard] PASS ($TARGET): typecheck correctly exited $MUTANT_EXIT and reported the injected error."
+}
+
+# ── Step 3: Probe each library ──────────────────────────────────────────────
+probe_file "lib/api-zod/src/index.ts"
+probe_file "lib/api-spec/orval.config.ts"
+probe_file "lib/api-client-react/src/custom-fetch.ts"
+
+echo "[typecheck-guard] All probes passed."
