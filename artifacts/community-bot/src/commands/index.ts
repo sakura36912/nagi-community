@@ -21,6 +21,7 @@ import {
   editEvent,
   createRoleButton,
   createTicket,
+  listTickets,
   deleteRoleButtonsByMessage,
   getEvent,
   getParticipants,
@@ -795,6 +796,12 @@ const ticketCommand: Command = {
         .setName("rename")
         .setDescription("チケットチャンネルの名前を変更します")
         .addStringOption((o) => o.setName("name").setDescription("新しいチャンネル名").setRequired(true).setMaxLength(100)),
+    )
+    // ── cleanup-perms ─────────────────────────────────────────────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName("cleanup-perms")
+        .setDescription("既存チケットチャンネルから不要なロールの閲覧権限を一括削除します（管理者）"),
     ),
 
   async execute(interaction) {
@@ -884,6 +891,52 @@ const ticketCommand: Command = {
         mentionStaff !== null && `スタッフメンション: ${mentionStaff ? "オン" : "オフ"}`,
       ].filter(Boolean).join("\n");
       await interaction.reply({ content: `✅ 設定しました。\n${lines}`, ephemeral: true, allowedMentions: { parse: [] } });
+      return;
+    }
+
+    // ── cleanup-perms ─────────────────────────────────────────────────────────
+    if (sub === "cleanup-perms" && group === null) {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({ content: "このコマンドは管理者のみ使用できます。", ephemeral: true });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true });
+
+      const guild    = interaction.guild!;
+      const settings = await getTicketSettings(guildId);
+      const tickets  = await listTickets(guildId);
+
+      // 許可する ID セット（@everyone・チケット作成者・Bot・スタッフロール）
+      const alwaysAllow = new Set([
+        guild.roles.everyone.id,
+        guild.members.me?.id,
+        settings?.staffRoleId,
+      ].filter(Boolean) as string[]);
+
+      let fixed = 0;
+      let skipped = 0;
+
+      for (const ticket of tickets) {
+        const ch = guild.channels.cache.get(ticket.channelId)
+          ?? await guild.channels.fetch(ticket.channelId).catch(() => null);
+        if (!ch || !("permissionOverwrites" in ch)) { skipped++; continue; }
+
+        const tc = ch as import("discord.js").TextChannel;
+        for (const [id, ow] of tc.permissionOverwrites.cache) {
+          // ユーザー（個人）上書きはそのまま残す
+          if (ow.type === 1) continue;
+          // 許可リストにないロールが ViewChannel allow を持っていたら削除
+          if (!alwaysAllow.has(id) && id !== ticket.userId && ow.allow.has(PermissionFlagsBits.ViewChannel)) {
+            await tc.permissionOverwrites.delete(id).catch(() => {});
+            fixed++;
+          }
+        }
+      }
+
+      await interaction.editReply(
+        `✅ ${tickets.length} 件のチケットをスキャンしました。\n` +
+        `修正: **${fixed}** 件のロール上書きを削除 / スキップ: ${skipped} チャンネル`,
+      );
       return;
     }
 

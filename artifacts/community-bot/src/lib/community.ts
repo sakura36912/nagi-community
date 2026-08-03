@@ -349,6 +349,13 @@ export async function removeTicket(channelId: string) {
   await db.delete(communityTicketsTable).where(eq(communityTicketsTable.channelId, channelId));
 }
 
+export async function listTickets(guildId: string) {
+  return db
+    .select()
+    .from(communityTicketsTable)
+    .where(eq(communityTicketsTable.guildId, guildId));
+}
+
 // ─── VC Privacy ──────────────────────────────────────────────────────────────
 
 /**
