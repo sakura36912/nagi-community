@@ -1589,6 +1589,9 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
   // チャンネルはまず仮名で作成し、ticket.id 確定後にリネーム
   const tempChannelName = `${prefix}-${sanitizedNick}-new`;
 
+  // ── Category: panel > global setting > hardcoded fallback ────────────────
+  const categoryId = panel?.categoryId ?? settings?.categoryId ?? TICKET_CATEGORY_FALLBACK;
+
   const overwrites: OverwriteResolvable[] = [
     { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
@@ -1601,8 +1604,19 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
     });
   }
 
-  // ── Category: panel > global setting > hardcoded fallback ────────────────
-  const categoryId = panel?.categoryId ?? settings?.categoryId ?? TICKET_CATEGORY_FALLBACK;
+  // カテゴリーで ViewChannel: allow になっているロールはチャンネルレベルでも
+  // 継承されてしまうため、明示的に deny を追加して封じる。
+  if (categoryId) {
+    const category = interaction.guild.channels.cache.get(categoryId);
+    if (category && "permissionOverwrites" in category) {
+      const explicitAllowIds = new Set(overwrites.map((o) => o.id as string));
+      for (const [id, ow] of (category as import("discord.js").CategoryChannel).permissionOverwrites.cache) {
+        if (!explicitAllowIds.has(id) && ow.allow.has(PermissionFlagsBits.ViewChannel)) {
+          overwrites.push({ id, deny: [PermissionFlagsBits.ViewChannel] });
+        }
+      }
+    }
+  }
 
   let channel;
   try {
