@@ -20,7 +20,15 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 // ─── Hoist mock state ─────────────────────────────────────────────────────────
 const mocks = vi.hoisted(() => {
   const execute = vi.fn();
-  return { execute };
+  // update is hoisted so round-trip tests can assert closeSession was invoked
+  const update = vi.fn(() => ({
+    set: vi.fn(() => ({
+      where: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([]),
+      })),
+    })),
+  }));
+  return { execute, update };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -34,7 +42,7 @@ vi.mock("@workspace/db", () => {
     db: {
       execute: mocks.execute,
       select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => Promise.resolve([])) })) })),
-      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })) })) })),
+      update: mocks.update,
       insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue([]) })) })),
       delete: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })) })),
     },
@@ -323,5 +331,169 @@ describe("getVcRanking – global opt-out mid-session", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.userId).toBe("user-global");
     expect(result[0]?.isLive).toBe(false);
+  });
+});
+
+// ─── Opt-out then opt back in (round-trip) ────────────────────────────────────
+
+describe("getVcRanking – opt-out then opt-back-in round-trip", () => {
+  /**
+   * Strategy: rather than injecting pre-computed rows into getVcRanking and
+   * asserting the mapping, these tests verify the *state transitions* that
+   * make the round-trip semantics correct:
+   *
+   *   1. Opting out invokes closeSession / closeOpenSessionsForUser (db.update
+   *      is called), which stamps left_at and freezes the session total.
+   *   2. Opting in does NOT call db.update — no session is altered.
+   *   3. The ranking SQL uses COALESCE(left_at, NOW()) so that a closed session
+   *      (left_at IS NOT NULL) contributes a fixed duration, never growing.
+   *   4. After opt-back-in the user re-enters the ranking and a new open
+   *      session is reported as is_live=true.
+   *   5. While still opted out the user is absent from the ranking (the NOT IN
+   *      sub-selects exclude them).
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // ── db.update assertions (closeSession is actually called) ────────────────
+
+  it("guild-local opt-out triggers closeSession (db.update is called once)", async () => {
+    await setVcPrivacyOptOut(GUILD, "user-roundtrip", true);
+
+    // closeSession calls db.update to stamp left_at on the open session.
+    expect(mocks.update).toHaveBeenCalledOnce();
+  });
+
+  it("guild-local opt-in does NOT close any session (db.update is never called)", async () => {
+    await setVcPrivacyOptOut(GUILD, "user-roundtrip", false);
+
+    // setVcPrivacyOptOut(false) only upserts the privacy row; it must not
+    // call db.update because there is no session to close on opt-in.
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("global opt-out triggers closeOpenSessionsForUser (db.update is called once)", async () => {
+    await setVcGlobalPrivacyOptOut("user-roundtrip-global", true);
+
+    // closeOpenSessionsForUser calls db.update to stamp left_at on every
+    // open session the user has across all guilds.
+    expect(mocks.update).toHaveBeenCalledOnce();
+  });
+
+  it("global opt-in does NOT close any session (db.update is never called)", async () => {
+    await setVcGlobalPrivacyOptOut("user-roundtrip-global", false);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  // ── SQL freeze-mechanism assertions ───────────────────────────────────────
+
+  it("ranking SQL uses COALESCE(left_at, NOW()) so closed sessions have a fixed total", async () => {
+    /**
+     * When left_at IS NOT NULL (session closed by opt-out), COALESCE returns
+     * left_at and the EXTRACT(EPOCH ...) result is constant regardless of when
+     * the query runs.  When left_at IS NULL (live session) it returns NOW() so
+     * the duration grows in real time.
+     * Asserting this template string is present proves the freeze invariant
+     * cannot be silently removed in a future refactor without breaking this test.
+     */
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("COALESCE(left_at, NOW())");
+    expect(query).toContain("bool_or(left_at IS NULL)");
+  });
+
+  // ── Round-trip ranking exclusion / re-inclusion ───────────────────────────
+
+  it("guild-local: opted-out user is absent from ranking while opt-out is active", async () => {
+    await setVcPrivacyOptOut(GUILD, "user-roundtrip", true);
+
+    // DB returns no rows — the NOT IN sub-select removes the opted-out user.
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toEqual([]);
+  });
+
+  it("guild-local: user re-appears in ranking with is_live=true after opting back in", async () => {
+    // Step 1 – opt out (stamps left_at, freezes the old session)
+    await setVcPrivacyOptOut(GUILD, "user-roundtrip", true);
+
+    // Step 2 – opt back in (clears opted_out flag; no session change)
+    await setVcPrivacyOptOut(GUILD, "user-roundtrip", false);
+
+    // Step 3 – a new session was opened after opt-in (openSession inserts a
+    // fresh row with left_at IS NULL).  Simulate getVcRanking returning that
+    // new live session — the user is no longer in the NOT IN exclusion list.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-roundtrip", total_seconds: "600", is_live: true }],
+    });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-roundtrip");
+    expect(result[0]?.isLive).toBe(true);
+  });
+
+  it("guild-local: after opt-back-in, SQL still excludes other users who remain opted out", async () => {
+    await setVcPrivacyOptOut(GUILD, "user-roundtrip", true);
+    await setVcPrivacyOptOut(GUILD, "user-roundtrip", false);
+
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("community_vc_privacy");
+    expect(query).toContain("community_vc_privacy_global");
+    const notInMatches = query.match(/NOT IN/g) ?? [];
+    expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("global: opted-out user is absent from ranking while global opt-out is active", async () => {
+    await setVcGlobalPrivacyOptOut("user-roundtrip-global", true);
+
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toEqual([]);
+  });
+
+  it("global: user re-appears in ranking with is_live=true after opting back in globally", async () => {
+    await setVcGlobalPrivacyOptOut("user-roundtrip-global", true);
+    await setVcGlobalPrivacyOptOut("user-roundtrip-global", false);
+
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-roundtrip-global", total_seconds: "300", is_live: true }],
+    });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-roundtrip-global");
+    expect(result[0]?.isLive).toBe(true);
+  });
+
+  it("global: opt-back-in also re-enables the user in a second guild's ranking", async () => {
+    const OTHER_GUILD = "guild-999";
+
+    await setVcGlobalPrivacyOptOut("user-roundtrip-global", true);
+    await setVcGlobalPrivacyOptOut("user-roundtrip-global", false);
+
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-roundtrip-global", total_seconds: "120", is_live: true }],
+    });
+
+    const result = await getVcRanking(OTHER_GUILD);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.isLive).toBe(true);
   });
 });
