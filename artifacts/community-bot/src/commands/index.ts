@@ -790,7 +790,9 @@ const ticketCommand: Command = {
           o.setName("channel_prefix").setDescription("チャンネル名プレフィックス（例: support → support-名前）").setRequired(false).setMaxLength(20),
         )
         .addBooleanOption((o) => o.setName("mention_user").setDescription("チケット作成者をメンションするか").setRequired(false))
-        .addBooleanOption((o) => o.setName("mention_staff").setDescription("スタッフロールをメンションするか").setRequired(false)),
+        .addBooleanOption((o) => o.setName("mention_staff").setDescription("スタッフロールをメンションするか").setRequired(false))
+        .addRoleOption((o) => o.setName("blocked_role").setDescription("チケットへのアクセスを常に拒否するロール（例: 画匠）").setRequired(false))
+        .addBooleanOption((o) => o.setName("clear_blocked").setDescription("ブロックロールの設定を解除する場合は true").setRequired(false)),
     )
     // ── rename ────────────────────────────────────────────────────────────────
     .addSubcommand((sub) =>
@@ -856,10 +858,13 @@ const ticketCommand: Command = {
       const channelPrefix = interaction.options.getString("channel_prefix");
       const mentionUser   = interaction.options.getBoolean("mention_user");
       const mentionStaff  = interaction.options.getBoolean("mention_staff");
+      const blockedRole   = interaction.options.getRole("blocked_role");
+      const clearBlocked  = interaction.options.getBoolean("clear_blocked");
 
-      const hasAny = staffRole || renameRole || category || channelPrefix !== null || mentionUser !== null || mentionStaff !== null;
+      const hasAny = staffRole || renameRole || category || channelPrefix !== null || mentionUser !== null || mentionStaff !== null || blockedRole || clearBlocked;
       if (!hasAny) {
         const s = await getTicketSettings(guildId);
+        const blockedIds = s?.blockedRoleIds?.split(",").filter(Boolean) ?? [];
         const embed = new EmbedBuilder()
           .setTitle("🎫 チケット グローバル設定")
           .setColor(0xfee75c)
@@ -870,6 +875,11 @@ const ticketCommand: Command = {
             { name: "チャンネルプレフィックス", value: s?.channelNamePrefix    ?? TICKET_DEFAULTS.channelNamePrefix, inline: true },
             { name: "ユーザーメンション",       value: s?.mentionUser  !== false ? "オン ✅" : "オフ ❌", inline: true },
             { name: "スタッフメンション",       value: s?.mentionStaff !== false ? "オン ✅" : "オフ ❌", inline: true },
+            {
+              name: "拒否ロール（ブロック）",
+              value: blockedIds.length ? blockedIds.map(id => `<@&${id}>`).join(", ") : "なし",
+              inline: false,
+            },
           );
         await interaction.reply({ embeds: [embed], ephemeral: true, allowedMentions: { parse: [] } });
         return;
@@ -882,6 +892,17 @@ const ticketCommand: Command = {
       if (channelPrefix)         updates.channelNamePrefix  = channelPrefix;
       if (mentionUser  !== null) updates.mentionUser        = mentionUser;
       if (mentionStaff !== null) updates.mentionStaff       = mentionStaff;
+
+      if (clearBlocked) {
+        updates.blockedRoleIds = null;
+      } else if (blockedRole) {
+        // 既存リストに追加（重複しなければ）
+        const current = await getTicketSettings(guildId);
+        const existing = current?.blockedRoleIds?.split(",").filter(Boolean) ?? [];
+        if (!existing.includes(blockedRole.id)) existing.push(blockedRole.id);
+        updates.blockedRoleIds = existing.join(",");
+      }
+
       await upsertTicketSettings(guildId, updates);
 
       const lines = [
@@ -891,6 +912,8 @@ const ticketCommand: Command = {
         channelPrefix         && `プレフィックス: **${channelPrefix}**`,
         mentionUser  !== null && `ユーザーメンション: ${mentionUser ? "オン" : "オフ"}`,
         mentionStaff !== null && `スタッフメンション: ${mentionStaff ? "オン" : "オフ"}`,
+        blockedRole           && `拒否ロール追加: <@&${blockedRole.id}>`,
+        clearBlocked          && "拒否ロール: 全解除",
       ].filter(Boolean).join("\n");
       await interaction.reply({ content: `✅ 設定しました。\n${lines}`, ephemeral: true, allowedMentions: { parse: [] } });
       return;
@@ -915,6 +938,9 @@ const ticketCommand: Command = {
         settings?.staffRoleId,
       ].filter(Boolean) as string[]);
 
+      // 設定済みのブロックロール
+      const blockedIds = settings?.blockedRoleIds?.split(",").filter(Boolean) ?? [];
+
       let fixed = 0;
       let skipped = 0;
 
@@ -924,20 +950,44 @@ const ticketCommand: Command = {
         if (!ch || !("permissionOverwrites" in ch)) { skipped++; continue; }
 
         const tc = ch as import("discord.js").TextChannel;
+
+        // 1. 許可リストにないロールが ViewChannel allow を持っていたら削除
         for (const [id, ow] of tc.permissionOverwrites.cache) {
-          // ユーザー（個人）上書きはそのまま残す
-          if (ow.type === 1) continue;
-          // 許可リストにないロールが ViewChannel allow を持っていたら削除
+          if (ow.type === 1) continue; // ユーザー上書きはそのまま
           if (!alwaysAllow.has(id) && id !== ticket.userId && ow.allow.has(PermissionFlagsBits.ViewChannel)) {
             await tc.permissionOverwrites.delete(id).catch(() => {});
             fixed++;
+          }
+        }
+
+        // 2. ブロックロールに明示的 deny を追加（カテゴリー継承を封じる）
+        for (const id of blockedIds) {
+          const existing = tc.permissionOverwrites.cache.get(id);
+          if (!existing || !existing.deny.has(PermissionFlagsBits.ViewChannel)) {
+            await tc.permissionOverwrites.edit(id, { ViewChannel: false }).catch(() => {});
+            fixed++;
+          }
+        }
+
+        // 3. カテゴリーの ViewChannel allow ロールにも deny を追加
+        const parent = tc.parent;
+        if (parent && "permissionOverwrites" in parent) {
+          for (const [id, ow] of (parent as import("discord.js").CategoryChannel).permissionOverwrites.cache) {
+            if (alwaysAllow.has(id) || id === ticket.userId || blockedIds.includes(id)) continue;
+            if (ow.allow.has(PermissionFlagsBits.ViewChannel)) {
+              const existing = tc.permissionOverwrites.cache.get(id);
+              if (!existing || !existing.deny.has(PermissionFlagsBits.ViewChannel)) {
+                await tc.permissionOverwrites.edit(id, { ViewChannel: false }).catch(() => {});
+                fixed++;
+              }
+            }
           }
         }
       }
 
       await interaction.editReply(
         `✅ ${tickets.length} 件のチケットをスキャンしました。\n` +
-        `修正: **${fixed}** 件のロール上書きを削除 / スキップ: ${skipped} チャンネル`,
+        `修正: **${fixed}** 件の上書きを適用 / スキップ: ${skipped} チャンネル`,
       );
       return;
     }
@@ -1657,6 +1707,12 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
       id: settings.staffRoleId,
       allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
     });
+  }
+
+  // 設定済みのブロックロールを明示的に deny
+  const blockedIds = settings?.blockedRoleIds?.split(",").filter(Boolean) ?? [];
+  for (const id of blockedIds) {
+    overwrites.push({ id, deny: [PermissionFlagsBits.ViewChannel] });
   }
 
   // カテゴリーで ViewChannel: allow になっているロールはチャンネルレベルでも

@@ -94,6 +94,11 @@ export const communityTicketSettingsTable = pgTable("community_ticket_settings",
   closeButtonLabel: text("close_button_label"),
   /** ButtonStyle value for the close button: 1=Primary 2=Secondary 3=Success 4=Danger */
   closeButtonStyle: integer("close_button_style"),
+  /**
+   * Comma-separated role IDs that are always denied ViewChannel on ticket channels.
+   * Use to permanently block roles (e.g. 画匠) from seeing any ticket.
+   */
+  blockedRoleIds: text("blocked_role_ids"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
