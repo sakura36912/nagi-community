@@ -68,6 +68,17 @@ export async function addVcRewardChannel(
   return row!;
 }
 
+/** Clear all channel IDs from the allowlist (reverts to "all channels eligible"). */
+export async function clearVcRewardChannels(guildId: string): Promise<VcRewardSettings> {
+  await getVcRewardSettings(guildId);
+  const [row] = await db
+    .update(vcRewardSettingsTable)
+    .set({ includedChannelIds: [] })
+    .where(eq(vcRewardSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
 /** Remove a voice channel ID from the allowlist. */
 export async function removeVcRewardChannel(
   guildId: string,

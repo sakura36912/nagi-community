@@ -11,6 +11,7 @@ import {
   setVcRewardSettings,
   addVcRewardChannel,
   removeVcRewardChannel,
+  clearVcRewardChannels,
 } from "../lib/vcReward";
 import { getGuildSettings } from "../lib/economy";
 
@@ -160,6 +161,21 @@ async function handleChannelAdd(
   });
 }
 
+async function handleChannelClear(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
+  const guildId = requireGuild(interaction);
+  if (!guildId) return;
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await clearVcRewardChannels(guildId);
+  const embed = await resolvedInfoEmbed(guildId, interaction);
+  await interaction.editReply({
+    content: "✅ 対象チャンネルをすべてクリアしました（すべてのVCが対象になります）。",
+    embeds: [embed],
+  });
+}
+
 async function handleChannelRemove(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
@@ -241,6 +257,9 @@ export const vcsalaryCommand: Command = {
                 .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
                 .setRequired(true),
             ),
+        )
+        .addSubcommand((sub) =>
+          sub.setName("clear").setDescription("対象チャンネルをすべてクリアします（すべてのVCが対象になります）"),
         ),
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
@@ -258,6 +277,7 @@ export const vcsalaryCommand: Command = {
     if (group === "channel") {
       if (sub === "add") await handleChannelAdd(interaction);
       else if (sub === "remove") await handleChannelRemove(interaction);
+      else if (sub === "clear") await handleChannelClear(interaction);
       return;
     }
 
