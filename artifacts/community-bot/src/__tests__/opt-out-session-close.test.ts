@@ -109,7 +109,7 @@ vi.mock("drizzle-orm", () => ({
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
 import { closeOpenSessionsForUser, deleteAllUserVcSessions, isVcTrackingOptedOut, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
-import { handlePrivacyGlobalOptoutDelete, handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyAdminDeleteConfirm, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
+import { handlePrivacyGlobalOptoutDelete, handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyDeleteCancel, handlePrivacyAdminDeleteConfirm, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
 function makeInteraction(userId: string, guildId?: string) {
@@ -1552,5 +1552,135 @@ describe("cold-start: brand-new user with no privacy rows is never blocked", () 
 
     // db.update() (used by closeSession) must NOT have been called
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+});
+
+// ─── handlePrivacyDeleteCancel – two-step delete cancel path ─────────────────
+//
+// This button is shown alongside the delete-confirm button in the /privacy delete
+// two-step flow. It has no user-ownership guard in its customId — the button ID is
+// a plain constant (no nonce or userId encoded). The replay-safety guarantee comes
+// from two complementary properties:
+//
+//   1. The confirmation embed is sent as an ephemeral interaction reply, which
+//      Discord only shows to the user who originally invoked /privacy delete.
+//      No other guild member can see or click the button in production.
+//
+//   2. The handler performs NO database writes. It only renders a "cancelled" embed
+//      and clears the components. Even if a different user somehow replayed the
+//      interaction token, they could not cause any data deletion or opt-out side
+//      effects — the worst outcome is a cosmetic UI update scoped to the original
+//      ephemeral message.
+//
+// Tests verify:
+//   - deferUpdate() is called (standard deferred-update flow)
+//   - editReply() is called with components:[] so the buttons are removed
+//   - The embed title reflects a cancelled (not deleted) state
+//   - The embed description confirms data is preserved (not wiped)
+//   - No DB functions (insert / update / delete) are ever called
+//   - A "replayed" call from a different userId still cannot touch the database
+
+describe("handlePrivacyDeleteCancel – two-step delete cancel path", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls deferUpdate() then editReply() (standard deferred-update flow)", async () => {
+    const interaction = makeInteraction("user-dc-cancel-1", "guild-cancel-1");
+    await handlePrivacyDeleteCancel(interaction as never);
+
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(interaction.editReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("replies with components:[] so the confirm/cancel buttons are cleared", async () => {
+    const interaction = makeInteraction("user-dc-cancel-2", "guild-cancel-2");
+    await handlePrivacyDeleteCancel(interaction as never);
+
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("embed title reflects a cancelled state (not a deletion)", async () => {
+    const interaction = makeInteraction("user-dc-cancel-3", "guild-cancel-3");
+    await handlePrivacyDeleteCancel(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { title?: string } }[] }]];
+    const title = replyArg.embeds[0]?.data?.title ?? "";
+    // Must communicate cancellation, not deletion
+    expect(title).toContain("キャンセル");
+    // Must NOT indicate data was deleted
+    expect(title).not.toContain("削除");
+  });
+
+  it("embed description confirms data is preserved (not wiped)", async () => {
+    const interaction = makeInteraction("user-dc-cancel-4", "guild-cancel-4");
+    await handlePrivacyDeleteCancel(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    // Must confirm data is retained
+    expect(description).toContain("データ");
+    // Must NOT reference a row count (which would indicate deletion happened)
+    expect(description).not.toMatch(/\d+件/);
+  });
+
+  it("never calls db.insert() — no opt-out row is written on cancel", async () => {
+    const interaction = makeInteraction("user-dc-cancel-5", "guild-cancel-5");
+    await handlePrivacyDeleteCancel(interaction as never);
+
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("never calls db.update() — no session-close side-effect on cancel", async () => {
+    const interaction = makeInteraction("user-dc-cancel-6", "guild-cancel-6");
+    await handlePrivacyDeleteCancel(interaction as never);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("never calls db.delete() — no session rows are deleted on cancel", async () => {
+    const interaction = makeInteraction("user-dc-cancel-7", "guild-cancel-7");
+    await handlePrivacyDeleteCancel(interaction as never);
+
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+  });
+
+  it("a replayed cancel from a different userId still touches no database (replay safety)", async () => {
+    // Simulate a replay: originalUserId triggered /privacy delete, but
+    // replayingUserId is the one clicking the cancel button.
+    // Even with no user-ownership guard, the handler must not write any data.
+    const replayingUser = makeInteraction("replaying-user-dc-cancel-8", "guild-cancel-8");
+    await handlePrivacyDeleteCancel(replayingUser as never);
+
+    // The replaying user must not have caused any database write
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+
+    // The UI update (deferred reply) still fires — it edits the original
+    // ephemeral message which is only visible to the original user
+    expect(replayingUser.deferUpdate).toHaveBeenCalled();
+    expect(replayingUser.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("works correctly in DM context (no guildId) — cancel is always safe without a guild", async () => {
+    // Cancel does not need a guildId because it performs no guild-scoped DB operation
+    const interaction = makeInteraction("user-dc-cancel-9");
+    await handlePrivacyDeleteCancel(interaction as never);
+
+    // Must still complete the cancel flow
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+
+    // And must not touch the database
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
   });
 });
