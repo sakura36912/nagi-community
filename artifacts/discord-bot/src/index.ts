@@ -553,6 +553,10 @@ async function runVcDeleteScheduler(): Promise<void> {
                   // DMs closed — ignore silently.
                 });
             }
+          } else if (!schedule.channelName) {
+            logger.warn(
+              `[vc-schedule] Skipping expiry warning DM for channel ${schedule.channelId} — channelName is missing`,
+            );
           }
         } catch (err) {
           logger.error(`[vc-schedule] Failed to send expiry warning for ${schedule.channelId}`, err);

@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   deleteSchedule: vi.fn(),
   getGuildSettings: vi.fn(),
   loggerInfo: vi.fn(),
+  loggerWarn: vi.fn(),
   loggerError: vi.fn(),
 }));
 
@@ -68,6 +69,7 @@ vi.mock("../lib/economy.js", () => ({
 vi.mock("../lib/logger.js", () => ({
   logger: {
     info: mocks.loggerInfo,
+    warn: mocks.loggerWarn,
     error: mocks.loggerError,
   },
 }));
@@ -175,6 +177,10 @@ async function runVcDeleteScheduler(
                   // DMs closed — ignore silently.
                 });
             }
+          } else if (!schedule.channelName) {
+            logger.warn(
+              `[vc-schedule] Skipping expiry warning DM for channel ${schedule.channelId} — channelName is missing`,
+            );
           }
         } catch (err) {
           logger.error(`[vc-schedule] Failed to send expiry warning for ${schedule.channelId}`, err);
@@ -426,6 +432,16 @@ describe("runVcDeleteScheduler – pre-expiry warning", () => {
     expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
   });
 
+  it("logs a warning when the DM is skipped due to a null channelName", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule({ channelName: null })]);
+
+    await runVcDeleteScheduler(makeClient());
+
+    expect(mocks.loggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("[vc-schedule] Skipping expiry warning DM for channel channel-1"),
+    );
+  });
+
   it("skips the DM when channelName is an empty string", async () => {
     mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule({ channelName: "" })]);
     const client = makeClient();
@@ -437,6 +453,16 @@ describe("runVcDeleteScheduler – pre-expiry warning", () => {
     expect(client._userSend).not.toHaveBeenCalled();
     // The schedule is still marked notified to prevent re-processing.
     expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+  });
+
+  it("logs a warning when the DM is skipped due to an empty channelName", async () => {
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule({ channelName: "" })]);
+
+    await runVcDeleteScheduler(makeClient());
+
+    expect(mocks.loggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("[vc-schedule] Skipping expiry warning DM for channel channel-1"),
+    );
   });
 
   it("skips the DM when schedule has no userId", async () => {
