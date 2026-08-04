@@ -108,17 +108,27 @@ const mocks = vi.hoisted(() => {
     })),
   }));
 
-  return { insert, select, update, tables, globalStore, privacyStore, reset };
+  // ── db.transaction mock ───────────────────────────────────────────────────
+  // Passes the same stateful `insert` as the `tx` object so that writes inside
+  // the transaction callback land in globalStore / privacyStore just like bare
+  // db.insert calls do.  On success the callback's writes are already committed
+  // (the stores are mutated in-place); on throw the callback throws naturally.
+  const transaction = vi.fn(async (cb: (tx: { insert: typeof insert }) => Promise<void>) => {
+    await cb({ insert });
+  });
+
+  return { insert, select, update, transaction, tables, globalStore, privacyStore, reset };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
 vi.mock("@workspace/db", () => ({
   db: {
-    insert:  mocks.insert,
-    select:  mocks.select,
-    update:  mocks.update,
-    execute: vi.fn().mockResolvedValue({ rows: [] }),
-    delete:  vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })) })),
+    insert:      mocks.insert,
+    select:      mocks.select,
+    update:      mocks.update,
+    transaction: mocks.transaction,
+    execute:     vi.fn().mockResolvedValue({ rows: [] }),
+    delete:      vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })) })),
   },
   communityVcPrivacyGlobalTable:    mocks.tables.global,
   communityVcPrivacyTable:          mocks.tables.privacy,

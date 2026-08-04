@@ -380,6 +380,31 @@ export async function setVcPrivacyOptOut(guildId: string, userId: string, optedO
 }
 
 /**
+ * Atomically opt a user back in to VC tracking by clearing both the global and
+ * per-guild opt-out rows inside a single DB transaction.  If either upsert
+ * fails the transaction rolls back, leaving neither row partially updated.
+ */
+export async function setVcPrivacyOptin(guildId: string, userId: string): Promise<void> {
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(communityVcPrivacyGlobalTable)
+      .values({ userId, optedOut: false, updatedAt: now })
+      .onConflictDoUpdate({
+        target: communityVcPrivacyGlobalTable.userId,
+        set: { optedOut: false, updatedAt: now },
+      });
+    await tx
+      .insert(communityVcPrivacyTable)
+      .values({ guildId, userId, optedOut: false, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [communityVcPrivacyTable.guildId, communityVcPrivacyTable.userId],
+        set: { optedOut: false, updatedAt: now },
+      });
+  });
+}
+
+/**
  * Set a user's global VC tracking opt-out status (applies to all guilds).
  * optedOut=true  → stop recording in every guild and close all open sessions
  * optedOut=false → resume recording (per-guild settings still apply)

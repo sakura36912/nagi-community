@@ -3,10 +3,11 @@
  *
  * Scenario: a user's privacy row was wiped (or never existed). When they run
  * `/privacy optin` the handler must NOT short-circuit before calling the
- * setters — it must call:
- *   • setVcGlobalPrivacyOptOut(userId, false)   — global opt-in path
- *   • setVcPrivacyOptOut(guildId, userId, false) — per-guild opt-in path
- * and then reply with a success embed.
+ * setters — it must atomically write:
+ *   • global opt-out  → false  (communityVcPrivacyGlobalTable)
+ *   • per-guild opt-out → false (communityVcPrivacyTable)
+ * both inside a single DB transaction so a partial failure cannot leave the
+ * user in a mixed opted-in / opted-out state.
  *
  * These tests exercise the full handler flow (not the DB functions in isolation)
  * so that a bug where the handler reads an absent row as opted-out and returns
@@ -35,12 +36,58 @@ const mocks = vi.hoisted(() => {
     roleButtons:       makeTable("roleButtons"),
   };
 
-  // Captures every upsert: { tableTag, row, set }
+  // Captures every upsert committed by a successful transaction: { tableTag, row, set }
   const upsertLog: Array<{ tableTag: string; row: Record<string, unknown>; set: Record<string, unknown> }> = [];
 
-  const reset = () => { upsertLog.length = 0; };
+  // Staging buffer — flushed to upsertLog on transaction success, discarded on rollback
+  const txUpsertBuffer: Array<{ tableTag: string; row: Record<string, unknown>; set: Record<string, unknown> }> = [];
 
-  // Stateful insert — tracks which table is being written to
+  // Per-test: which table (by tableTag) should reject inside the transaction. null = all succeed.
+  const txState: { failTable: string | null } = { failTable: null };
+
+  const reset = () => {
+    upsertLog.length = 0;
+    txUpsertBuffer.length = 0;
+    txState.failTable = null;
+  };
+
+  // ── Insert implementation used inside db.transaction callback ─────────────
+  // (Not a vi.fn — wraps individual calls in a plain object so vitest won't
+  //  confuse them with the top-level db.insert mock.)
+  const txInsert = (table: unknown) => ({
+    values: vi.fn((row: Record<string, unknown>) => ({
+      onConflictDoUpdate: vi.fn(({ set }: { set: Record<string, unknown> }) => {
+        const tableTag =
+          table === tables.global  ? "global"  :
+          table === tables.privacy ? "privacy" : "other";
+        if (txState.failTable === tableTag) {
+          return Promise.reject(new Error(`DB transient failure — ${tableTag}`));
+        }
+        txUpsertBuffer.push({ tableTag, row, set });
+        return Promise.resolve([]);
+      }),
+      returning: vi.fn().mockResolvedValue([]),
+    })),
+  });
+
+  // ── db.transaction mock ───────────────────────────────────────────────────
+  // Mirrors real Drizzle behaviour: all tx writes go to a staging buffer;
+  // on success they are flushed to upsertLog; on any throw they are discarded.
+  const transaction = vi.fn(async (cb: (tx: { insert: typeof txInsert }) => Promise<void>) => {
+    txUpsertBuffer.length = 0;
+    try {
+      await cb({ insert: txInsert });
+      // Commit: staged writes become visible
+      upsertLog.push(...txUpsertBuffer);
+    } catch (err) {
+      // Rollback: staged writes are discarded
+      throw err;
+    } finally {
+      txUpsertBuffer.length = 0;
+    }
+  });
+
+  // ── Stateful insert — used for non-transactional DB calls (select / update) ─
   const insert = vi.fn((table: unknown) => ({
     values: vi.fn((row: Record<string, unknown>) => ({
       onConflictDoUpdate: vi.fn(({ set }: { set: Record<string, unknown> }) => {
@@ -68,17 +115,18 @@ const mocks = vi.hoisted(() => {
     })),
   }));
 
-  return { insert, select, selectWhere, selectFrom, update, tables, upsertLog, reset };
+  return { insert, select, selectWhere, selectFrom, update, transaction, tables, upsertLog, txState, reset };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
 vi.mock("@workspace/db", () => ({
   db: {
-    insert:  mocks.insert,
-    select:  mocks.select,
-    update:  mocks.update,
-    execute: vi.fn().mockResolvedValue({ rows: [] }),
-    delete:  vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })) })),
+    insert:      mocks.insert,
+    select:      mocks.select,
+    update:      mocks.update,
+    transaction: mocks.transaction,
+    execute:     vi.fn().mockResolvedValue({ rows: [] }),
+    delete:      vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })) })),
   },
   communityVcPrivacyGlobalTable:    mocks.tables.global,
   communityVcPrivacyTable:           mocks.tables.privacy,
@@ -233,16 +281,15 @@ describe("handlePrivacyOptin — global opt-in path (absent row)", () => {
     expect(perGuildUpserts[0]!.set.optedOut).toBe(false);
   });
 
-  it("global upsert conflict target is the userId column (single, not an array)", async () => {
-    const interaction = makeInteraction({ userId: "user-conflict-check" });
+  it("global upsert is routed through db.transaction (both writes are atomic)", async () => {
+    const interaction = makeInteraction({ userId: "user-tx-check" });
     await handlePrivacyOptin(interaction as never);
 
-    // The onConflictDoUpdate mock receives { target, set }.
-    // For the global table the target is a single column (global.userId).
-    // We verify this by inspecting the raw call args on the mock.
-    const insertCalls = mocks.insert.mock.calls as unknown as Array<[unknown]>;
-    const globalInsertCall = insertCalls.find(([tbl]) => tbl === mocks.tables.global);
-    expect(globalInsertCall).toBeDefined();
+    // The handler must go through db.transaction, not bare db.insert
+    expect(mocks.transaction).toHaveBeenCalledTimes(1);
+    // The global write is committed (visible in upsertLog) only because the tx succeeded
+    const globalUpserts = mocks.upsertLog.filter((u) => u.tableTag === "global");
+    expect(globalUpserts).toHaveLength(1);
   });
 
   it("does not close any global sessions when opting back in (optedOut=false branch skipped)", async () => {
@@ -254,6 +301,72 @@ describe("handlePrivacyOptin — global opt-in path (absent row)", () => {
   });
 });
 
+describe("handlePrivacyOptin — partial failure: one setter rejects, state preserved", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.reset(); // clears upsertLog, txUpsertBuffer, and txState.failTable
+    mocks.selectWhere.mockResolvedValue([]);
+  });
+
+  // ── global setter fails ────────────────────────────────────────────────────
+
+  it("propagates the error when the global setter rejects (does not swallow it silently)", async () => {
+    mocks.txState.failTable = "global";
+    const interaction = makeInteraction();
+    await expect(handlePrivacyOptin(interaction as never)).rejects.toThrow(
+      "DB transient failure — global",
+    );
+  });
+
+  it("preserves pre-op state when the global setter rejects — no writes are committed", async () => {
+    // Simulates: global write fails inside the transaction.
+    // The transaction mock discards the staging buffer on throw, so upsertLog stays empty.
+    mocks.txState.failTable = "global";
+    const interaction = makeInteraction();
+    await expect(handlePrivacyOptin(interaction as never)).rejects.toBeDefined();
+    expect(mocks.upsertLog).toHaveLength(0);
+  });
+
+  it("does not send a success embed when the global setter rejects", async () => {
+    mocks.txState.failTable = "global";
+    const interaction = makeInteraction();
+    await expect(handlePrivacyOptin(interaction as never)).rejects.toBeDefined();
+    expect(interaction.editReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: expect.any(Array) }),
+    );
+  });
+
+  // ── per-guild setter fails ─────────────────────────────────────────────────
+
+  it("propagates the error when the per-guild setter rejects (does not swallow it silently)", async () => {
+    mocks.txState.failTable = "privacy";
+    const interaction = makeInteraction();
+    await expect(handlePrivacyOptin(interaction as never)).rejects.toThrow(
+      "DB transient failure — privacy",
+    );
+  });
+
+  it("preserves pre-op state when the per-guild setter rejects — the preceding global write is rolled back too", async () => {
+    // Simulates: global write succeeds (staged) then per-guild write fails.
+    // The transaction rolls back, discarding the already-staged global write.
+    // upsertLog must remain empty — a partial update would leave the user in a
+    // globally opted-in but per-guild opted-out state.
+    mocks.txState.failTable = "privacy";
+    const interaction = makeInteraction();
+    await expect(handlePrivacyOptin(interaction as never)).rejects.toBeDefined();
+    expect(mocks.upsertLog).toHaveLength(0);
+  });
+
+  it("does not send a success embed when the per-guild setter rejects", async () => {
+    mocks.txState.failTable = "privacy";
+    const interaction = makeInteraction();
+    await expect(handlePrivacyOptin(interaction as never)).rejects.toBeDefined();
+    expect(interaction.editReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: expect.any(Array) }),
+    );
+  });
+});
+
 describe("handlePrivacyOptin — edge case: no guildId (DM context)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -261,12 +374,12 @@ describe("handlePrivacyOptin — edge case: no guildId (DM context)", () => {
     mocks.selectWhere.mockResolvedValue([]);
   });
 
-  it("returns early without calling the DB setters when guildId is absent", async () => {
+  it("returns early without calling db.transaction when guildId is absent", async () => {
     const interaction = makeInteraction({ guildId: null });
     await handlePrivacyOptin(interaction as never);
 
     // No DB writes should occur if there's no guild context
-    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.transaction).not.toHaveBeenCalled();
   });
 
   it("calls editReply with an error message (not a success embed) when guildId is absent", async () => {

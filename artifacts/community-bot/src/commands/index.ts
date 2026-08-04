@@ -44,6 +44,7 @@ import {
   setStaffRole,
   setVcPrivacyOptOut,
   setVcGlobalPrivacyOptOut,
+  setVcPrivacyOptin,
   isVcTrackingGloballyOptedOut,
   isVcTrackingGuildLocalOptedOut,
   deleteAllUserVcSessions,
@@ -1160,11 +1161,9 @@ export async function handlePrivacyOptin(interaction: ChatInputCommandInteractio
   }
   const guildId = interaction.guildId;
   const userId = interaction.user.id;
-  // Clear both global and per-guild opt-out so the user resumes tracking everywhere.
-  await Promise.all([
-    setVcGlobalPrivacyOptOut(userId, false),
-    setVcPrivacyOptOut(guildId, userId, false),
-  ]);
+  // Clear both global and per-guild opt-out atomically so a transient DB error
+  // on either write cannot leave the user in a mixed opted-in/opted-out state.
+  await setVcPrivacyOptin(guildId, userId);
   const embed = new EmbedBuilder()
     .setTitle("🔓 トラッキングを再開しました")
     .setColor(0x57f287)
