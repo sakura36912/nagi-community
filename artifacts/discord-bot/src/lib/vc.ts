@@ -15,6 +15,10 @@ export async function saveSchedule(
   expiresAt: Date,
   userId?: string,
 ): Promise<VcSchedule> {
+  if (!channelName || channelName.trim() === "") {
+    throw new Error("channelName is required and cannot be empty");
+  }
+
   const [row] = await db
     .insert(vcSchedulesTable)
     .values({ guildId, channelId, channelName, expiresAt, userId: userId ?? null })
