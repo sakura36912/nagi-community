@@ -88,6 +88,7 @@ import {
 import {
   distributeRoleRewards,
   getExpiredPrivateVcSessions,
+  getPrivateVcSessionByChannelId,
   deletePrivateVcSession,
   getGuildSettings,
   getGuildWalletUserIds,
@@ -746,14 +747,17 @@ async function sendVcNotifyLeave(guild: VoiceState["guild"], userId: string, cha
 /**
  * Returns true if the given channelId is in the eligible channel list.
  * When includedChannelIds is empty, all voice channels are eligible.
+ * Private VCs created by /vc are always eligible regardless of the list.
  */
-function isEligibleChannel(
+async function isEligibleChannel(
   channelId: string,
   includedChannelIds: string[],
-  _guild: VoiceState["guild"],
-): boolean {
+): Promise<boolean> {
   if (includedChannelIds.length === 0) return true;
-  return includedChannelIds.includes(channelId);
+  if (includedChannelIds.includes(channelId)) return true;
+  // /vc で作成された private VC は常に対象
+  const session = await getPrivateVcSessionByChannelId(channelId);
+  return session != null;
 }
 
 /**
@@ -871,7 +875,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             await recordVcJoin(guild.id, userId, newState.channelId!);
           } else {
             const settings = await getVcRewardSettings(guild.id);
-            if (settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedChannelIds, guild)) {
+            if (settings.ratePerHour > 0 && await isEligibleChannel(newState.channelId!, settings.includedChannelIds)) {
               await recordVcJoin(guild.id, userId, newState.channelId!);
             }
           }
@@ -961,8 +965,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             getHubSalaryForChannel(newState.channelId!),
             getVcRewardSettings(guild.id),
           ]);
-          const wasGeneralEligible = settings.ratePerHour > 0 && isEligibleChannel(oldState.channelId!, settings.includedChannelIds, guild);
-          const nowGeneralEligible = settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedChannelIds, guild);
+          const [wasGeneralEligible, nowGeneralEligible] = await Promise.all([
+            isEligibleChannel(oldState.channelId!, settings.includedChannelIds).then((e) => settings.ratePerHour > 0 && e),
+            isEligibleChannel(newState.channelId!, settings.includedChannelIds).then((e) => settings.ratePerHour > 0 && e),
+          ]);
           const wasTracked = oldHubSalary != null || wasGeneralEligible;
           const nowTracked = newHubSalary != null || nowGeneralEligible;
 
