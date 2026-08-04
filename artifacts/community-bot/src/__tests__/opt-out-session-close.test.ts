@@ -109,7 +109,7 @@ vi.mock("drizzle-orm", () => ({
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
 import { closeOpenSessionsForUser, deleteAllUserVcSessions, isVcTrackingOptedOut, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
-import { handlePrivacyGlobalOptoutDelete, handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyDeleteCancel, handlePrivacyAdminDeleteConfirm, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
+import { handlePrivacyGlobalOptoutDelete, handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyDeleteCancel, handlePrivacyAdminDeleteConfirm, handlePrivacyAdminDeleteCancel, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
 function makeInteraction(userId: string, guildId?: string) {
@@ -1682,5 +1682,103 @@ describe("handlePrivacyDeleteCancel – two-step delete cancel path", () => {
     expect(mocks.insert).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
     expect(mocks.deleteFn).not.toHaveBeenCalled();
+  });
+});
+
+// ─── handlePrivacyAdminDeleteCancel – admin cancel button permission guard ─────
+//
+// handlePrivacyAdminDeleteCancel mirrors the confirm handler's ManageGuild guard.
+// A non-admin who intercepts or replays the cancel button must receive an
+// ephemeral error and the handler must perform no database writes.
+// An admin who clicks cancel must see a cancellation embed with components:[].
+//
+// Tests verify:
+//   - DM guard: no guildId → ephemeral reply, no DB calls
+//   - Permission guard: member without ManageGuild → ephemeral reply, no DB calls
+//   - Admin happy path: deferUpdate + editReply with components:[] and cancel embed
+//   - Admin happy path: embed communicates cancellation (title contains キャンセル)
+
+describe("handlePrivacyAdminDeleteCancel – admin cancel button permission guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Build a fake ButtonInteraction for the admin-delete cancel button.
+   * `isAdmin` controls whether member.permissions.has() returns true.
+   */
+  function makeAdminCancelInteraction(
+    userId: string,
+    guildId: string | undefined,
+    isAdmin = true,
+  ) {
+    return {
+      user: { id: userId, tag: `${userId}#0000` },
+      guildId: guildId ?? null,
+      member: {
+        permissions: {
+          has: vi.fn().mockReturnValue(isAdmin),
+        },
+      },
+      guild: { name: "Test Guild" },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it("replies ephemerally and makes no DB calls when guildId is absent (DM context)", async () => {
+    const interaction = makeAdminCancelInteraction("admin-adc-0", undefined);
+    await handlePrivacyAdminDeleteCancel(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("replies ephemerally and makes no DB calls when member lacks ManageGuild permission", async () => {
+    const interaction = makeAdminCancelInteraction("non-admin-adc-1", "guild-adc-1", false);
+    await handlePrivacyAdminDeleteCancel(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("admin successfully cancels: calls deferUpdate then editReply with components:[]", async () => {
+    const interaction = makeAdminCancelInteraction("admin-adc-2", "guild-adc-2");
+    await handlePrivacyAdminDeleteCancel(interaction as never);
+
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("admin cancel embed title communicates cancellation (contains キャンセル, not 削除)", async () => {
+    const interaction = makeAdminCancelInteraction("admin-adc-3", "guild-adc-3");
+    await handlePrivacyAdminDeleteCancel(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { title?: string } }[] }]];
+    const title = replyArg.embeds[0]?.data?.title ?? "";
+    expect(title).toContain("キャンセル");
+    expect(title).not.toContain("削除");
+  });
+
+  it("admin cancel makes no DB calls — data is never touched on cancel", async () => {
+    const interaction = makeAdminCancelInteraction("admin-adc-4", "guild-adc-4");
+    await handlePrivacyAdminDeleteCancel(interaction as never);
+
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 });
