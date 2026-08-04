@@ -42,6 +42,10 @@ import {
   type RankingPeriod,
   COMM_EVENT_JOIN_PREFIX,
   COMM_EVENT_CANCEL_PREFIX,
+  COMM_TICKET_CREATE,
+  COMM_TICKET_CLOSE_PREFIX,
+  COMM_TICKET_CLOSE_APPROVE_PREFIX,
+  COMM_TICKET_CLOSE_CANCEL_PREFIX,
   COMM_PRIVACY_DELETE_CONFIRM,
   COMM_PRIVACY_DELETE_CANCEL,
   COMM_PRIVACY_OPTOUT_KEEP,
@@ -55,6 +59,10 @@ import {
   COMM_RETENTION_CANCEL_PREFIX,
   handleEventJoin,
   handleEventCancel,
+  handleTicketCreate,
+  handleTicketClose,
+  handleTicketCloseApprove,
+  handleTicketCloseCancel,
   handlePrivacyDeleteConfirm,
   handlePrivacyDeleteCancel,
   handlePrivacyOptoutKeep,
@@ -588,6 +596,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id.startsWith(COMM_EVENT_CANCEL_PREFIX)) {
         await handleEventCancel(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_TICKET_CREATE)) {
+        await handleTicketCreate(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_TICKET_CLOSE_APPROVE_PREFIX)) {
+        await handleTicketCloseApprove(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_TICKET_CLOSE_CANCEL_PREFIX)) {
+        await handleTicketCloseCancel(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_TICKET_CLOSE_PREFIX)) {
+        await handleTicketClose(interaction);
         return;
       }
       if (id === COMM_BOTSTATUS_REFRESH) {
