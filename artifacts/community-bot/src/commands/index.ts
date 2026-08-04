@@ -1654,6 +1654,32 @@ export async function handlePrivacyGlobalOptoutDelete(interaction: ButtonInterac
     )
     .setTimestamp();
   await interaction.editReply({ embeds: [embed], components: [] });
+
+  // Post to the audit log channel of the invoking guild (if the interaction
+  // came from a guild and an audit channel is configured for it).
+  if (interaction.guildId) {
+    const auditChannelId = await getAuditLogChannel(interaction.guildId);
+    if (auditChannelId) {
+      try {
+        const auditChannel = interaction.guild?.channels.cache.get(auditChannelId)
+          ?? await interaction.guild?.channels.fetch(auditChannelId).catch(() => null);
+        if (auditChannel?.isTextBased()) {
+          const auditEmbed = new EmbedBuilder()
+            .setTitle("🔍 ユーザーによる全データ削除（グローバルオプトアウト）")
+            .setColor(0xed4245)
+            .addFields(
+              { name: "ユーザー", value: `<@${userId}>`, inline: true },
+              { name: "削除件数", value: `${deleted}件`, inline: true },
+            )
+            .setFooter({ text: `ユーザーID: ${userId}` })
+            .setTimestamp();
+          await auditChannel.send({ embeds: [auditEmbed] });
+        }
+      } catch (err) {
+        logger.error("[privacy] Failed to post global wipe to audit log channel", err);
+      }
+    }
+  }
 }
 
 export async function handlePrivacyAdminDeleteConfirm(interaction: ButtonInteraction): Promise<void> {

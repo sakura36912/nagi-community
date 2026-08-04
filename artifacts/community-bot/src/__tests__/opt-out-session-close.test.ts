@@ -1435,6 +1435,174 @@ describe("handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path", 
   });
 });
 
+// ─── handlePrivacyGlobalOptoutDelete – audit log path ────────────────────────
+//
+// After the wipe completes the handler should attempt to post an audit log entry
+// to the guild's configured audit log channel (when the interaction came from a
+// guild and a channel is configured).
+//
+// We verify three properties:
+//   1. The audit log channel lookup (getAuditLogChannel) is attempted after deletion.
+//   2. When no audit channel is configured the handler still resolves without throwing.
+//   3. The embed sent to the audit channel names the deleted-row count.
+//
+// The call sequence for an interaction with a guildId is:
+//   deleteAllUserVcSessions:
+//     → db.delete(sessions).where().returning()      → deleteReturning[0]
+//     → db.delete(global).where().returning()        → deleteReturning[1]
+//   setVcGlobalPrivacyOptOut:
+//     → db.insert().values().onConflictDoUpdate()    → onConflictDoUpdate[0]
+//     → db.update().set().where().returning()        → returning[0]  (closeOpenSessionsForUser)
+//   getAuditLogChannel:
+//     → db.select().from().where()                   → selectWhere[0]
+
+describe('handlePrivacyGlobalOptoutDelete – audit log path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Stage the four mock results that every successful invocation consumes
+   * before reaching getAuditLogChannel, plus optionally a selectWhere result
+   * that makes getAuditLogChannel return a non-null channel id.
+   */
+  function setupMocks(
+    deletedRows: { id: number }[],
+    auditChannelId: string | null = null,
+  ) {
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);           // global opt-out row cleared
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);        // global opt-out upsert
+    mocks.returning.mockResolvedValueOnce([]);                 // closeOpenSessionsForUser
+    if (auditChannelId !== null) {
+      // getAuditLogChannel uses db.select().from().where() → selectWhere
+      mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: auditChannelId }]);
+    }
+    // When auditChannelId is null: selectWhere returns [] by default →
+    // getAuditLogChannel returns null → audit branch is skipped.
+  }
+
+  /**
+   * Build a fake ButtonInteraction that includes a guild context with a
+   * channel whose isTextBased() returns true and whose send() is a vi.fn().
+   */
+  function makeGuildInteraction(userId: string, guildId: string, auditChannelId?: string) {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const textChannel = auditChannelId
+      ? { isTextBased: () => true, send }
+      : null;
+    return {
+      user: { id: userId, tag: `${userId}#0000` },
+      guildId,
+      guild: {
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(textChannel) },
+          fetch: vi.fn().mockResolvedValue(textChannel),
+        },
+      },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+      _send: send,  // expose for assertions
+    };
+  }
+
+  it("attempts the audit log channel lookup (selectWhere called) when interaction has a guildId", async () => {
+    setupMocks([], "audit-ch-gal-1");
+    const interaction = makeGuildInteraction("user-gal-1", "guild-gal-1", "audit-ch-gal-1");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    // getAuditLogChannel → db.select().from().where() must have been called
+    expect(mocks.selectWhere).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT attempt the audit log channel lookup when interaction has no guildId (DM context)", async () => {
+    setupMocks([]);
+    // makeInteraction has no guildId → selectWhere must never be reached
+    const interaction = makeInteraction("user-gal-2");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    expect(mocks.selectWhere).not.toHaveBeenCalled();
+  });
+
+  it("handler still completes (resolves) without throwing when no audit channel is configured", async () => {
+    // selectWhere default returns [] → getAuditLogChannel returns null → branch skipped
+    setupMocks([{ id: 1 }], null);
+    const interaction = makeGuildInteraction("user-gal-3", "guild-gal-3");
+    await expect(handlePrivacyGlobalOptoutDelete(interaction as never)).resolves.toBeUndefined();
+
+    // The user-facing reply must still have been sent
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("handler still completes without throwing when the audit channel fetch throws", async () => {
+    setupMocks([{ id: 1 }, { id: 2 }], "audit-ch-gal-4");
+    const interaction = {
+      user: { id: "user-gal-4", tag: "user-gal-4#0000" },
+      guildId: "guild-gal-4",
+      guild: {
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(null) },
+          fetch: vi.fn().mockRejectedValue(new Error("Unknown Channel")),
+        },
+      },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(handlePrivacyGlobalOptoutDelete(interaction as never)).resolves.toBeUndefined();
+
+    // User-facing reply must still arrive
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    expect(replyArg.embeds[0]?.data?.description ?? "").toContain("2件");
+  });
+
+  it("audit embed sent to the channel names the correct deleted-row count (3 rows)", async () => {
+    setupMocks([{ id: 10 }, { id: 11 }, { id: 12 }], "audit-ch-gal-5");
+    const interaction = makeGuildInteraction("user-gal-5", "guild-gal-5", "audit-ch-gal-5");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    // The channel's send() must have been called with an embed
+    const sendMock = interaction._send;
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const [[sendArg]] = sendMock.mock.calls as [[{ embeds: { data: { fields?: { name: string; value: string }[] } }[] }]];
+    const fields = sendArg.embeds[0]?.data?.fields ?? [];
+    const deletedField = fields.find((f) => f.value === "3件");
+    expect(deletedField).toBeDefined();
+  });
+
+  it("audit embed sent to the channel names the correct deleted-row count (0 rows)", async () => {
+    setupMocks([], "audit-ch-gal-6");
+    const interaction = makeGuildInteraction("user-gal-6", "guild-gal-6", "audit-ch-gal-6");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    const sendMock = interaction._send;
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const [[sendArg]] = sendMock.mock.calls as [[{ embeds: { data: { fields?: { name: string; value: string }[] } }[] }]];
+    const fields = sendArg.embeds[0]?.data?.fields ?? [];
+    const deletedField = fields.find((f) => f.value === "0件");
+    expect(deletedField).toBeDefined();
+  });
+
+  it("audit embed is NOT sent when no audit channel is configured (send never called)", async () => {
+    setupMocks([{ id: 1 }], null);
+    const interaction = makeGuildInteraction("user-gal-7", "guild-gal-7");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    // channel mock had no textChannel stub, so _send was never set up — assert via selectWhere
+    // (getAuditLogChannel was called once and returned null, so send path was not reached)
+    expect(mocks.selectWhere).toHaveBeenCalledTimes(1);
+    // No channel fetch should have been attempted
+    expect(interaction.guild.channels.fetch).not.toHaveBeenCalled();
+  });
+});
+
 // ─── isVcTrackingOptedOut – all four global/per-guild flag combinations ────────
 //
 // isVcTrackingOptedOut is the core gate used by openSession. It runs two
