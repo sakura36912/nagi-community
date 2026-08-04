@@ -598,7 +598,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await handleEventCancel(interaction);
         return;
       }
-      if (id === COMM_TICKET_CREATE) {
+      if (id.startsWith(COMM_TICKET_CREATE)) {
         await handleTicketCreate(interaction);
         return;
       }

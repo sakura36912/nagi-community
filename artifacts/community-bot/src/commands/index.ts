@@ -624,6 +624,9 @@ const ticketCommand: Command = {
         .setDescription("チケット作成ボタンをこのチャンネルに設置します（管理者）")
         .addChannelOption((o) =>
           o.setName("channel").setDescription("設置先チャンネル（省略時: 現在のチャンネル）").addChannelTypes(ChannelType.GuildText).setRequired(false),
+        )
+        .addRoleOption((o) =>
+          o.setName("role").setDescription("このロールのメンバーだけがチケットを閲覧できます（省略時: 全スタッフ共通）").setRequired(false),
         ),
     ),
 
@@ -679,18 +682,26 @@ const ticketCommand: Command = {
         await interaction.reply({ content: "送信できるチャンネルが見つかりません。", ephemeral: true });
         return;
       }
+      const targetRole = interaction.options.getRole("role");
+      // custom ID: "comm:ticket:create" or "comm:ticket:create:ROLE_ID"
+      const buttonId = targetRole ? `${COMM_TICKET_CREATE}:${targetRole.id}` : COMM_TICKET_CREATE;
+      const description = targetRole
+        ? `ボタンを押すと、<@&${targetRole.id}> メンバーとのプライベートチャンネルが作成されます。`
+        : TICKET_DEFAULTS.panelDescription;
+
       const embed = new EmbedBuilder()
         .setTitle(TICKET_DEFAULTS.panelTitle)
         .setColor(TICKET_DEFAULTS.welcomeEmbedColor)
-        .setDescription(TICKET_DEFAULTS.panelDescription);
+        .setDescription(description);
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId(COMM_TICKET_CREATE)
+          .setCustomId(buttonId)
           .setLabel(TICKET_DEFAULTS.panelButtonLabel)
           .setStyle(ButtonStyle.Primary),
       );
-      await targetChannel.send({ embeds: [embed], components: [row] });
-      await interaction.reply({ content: `✅ <#${targetChannel.id}> にチケットパネルを設置しました。`, ephemeral: true });
+      await targetChannel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } });
+      const rolePart = targetRole ? `（対象ロール: <@&${targetRole.id}>）` : "";
+      await interaction.reply({ content: `✅ <#${targetChannel.id}> にチケットパネルを設置しました。${rolePart}`, ephemeral: true, allowedMentions: { parse: [] } });
       return;
     }
   },
@@ -1275,7 +1286,13 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
     return;
   }
 
-  // ── チャンネル名: ticket-ニックネーム（仮名）→ ID確定後にリネーム ──────────
+  // ── ボタン custom ID からターゲットロール ID を取得 ────────────────────────
+  // 形式: "comm:ticket:create" (なし) または "comm:ticket:create:ROLE_ID" (指定あり)
+  const targetRoleId = interaction.customId.length > COMM_TICKET_CREATE.length
+    ? interaction.customId.slice(COMM_TICKET_CREATE.length + 1) || null
+    : null;
+
+  // ── チャンネル名 ──────────────────────────────────────────────────────────
   const member = interaction.guild.members.cache.get(interaction.user.id)
     ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
   const displayName   = member?.displayName ?? interaction.user.displayName;
@@ -1301,9 +1318,16 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
       allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
     });
   }
+  // ターゲットロールが指定されている場合はそのロールだけ allow を追加
+  if (targetRoleId && targetRoleId !== settings?.staffRoleId) {
+    overwrites.push({
+      id: targetRoleId,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+    });
+  }
 
-  // カテゴリーまたはサーバーレベルで ViewChannel を持つロールを
-  // permissionsFor で実効権限チェックし、明示的に deny を追加。
+  // カテゴリーまたはサーバーレベルで ViewChannel を持つロールを deny
+  // （explicit allow リストにあるものはスキップ）
   {
     const explicitIds = new Set(overwrites.map((o) => o.id as string));
     const category    = categoryId
@@ -1352,15 +1376,22 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
       .setStyle(ButtonStyle.Danger),
   );
 
-  // チケット作成者とスタッフロールをメンション
-  const mentions: string[] = [`<@${interaction.user.id}>`];
-  if (settings?.staffRoleId) mentions.push(`<@&${settings.staffRoleId}>`);
+  // メンション: 作成者 + ターゲットロール（あれば）+ スタッフロール
+  const mentionUsers: string[] = [interaction.user.id];
+  const mentionRoles: string[] = [];
+  if (targetRoleId) mentionRoles.push(targetRoleId);
+  if (settings?.staffRoleId && settings.staffRoleId !== targetRoleId) mentionRoles.push(settings.staffRoleId);
+
+  const content = [
+    `<@${interaction.user.id}>`,
+    ...mentionRoles.map((r) => `<@&${r}>`),
+  ].join(" ");
 
   await channel.send({
-    content: mentions.join(" "),
+    content,
     embeds: [embed],
     components: [closeRow],
-    allowedMentions: { users: [interaction.user.id], roles: settings?.staffRoleId ? [settings.staffRoleId] : [] },
+    allowedMentions: { users: mentionUsers, roles: mentionRoles },
   });
   await interaction.editReply(`✅ チケットを作成しました: <#${channel.id}>`);
 }
