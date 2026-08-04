@@ -53,7 +53,6 @@ import {
   getGroupShopSalesSummary,
   setVcCategoryId,
   buyItem,
-  claimDaily,
   createOrUpdateCurrency,
   createPrivateVcSession,
   getActivePrivateVcSession,
@@ -897,28 +896,6 @@ const balanceCommand: Command = {
       .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: (interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL() })
       .setDescription(`残高: **${wallet.balance.toLocaleString()}${settings.currencyName}**`);
     await interaction.reply({ embeds: [embed], ephemeral: true });
-  },
-};
-
-const dailyCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("daily")
-    .setDescription("毎日受け取れる通貨を受け取ります")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  async execute(interaction) {
-    const guildId = requireGuild(interaction);
-    const settings = await getGuildSettings(guildId);
-    const result = await claimDaily(guildId, interaction.user.id, settings.dailyAmount);
-    if (result.ok) {
-      await interaction.reply(
-        `${settings.dailyAmount.toLocaleString()}${settings.currencyName}を受け取りました!現在の残高: **${result.balance.toLocaleString()}${settings.currencyName}**`,
-      );
-    } else {
-      await interaction.reply({
-        content: `まだ受け取れません。次回まであと ${formatMs(result.msRemaining)} です。`,
-        ephemeral: true,
-      });
-    }
   },
 };
 
@@ -1885,7 +1862,6 @@ export async function handleVcPanelRenameModal(interaction: ModalSubmitInteracti
 export const commands: Command[] = [
   interviewCommand,
   balanceCommand,
-  dailyCommand,
   payCommand,
   giveCommand,
   leaderboardCommand,

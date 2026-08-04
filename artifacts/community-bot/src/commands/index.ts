@@ -20,7 +20,6 @@ import {
   deleteEvent,
   editEvent,
   createRoleButton,
-  createTicket,
   deleteRoleButtonsByMessage,
   getEvent,
   getParticipants,
@@ -30,8 +29,6 @@ import {
   getRoleButtonById,
   getRoleButtonsByMessage,
   getEventSettings,
-  getTicketByChannel,
-  getTicketSettings,
   getUserVcRank,
   getVcRanking,
   getVcTimeInPeriod,
@@ -40,13 +37,11 @@ import {
   listUpcomingEvents,
   setEventSettings,
   removeParticipant,
-  removeTicket,
   setLeaveLogChannel,
   setRankingSettings,
   setVcSessionRetentionDays,
   getVcSessionRetentionDays,
   setStaffRole,
-  upsertTicketSettings,
   setVcPrivacyOptOut,
   setVcGlobalPrivacyOptOut,
   isVcTrackingGloballyOptedOut,
@@ -61,17 +56,12 @@ import {
   wipeGuildVcSessions,
   getTrackedVcCategoryId,
   setTrackedVcCategoryId,
-  type CommunityTicketSettings,
 } from "../lib/community.js";
 
 // ─── Prefix constants ────────────────────────────────────────────────────────
 
 export const COMM_EVENT_JOIN_PREFIX = "comm:event:join:";
 export const COMM_EVENT_CANCEL_PREFIX = "comm:event:cancel:";
-export const COMM_TICKET_CREATE              = "comm:ticket:create";
-export const COMM_TICKET_CLOSE_PREFIX        = "comm:ticket:close:";
-export const COMM_TICKET_CLOSE_APPROVE_PREFIX = "comm:ticket:close-approve:";
-export const COMM_TICKET_CLOSE_CANCEL_PREFIX  = "comm:ticket:close-cancel:";
 export const COMM_PRIVACY_DELETE_CONFIRM = "comm:privacy:delete:confirm";
 export const COMM_PRIVACY_DELETE_CANCEL = "comm:privacy:delete:cancel";
 export const COMM_PRIVACY_OPTOUT_KEEP = "comm:privacy:optout:keep";
@@ -583,125 +573,6 @@ const rankingCommand: Command = {
       await interaction.deferReply({ ephemeral: true });
       const deleted = await wipeGuildVcSessions(guildId);
       await interaction.editReply(`✅ このサーバーのVC滞在時間データを **${deleted}件** 削除しました。`);
-      return;
-    }
-  },
-};
-
-// ─── /ticket ─────────────────────────────────────────────────────────────────
-
-const TICKET_DEFAULTS = {
-  welcomeMessage:   "用件をお書きください。スタッフが対応します。",
-  welcomeEmbedTitle: "🎫 サポートチケット",
-  welcomeEmbedColor: 0xfee75c,
-  channelNamePrefix: "ticket",
-  panelTitle:        "🎫 サポートチケット",
-  panelDescription:  "ボタンを押すと、スタッフとのプライベートチャンネルが作成されます。",
-  panelButtonLabel:  "チケットを作成 🎫",
-} as const;
-
-const ticketCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("ticket")
-    .setDescription("チケットシステムの管理")
-    // ── settings ──────────────────────────────────────────────────────────────
-    .addSubcommand((sub) =>
-      sub
-        .setName("settings")
-        .setDescription("設定を確認・変更します（管理者）")
-        .addRoleOption((o) => o.setName("staff_role").setDescription("チケット対応スタッフのロール").setRequired(false))
-        .addChannelOption((o) =>
-          o.setName("category").setDescription("チケットチャンネルを作るカテゴリー").addChannelTypes(ChannelType.GuildCategory).setRequired(false),
-        )
-        .addStringOption((o) =>
-          o.setName("welcome_msg").setDescription("チケット開設時のウェルカムメッセージ").setRequired(false).setMaxLength(2000),
-        ),
-    )
-    // ── post ──────────────────────────────────────────────────────────────────
-    .addSubcommand((sub) =>
-      sub
-        .setName("post")
-        .setDescription("チケット作成ボタンをこのチャンネルに設置します（管理者）")
-        .addChannelOption((o) =>
-          o.setName("channel").setDescription("設置先チャンネル（省略時: 現在のチャンネル）").addChannelTypes(ChannelType.GuildText).setRequired(false),
-        )
-        .addRoleOption((o) =>
-          o.setName("role").setDescription("このロールのメンバーだけがチケットを閲覧できます（省略時: 全スタッフ共通）").setRequired(false),
-        ),
-    ),
-
-  async execute(interaction) {
-    const guildId = requireGuild(interaction);
-    const sub = interaction.options.getSubcommand();
-
-    if (!requireAdmin(interaction)) {
-      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-      return;
-    }
-
-    // ── settings ──────────────────────────────────────────────────────────────
-    if (sub === "settings") {
-      const staffRole  = interaction.options.getRole("staff_role");
-      const category   = interaction.options.getChannel("category");
-      const welcomeMsg = interaction.options.getString("welcome_msg");
-
-      const hasAny = staffRole || category || welcomeMsg !== null;
-      if (!hasAny) {
-        const s = await getTicketSettings(guildId);
-        const embed = new EmbedBuilder()
-          .setTitle("🎫 チケット設定")
-          .setColor(0xfee75c)
-          .addFields(
-            { name: "スタッフロール",     value: s?.staffRoleId ? `<@&${s.staffRoleId}>` : "未設定", inline: true },
-            { name: "カテゴリー",         value: s?.categoryId  ? `<#${s.categoryId}>` : "未設定",   inline: true },
-            { name: "ウェルカムメッセージ", value: s?.welcomeMessage ?? TICKET_DEFAULTS.welcomeMessage, inline: false },
-          );
-        await interaction.reply({ embeds: [embed], ephemeral: true, allowedMentions: { parse: [] } });
-        return;
-      }
-
-      const updates: Parameters<typeof upsertTicketSettings>[1] = {};
-      if (staffRole)          updates.staffRoleId    = staffRole.id;
-      if (category)           updates.categoryId     = category.id;
-      if (welcomeMsg !== null) updates.welcomeMessage = welcomeMsg;
-      await upsertTicketSettings(guildId, updates);
-
-      const lines = [
-        staffRole          && `スタッフロール: <@&${staffRole.id}>`,
-        category           && `カテゴリー: <#${category.id}>`,
-        welcomeMsg !== null && `ウェルカムメッセージ: 更新しました`,
-      ].filter(Boolean).join("\n");
-      await interaction.reply({ content: `✅ 設定しました。\n${lines}`, ephemeral: true, allowedMentions: { parse: [] } });
-      return;
-    }
-
-    // ── post ──────────────────────────────────────────────────────────────────
-    if (sub === "post") {
-      const targetChannel = (interaction.options.getChannel("channel") ?? interaction.channel) as import("discord.js").TextChannel | null;
-      if (!targetChannel?.isSendable()) {
-        await interaction.reply({ content: "送信できるチャンネルが見つかりません。", ephemeral: true });
-        return;
-      }
-      const targetRole = interaction.options.getRole("role");
-      // custom ID: "comm:ticket:create" or "comm:ticket:create:ROLE_ID"
-      const buttonId = targetRole ? `${COMM_TICKET_CREATE}:${targetRole.id}` : COMM_TICKET_CREATE;
-      const description = targetRole
-        ? `ボタンを押すと、<@&${targetRole.id}> メンバーとのプライベートチャンネルが作成されます。`
-        : TICKET_DEFAULTS.panelDescription;
-
-      const embed = new EmbedBuilder()
-        .setTitle(TICKET_DEFAULTS.panelTitle)
-        .setColor(TICKET_DEFAULTS.welcomeEmbedColor)
-        .setDescription(description);
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(buttonId)
-          .setLabel(TICKET_DEFAULTS.panelButtonLabel)
-          .setStyle(ButtonStyle.Primary),
-      );
-      await targetChannel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } });
-      const rolePart = targetRole ? `（対象ロール: <@&${targetRole.id}>）` : "";
-      await interaction.reply({ content: `✅ <#${targetChannel.id}> にチケットパネルを設置しました。${rolePart}`, ephemeral: true, allowedMentions: { parse: [] } });
       return;
     }
   },
@@ -1268,236 +1139,6 @@ export async function handleEventCancel(interaction: ButtonInteraction): Promise
   } else {
     await interaction.followUp({ content: "参加登録されていませんでした。", ephemeral: true });
   }
-}
-
-export async function handleTicketCreate(interaction: ButtonInteraction): Promise<void> {
-  if (!interaction.guildId || !interaction.guild) {
-    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
-    return;
-  }
-  await interaction.deferReply({ ephemeral: true });
-
-  const guildId  = interaction.guildId;
-  const settings = await getTicketSettings(guildId);
-  const me       = interaction.guild.members.me;
-
-  if (!me?.permissions.has("ManageChannels")) {
-    await interaction.editReply("BotにManageChannels権限がありません。");
-    return;
-  }
-
-  // ── ボタン custom ID からターゲットロール ID を取得 ────────────────────────
-  // 形式: "comm:ticket:create" (なし) または "comm:ticket:create:ROLE_ID" (指定あり)
-  const targetRoleId = interaction.customId.length > COMM_TICKET_CREATE.length
-    ? interaction.customId.slice(COMM_TICKET_CREATE.length + 1) || null
-    : null;
-
-  // ── チャンネル名 ──────────────────────────────────────────────────────────
-  const member = interaction.guild.members.cache.get(interaction.user.id)
-    ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  const displayName   = member?.displayName ?? interaction.user.displayName;
-  const sanitizedNick = displayName
-    .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9\-_]/g, "")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 20) || interaction.user.username.slice(0, 20).toLowerCase();
-
-  const categoryId = settings?.categoryId ?? undefined;
-
-  // ── 権限上書き ────────────────────────────────────────────────────────────
-  const overwrites: OverwriteResolvable[] = [
-    { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-    { id: me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-  ];
-  if (settings?.staffRoleId) {
-    overwrites.push({
-      id: settings.staffRoleId,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-    });
-  }
-  // ターゲットロールが指定されている場合はそのロールだけ allow を追加
-  if (targetRoleId && targetRoleId !== settings?.staffRoleId) {
-    overwrites.push({
-      id: targetRoleId,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
-    });
-  }
-
-  // カテゴリーまたはサーバーレベルで ViewChannel を持つロールを deny
-  // （explicit allow リストにあるものはスキップ）
-  {
-    const explicitIds = new Set(overwrites.map((o) => o.id as string));
-    const category    = categoryId
-      ? (interaction.guild.channels.cache.get(categoryId) as import("discord.js").CategoryChannel | undefined)
-      : undefined;
-
-    for (const [id, role] of interaction.guild.roles.cache) {
-      if (id === interaction.guild.roles.everyone.id || explicitIds.has(id)) continue;
-      const perms = category ? category.permissionsFor(role) : role.permissions;
-      if (perms?.has(PermissionFlagsBits.ViewChannel)) {
-        overwrites.push({ id, deny: [PermissionFlagsBits.ViewChannel] });
-      }
-    }
-  }
-
-  // ── チャンネル作成 ────────────────────────────────────────────────────────
-  let channel: import("discord.js").TextChannel;
-  try {
-    channel = await interaction.guild.channels.create({
-      name: `ticket-${sanitizedNick}-new`,
-      type: ChannelType.GuildText,
-      parent: categoryId,
-      permissionOverwrites: overwrites,
-    });
-  } catch (err) {
-    logger.error("[ticket] Failed to create channel", err);
-    await interaction.editReply("チャンネルの作成に失敗しました。");
-    return;
-  }
-
-  const ticket = await createTicket(guildId, channel.id, interaction.user.id);
-  await channel.setName(`ticket-${sanitizedNick}-${ticket.id}`).catch(() => {});
-
-  // ── ウェルカムメッセージ ──────────────────────────────────────────────────
-  const welcomeMsg = settings?.welcomeMessage ?? TICKET_DEFAULTS.welcomeMessage;
-  const embed = new EmbedBuilder()
-    .setColor(TICKET_DEFAULTS.welcomeEmbedColor)
-    .setTitle(TICKET_DEFAULTS.welcomeEmbedTitle)
-    .setDescription(welcomeMsg)
-    .setFooter({ text: `チケット #${ticket.id} · ${displayName}` });
-
-  const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`${COMM_TICKET_CLOSE_PREFIX}${ticket.id}`)
-      .setLabel("チケットを閉じる 🔒")
-      .setStyle(ButtonStyle.Danger),
-  );
-
-  // メンション: 作成者 + ターゲットロール（あれば）+ スタッフロール
-  const mentionUsers: string[] = [interaction.user.id];
-  const mentionRoles: string[] = [];
-  if (targetRoleId) mentionRoles.push(targetRoleId);
-  if (settings?.staffRoleId && settings.staffRoleId !== targetRoleId) mentionRoles.push(settings.staffRoleId);
-
-  const content = [
-    `<@${interaction.user.id}>`,
-    ...mentionRoles.map((r) => `<@&${r}>`),
-  ].join(" ");
-
-  await channel.send({
-    content,
-    embeds: [embed],
-    components: [closeRow],
-    allowedMentions: { users: mentionUsers, roles: mentionRoles },
-  });
-  await interaction.editReply(`✅ チケットを作成しました: <#${channel.id}>`);
-}
-
-/** チケット本体を削除する内部ユーティリティ */
-async function doCloseTicket(interaction: ButtonInteraction, ticketId: number): Promise<void> {
-  await removeTicket(interaction.channelId!);
-  try {
-    await interaction.channel?.delete("チケットのクローズ");
-  } catch (err) {
-    logger.error("[ticket] Failed to delete channel", err);
-  }
-}
-
-/** ユーザーがスタッフロールまたは Administrator かを判定 */
-async function isTicketStaff(interaction: ButtonInteraction, staffRoleId: string | null | undefined): Promise<boolean> {
-  if (!interaction.guild || !interaction.member) return false;
-  const perms = interaction.memberPermissions;
-  if (perms?.has(PermissionFlagsBits.Administrator)) return true;
-  if (staffRoleId) {
-    const member = interaction.guild.members.cache.get(interaction.user.id)
-      ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-    if (member?.roles.cache.has(staffRoleId)) return true;
-  }
-  return false;
-}
-
-export async function handleTicketClose(interaction: ButtonInteraction): Promise<void> {
-  if (!interaction.channelId || !interaction.guild) return;
-
-  const ticket = await getTicketByChannel(interaction.channelId);
-  if (!ticket) {
-    await interaction.reply({ content: "このチャンネルはチケットではないか、すでに閉じられています。", ephemeral: true });
-    return;
-  }
-
-  const settings = await getTicketSettings(interaction.guild.id);
-  const staff = await isTicketStaff(interaction, settings?.staffRoleId ?? null);
-
-  // スタッフ・管理者は即クローズ
-  if (staff) {
-    await interaction.deferReply({ ephemeral: true });
-    await interaction.editReply("チケットを閉じます…");
-    await doCloseTicket(interaction, ticket.id);
-    return;
-  }
-
-  // 一般ユーザーは承認リクエストを投稿
-  await interaction.deferUpdate();
-
-  const staffMention = settings?.staffRoleId ? `<@&${settings.staffRoleId}> ` : "";
-  const embed = new EmbedBuilder()
-    .setTitle("🔒 クローズ承認リクエスト")
-    .setColor(0xfee75c)
-    .setDescription(
-      `<@${interaction.user.id}> がこのチケットのクローズを要求しました。\n` +
-      `${staffMention}管理者が「承認」を押すとチャンネルが削除されます。`,
-    )
-    .setTimestamp();
-
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`${COMM_TICKET_CLOSE_APPROVE_PREFIX}${ticket.id}`)
-      .setLabel("✅ 承認してクローズ")
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
-      .setCustomId(`${COMM_TICKET_CLOSE_CANCEL_PREFIX}${ticket.id}`)
-      .setLabel("❌ キャンセル")
-      .setStyle(ButtonStyle.Secondary),
-  );
-
-  if (interaction.channel && "send" in interaction.channel) {
-    await (interaction.channel as import("discord.js").TextChannel).send({
-      content: staffMention.trim() || undefined,
-      embeds: [embed],
-      components: [row],
-      allowedMentions: { roles: settings?.staffRoleId ? [settings.staffRoleId] : [] },
-    });
-  }
-}
-
-export async function handleTicketCloseApprove(interaction: ButtonInteraction): Promise<void> {
-  if (!interaction.channelId || !interaction.guild) return;
-
-  const settings = await getTicketSettings(interaction.guild.id);
-  const staff = await isTicketStaff(interaction, settings?.staffRoleId ?? null);
-  if (!staff) {
-    await interaction.reply({ content: "❌ このボタンはスタッフ・管理者のみ使用できます。", ephemeral: true });
-    return;
-  }
-
-  const ticket = await getTicketByChannel(interaction.channelId);
-  if (!ticket) {
-    await interaction.reply({ content: "このチケットはすでに閉じられています。", ephemeral: true });
-    return;
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-  await interaction.editReply("チケットを閉じます…");
-  await doCloseTicket(interaction, ticket.id);
-}
-
-export async function handleTicketCloseCancel(interaction: ButtonInteraction): Promise<void> {
-  // リクエストメッセージ自体を削除してキャンセル
-  await interaction.message.delete().catch(() => {});
-  await interaction.reply({ content: "✅ クローズリクエストをキャンセルしました。", ephemeral: true });
 }
 
 export async function handleBotstatusRefresh(interaction: ButtonInteraction): Promise<void> {
@@ -2308,7 +1949,6 @@ export const commands: Command[] = [
   vcRankCommand,
   mystatsCommand,
   privacyCommand,
-  ticketCommand,
   botstatusCommand,
   roleButtonCommand,
   leavelogCommand,
