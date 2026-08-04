@@ -482,6 +482,77 @@ describe("setVcPrivacyOptOut – opt-in path (optedOut=false)", () => {
   });
 });
 
+// ─── setVcGlobalPrivacyOptOut – cold-start opt-in path (optedOut=false) ──────
+//
+// A user who has never touched the global opt-out setting has no row in
+// communityVcPrivacyGlobalTable. Calling setVcGlobalPrivacyOptOut(userId, false)
+// must still succeed: it takes the INSERT branch of the upsert (no conflict),
+// stores optedOut=false, and must NOT call closeOpenSessionsForUser (the
+// session-close path is only for optedOut=true).
+
+describe("setVcGlobalPrivacyOptOut – cold-start opt-in path (optedOut=false)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 0 when the user has no prior global opt-out row", async () => {
+    // No pre-existing row → INSERT branch; onConflictDoUpdate resolves without conflict.
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    const result = await setVcGlobalPrivacyOptOut("user-cg-1", false);
+
+    expect(result).toBe(0);
+  });
+
+  it("calls db.insert() with optedOut: false (persists the cold-start row)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    await setVcGlobalPrivacyOptOut("user-cg-2", false);
+
+    // db.insert() must have been called exactly once
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+
+    // The values() payload must carry optedOut: false and the correct userId
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.userId).toBe("user-cg-2");
+    expect(valuesArg.optedOut).toBe(false);
+  });
+
+  it("does NOT call db.update() (closeOpenSessionsForUser is skipped on opt-in)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    await setVcGlobalPrivacyOptOut("user-cg-3", false);
+
+    // db.update() is only used by closeOpenSessionsForUser; it must never be
+    // invoked on the opt-in path regardless of whether a prior row exists.
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("targets the global table (insert must reach communityVcPrivacyGlobalTable)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    await setVcGlobalPrivacyOptOut("user-cg-4", false);
+
+    // The table stub passed to db.insert() must be communityVcPrivacyGlobalTable
+    // (the proxy returns "global.<prop>" for every property on that stub).
+    const [tableArg] = mocks.insert.mock.calls[0] as unknown as [Record<string, string>];
+    expect(tableArg["userId"]).toBe("global.userId");
+  });
+
+  it("onConflictDoUpdate payload also carries optedOut: false (update branch is consistent)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    await setVcGlobalPrivacyOptOut("user-cg-5", false);
+
+    const [conflictArg] = mocks.onConflictDoUpdate.mock.calls[0] as unknown as [
+      { set: { optedOut: boolean } }
+    ];
+    expect(conflictArg.set.optedOut).toBe(false);
+  });
+});
+
 // ─── handlePrivacyOptoutDelete – per-guild delete path ────────────────────────
 //
 // This handler calls Promise.all([deleteUserVcSessions, setVcPrivacyOptOut])
