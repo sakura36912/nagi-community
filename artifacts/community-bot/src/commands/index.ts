@@ -78,7 +78,9 @@ import {
 export const COMM_EVENT_JOIN_PREFIX = "comm:event:join:";
 export const COMM_EVENT_CANCEL_PREFIX = "comm:event:cancel:";
 export const COMM_TICKET_CREATE = "comm:ticket:create";
-export const COMM_TICKET_CLOSE_PREFIX = "comm:ticket:close:";
+export const COMM_TICKET_CLOSE_PREFIX         = "comm:ticket:close:";
+export const COMM_TICKET_CLOSE_APPROVE_PREFIX = "comm:ticket:close-approve:";
+export const COMM_TICKET_CLOSE_CANCEL_PREFIX  = "comm:ticket:close-cancel:";
 export const COMM_PRIVACY_DELETE_CONFIRM = "comm:privacy:delete:confirm";
 export const COMM_PRIVACY_DELETE_CANCEL = "comm:privacy:delete:cancel";
 export const COMM_PRIVACY_OPTOUT_KEEP = "comm:privacy:optout:keep";
@@ -1734,24 +1736,108 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
   await interaction.editReply(`✅ チケットを作成しました: <#${channel.id}>`);
 }
 
-export async function handleTicketClose(interaction: ButtonInteraction): Promise<void> {
-  if (!interaction.channelId) return;
-  await interaction.deferReply({ ephemeral: true });
-
-  const ticket = await getTicketByChannel(interaction.channelId);
-  if (!ticket) {
-    await interaction.editReply("このチャンネルはチケットではないか、すでに閉じられています。");
-    return;
-  }
-
-  await removeTicket(interaction.channelId);
-  await interaction.editReply("チケットを閉じます…");
-
+/** チケット本体を削除する内部ユーティリティ */
+async function doCloseTicket(interaction: ButtonInteraction, ticketId: number): Promise<void> {
+  await removeTicket(interaction.channelId!);
   try {
     await interaction.channel?.delete("チケットのクローズ");
   } catch (err) {
     logger.error("[ticket] Failed to delete channel", err);
   }
+}
+
+/** ユーザーがスタッフロールまたは Administrator かを判定 */
+async function isTicketStaff(interaction: ButtonInteraction, staffRoleId: string | null | undefined): Promise<boolean> {
+  if (!interaction.guild || !interaction.member) return false;
+  const perms = interaction.memberPermissions;
+  if (perms?.has(PermissionFlagsBits.Administrator)) return true;
+  if (staffRoleId) {
+    const member = interaction.guild.members.cache.get(interaction.user.id)
+      ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    if (member?.roles.cache.has(staffRoleId)) return true;
+  }
+  return false;
+}
+
+export async function handleTicketClose(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.channelId || !interaction.guild) return;
+
+  const ticket = await getTicketByChannel(interaction.channelId);
+  if (!ticket) {
+    await interaction.reply({ content: "このチャンネルはチケットではないか、すでに閉じられています。", ephemeral: true });
+    return;
+  }
+
+  const settings = await getTicketSettings(interaction.guild.id);
+  const staff = await isTicketStaff(interaction, settings?.staffRoleId ?? null);
+
+  // スタッフ・管理者は即クローズ
+  if (staff) {
+    await interaction.deferReply({ ephemeral: true });
+    await interaction.editReply("チケットを閉じます…");
+    await doCloseTicket(interaction, ticket.id);
+    return;
+  }
+
+  // 一般ユーザーは承認リクエストを投稿
+  await interaction.deferUpdate();
+
+  const staffMention = settings?.staffRoleId ? `<@&${settings.staffRoleId}> ` : "";
+  const embed = new EmbedBuilder()
+    .setTitle("🔒 クローズ承認リクエスト")
+    .setColor(0xfee75c)
+    .setDescription(
+      `<@${interaction.user.id}> がこのチケットのクローズを要求しました。\n` +
+      `${staffMention}管理者が「承認」を押すとチャンネルが削除されます。`,
+    )
+    .setTimestamp();
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${COMM_TICKET_CLOSE_APPROVE_PREFIX}${ticket.id}`)
+      .setLabel("✅ 承認してクローズ")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`${COMM_TICKET_CLOSE_CANCEL_PREFIX}${ticket.id}`)
+      .setLabel("❌ キャンセル")
+      .setStyle(ButtonStyle.Secondary),
+  );
+
+  if (interaction.channel && "send" in interaction.channel) {
+    await (interaction.channel as import("discord.js").TextChannel).send({
+      content: staffMention.trim() || undefined,
+      embeds: [embed],
+      components: [row],
+      allowedMentions: { roles: settings?.staffRoleId ? [settings.staffRoleId] : [] },
+    });
+  }
+}
+
+export async function handleTicketCloseApprove(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.channelId || !interaction.guild) return;
+
+  const settings = await getTicketSettings(interaction.guild.id);
+  const staff = await isTicketStaff(interaction, settings?.staffRoleId ?? null);
+  if (!staff) {
+    await interaction.reply({ content: "❌ このボタンはスタッフ・管理者のみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const ticket = await getTicketByChannel(interaction.channelId);
+  if (!ticket) {
+    await interaction.reply({ content: "このチケットはすでに閉じられています。", ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  await interaction.editReply("チケットを閉じます…");
+  await doCloseTicket(interaction, ticket.id);
+}
+
+export async function handleTicketCloseCancel(interaction: ButtonInteraction): Promise<void> {
+  // リクエストメッセージ自体を削除してキャンセル
+  await interaction.message.delete().catch(() => {});
+  await interaction.reply({ content: "✅ クローズリクエストをキャンセルしました。", ephemeral: true });
 }
 
 export async function handleBotstatusRefresh(interaction: ButtonInteraction): Promise<void> {

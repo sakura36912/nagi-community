@@ -44,6 +44,8 @@ import {
   COMM_EVENT_CANCEL_PREFIX,
   COMM_TICKET_CREATE,
   COMM_TICKET_CLOSE_PREFIX,
+  COMM_TICKET_CLOSE_APPROVE_PREFIX,
+  COMM_TICKET_CLOSE_CANCEL_PREFIX,
   COMM_TICKET_PANEL_PREFIX,
   COMM_PRIVACY_DELETE_CONFIRM,
   COMM_PRIVACY_DELETE_CANCEL,
@@ -60,6 +62,8 @@ import {
   handleEventCancel,
   handleTicketCreate,
   handleTicketClose,
+  handleTicketCloseApprove,
+  handleTicketCloseCancel,
   handlePrivacyDeleteConfirm,
   handlePrivacyDeleteCancel,
   handlePrivacyOptoutKeep,
@@ -597,6 +601,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id === COMM_TICKET_CREATE || id.startsWith(COMM_TICKET_PANEL_PREFIX)) {
         await handleTicketCreate(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_TICKET_CLOSE_APPROVE_PREFIX)) {
+        await handleTicketCloseApprove(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_TICKET_CLOSE_CANCEL_PREFIX)) {
+        await handleTicketCloseCancel(interaction);
         return;
       }
       if (id.startsWith(COMM_TICKET_CLOSE_PREFIX)) {
