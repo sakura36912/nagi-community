@@ -1105,6 +1105,63 @@ describe('handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe',
     // The admin's own id must NOT be used as the userId filter
     expect(eqVals).not.toContain("admin-ad-7");
   });
+
+  it("admin still sees the 'deleted N rows' embed when the audit channel fetch throws", async () => {
+    // deleteUserVcSessions calls db.delete() twice (sessions + privacy row)
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+    // getAuditLogChannel returns a configured channel id via db.select()
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-fetch-throws" }]);
+
+    // channels.fetch rejects (e.g. channel was deleted from Discord)
+    const interaction = {
+      user: { id: "admin-audit-1", tag: "admin-audit-1#0000" },
+      guildId: "guild-audit-1",
+      customId: `${COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX}target-audit-1`,
+      member: { permissions: { has: vi.fn().mockReturnValue(true) } },
+      guild: {
+        name: "Test Guild",
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(null) },
+          fetch: vi.fn().mockRejectedValue(new Error("Unknown Channel")),
+        },
+      },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    // Must not throw even though the channel fetch fails
+    await expect(handlePrivacyAdminDeleteConfirm(interaction as never)).resolves.toBeUndefined();
+
+    // Admin must still have received the confirmation embed
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("2件");
+  });
+
+  it("handler completes normally with no extra DB calls when no audit channel is configured", async () => {
+    // deleteUserVcSessions calls db.delete() twice (sessions + privacy row)
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 5 }]);
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+    // selectWhere returns [] by default → getAuditLogChannel returns null → audit branch skipped
+
+    const interaction = makeAdminInteraction("admin-audit-2", "guild-audit-2", "target-audit-2");
+
+    await expect(handlePrivacyAdminDeleteConfirm(interaction as never)).resolves.toBeUndefined();
+
+    // Admin still receives the confirmation embed
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+    // No insert calls (no audit log message was posted)
+    expect(mocks.insert).not.toHaveBeenCalled();
+    // Exactly 2 deletes (sessions + privacy row), nothing more
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ─── deleteAllUserVcSessions – global wipe scoped to one user only ────────────
