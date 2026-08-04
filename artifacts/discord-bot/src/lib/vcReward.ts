@@ -47,20 +47,19 @@ export async function setVcRewardSettings(
   return row!;
 }
 
-/** Append a category ID to the allowlist (no-op if already present). */
-export async function addVcRewardCategory(
+/** Append a voice channel ID to the allowlist (no-op if already present). */
+export async function addVcRewardChannel(
   guildId: string,
-  categoryId: string,
+  channelId: string,
 ): Promise<VcRewardSettings> {
-  // Ensure a row exists first.
   await getVcRewardSettings(guildId);
   const [row] = await db
     .update(vcRewardSettingsTable)
     .set({
-      includedCategoryIds: sql`
-        CASE WHEN ${categoryId} = ANY(included_category_ids)
-          THEN included_category_ids
-          ELSE array_append(included_category_ids, ${categoryId})
+      includedChannelIds: sql`
+        CASE WHEN ${channelId} = ANY(included_channel_ids)
+          THEN included_channel_ids
+          ELSE array_append(included_channel_ids, ${channelId})
         END
       `,
     })
@@ -69,16 +68,16 @@ export async function addVcRewardCategory(
   return row!;
 }
 
-/** Remove a category ID from the allowlist. */
-export async function removeVcRewardCategory(
+/** Remove a voice channel ID from the allowlist. */
+export async function removeVcRewardChannel(
   guildId: string,
-  categoryId: string,
+  channelId: string,
 ): Promise<VcRewardSettings> {
   await getVcRewardSettings(guildId);
   const [row] = await db
     .update(vcRewardSettingsTable)
     .set({
-      includedCategoryIds: sql`array_remove(included_category_ids, ${categoryId})`,
+      includedChannelIds: sql`array_remove(included_channel_ids, ${channelId})`,
     })
     .where(eq(vcRewardSettingsTable.guildId, guildId))
     .returning();

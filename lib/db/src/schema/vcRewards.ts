@@ -39,11 +39,11 @@ export const vcRewardSettingsTable = pgTable("vc_reward_settings", {
   /** Minimum continuous minutes required before any reward is paid. */
   minMinutes: integer("min_minutes").notNull().default(5),
   /**
-   * Allowlist of Discord category channel IDs.
-   * Empty array = all categories are eligible.
-   * Non-empty = only VCs whose parentId is in this list earn rewards.
+   * Allowlist of Discord voice channel IDs.
+   * Empty array = all voice channels are eligible.
+   * Non-empty = only VCs whose channelId is in this list earn rewards.
    */
-  includedCategoryIds: text("included_category_ids")
+  includedChannelIds: text("included_channel_ids")
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),

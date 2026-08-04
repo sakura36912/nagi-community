@@ -744,18 +744,16 @@ async function sendVcNotifyLeave(guild: VoiceState["guild"], userId: string, cha
 // ─── VC-time reward handler ───────────────────────────────────────────────────
 
 /**
- * Returns true if the given channelId is in an eligible category.
- * When includedCategoryIds is empty, all categories are eligible.
+ * Returns true if the given channelId is in the eligible channel list.
+ * When includedChannelIds is empty, all voice channels are eligible.
  */
 function isEligibleChannel(
   channelId: string,
-  includedCategoryIds: string[],
-  guild: VoiceState["guild"],
+  includedChannelIds: string[],
+  _guild: VoiceState["guild"],
 ): boolean {
-  if (includedCategoryIds.length === 0) return true;
-  const channel = guild.channels.cache.get(channelId);
-  if (!channel || !channel.parentId) return false;
-  return includedCategoryIds.includes(channel.parentId);
+  if (includedChannelIds.length === 0) return true;
+  return includedChannelIds.includes(channelId);
 }
 
 /**
@@ -873,7 +871,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             await recordVcJoin(guild.id, userId, newState.channelId!);
           } else {
             const settings = await getVcRewardSettings(guild.id);
-            if (settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild)) {
+            if (settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedChannelIds, guild)) {
               await recordVcJoin(guild.id, userId, newState.channelId!);
             }
           }
@@ -963,8 +961,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             getHubSalaryForChannel(newState.channelId!),
             getVcRewardSettings(guild.id),
           ]);
-          const wasGeneralEligible = settings.ratePerHour > 0 && isEligibleChannel(oldState.channelId!, settings.includedCategoryIds, guild);
-          const nowGeneralEligible = settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedCategoryIds, guild);
+          const wasGeneralEligible = settings.ratePerHour > 0 && isEligibleChannel(oldState.channelId!, settings.includedChannelIds, guild);
+          const nowGeneralEligible = settings.ratePerHour > 0 && isEligibleChannel(newState.channelId!, settings.includedChannelIds, guild);
           const wasTracked = oldHubSalary != null || wasGeneralEligible;
           const nowTracked = newHubSalary != null || nowGeneralEligible;
 

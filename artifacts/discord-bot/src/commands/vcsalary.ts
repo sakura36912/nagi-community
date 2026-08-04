@@ -9,8 +9,8 @@ import {
 import {
   getVcRewardSettings,
   setVcRewardSettings,
-  addVcRewardCategory,
-  removeVcRewardCategory,
+  addVcRewardChannel,
+  removeVcRewardChannel,
 } from "../lib/vcReward";
 import { getGuildSettings } from "../lib/economy";
 
@@ -25,17 +25,17 @@ function buildInfoEmbed(
   ratePerHour: number,
   minMinutes: number,
   currencyName: string,
-  includedCategoryIds: string[],
-  categoryNames: string[],
+  includedChannelIds: string[],
+  channelNames: string[],
 ): EmbedBuilder {
   const enabled = ratePerHour > 0;
 
-  const categoryValue =
-    includedCategoryIds.length === 0
-      ? "すべてのカテゴリ"
-      : categoryNames.length > 0
-        ? categoryNames.map((n) => `• ${n}`).join("\n")
-        : includedCategoryIds.map((id) => `• <#${id}>`).join("\n");
+  const channelValue =
+    includedChannelIds.length === 0
+      ? "すべてのVCチャンネル"
+      : channelNames.length > 0
+        ? channelNames.map((n) => `• ${n}`).join("\n")
+        : includedChannelIds.map((id) => `• <#${id}>`).join("\n");
 
   return new EmbedBuilder()
     .setTitle("🎙️ VC滞在報酬 設定")
@@ -57,8 +57,8 @@ function buildInfoEmbed(
         inline: true,
       },
       {
-        name: "対象カテゴリ",
-        value: categoryValue,
+        name: "対象チャンネル",
+        value: channelValue,
       },
     )
     .setFooter({
@@ -92,8 +92,8 @@ async function resolvedInfoEmbed(
     getGuildSettings(guildId),
   ]);
 
-  // Resolve category names from the guild's channel cache.
-  const categoryNames = settings.includedCategoryIds.map((id) => {
+  // Resolve channel names from the guild's channel cache.
+  const channelNames = settings.includedChannelIds.map((id) => {
     const ch = interaction.guild?.channels.cache.get(id);
     return ch ? ch.name : id;
   });
@@ -102,8 +102,8 @@ async function resolvedInfoEmbed(
     settings.ratePerHour,
     settings.minMinutes,
     guildSettings.currencyName,
-    settings.includedCategoryIds,
-    categoryNames,
+    settings.includedChannelIds,
+    channelNames,
   );
 }
 
@@ -136,50 +136,50 @@ async function handleInfo(
   await interaction.editReply({ embeds: [embed] });
 }
 
-async function handleCategoryAdd(
+async function handleChannelAdd(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
   const guildId = requireGuild(interaction);
   if (!guildId) return;
 
-  const channel = interaction.options.getChannel("category", true);
-  if (channel.type !== ChannelType.GuildCategory) {
+  const channel = interaction.options.getChannel("channel", true);
+  if (channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice) {
     await interaction.reply({
-      content: "カテゴリチャンネルを選択してください。",
+      content: "ボイスチャンネルまたはステージチャンネルを選択してください。",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  await addVcRewardCategory(guildId, channel.id);
+  await addVcRewardChannel(guildId, channel.id);
   const embed = await resolvedInfoEmbed(guildId, interaction);
   await interaction.editReply({
-    content: `✅ **${channel.name}** を対象カテゴリに追加しました。`,
+    content: `✅ **${channel.name}** を対象チャンネルに追加しました。`,
     embeds: [embed],
   });
 }
 
-async function handleCategoryRemove(
+async function handleChannelRemove(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
   const guildId = requireGuild(interaction);
   if (!guildId) return;
 
-  const channel = interaction.options.getChannel("category", true);
-  if (channel.type !== ChannelType.GuildCategory) {
+  const channel = interaction.options.getChannel("channel", true);
+  if (channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice) {
     await interaction.reply({
-      content: "カテゴリチャンネルを選択してください。",
+      content: "ボイスチャンネルまたはステージチャンネルを選択してください。",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  await removeVcRewardCategory(guildId, channel.id);
+  await removeVcRewardChannel(guildId, channel.id);
   const embed = await resolvedInfoEmbed(guildId, interaction);
   await interaction.editReply({
-    content: `✅ **${channel.name}** を対象カテゴリから除外しました。`,
+    content: `✅ **${channel.name}** を対象チャンネルから除外しました。`,
     embeds: [embed],
   });
 }
@@ -216,29 +216,29 @@ export const vcsalaryCommand: Command = {
     )
     .addSubcommandGroup((group) =>
       group
-        .setName("category")
-        .setDescription("報酬対象カテゴリの管理（管理者）")
+        .setName("channel")
+        .setDescription("報酬対象チャンネルの管理（管理者）")
         .addSubcommand((sub) =>
           sub
             .setName("add")
-            .setDescription("対象カテゴリを追加します")
+            .setDescription("対象チャンネルを追加します")
             .addChannelOption((opt) =>
               opt
-                .setName("category")
-                .setDescription("追加するカテゴリ")
-                .addChannelTypes(ChannelType.GuildCategory)
+                .setName("channel")
+                .setDescription("追加するボイスチャンネル")
+                .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
                 .setRequired(true),
             ),
         )
         .addSubcommand((sub) =>
           sub
             .setName("remove")
-            .setDescription("対象カテゴリを除外します")
+            .setDescription("対象チャンネルを除外します")
             .addChannelOption((opt) =>
               opt
-                .setName("category")
-                .setDescription("除外するカテゴリ")
-                .addChannelTypes(ChannelType.GuildCategory)
+                .setName("channel")
+                .setDescription("除外するボイスチャンネル")
+                .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
                 .setRequired(true),
             ),
         ),
@@ -249,15 +249,15 @@ export const vcsalaryCommand: Command = {
     const group = interaction.options.getSubcommandGroup(false);
     const sub = interaction.options.getSubcommand();
 
-    const isAdminSub = group === "category" || sub === "setup";
+    const isAdminSub = group === "channel" || sub === "setup";
     if (isAdminSub && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
       await interaction.reply({ content: "❌ このコマンドは管理者権限が必要です。", flags: MessageFlags.Ephemeral });
       return;
     }
 
-    if (group === "category") {
-      if (sub === "add") await handleCategoryAdd(interaction);
-      else if (sub === "remove") await handleCategoryRemove(interaction);
+    if (group === "channel") {
+      if (sub === "add") await handleChannelAdd(interaction);
+      else if (sub === "remove") await handleChannelRemove(interaction);
       return;
     }
 
