@@ -790,6 +790,23 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
     });
   }
 
+  // カテゴリーまたはサーバーレベルで ViewChannel を持つロールを自動 deny
+  // （explicit allow リストにあるものはスキップ）
+  {
+    const explicitIds = new Set(overwrites.map((o) => o.id as string));
+    const category = categoryId
+      ? (interaction.guild.channels.cache.get(categoryId) as import("discord.js").CategoryChannel | undefined)
+      : undefined;
+
+    for (const [id, role] of interaction.guild.roles.cache) {
+      if (id === interaction.guild.roles.everyone.id || explicitIds.has(id)) continue;
+      const perms = category ? category.permissionsFor(role) : role.permissions;
+      if (perms?.has(PermissionFlagsBits.ViewChannel)) {
+        overwrites.push({ id, deny: [PermissionFlagsBits.ViewChannel] });
+      }
+    }
+  }
+
   // チャンネル作成
   let channel: import("discord.js").TextChannel;
   try {
