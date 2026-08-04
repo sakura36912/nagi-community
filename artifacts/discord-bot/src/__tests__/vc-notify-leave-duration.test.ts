@@ -278,6 +278,22 @@ describe("handleMove – tracked → untracked", () => {
     expect(send).toHaveBeenCalledOnce();
     expect(send.mock.calls[0][0]).not.toMatch(/滞在/);
   });
+
+  it("does not send and does not throw when the notify channel has been deleted", async () => {
+    mocks.getVcLogSettings.mockResolvedValue({
+      notifyChannelId: "ch-deleted", // not in guild.channels.cache
+      categoryIds: ["cat-1"],
+    });
+    mocks.recordVcLogLeave.mockResolvedValue({ durationSeconds: 60 });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const guild = makeGuild(send); // cache only has "ch-old", not "ch-deleted"
+
+    await expect(
+      handleMove(guild, "user-1", "ch-old", "ch-new", parentMap),
+    ).resolves.toBeUndefined();
+
+    expect(send).not.toHaveBeenCalled();
+  });
 });
 
 describe("handleMove – tracked → tracked (different category)", () => {
