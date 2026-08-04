@@ -16,6 +16,13 @@
  *   7. A DB error in setVcLogNotifyChannel is caught and logged.
  *   8. logger.warn fires when notifyChannelId is cleared; NOT fired otherwise.
  *   9. getVcLogSettings receives the correct guildId.
+ *  10. Deleted channel matches banLogChannelId → setBanLogChannelId(guildId, null) called once.
+ *  11. Deleted channel does NOT match banLogChannelId → setBanLogChannelId NOT called.
+ *  12. banLogChannelId is null → setBanLogChannelId NOT called.
+ *  13. logger.warn fires (with channel id and guild id) when banLogChannelId is cleared.
+ *  14. A DB error in getGuildSettings is caught; setBanLogChannelId is NOT called.
+ *  15. A DB error in setBanLogChannelId is caught and logged.
+ *  16. getGuildSettings receives the correct guildId.
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -190,5 +197,133 @@ describe("handleChannelDelete – notifyChannelId auto-clear", () => {
 
     expect(mocks.getVcLogSettings).toHaveBeenCalledOnce();
     expect(mocks.getVcLogSettings).toHaveBeenCalledWith("guild-42");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("handleChannelDelete – banLogChannelId auto-clear", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.setVcLogNotifyChannel.mockResolvedValue(undefined);
+    mocks.setBanLogChannelId.mockResolvedValue(undefined);
+    mocks.setLeaveLogChannelId.mockResolvedValue(undefined);
+    // Default VC log settings: no notify channel configured.
+    mocks.getVcLogSettings.mockResolvedValue({ notifyChannelId: null });
+  });
+
+  // ── Happy path: channel matches banLogChannelId ────────────────────────────
+
+  it("calls setBanLogChannelId(guildId, null) exactly once when the deleted channel matches banLogChannelId", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-banlog",
+      leaveLogChannelId: null,
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-banlog", "guild-ban"));
+
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledWith("guild-ban", null);
+  });
+
+  it("logs a warn containing the channel id and guild id when banLogChannelId is cleared", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-banlog",
+      leaveLogChannelId: null,
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-banlog", "guild-ban"));
+
+    const warnCalls: unknown[][] = mocks.loggerWarn.mock.calls;
+    const banWarnCall = warnCalls.find(
+      (args) => typeof args[0] === "string" && args[0].includes("[bannotify]"),
+    );
+    expect(banWarnCall).toBeDefined();
+    const warnMsg = banWarnCall![0] as string;
+    expect(warnMsg).toContain("ch-banlog");
+    expect(warnMsg).toContain("guild-ban");
+  });
+
+  // ── No-op path: channel does not match banLogChannelId ────────────────────
+
+  it("does NOT call setBanLogChannelId when the deleted channel does not match banLogChannelId", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-banlog",
+      leaveLogChannelId: null,
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-other", "guild-ban"));
+
+    expect(mocks.setBanLogChannelId).not.toHaveBeenCalled();
+  });
+
+  it("does NOT log a [bannotify] warn when the deleted channel does not match banLogChannelId", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-banlog",
+      leaveLogChannelId: null,
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-other", "guild-ban"));
+
+    const banWarnCalled = mocks.loggerWarn.mock.calls.some(
+      (args: unknown[]) => typeof args[0] === "string" && args[0].includes("[bannotify]"),
+    );
+    expect(banWarnCalled).toBe(false);
+  });
+
+  it("does NOT call setBanLogChannelId when banLogChannelId is null", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: null,
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-any", "guild-ban"));
+
+    expect(mocks.setBanLogChannelId).not.toHaveBeenCalled();
+  });
+
+  // ── Error handling ────────────────────────────────────────────────────────
+
+  it("catches a getGuildSettings error without calling setBanLogChannelId", async () => {
+    const dbError = new Error("DB read failed");
+    mocks.getGuildSettings.mockRejectedValue(dbError);
+
+    await handleChannelDelete(makeGuildChannel("ch-banlog", "guild-ban"));
+
+    expect(mocks.setBanLogChannelId).not.toHaveBeenCalled();
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("[economy] ChannelDelete"),
+      dbError,
+    );
+  });
+
+  it("catches a setBanLogChannelId error and logs it", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-banlog",
+      leaveLogChannelId: null,
+    });
+    const writeError = new Error("write failed");
+    mocks.setBanLogChannelId.mockRejectedValue(writeError);
+
+    await handleChannelDelete(makeGuildChannel("ch-banlog", "guild-ban"));
+
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("[economy] ChannelDelete"),
+      writeError,
+    );
+  });
+
+  // ── Correct guildId forwarding ────────────────────────────────────────────
+
+  it("passes the correct guildId to getGuildSettings", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: null,
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-xyz", "guild-99"));
+
+    expect(mocks.getGuildSettings).toHaveBeenCalledOnce();
+    expect(mocks.getGuildSettings).toHaveBeenCalledWith("guild-99");
   });
 });
