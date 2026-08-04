@@ -16,11 +16,17 @@
  *     3. Duration suffix appears in leave notification.
  *     4. No suffix when no presence row exists.
  *
+ *   Move untracked → tracked:
+ *     5. sendVcNotifyJoin fires with the new channel.
+ *     6. recordVcLogLeave is NOT called.
+ *     7. recordVcLogJoin is called with the new channel and its category.
+ *     8. sendVcNotifyJoin is suppressed when notifyChannelId is null.
+ *
  *   Move tracked → tracked (different category):
- *     5. Leave notification carries the duration suffix (read from getVcLogPresence).
- *     6. getVcLogPresence is called — session NOT mutated via recordVcLogLeave/Join.
- *     7. Join notification is sent for the new channel.
- *     8. No suffix when getVcLogPresence returns undefined.
+ *     9.  Leave notification carries the duration suffix (read from getVcLogPresence).
+ *     10. getVcLogPresence is called — session NOT mutated via recordVcLogLeave/Join.
+ *     11. Join notification is sent for the new channel.
+ *     12. No suffix when getVcLogPresence returns undefined.
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -53,6 +59,8 @@ import {
   recordVcLogLeave,
   recordVcLogJoin,
 } from "../lib/vcReward.js";
+
+import { handleVcLogMove, type VcLogMoveNotify } from "../lib/vcLogMove.js";
 
 // ─── Inline helpers (mirrors index.ts exactly) ────────────────────────────────
 
@@ -143,45 +151,11 @@ async function handleLeave(
   }
 }
 
-// ─── Inlined move handler (session-log + notify portion) ─────────────────────
-// Mirrors the "Moved between two non-AFK VCs" branch of the voiceStateUpdate handler.
+// ─── Helpers for handleVcLogMove tests ───────────────────────────────────────
 
-async function handleMove(
-  guild: FakeGuild,
-  userId: string,
-  oldChannelId: string,
-  newChannelId: string,
-  channelParentMap: Map<string, string | null>,
-): Promise<void> {
-  try {
-    const logSettings = await getVcLogSettings(guild.id);
-    const categoryIds: string[] = logSettings.categoryIds ?? [];
-    const wasLogCat = getLogCategoryId(oldChannelId, categoryIds, channelParentMap);
-    const nowLogCat = getLogCategoryId(newChannelId, categoryIds, channelParentMap);
-
-    if (wasLogCat && !nowLogCat) {
-      // tracked → untracked: settle session, show duration in leave notification
-      const leaveResult = await recordVcLogLeave(guild.id, userId);
-      if (logSettings.notifyChannelId) {
-        const joinedAt = leaveResult
-          ? new Date(Date.now() - leaveResult.durationSeconds * 1000)
-          : undefined;
-        await sendVcNotifyLeave(guild, userId, oldChannelId, logSettings.notifyChannelId, joinedAt);
-      }
-    } else if (!wasLogCat && nowLogCat) {
-      await recordVcLogJoin(guild.id, userId, newChannelId, nowLogCat);
-      if (logSettings.notifyChannelId) {
-        await sendVcNotifyJoin(guild, userId, newChannelId, logSettings.notifyChannelId);
-      }
-    } else if (wasLogCat && nowLogCat && logSettings.notifyChannelId) {
-      // Both tracked: notify move only (session tracking continues uninterrupted)
-      const presence = await getVcLogPresence(guild.id, userId);
-      await sendVcNotifyLeave(guild, userId, oldChannelId, logSettings.notifyChannelId, presence?.joinedAt);
-      await sendVcNotifyJoin(guild, userId, newChannelId, logSettings.notifyChannelId);
-    }
-  } catch (err) {
-    mocks.loggerError(`[vclog] channel-move log error for ${userId}`, err);
-  }
+/** Build the channelParentId callback that handleVcLogMove expects. */
+function makeChannelParentId(map: Map<string, string | null>) {
+  return (channelId: string) => map.get(channelId) ?? null;
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -243,91 +217,146 @@ describe("handleLeave – straight leave duration propagation", () => {
   });
 });
 
-describe("handleMove – tracked → untracked", () => {
-  const parentMap = new Map([
+// ─── handleVcLogMove tests — exercise the real production function ────────────
+
+describe("handleVcLogMove – tracked → untracked", () => {
+  const channelParentId = makeChannelParentId(new Map([
     ["ch-old", "cat-1"],   // tracked
     ["ch-new", "cat-99"],  // not tracked
-  ]);
+  ]));
+
+  let sendJoin: ReturnType<typeof vi.fn>;
+  let sendLeave: ReturnType<typeof vi.fn>;
+  let notify: VcLogMoveNotify;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sendJoin = vi.fn().mockResolvedValue(undefined);
+    sendLeave = vi.fn().mockResolvedValue(undefined);
+    notify = { sendJoin, sendLeave };
     mocks.getVcLogSettings.mockResolvedValue({
-      notifyChannelId: NOTIFY_CH,
+      notifyChannelId: "notify-ch",
       categoryIds: ["cat-1"],
     });
   });
 
   it("shows duration in leave notification when presence row existed", async () => {
-    mocks.recordVcLogLeave.mockResolvedValue({ durationSeconds: 60 }); // 1分0秒
-    const send = vi.fn().mockResolvedValue(undefined);
-    const guild = makeGuild(send);
+    mocks.recordVcLogLeave.mockResolvedValue({ durationSeconds: 60 });
 
-    await handleMove(guild, "user-1", "ch-old", "ch-new", parentMap);
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
 
-    expect(send).toHaveBeenCalledOnce();
-    expect(send.mock.calls[0][0]).toMatch(/滞在: 1分0秒/);
+    expect(sendLeave).toHaveBeenCalledOnce();
+    const [uid, channelId, notifyChannelId, joinedAt] = sendLeave.mock.calls[0];
+    expect(uid).toBe("user-1");
+    expect(channelId).toBe("ch-old");
+    expect(notifyChannelId).toBe("notify-ch");
+    expect(joinedAt).toBeInstanceOf(Date);
   });
 
   it("omits duration when no presence row existed", async () => {
     mocks.recordVcLogLeave.mockResolvedValue(undefined);
-    const send = vi.fn().mockResolvedValue(undefined);
-    const guild = makeGuild(send);
 
-    await handleMove(guild, "user-1", "ch-old", "ch-new", parentMap);
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
 
-    expect(send).toHaveBeenCalledOnce();
-    expect(send.mock.calls[0][0]).not.toMatch(/滞在/);
+    expect(sendLeave).toHaveBeenCalledOnce();
+    const [, , , joinedAt] = sendLeave.mock.calls[0];
+    expect(joinedAt).toBeUndefined();
   });
 
-  it("does not send and does not throw when the notify channel has been deleted", async () => {
+  it("does not call sendLeave when notifyChannelId is null", async () => {
     mocks.getVcLogSettings.mockResolvedValue({
-      notifyChannelId: "ch-deleted", // not in guild.channels.cache
+      notifyChannelId: null,
       categoryIds: ["cat-1"],
     });
     mocks.recordVcLogLeave.mockResolvedValue({ durationSeconds: 60 });
-    const send = vi.fn().mockResolvedValue(undefined);
-    const guild = makeGuild(send); // cache only has "ch-old", not "ch-deleted"
 
-    await expect(
-      handleMove(guild, "user-1", "ch-old", "ch-new", parentMap),
-    ).resolves.toBeUndefined();
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
 
-    expect(send).not.toHaveBeenCalled();
+    expect(sendLeave).not.toHaveBeenCalled();
   });
 });
 
-describe("handleMove – tracked → tracked (different category)", () => {
-  const parentMap = new Map([
-    ["ch-old", "cat-1"],  // tracked
-    ["ch-new", "cat-2"],  // also tracked
-  ]);
+describe("handleVcLogMove – untracked → tracked", () => {
+  const channelParentId = makeChannelParentId(new Map([
+    ["ch-old", "cat-99"], // NOT tracked
+    ["ch-new", "cat-1"],  // tracked
+  ]));
 
-  function makeGuildWithTwo(send: ReturnType<typeof vi.fn>): FakeGuild {
-    return {
-      id: "guild-1",
-      channels: {
-        cache: new Map([
-          ["ch-old", { send }],
-          ["ch-new", { send }],
-        ]),
-      },
-    };
-  }
+  let sendJoin: ReturnType<typeof vi.fn>;
+  let sendLeave: ReturnType<typeof vi.fn>;
+  let notify: VcLogMoveNotify;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sendJoin = vi.fn().mockResolvedValue(undefined);
+    sendLeave = vi.fn().mockResolvedValue(undefined);
+    notify = { sendJoin, sendLeave };
     mocks.getVcLogSettings.mockResolvedValue({
-      notifyChannelId: NOTIFY_CH,
+      notifyChannelId: "notify-ch",
+      categoryIds: ["cat-1"],
+    });
+    mocks.recordVcLogJoin.mockResolvedValue(undefined);
+  });
+
+  it("fires sendVcNotifyJoin with the new channel", async () => {
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
+
+    expect(sendJoin).toHaveBeenCalledOnce();
+    expect(sendJoin).toHaveBeenCalledWith("user-1", "ch-new", "notify-ch");
+  });
+
+  it("does not call recordVcLogLeave", async () => {
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
+
+    expect(mocks.recordVcLogLeave).not.toHaveBeenCalled();
+  });
+
+  it("calls recordVcLogJoin with the new channel and its category", async () => {
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
+
+    expect(mocks.recordVcLogJoin).toHaveBeenCalledOnce();
+    expect(mocks.recordVcLogJoin).toHaveBeenCalledWith("guild-1", "user-1", "ch-new", "cat-1");
+  });
+
+  it("does not call sendJoin when notifyChannelId is null", async () => {
+    mocks.getVcLogSettings.mockResolvedValue({
+      notifyChannelId: null,
+      categoryIds: ["cat-1"],
+    });
+
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
+
+    expect(sendJoin).not.toHaveBeenCalled();
+    // session tracking still happens
+    expect(mocks.recordVcLogJoin).toHaveBeenCalledOnce();
+  });
+});
+
+describe("handleVcLogMove – tracked → tracked (different category)", () => {
+  const channelParentId = makeChannelParentId(new Map([
+    ["ch-old", "cat-1"],  // tracked
+    ["ch-new", "cat-2"],  // also tracked
+  ]));
+
+  let sendJoin: ReturnType<typeof vi.fn>;
+  let sendLeave: ReturnType<typeof vi.fn>;
+  let notify: VcLogMoveNotify;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sendJoin = vi.fn().mockResolvedValue(undefined);
+    sendLeave = vi.fn().mockResolvedValue(undefined);
+    notify = { sendJoin, sendLeave };
+    mocks.getVcLogSettings.mockResolvedValue({
+      notifyChannelId: "notify-ch",
       categoryIds: ["cat-1", "cat-2"],
     });
   });
 
   it("calls getVcLogPresence (not recordVcLogLeave) so session is not terminated", async () => {
     mocks.getVcLogPresence.mockResolvedValue({ joinedAt: new Date(Date.now() - 120 * 1000) });
-    const send = vi.fn().mockResolvedValue(undefined);
-    const guild = makeGuildWithTwo(send);
 
-    await handleMove(guild, "user-1", "ch-old", "ch-new", parentMap);
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
 
     expect(mocks.getVcLogPresence).toHaveBeenCalledOnce();
     expect(mocks.getVcLogPresence).toHaveBeenCalledWith("guild-1", "user-1");
@@ -335,43 +364,35 @@ describe("handleMove – tracked → tracked (different category)", () => {
     expect(mocks.recordVcLogJoin).not.toHaveBeenCalled();
   });
 
-  it("shows duration in leave notification when presence row existed", async () => {
-    mocks.getVcLogPresence.mockResolvedValue({ joinedAt: new Date(Date.now() - 185 * 1000) }); // 3分5秒
-    const send = vi.fn().mockResolvedValue(undefined);
-    const guild = makeGuildWithTwo(send);
+  it("passes joinedAt from getVcLogPresence to sendLeave", async () => {
+    const joinedAt = new Date(Date.now() - 185 * 1000); // 3分5秒
+    mocks.getVcLogPresence.mockResolvedValue({ joinedAt });
 
-    await handleMove(guild, "user-1", "ch-old", "ch-new", parentMap);
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
 
-    const leaveCalls = send.mock.calls
-      .map((c) => c[0] as string)
-      .filter((msg) => msg.includes("退出"));
-    expect(leaveCalls).toHaveLength(1);
-    expect(leaveCalls[0]).toMatch(/滞在: 3分5秒/);
+    expect(sendLeave).toHaveBeenCalledOnce();
+    const [, , , passedJoinedAt] = sendLeave.mock.calls[0];
+    expect(passedJoinedAt).toBe(joinedAt);
   });
 
-  it("omits duration when getVcLogPresence returns undefined", async () => {
+  it("omits joinedAt when getVcLogPresence returns undefined", async () => {
     mocks.getVcLogPresence.mockResolvedValue(undefined);
-    const send = vi.fn().mockResolvedValue(undefined);
-    const guild = makeGuildWithTwo(send);
 
-    await handleMove(guild, "user-1", "ch-old", "ch-new", parentMap);
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
 
-    const leaveCalls = send.mock.calls
-      .map((c) => c[0] as string)
-      .filter((msg) => msg.includes("退出"));
-    expect(leaveCalls).toHaveLength(1);
-    expect(leaveCalls[0]).not.toMatch(/滞在/);
+    expect(sendLeave).toHaveBeenCalledOnce();
+    const [, , , joinedAt] = sendLeave.mock.calls[0];
+    expect(joinedAt).toBeUndefined();
   });
 
   it("sends both a leave and a join notification", async () => {
     mocks.getVcLogPresence.mockResolvedValue({ joinedAt: new Date(Date.now() - 30 * 1000) });
-    const send = vi.fn().mockResolvedValue(undefined);
-    const guild = makeGuildWithTwo(send);
 
-    await handleMove(guild, "user-1", "ch-old", "ch-new", parentMap);
+    await handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notify);
 
-    const msgs = send.mock.calls.map((c) => c[0] as string);
-    expect(msgs.some((m) => m.includes("退出"))).toBe(true);
-    expect(msgs.some((m) => m.includes("参加"))).toBe(true);
+    expect(sendLeave).toHaveBeenCalledOnce();
+    expect(sendLeave).toHaveBeenCalledWith("user-1", "ch-old", "notify-ch", expect.any(Date));
+    expect(sendJoin).toHaveBeenCalledOnce();
+    expect(sendJoin).toHaveBeenCalledWith("user-1", "ch-new", "notify-ch");
   });
 });

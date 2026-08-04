@@ -61,6 +61,7 @@ import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/shee
 import { getStickyMessage, updateStickyLastMessageId } from "./lib/sticky";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 import { handleChannelDelete } from "./lib/handleChannelDelete";
+import { handleVcLogMove } from "./lib/vcLogMove";
 
 import { logger } from "./lib/logger";
 import {
@@ -1011,34 +1012,19 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         }
       })(),
       // Session log + move notification – category eligibility may have changed
-      (async () => {
-        try {
-          const logSettings = await getVcLogSettings(guild.id);
-          const wasLogCat = getLogCategoryId(oldState.channelId!, logSettings.categoryIds, guild);
-          const nowLogCat = getLogCategoryId(newState.channelId!, logSettings.categoryIds, guild);
-          if (wasLogCat && !nowLogCat) {
-            const leaveResult = await recordVcLogLeave(guild.id, userId);
-            if (logSettings.notifyChannelId) {
-              const joinedAt = leaveResult
-                ? new Date(Date.now() - leaveResult.durationSeconds * 1000)
-                : undefined;
-              await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId, joinedAt);
-            }
-          } else if (!wasLogCat && nowLogCat) {
-            await recordVcLogJoin(guild.id, userId, newState.channelId!, nowLogCat);
-            if (logSettings.notifyChannelId) {
-              await sendVcNotifyJoin(guild, userId, newState.channelId!, logSettings.notifyChannelId);
-            }
-          } else if (wasLogCat && nowLogCat && logSettings.notifyChannelId) {
-            // Both tracked: notify move only (session tracking continues uninterrupted)
-            const presence = await getVcLogPresence(guild.id, userId);
-            await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId, presence?.joinedAt);
-            await sendVcNotifyJoin(guild, userId, newState.channelId!, logSettings.notifyChannelId);
-          }
-        } catch (err) {
-          logger.error(`[vclog] channel-move log error for ${userId}`, err);
-        }
-      })(),
+      handleVcLogMove(
+        guild.id,
+        userId,
+        oldState.channelId!,
+        newState.channelId!,
+        (channelId) => guild.channels.cache.get(channelId)?.parentId,
+        {
+          sendJoin: (uid, channelId, notifyChannelId) =>
+            sendVcNotifyJoin(guild, uid, channelId, notifyChannelId),
+          sendLeave: (uid, channelId, notifyChannelId, joinedAt) =>
+            sendVcNotifyLeave(guild, uid, channelId, notifyChannelId, joinedAt),
+        },
+      ).catch((err) => logger.error(`[vclog] channel-move log error for ${userId}`, err)),
       // Hub: 別VCから Hub に移動してきた場合 → 新VC作成＆転送
       handleHubJoin(newState).catch((err) =>
         logger.error(`[vcHub] handleHubJoin (move) error for ${userId}`, err),
