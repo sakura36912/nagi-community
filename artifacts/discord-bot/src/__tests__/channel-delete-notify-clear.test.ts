@@ -327,3 +327,146 @@ describe("handleChannelDelete – banLogChannelId auto-clear", () => {
     expect(mocks.getGuildSettings).toHaveBeenCalledWith("guild-99");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("handleChannelDelete – leaveLogChannelId auto-clear", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.setVcLogNotifyChannel.mockResolvedValue(undefined);
+    mocks.setBanLogChannelId.mockResolvedValue(undefined);
+    mocks.setLeaveLogChannelId.mockResolvedValue(undefined);
+    // Default VC log settings: no notify channel configured.
+    mocks.getVcLogSettings.mockResolvedValue({ notifyChannelId: null });
+  });
+
+  // ── Happy path: channel matches leaveLogChannelId ─────────────────────────
+
+  it("calls setLeaveLogChannelId(guildId, null) exactly once when the deleted channel matches leaveLogChannelId", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: "ch-leavelog",
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-leavelog", "guild-leave"));
+
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledWith("guild-leave", null);
+  });
+
+  it("logs a warn containing the channel id and guild id when leaveLogChannelId is cleared", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: "ch-leavelog",
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-leavelog", "guild-leave"));
+
+    const warnCalls: unknown[][] = mocks.loggerWarn.mock.calls;
+    const leaveWarnCall = warnCalls.find(
+      (args) => typeof args[0] === "string" && args[0].includes("[leavelog]"),
+    );
+    expect(leaveWarnCall).toBeDefined();
+    const warnMsg = leaveWarnCall![0] as string;
+    expect(warnMsg).toContain("ch-leavelog");
+    expect(warnMsg).toContain("guild-leave");
+  });
+
+  // ── No-op path: channel does not match leaveLogChannelId ─────────────────
+
+  it("does NOT call setLeaveLogChannelId when the deleted channel does not match leaveLogChannelId", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: "ch-leavelog",
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-other", "guild-leave"));
+
+    expect(mocks.setLeaveLogChannelId).not.toHaveBeenCalled();
+  });
+
+  it("does NOT log a [leavelog] warn when the deleted channel does not match leaveLogChannelId", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: "ch-leavelog",
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-other", "guild-leave"));
+
+    const leaveWarnCalled = mocks.loggerWarn.mock.calls.some(
+      (args: unknown[]) => typeof args[0] === "string" && args[0].includes("[leavelog]"),
+    );
+    expect(leaveWarnCalled).toBe(false);
+  });
+
+  it("does NOT call setLeaveLogChannelId when leaveLogChannelId is null", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: null,
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-any", "guild-leave"));
+
+    expect(mocks.setLeaveLogChannelId).not.toHaveBeenCalled();
+  });
+
+  // ── Error handling ────────────────────────────────────────────────────────
+
+  it("catches a getGuildSettings error without calling setLeaveLogChannelId", async () => {
+    const dbError = new Error("DB read failed");
+    mocks.getGuildSettings.mockRejectedValue(dbError);
+
+    await handleChannelDelete(makeGuildChannel("ch-leavelog", "guild-leave"));
+
+    expect(mocks.setLeaveLogChannelId).not.toHaveBeenCalled();
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("[economy] ChannelDelete"),
+      dbError,
+    );
+  });
+
+  it("catches a setLeaveLogChannelId error and logs it", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: "ch-leavelog",
+    });
+    const writeError = new Error("write failed");
+    mocks.setLeaveLogChannelId.mockRejectedValue(writeError);
+
+    await handleChannelDelete(makeGuildChannel("ch-leavelog", "guild-leave"));
+
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("[economy] ChannelDelete"),
+      writeError,
+    );
+  });
+
+  // ── banLog and leaveLog are independent within the same try block ─────────
+
+  it("clears both banLogChannelId and leaveLogChannelId when both match the deleted channel", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-shared",
+      leaveLogChannelId: "ch-shared",
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-shared", "guild-both"));
+
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledWith("guild-both", null);
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledWith("guild-both", null);
+  });
+
+  it("clears only leaveLogChannelId when only it matches and banLogChannelId differs", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-banlog",
+      leaveLogChannelId: "ch-leavelog",
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-leavelog", "guild-leave"));
+
+    expect(mocks.setBanLogChannelId).not.toHaveBeenCalled();
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledWith("guild-leave", null);
+  });
+});
