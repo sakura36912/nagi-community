@@ -108,7 +108,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
-import { closeOpenSessionsForUser, deleteAllUserVcSessions, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
+import { closeOpenSessionsForUser, deleteAllUserVcSessions, isVcTrackingOptedOut, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
 import { handlePrivacyGlobalOptoutDelete, handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyAdminDeleteConfirm, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
@@ -1304,5 +1304,78 @@ describe("handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path", 
     expect(eqVals).toContain("user-god-7");
     // A different user's id must NOT appear
     expect(eqVals).not.toContain("user-other-god");
+  });
+});
+
+// ─── isVcTrackingOptedOut – all four global/per-guild flag combinations ────────
+//
+// isVcTrackingOptedOut is the core gate used by openSession. It runs two
+// parallel selects (global table, per-guild table) and returns true when
+// either flag is opted-out=true. We verify every combination:
+//
+//   global=false, per-guild=false → false  (not blocked)
+//   global=false, per-guild=true  → true   (blocked by per-guild flag)
+//   global=true,  per-guild=false → true   (blocked; global wins)
+//   global=true,  per-guild=true  → true   (blocked; both flags set)
+//
+// The first selectWhere mock call resolves the global table query,
+// the second resolves the per-guild table query (matching the Promise.all order
+// inside isVcTrackingOptedOut).
+
+describe("isVcTrackingOptedOut – all four global/per-guild flag combinations", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns false when global=false and per-guild=false (not blocked)", async () => {
+    // global table: no opted-out row
+    mocks.selectWhere.mockResolvedValueOnce([]);
+    // per-guild table: no opted-out row
+    mocks.selectWhere.mockResolvedValueOnce([]);
+
+    const result = await isVcTrackingOptedOut("guild-comb-A", "user-comb-A");
+
+    expect(result).toBe(false);
+    // No insert should have been triggered (we only queried)
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("returns true when global=false and per-guild=true (blocked by per-guild flag)", async () => {
+    // global table: row exists but optedOut=false
+    mocks.selectWhere.mockResolvedValueOnce([{ userId: "user-comb-B", optedOut: false }]);
+    // per-guild table: row with optedOut=true
+    mocks.selectWhere.mockResolvedValueOnce([{ guildId: "guild-comb-B", userId: "user-comb-B", optedOut: true }]);
+
+    const result = await isVcTrackingOptedOut("guild-comb-B", "user-comb-B");
+
+    expect(result).toBe(true);
+    // No session insert should have occurred
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("returns true when global=true and per-guild=false (blocked; global wins)", async () => {
+    // global table: row with optedOut=true
+    mocks.selectWhere.mockResolvedValueOnce([{ userId: "user-comb-C", optedOut: true }]);
+    // per-guild table: row with optedOut=false (opt-in at guild level)
+    mocks.selectWhere.mockResolvedValueOnce([{ guildId: "guild-comb-C", userId: "user-comb-C", optedOut: false }]);
+
+    const result = await isVcTrackingOptedOut("guild-comb-C", "user-comb-C");
+
+    expect(result).toBe(true);
+    // No session insert should have occurred
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("returns true when global=true and per-guild=true (blocked; both flags set)", async () => {
+    // global table: row with optedOut=true
+    mocks.selectWhere.mockResolvedValueOnce([{ userId: "user-comb-D", optedOut: true }]);
+    // per-guild table: row with optedOut=true
+    mocks.selectWhere.mockResolvedValueOnce([{ guildId: "guild-comb-D", userId: "user-comb-D", optedOut: true }]);
+
+    const result = await isVcTrackingOptedOut("guild-comb-D", "user-comb-D");
+
+    expect(result).toBe(true);
+    // No session insert should have occurred
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 });
