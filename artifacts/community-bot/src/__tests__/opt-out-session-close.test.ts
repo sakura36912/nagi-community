@@ -1435,6 +1435,92 @@ describe("handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path", 
   });
 });
 
+// ─── handlePrivacyGlobalOptoutDelete – replay-attack guard ───────────────────
+//
+// The handler derives the userId exclusively from `interaction.user.id`.
+// There is no targetUserId encoded in the button customId — unlike the admin
+// delete handler, which embeds a target in the customId.  This means:
+//
+//   • When user A clicks their own button, only user A's sessions are deleted.
+//   • If user B somehow replays the same button (e.g. by exploiting a cached
+//     Discord message), `interaction.user.id` is user B's id, so only user B's
+//     own data is affected — user A's data is never touched.
+//
+// These tests make that guarantee explicit so a future refactor cannot silently
+// introduce a customId-derived userId that breaks the isolation.
+
+describe("handlePrivacyGlobalOptoutDelete – replay-attack guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function setupMocks(deletedRows: { id: number }[]) {
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);           // global opt-out row cleared
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);        // global opt-out upsert (re-set)
+    mocks.returning.mockResolvedValueOnce([]);                 // closeOpenSessionsForUser
+  }
+
+  it("passes interaction.user.id as the userId to deleteAllUserVcSessions — never a hardcoded or customId-derived id", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-replay-A");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    // The WHERE clause on the first delete (sessions) must carry user-replay-A's id.
+    // If the handler ever switched to reading the id from customId or a closure
+    // variable, this assertion would catch it.
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; val?: string; args?: { op: string; val?: string }[] }
+    ];
+    const collectEqVals = (node: { op: string; val?: string; args?: unknown[] }): string[] => {
+      if (node.op === "eq") return [node.val as string];
+      if (node.op === "and" && Array.isArray(node.args))
+        return (node.args as { op: string; val?: string; args?: unknown[] }[]).flatMap(collectEqVals);
+      return [];
+    };
+    const eqVals = collectEqVals(whereArg as { op: string; val?: string; args?: unknown[] });
+
+    // Must contain the clicking user's id
+    expect(eqVals).toContain("user-replay-A");
+    // The opt-out upsert (setVcGlobalPrivacyOptOut) must also target the same user
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [{ userId: string; optedOut: boolean }];
+    expect(valuesArg.userId).toBe("user-replay-A");
+  });
+
+  it("when user B replays the button, only user B's sessions are deleted — user A's data is untouched", async () => {
+    // Simulate user B ("user-replay-B") clicking the button.
+    // Even if the original confirm embed was generated in response to user A's
+    // command, Discord delivers the button click as user B's interaction.
+    // The handler must therefore scope the delete to user B, not user A.
+    setupMocks([{ id: 200 }, { id: 201 }]);
+
+    const interaction = makeInteraction("user-replay-B");
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; val?: string; args?: { op: string; val?: string }[] }
+    ];
+    const collectEqVals = (node: { op: string; val?: string; args?: unknown[] }): string[] => {
+      if (node.op === "eq") return [node.val as string];
+      if (node.op === "and" && Array.isArray(node.args))
+        return (node.args as { op: string; val?: string; args?: unknown[] }[]).flatMap(collectEqVals);
+      return [];
+    };
+    const eqVals = collectEqVals(whereArg as { op: string; val?: string; args?: unknown[] });
+
+    // The replaying user's id (user B) must be the scope of the delete
+    expect(eqVals).toContain("user-replay-B");
+    // The original user's id (user A) must NOT appear anywhere in the WHERE clause
+    expect(eqVals).not.toContain("user-replay-A");
+
+    // The opt-out upsert must also target user B, not user A
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [{ userId: string; optedOut: boolean }];
+    expect(valuesArg.userId).toBe("user-replay-B");
+    expect(valuesArg.userId).not.toBe("user-replay-A");
+  });
+});
+
 // ─── handlePrivacyGlobalOptoutDelete – audit log path ────────────────────────
 //
 // After the wipe completes the handler should attempt to post an audit log entry
