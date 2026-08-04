@@ -1452,15 +1452,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
   } catch (err) {
+    // 10062 = Unknown interaction (expired before we could respond) — not actionable, skip silently.
+    const code = (err as { code?: number }).code;
+    if (code === 10062) return;
+
     logger.error("Error handling interaction", err);
     const errorMessage =
       err instanceof Error ? err.message : "処理中にエラーが発生しました。";
 
     if (interaction.isRepliable()) {
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: errorMessage, flags: MessageFlags.Ephemeral });
-      } else {
-        await interaction.reply({ content: errorMessage, flags: MessageFlags.Ephemeral });
+      try {
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: errorMessage, flags: MessageFlags.Ephemeral });
+        } else {
+          await interaction.reply({ content: errorMessage, flags: MessageFlags.Ephemeral });
+        }
+      } catch {
+        // Ignore errors from the error-reply itself (e.g. 40060 already-acknowledged).
       }
     }
   }
