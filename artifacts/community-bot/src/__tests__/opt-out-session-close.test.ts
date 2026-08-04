@@ -1379,3 +1379,107 @@ describe("isVcTrackingOptedOut – all four global/per-guild flag combinations",
     expect(mocks.insert).not.toHaveBeenCalled();
   });
 });
+
+// ─── Cold-start path: brand-new user with zero privacy rows ──────────────────
+//
+// A first-time user has never interacted with the privacy commands, so neither
+// communityVcPrivacyGlobalTable nor communityVcPrivacyTable has a row for them.
+// isVcTrackingOptedOut must return false (not throw, not misread undefined as
+// opted-out) and openSession must successfully insert a session row.
+
+describe("cold-start: brand-new user with no privacy rows is never blocked", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("isVcTrackingOptedOut returns false when no row exists in either privacy table", async () => {
+    // Both parallel selects return empty arrays — no privacy rows at all
+    mocks.selectWhere.mockResolvedValueOnce([]); // global table → no row
+    mocks.selectWhere.mockResolvedValueOnce([]); // per-guild table → no row
+
+    const result = await isVcTrackingOptedOut("guild-cs-1", "user-cs-1");
+
+    expect(result).toBe(false);
+  });
+
+  it("isVcTrackingOptedOut does not throw when both queries return undefined rows", async () => {
+    // Defensive: ensure the function never throws on a cold-start path
+    mocks.selectWhere.mockResolvedValueOnce([]);
+    mocks.selectWhere.mockResolvedValueOnce([]);
+
+    await expect(isVcTrackingOptedOut("guild-cs-2", "user-cs-2")).resolves.toBe(false);
+  });
+
+  it("openSession inserts a session row for a brand-new user (not blocked)", async () => {
+    // isVcTrackingOptedOut → both selects return empty (no privacy rows)
+    mocks.selectWhere.mockResolvedValueOnce([]); // global table → no row
+    mocks.selectWhere.mockResolvedValueOnce([]); // per-guild table → no row
+
+    // The insert inside openSession uses .values().returning()
+    const fakeSession = {
+      id: 42,
+      guildId: "guild-cs-3",
+      userId: "user-cs-3",
+      channelId: "channel-cs-3",
+      joinedAt: new Date(),
+      leftAt: null,
+      isExile: false,
+    };
+    mocks.returningFromInsert.mockResolvedValueOnce([fakeSession]);
+
+    const session = await openSession("guild-cs-3", "user-cs-3", "channel-cs-3");
+
+    // A real session must be returned — the user was not blocked
+    expect(session).not.toBeNull();
+    expect(session?.userId).toBe("user-cs-3");
+    expect(session?.guildId).toBe("guild-cs-3");
+    expect(session?.channelId).toBe("channel-cs-3");
+  });
+
+  it("openSession calls db.insert() exactly once for a brand-new user (the session row)", async () => {
+    // No privacy rows in either table
+    mocks.selectWhere.mockResolvedValueOnce([]);
+    mocks.selectWhere.mockResolvedValueOnce([]);
+
+    const fakeSession = {
+      id: 43,
+      guildId: "guild-cs-4",
+      userId: "user-cs-4",
+      channelId: "channel-cs-4",
+      joinedAt: new Date(),
+      leftAt: null,
+      isExile: false,
+    };
+    mocks.returningFromInsert.mockResolvedValueOnce([fakeSession]);
+
+    await openSession("guild-cs-4", "user-cs-4", "channel-cs-4");
+
+    // Exactly one insert — the session row. No phantom opt-out write.
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+    // The table passed to db.insert() must be the sessions table
+    const [tableArg] = mocks.insert.mock.calls[0] as unknown as [Record<string, string>];
+    expect(tableArg["userId"]).toBe("sessions.userId");
+  });
+
+  it("openSession does not call db.update() for a brand-new user (no close-session side-effect)", async () => {
+    // No privacy rows in either table
+    mocks.selectWhere.mockResolvedValueOnce([]);
+    mocks.selectWhere.mockResolvedValueOnce([]);
+
+    const fakeSession = {
+      id: 44,
+      guildId: "guild-cs-5",
+      userId: "user-cs-5",
+      channelId: "channel-cs-5",
+      joinedAt: new Date(),
+      leftAt: null,
+      isExile: false,
+    };
+    mocks.returningFromInsert.mockResolvedValueOnce([fakeSession]);
+
+    await openSession("guild-cs-5", "user-cs-5", "channel-cs-5");
+
+    // db.update() (used by closeSession) must NOT have been called
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+});
