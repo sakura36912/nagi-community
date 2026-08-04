@@ -1715,16 +1715,21 @@ export async function handleTicketCreate(interaction: ButtonInteraction): Promis
     overwrites.push({ id, deny: [PermissionFlagsBits.ViewChannel] });
   }
 
-  // カテゴリーで ViewChannel: allow になっているロールはチャンネルレベルでも
-  // 継承されてしまうため、明示的に deny を追加して封じる。
-  if (categoryId) {
-    const category = interaction.guild.channels.cache.get(categoryId);
-    if (category && "permissionOverwrites" in category) {
-      const explicitAllowIds = new Set(overwrites.map((o) => o.id as string));
-      for (const [id, ow] of (category as import("discord.js").CategoryChannel).permissionOverwrites.cache) {
-        if (!explicitAllowIds.has(id) && ow.allow.has(PermissionFlagsBits.ViewChannel)) {
-          overwrites.push({ id, deny: [PermissionFlagsBits.ViewChannel] });
-        }
+  // カテゴリー（またはサーバー全体）経由で ViewChannel が有効なロールを
+  // permissionsFor で実効権限チェックし、明示的に deny を追加して封じる。
+  {
+    const explicitAllowIds = new Set(overwrites.map((o) => o.id as string));
+    const category = categoryId
+      ? (interaction.guild.channels.cache.get(categoryId) as import("discord.js").CategoryChannel | undefined)
+      : undefined;
+
+    for (const [id, role] of interaction.guild.roles.cache) {
+      if (id === interaction.guild.roles.everyone.id) continue;
+      if (explicitAllowIds.has(id)) continue;
+      // カテゴリーがある場合はカテゴリー上の実効権限、なければロールの基本権限で判定
+      const perms = category ? category.permissionsFor(role) : role.permissions;
+      if (perms?.has(PermissionFlagsBits.ViewChannel)) {
+        overwrites.push({ id, deny: [PermissionFlagsBits.ViewChannel] });
       }
     }
   }
