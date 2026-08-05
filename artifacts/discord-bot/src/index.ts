@@ -812,7 +812,15 @@ async function handleVcLeave(
       await db.insert(transactionsTable).values({ guildId: guild.id, userId, amount: reward, reason });
     } else {
       const settings = await getVcRewardSettings(guild.id);
-      reward = await payVcReward(guild.id, userId, joinedAt, guildSettings.currencyName, settings);
+      const member = guild.members.cache.get(userId);
+      reward = await payVcReward(
+        guild.id,
+        userId,
+        joinedAt,
+        guildSettings.currencyName,
+        settings,
+        member ? (msg: string) => member.send(msg) : undefined,
+      );
       if (reward <= 0) return;
     }
 

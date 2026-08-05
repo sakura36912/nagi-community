@@ -1,3 +1,4 @@
+import { DiscordAPIError } from "discord.js";
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import {
   db,
@@ -157,7 +158,8 @@ export async function payVcReward(
   userId: string,
   joinedAt: Date,
   currencyName: string,
-  settings: VcRewardSettings,
+  settings: Pick<VcRewardSettings, "ratePerHour" | "minMinutes">,
+  sendDm?: (message: string) => Promise<unknown>,
 ): Promise<number> {
   if (settings.ratePerHour <= 0) return 0;
 
@@ -181,6 +183,19 @@ export async function payVcReward(
   await db
     .insert(transactionsTable)
     .values({ guildId, userId, amount: reward, reason });
+
+  // Notify member via DM. Silently ignore 50007 (Cannot send messages to this user / DMs closed).
+  if (sendDm) {
+    try {
+      await sendDm(`VC滞在報酬として **${reward} ${currencyName}** を受け取りました！`);
+    } catch (err) {
+      if (err instanceof DiscordAPIError && err.code === 50007) {
+        // Member has DMs closed — silently ignore.
+      } else {
+        throw err;
+      }
+    }
+  }
 
   return reward;
 }
