@@ -760,7 +760,9 @@ describe("runVcDeleteScheduler – extended expiry DM timestamp accuracy", () =>
       makeSchedule({ expiresAt: extendedExpiresAt, notifiedAt: null }),
     ]);
 
+    const beforeTick2 = Date.now();
     await runVcDeleteScheduler(client);
+    const afterTick2 = Date.now();
 
     // A new DM must fire using the extended expiry timestamp.
     expect(client._userSend).toHaveBeenCalledOnce();
@@ -769,8 +771,13 @@ describe("runVcDeleteScheduler – extended expiry DM timestamp accuracy", () =>
     expect(dmText).toContain(`<t:${extendedTs}:T>`);
     // The stale original timestamp must NOT appear.
     expect(dmText).not.toContain(`<t:${originalTs}:R>`);
-    // notifiedAt updated again on this tick.
+    // markScheduleNotified must be called a second time — once more for this tick.
     expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+    // The second argument must be the current-tick time, not the extended expiresAt.
+    const [, notifiedDate2] = mocks.markScheduleNotified.mock.calls[0] as [number, Date];
+    expect(notifiedDate2).toBeInstanceOf(Date);
+    expect(notifiedDate2.getTime()).toBeGreaterThanOrEqual(beforeTick2);
+    expect(notifiedDate2.getTime()).toBeLessThanOrEqual(afterTick2);
   });
 });
 
