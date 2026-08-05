@@ -821,18 +821,7 @@ async function handleVcLeave(
       `[vcsalary] ${userId} in ${guild.id}: +${reward}${guildSettings.currencyName} for ${minutes}min VC${hubSalaryOverride ? " (hub)" : ""}`,
     );
 
-    // DM the user (best-effort; closed DMs are silently ignored).
-    try {
-      const member = guild.members.cache.get(userId)
-        ?? await guild.members.fetch(userId).catch(() => null);
-      if (member) {
-        await member.send(
-          `🎙️ VC滞在報酬として **${reward} ${guildSettings.currencyName}** が付与されました！（${minutes}分 滞在）`,
-        );
-      }
-    } catch {
-      // DMs closed or member left — ignore.
-    }
+
   } catch (err) {
     logger.error(`[vcsalary] Error paying VC reward for ${userId} in ${guild.id}`, err);
   }
