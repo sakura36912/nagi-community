@@ -944,16 +944,36 @@ export async function handleNicknameModalSubmit(interaction: ModalSubmitInteract
 const balanceCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("残高確認")
-    .setDescription("自分の残高を表示します"),
+    .setDescription("残高を表示します。管理者はメンバーを指定して確認できます")
+    .addUserOption((opt) =>
+      opt.setName("メンバー").setDescription("確認するメンバー（省略時は自分）").setRequired(false),
+    ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
+    const targetUser = interaction.options.getUser("メンバー");
+
+    // 他人を指定した場合は管理者権限チェック
+    if (targetUser && targetUser.id !== interaction.user.id) {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({ content: "❌ 他のメンバーの残高を確認するには管理者権限が必要です。", ephemeral: true });
+        return;
+      }
+    }
+
+    const subject = targetUser ?? interaction.user;
     const [wallet, settings] = await Promise.all([
-      getOrCreateWallet(guildId, interaction.user.id),
+      getOrCreateWallet(guildId, subject.id),
       getGuildSettings(guildId),
     ]);
+
+    const member = interaction.guild?.members.cache.get(subject.id)
+      ?? await interaction.guild?.members.fetch(subject.id).catch(() => null);
+    const displayName = member?.displayName ?? subject.displayName ?? subject.username;
+    const avatarUrl = member?.displayAvatarURL() ?? subject.displayAvatarURL();
+
     const embed = new EmbedBuilder()
       .setColor(0x3498db)
-      .setAuthor({ name: interaction.user.displayName ?? interaction.user.username, iconURL: (interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL() })
+      .setAuthor({ name: displayName, iconURL: avatarUrl })
       .setDescription(`残高: **${wallet.balance.toLocaleString()}${settings.currencyName}**`);
     await interaction.reply({ embeds: [embed], ephemeral: true });
   },
