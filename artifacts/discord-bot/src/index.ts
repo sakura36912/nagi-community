@@ -981,18 +981,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             // 報酬対象に移動 → 計測開始
             await recordVcJoin(guild.id, userId, newState.channelId!);
           } else if (wasTracked && nowTracked) {
-            const typeChanged = (oldHubSalary != null) !== (newHubSalary != null);
-            const rateChanged = (oldHubSalary?.ratePerHour ?? settings.ratePerHour) !== (newHubSalary?.ratePerHour ?? settings.ratePerHour);
-            if (typeChanged || rateChanged) {
-              // 報酬レート変化 → 旧セッション精算 → 新セッション開始
-              const presence = await clearVcPresence(guild.id, userId).catch(() => undefined);
-              if (presence) await handleVcLeave(guild, userId, presence.joinedAt, oldHubSalary ?? undefined);
-              await recordVcJoin(guild.id, userId, newState.channelId!);
-            } else if (newHubSalary != null) {
-              // 同レートのHub VC間移動 → channelId だけ更新（joinedAt は保持）
-              await updateVcPresenceChannel(guild.id, userId, newState.channelId!);
-            }
-            // else: 同カテゴリのgeneral VC間移動 → 何もしない（既存の蓄積を継続）
+            // チャンネル移動時は joinedAt を保持したまま channelId だけ更新
+            // レート・種別が変わっても精算しない（滞在時間をリセットしない）
+            await updateVcPresenceChannel(guild.id, userId, newState.channelId!);
           }
         } catch (err) {
           logger.error(`[vcsalary] channel-move handling error for ${userId}`, err);
