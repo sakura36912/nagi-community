@@ -119,6 +119,7 @@ import {
   setBanLogChannelId,
   setRewardInterval,
   setRewardDayOfMonth,
+  isDueCalendarDay,
 } from "../lib/economy.js";
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -327,5 +328,80 @@ describe("setRewardDayOfMonth — fresh guild (no pre-existing row)", () => {
     const result = await setRewardDayOfMonth("guild-day-5", 10);
     expect(result.rewardDayOfMonth).toBe(10);
     expect(mocks.store.get("guild-day-5")?.banLogChannelId).toBe("ban-ch-day5");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("setRewardInterval / setRewardDayOfMonth — mutual exclusion", () => {
+  beforeEach(() => {
+    mocks.store.clear();
+  });
+
+  it("setRewardDayOfMonth then setRewardInterval: rewardDayOfMonth is null after the switch", async () => {
+    // Start in calendar-day mode.
+    await setRewardDayOfMonth("guild-mutex-1", 15);
+    expect(mocks.store.get("guild-mutex-1")?.rewardDayOfMonth).toBe(15);
+
+    // Switch to interval mode — must clear the calendar-day column.
+    const result = await setRewardInterval("guild-mutex-1", 480);
+    expect(result.rewardIntervalMinutes).toBe(480);
+    expect(result.rewardDayOfMonth).toBeNull();
+    expect(mocks.store.get("guild-mutex-1")?.rewardDayOfMonth).toBeNull();
+  });
+
+  it("setRewardInterval then setRewardDayOfMonth: isDueCalendarDay returns true (calendar mode supersedes interval)", async () => {
+    // Start in interval mode.
+    await setRewardInterval("guild-mutex-2", 10080);
+
+    // Switch to calendar-day mode — rewardDayOfMonth now takes priority.
+    const today = new Date();
+    const todayDay = today.getDate();
+    const result = await setRewardDayOfMonth("guild-mutex-2", todayDay);
+    expect(result.rewardDayOfMonth).toBe(todayDay);
+
+    // isDueCalendarDay must recognise calendar mode is active and today matches.
+    // No lastRewardAt set → first payout of the month → should be due.
+    const settings = { ...result, lastRewardAt: null } as Parameters<typeof isDueCalendarDay>[0];
+    expect(isDueCalendarDay(settings, today)).toBe(true);
+  });
+
+  it("after switching to interval mode isDueCalendarDay returns false regardless of the day", async () => {
+    // Seed a row that was in calendar-day mode.
+    await setRewardDayOfMonth("guild-mutex-3", 1);
+
+    // Switch to interval mode.
+    const result = await setRewardInterval("guild-mutex-3", 60);
+
+    // rewardDayOfMonth must be cleared, so isDueCalendarDay must return false.
+    const settings = { ...result, lastRewardAt: null } as Parameters<typeof isDueCalendarDay>[0];
+    // Force "today" to day 1 — even if it matches, the cleared column must win.
+    const firstOfMonth = new Date();
+    firstOfMonth.setDate(1);
+    expect(isDueCalendarDay(settings, firstOfMonth)).toBe(false);
+  });
+
+  it("setRewardInterval then setRewardDayOfMonth: interval is superseded at the application level — isDueCalendarDay governs payouts", async () => {
+    // Start in interval mode.
+    await setRewardInterval("guild-mutex-4", 1440);
+    expect(mocks.store.get("guild-mutex-4")?.rewardIntervalMinutes).toBe(1440);
+
+    // Switch to calendar-day mode.
+    // rewardIntervalMinutes is NOT NULL in the schema, so it cannot be cleared here;
+    // mutual exclusion is enforced at the application level by isDueCalendarDay.
+    const result = await setRewardDayOfMonth("guild-mutex-4", 20);
+    expect(result.rewardDayOfMonth).toBe(20);
+
+    // Calendar mode is now authoritative: when rewardDayOfMonth is set,
+    // isDueCalendarDay returns true on the matching day and the scheduler must
+    // consult it *before* any interval-mode logic.
+    const today = new Date();
+    const todayDay = today.getDate();
+    const settingsOnPayDay = { ...result, rewardDayOfMonth: todayDay, lastRewardAt: null } as Parameters<typeof isDueCalendarDay>[0];
+    expect(isDueCalendarDay(settingsOnPayDay, today)).toBe(true);
+
+    // Conversely, a row with rewardDayOfMonth null falls through to interval mode.
+    const settingsIntervalOnly = { ...result, rewardDayOfMonth: null, lastRewardAt: null } as Parameters<typeof isDueCalendarDay>[0];
+    expect(isDueCalendarDay(settingsIntervalOnly, today)).toBe(false);
   });
 });

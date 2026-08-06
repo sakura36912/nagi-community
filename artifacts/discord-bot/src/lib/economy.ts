@@ -569,7 +569,10 @@ export async function setRewardInterval(guildId: string, minutes: number): Promi
 }
 
 // Set a fixed calendar day (1–31) for monthly salary distribution.
-// Clears the interval mode — the two are mutually exclusive.
+// rewardIntervalMinutes is NOT NULL in the schema, so it cannot be cleared here.
+// Mutual exclusion is enforced at the application level: isDueCalendarDay returns
+// true (calendar mode) only when rewardDayOfMonth is set, and the scheduler must
+// check isDueCalendarDay before falling back to interval-mode logic.
 export async function setRewardDayOfMonth(guildId: string, day: number): Promise<GuildSettings> {
   return upsertGuildSetting(guildId, { rewardDayOfMonth: day });
 }
