@@ -422,6 +422,37 @@ client.once(Events.ClientReady, async (readyClient) => {
     );
   }, 60 * 1000);
 
+  // ── Periodic messages ─────────────────────────────────────────────────────
+  // Checks every 10 minutes whether any enabled periodic messages are due,
+  // posts them, and updates last_posted_at.
+  async function runPeriodicMessages(): Promise<void> {
+    const { getDuePeriodicMessages, markPeriodicMessagePosted } = await import("./lib/periodicMessages.js");
+    const due = await getDuePeriodicMessages().catch((err) => {
+      logger.error("[periodic] Failed to fetch due messages", err);
+      return [] as Awaited<ReturnType<typeof getDuePeriodicMessages>>;
+    });
+    for (const msg of due) {
+      try {
+        const guild = readyClient.guilds.cache.get(msg.guildId)
+          ?? await readyClient.guilds.fetch(msg.guildId).catch(() => null);
+        if (!guild) continue;
+        const channel = guild.channels.cache.get(msg.channelId)
+          ?? await guild.channels.fetch(msg.channelId).catch(() => null);
+        if (!channel?.isTextBased()) continue;
+        await channel.send(msg.message);
+        await markPeriodicMessagePosted(msg.id);
+        logger.info(`[periodic] Posted message id=${msg.id} to channel ${msg.channelId} in guild ${msg.guildId}`);
+      } catch (err) {
+        logger.error(`[periodic] Failed to post message id=${msg.id}`, err);
+      }
+    }
+  }
+
+  runPeriodicMessages().catch((err) => logger.error("[periodic] Initial run error", err));
+  setInterval(() => {
+    runPeriodicMessages().catch((err) => logger.error("[periodic] Scheduler error", err));
+  }, 10 * 60 * 1000);
+
   async function runEventParticipationAward(): Promise<void> {
     const events = await getEventsNeedingParticipationPoints();
     for (const event of events) {

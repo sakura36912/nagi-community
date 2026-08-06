@@ -354,3 +354,22 @@ export const communityPrebansTable = pgTable(
 );
 
 export type CommunityPreban = typeof communityPrebansTable.$inferSelect;
+
+// ─── Periodic Messages ───────────────────────────────────────────────────────
+
+/** Scheduled messages posted to a channel at a fixed interval. */
+export const periodicMessagesTable = pgTable("periodic_messages", {
+  id: serial("id").primaryKey(),
+  guildId: text("guild_id").notNull(),
+  channelId: text("channel_id").notNull(),
+  /** Message content (plain text or Discord markdown). */
+  message: text("message").notNull(),
+  /** How many hours between posts. Default 24. */
+  intervalHours: integer("interval_hours").notNull().default(24),
+  /** Timestamp of the most recent post. Null = never posted. */
+  lastPostedAt: timestamp("last_posted_at", { withTimezone: true }),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type PeriodicMessage = typeof periodicMessagesTable.$inferSelect;
