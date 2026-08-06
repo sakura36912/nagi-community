@@ -1944,6 +1944,7 @@ const tempvcCommand: Command = {
 
 import { prebanCommand } from "./preban.js";
 import { pointCommand } from "./point.js";
+import { periodicCommand } from "./periodic.js";
 
 export const commands: Command[] = [
   rankingCommand,
@@ -1956,4 +1957,5 @@ export const commands: Command[] = [
   prebanCommand,
   pointCommand,
   tempvcCommand,
+  periodicCommand,
 ];

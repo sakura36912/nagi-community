@@ -15,6 +15,47 @@ export async function getDuePeriodicMessages(): Promise<PeriodicMessage[]> {
     );
 }
 
+/** Return all periodic messages for a guild. */
+export async function listPeriodicMessages(guildId: string): Promise<PeriodicMessage[]> {
+  return db
+    .select()
+    .from(periodicMessagesTable)
+    .where(eq(periodicMessagesTable.guildId, guildId));
+}
+
+/** Add a new periodic message. */
+export async function addPeriodicMessage(
+  guildId: string,
+  channelId: string,
+  message: string,
+  intervalHours: number,
+): Promise<PeriodicMessage> {
+  const [row] = await db
+    .insert(periodicMessagesTable)
+    .values({ guildId, channelId, message, intervalHours, enabled: true })
+    .returning();
+  return row!;
+}
+
+/** Remove a periodic message by ID (scoped to guild). Returns true if deleted. */
+export async function removePeriodicMessage(guildId: string, id: number): Promise<boolean> {
+  const result = await db
+    .delete(periodicMessagesTable)
+    .where(sql`${periodicMessagesTable.id} = ${id} AND ${periodicMessagesTable.guildId} = ${guildId}`)
+    .returning();
+  return result.length > 0;
+}
+
+/** Toggle enabled state. Returns the updated row, or null if not found. */
+export async function togglePeriodicMessage(guildId: string, id: number): Promise<PeriodicMessage | null> {
+  const [row] = await db
+    .update(periodicMessagesTable)
+    .set({ enabled: sql`NOT ${periodicMessagesTable.enabled}` })
+    .where(sql`${periodicMessagesTable.id} = ${id} AND ${periodicMessagesTable.guildId} = ${guildId}`)
+    .returning();
+  return row ?? null;
+}
+
 /** Mark a periodic message as just posted. */
 export async function markPeriodicMessagePosted(id: number): Promise<void> {
   await db
