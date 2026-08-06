@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, lte } from "drizzle-orm";
+import { and, eq, gt, isNull, lte, notInArray } from "drizzle-orm";
 import { db, vcSchedulesTable, type VcSchedule } from "@workspace/db";
 
 /** Default number of milliseconds before expiry at which we send the warning DM. */
@@ -85,6 +85,28 @@ export async function getSchedulesExpiringSoon(
         isNull(vcSchedulesTable.notifiedAt),            // not yet notified
       ),
     );
+}
+
+/**
+ * Delete all `vc_schedules` rows whose `guild_id` is not in `activeGuildIds`.
+ *
+ * Called on bot startup so that rows left behind when the bot was removed from
+ * a guild do not accumulate and silently repeat on every scheduler tick.
+ *
+ * Guard: when `activeGuildIds` is empty the function is a no-op — a bot with
+ * no guilds should not mass-delete every schedule row.
+ *
+ * Returns the number of rows deleted.
+ */
+export async function pruneOrphanedVcSchedules(
+  activeGuildIds: string[],
+): Promise<number> {
+  if (activeGuildIds.length === 0) return 0;
+  const result = await db
+    .delete(vcSchedulesTable)
+    .where(notInArray(vcSchedulesTable.guildId, activeGuildIds))
+    .returning({ id: vcSchedulesTable.id });
+  return result.length;
 }
 
 /** Mark a schedule as having had its pre-expiry notification sent. */

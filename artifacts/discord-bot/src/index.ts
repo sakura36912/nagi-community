@@ -55,6 +55,7 @@ import {
   getSchedulesExpiringSoon,
   deleteSchedule,
   markScheduleNotified,
+  pruneOrphanedVcSchedules,
   NOTIFY_BEFORE_MS,
 } from "./lib/vc";
 import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
@@ -630,6 +631,18 @@ client.once(Events.ClientReady, (readyClient) => {
       logger.info(`[vcsalary] Cleared ${rows.length} stale presence record(s) on startup`);
     })
     .catch((err) => logger.error("[vcsalary] Failed to clear stale presences", err));
+
+  // Remove vc_schedules rows for guilds the bot is no longer a member of.
+  // When the bot is removed from a guild its schedule rows are never cleaned
+  // up by the regular expiry loop, so they accumulate indefinitely.
+  const activeGuildIds = [...readyClient.guilds.cache.keys()];
+  pruneOrphanedVcSchedules(activeGuildIds)
+    .then((count) => {
+      if (count > 0) {
+        logger.info(`[vc-schedule] Pruned ${count} orphaned schedule row(s) for guilds the bot has left`);
+      }
+    })
+    .catch((err) => logger.error("[vc-schedule] Failed to prune orphaned vc_schedules rows", err));
 
   // Seed default shop items for all guilds already in the bot's cache.
   for (const guild of readyClient.guilds.cache.values()) {
