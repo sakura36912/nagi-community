@@ -1605,17 +1605,11 @@ const rewardCommand: Command = {
       const guild = interaction.guild!;
       const settings = await getGuildSettings(guildId);
 
-      const userIds = await getGuildWalletUserIds(guildId);
+      await guild.members.fetch();
       const memberRoles = new Map<string, string[]>();
-      for (const userId of userIds) {
-        try {
-          const member = guild.members.cache.get(userId)
-            ?? await guild.members.fetch(userId).catch(() => null);
-          if (!member || member.user.bot) continue;
-          memberRoles.set(userId, [...member.roles.cache.keys()]);
-        } catch {
-          // 退鯖済みなどはスキップ
-        }
+      for (const member of guild.members.cache.values()) {
+        if (member.user.bot) continue;
+        memberRoles.set(member.id, [...member.roles.cache.keys()]);
       }
 
       const { paidCount, totalPaid } = await distributeRoleRewards(

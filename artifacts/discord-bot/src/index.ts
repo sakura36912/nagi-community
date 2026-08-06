@@ -168,19 +168,12 @@ async function runRewardScheduler(): Promise<void> {
         continue;
       }
 
-      // Build userId → roleIds map from wallet holders only.
-      // We fetch each member individually via REST so no privileged
-      // GuildMembers gateway intent is needed.
-      const userIds = await getGuildWalletUserIds(guild.id);
+      // Build userId → roleIds map from ALL guild members.
+      await guild.members.fetch();
       const memberRoles = new Map<string, string[]>();
-      for (const userId of userIds) {
-        try {
-          const member = await guild.members.fetch(userId);
-          if (member.user.bot) continue;
-          memberRoles.set(userId, [...member.roles.cache.keys()]);
-        } catch {
-          // Member may have left the guild — skip silently.
-        }
+      for (const member of guild.members.cache.values()) {
+        if (member.user.bot) continue;
+        memberRoles.set(member.id, [...member.roles.cache.keys()]);
       }
 
       const { paidCount, totalPaid } = await distributeRoleRewards(
