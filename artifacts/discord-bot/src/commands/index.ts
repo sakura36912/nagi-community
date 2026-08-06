@@ -489,6 +489,21 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       await extendSchedule(session.channelId, updated.expiresAt).catch((err) =>
         logger.error(`[vc-extend] Failed to update schedule for channel ${session.channelId}`, err),
       );
+      // Update the expiry display in the VC's voice-text channel (best-effort).
+      try {
+        const textCh = interaction.guild!.channels.cache.get(session.channelId)
+          ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
+        if (textCh && "messages" in textCh) {
+          const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
+          const panelMsg = msgs.find(
+            (m) => m.author.id === interaction.client.user?.id
+              && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+          );
+          if (panelMsg) await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt));
+        }
+      } catch (panelErr) {
+        logger.error(`[vc-extend] Failed to update panel message for channel ${session.channelId}`, panelErr);
+      }
       const ts = Math.floor(updated.expiresAt.getTime() / 1000);
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
     } catch {
@@ -694,6 +709,21 @@ async function applyShopPurchase(
       await extendSchedule(session.channelId, updated.expiresAt).catch((err) =>
         logger.error(`[vc-extend] Failed to update schedule for channel ${session.channelId}`, err),
       );
+      // Update the expiry display in the VC's voice-text channel (best-effort).
+      try {
+        const textCh = interaction.guild.channels.cache.get(session.channelId)
+          ?? await interaction.guild.channels.fetch(session.channelId).catch(() => null);
+        if (textCh && "messages" in textCh) {
+          const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
+          const panelMsg = msgs.find(
+            (m) => m.author.id === interaction.client.user?.id
+              && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+          );
+          if (panelMsg) await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt));
+        }
+      } catch (panelErr) {
+        logger.error(`[vc-extend] Failed to update panel message for channel ${session.channelId}`, panelErr);
+      }
       const ts = Math.floor(updated.expiresAt.getTime() / 1000);
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
     } catch {
