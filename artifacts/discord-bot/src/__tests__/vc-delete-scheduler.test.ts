@@ -926,6 +926,35 @@ describe("runVcDeleteScheduler – per-guild warn time isolation", () => {
     expect(callB![2]).not.toBe(5 * 60 * 1000);
     expect(callB![2]).toBe(60 * 60 * 1000);
   });
+
+  it("a missing settings row for guild-A does not crash the loop or skip guild-B", async () => {
+    // guild-A's settings fetch rejects (e.g. missing DB row); guild-B resolves normally
+    const settingsError = new Error("DB row not found for guild-A");
+    mocks.getGuildSettings.mockImplementation((guildId: string) => {
+      if (guildId === "guild-A") return Promise.reject(settingsError);
+      if (guildId === "guild-B") return Promise.resolve({ vcWarnBeforeMinutes: 30 });
+      return Promise.resolve({ vcWarnBeforeMinutes: 10 });
+    });
+
+    // The scheduler must not throw even though guild-A's settings fetch fails
+    await expect(runVcDeleteScheduler(makeTwoGuildClient())).resolves.toBeUndefined();
+
+    // guild-A's failure should have been logged
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("[vc-schedule] Failed to process expiry warnings for guild guild-A"),
+      settingsError,
+    );
+
+    // guild-B must still be processed with its own 30-minute window
+    const calls = mocks.getSchedulesExpiringSoon.mock.calls as [string, Date, number][];
+    const callB = calls.find(([guildId]) => guildId === "guild-B");
+    expect(callB).toBeDefined();
+    expect(callB![2]).toBe(30 * 60 * 1000);
+
+    // guild-A must NOT have reached getSchedulesExpiringSoon (it threw before that)
+    const callA = calls.find(([guildId]) => guildId === "guild-A");
+    expect(callA).toBeUndefined();
+  });
 });
 
 // ─── Ghost warning DM prevention ─────────────────────────────────────────────
