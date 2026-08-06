@@ -955,6 +955,38 @@ describe("runVcDeleteScheduler – per-guild warn time isolation", () => {
     const callA = calls.find(([guildId]) => guildId === "guild-A");
     expect(callA).toBeUndefined();
   });
+
+  it("uses the fallback warn time and does not crash when vcWarnBeforeMinutes is undefined", async () => {
+    // getGuildSettings returns an object but vcWarnBeforeMinutes is absent/undefined.
+    // Multiplying undefined by 60000 would yield NaN — the scheduler must guard
+    // against this and fall back to the default 10-minute window.
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: undefined });
+
+    // The scheduler must not throw.
+    await expect(runVcDeleteScheduler(makeTwoGuildClient())).resolves.toBeUndefined();
+
+    // getSchedulesExpiringSoon must still be called for both guilds.
+    expect(mocks.getSchedulesExpiringSoon).toHaveBeenCalledTimes(2);
+
+    // Every call must use the fallback 10-minute window (not NaN).
+    const calls = mocks.getSchedulesExpiringSoon.mock.calls as [string, Date, number][];
+    for (const call of calls) {
+      const warnBeforeMs = call[2];
+      expect(Number.isNaN(warnBeforeMs)).toBe(false);
+      expect(warnBeforeMs).toBe(10 * 60 * 1000);
+    }
+  });
+
+  it("logs an info message when vcWarnBeforeMinutes is undefined (fallback activated)", async () => {
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: undefined });
+
+    await runVcDeleteScheduler(makeTwoGuildClient());
+
+    // The scheduler should log that it is falling back, once per guild.
+    expect(mocks.loggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining("vcWarnBeforeMinutes not set for guild"),
+    );
+  });
 });
 
 // ─── Ghost warning DM prevention ─────────────────────────────────────────────
