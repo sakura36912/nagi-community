@@ -113,7 +113,7 @@ async function runVcDeleteScheduler(
       const configuredMinutes = (guildSettings as { vcWarnBeforeMinutes: number | null | undefined }).vcWarnBeforeMinutes;
       const FALLBACK_MS = 10 * 60 * 1000; // mirrors NOTIFY_BEFORE_MS
       const warnBeforeMs =
-        configuredMinutes != null
+        configuredMinutes != null && configuredMinutes > 0
           ? configuredMinutes * 60 * 1000
           : (logger.info(
               `[vc-schedule] vcWarnBeforeMinutes not set for guild ${guildId}; falling back to default ${FALLBACK_MS / 60000} min`,
@@ -836,6 +836,34 @@ describe("getSchedulesExpiringSoon – query filter assertions", () => {
     expect(mocks.loggerInfo).toHaveBeenCalledWith(
       expect.stringContaining("vcWarnBeforeMinutes not set"),
     );
+  });
+
+  it("falls back to 10 min when vcWarnBeforeMinutes is 0 (never produces a 0 ms window)", async () => {
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 0 });
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([]);
+
+    await runVcDeleteScheduler(makeClient());
+
+    expect(mocks.getSchedulesExpiringSoon).toHaveBeenCalledOnce();
+
+    const [, , warnBeforeMs] = mocks.getSchedulesExpiringSoon.mock.calls[0] as [string, Date, number];
+    // A 0 ms window would make every VC look like it is expiring right now;
+    // the scheduler must reject 0 and fall back to the safe default.
+    expect(warnBeforeMs).not.toBe(0);
+    expect(warnBeforeMs).toBe(10 * 60 * 1000);
+  });
+
+  it("falls back to 10 min when vcWarnBeforeMinutes is negative", async () => {
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: -5 });
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([]);
+
+    await runVcDeleteScheduler(makeClient());
+
+    expect(mocks.getSchedulesExpiringSoon).toHaveBeenCalledOnce();
+
+    const [, , warnBeforeMs] = mocks.getSchedulesExpiringSoon.mock.calls[0] as [string, Date, number];
+    expect(warnBeforeMs).toBeGreaterThan(0);
+    expect(warnBeforeMs).toBe(10 * 60 * 1000);
   });
 
   it("is called once per guild in the cache per scheduler tick", async () => {

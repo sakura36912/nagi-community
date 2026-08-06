@@ -483,7 +483,7 @@ async function runVcDeleteScheduler(): Promise<void> {
       const guildSettings = await getGuildSettings(guild.id);
       const configuredMinutes = guildSettings.vcWarnBeforeMinutes;
       const warnBeforeMs =
-        configuredMinutes != null
+        configuredMinutes != null && configuredMinutes > 0
           ? configuredMinutes * 60 * 1000
           : (logger.info(
               `[vc-schedule] vcWarnBeforeMinutes not set for guild ${guild.id}; falling back to default ${NOTIFY_BEFORE_MS / 60000} min`,
