@@ -139,6 +139,32 @@ vi.mock("drizzle-orm", async (importOriginal) => {
 import { setVcWarnBeforeMinutes, getGuildSettings } from "../lib/economy.js";
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+describe("setVcWarnBeforeMinutes — existing guild (pre-seeded row)", () => {
+  beforeEach(() => {
+    mocks.store.clear();
+  });
+
+  it("does not overwrite currencyName or banLogChannelId set before the call", async () => {
+    const guildId = "guild-existing-1";
+
+    // Seed a row that already has non-default values for unrelated columns.
+    mocks.store.set(guildId, {
+      guildId,
+      currencyName: "ゴールド",
+      banLogChannelId: "channel-ban-999",
+      vcWarnBeforeMinutes: 10,
+    });
+
+    const result = await setVcWarnBeforeMinutes(guildId, 30);
+
+    // The warn time must be updated …
+    expect(result.vcWarnBeforeMinutes).toBe(30);
+    // … but the unrelated columns must be untouched.
+    expect(result.currencyName).toBe("ゴールド");
+    expect(result.banLogChannelId).toBe("channel-ban-999");
+  });
+});
+
 describe("setVcWarnBeforeMinutes — fresh guild (no pre-existing row)", () => {
   beforeEach(() => {
     mocks.store.clear();
