@@ -488,9 +488,23 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       const updated = await extendPrivateVcSession(session.id, vcExtendDuration);
       // Propagate the new deadline to the VC schedule row and re-arm the
       // pre-expiry warning so the scheduler DMs the owner at the right time.
-      await extendSchedule(session.channelId, updated.expiresAt).catch((err) =>
-        logger.error(`[vc-extend] Failed to update schedule for channel ${session.channelId}`, err),
-      );
+      const scheduleRow = await extendSchedule(session.channelId, updated.expiresAt).catch((err) => {
+        logger.error(`[vc-extend] Failed to update schedule for channel ${session.channelId}`, err);
+        return null;
+      });
+      if (!scheduleRow) {
+        // extendSchedule returned null — no row existed (e.g. bot restarted
+        // before saveSchedule ran). Create one now so the pre-expiry warning
+        // DM will still fire at the correct time.
+        logger.warn(`[vc-extend] No schedule row found for channel ${session.channelId}; creating fallback row`);
+        const fallbackCh = interaction.guild!.channels.cache.get(session.channelId)
+          ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
+        const fallbackName = fallbackCh && "name" in fallbackCh && fallbackCh.name
+          ? fallbackCh.name
+          : session.channelId;
+        saveSchedule(interaction.guildId, session.channelId, fallbackName, updated.expiresAt, interaction.user.id)
+          .catch((err) => logger.error(`[vc-extend] Fallback saveSchedule also failed for channel ${session.channelId}`, err));
+      }
       // Update the expiry display in the VC's voice-text channel (best-effort).
       try {
         const textCh = interaction.guild!.channels.cache.get(session.channelId)
@@ -708,9 +722,23 @@ async function applyShopPurchase(
       const updated = await extendPrivateVcSession(session.id, vcExtendDuration);
       // Propagate the new deadline to the VC schedule row and re-arm the
       // pre-expiry warning so the scheduler DMs the owner at the right time.
-      await extendSchedule(session.channelId, updated.expiresAt).catch((err) =>
-        logger.error(`[vc-extend] Failed to update schedule for channel ${session.channelId}`, err),
-      );
+      const scheduleRow = await extendSchedule(session.channelId, updated.expiresAt).catch((err) => {
+        logger.error(`[vc-extend] Failed to update schedule for channel ${session.channelId}`, err);
+        return null;
+      });
+      if (!scheduleRow) {
+        // extendSchedule returned null — no row existed (e.g. bot restarted
+        // before saveSchedule ran). Create one now so the pre-expiry warning
+        // DM will still fire at the correct time.
+        logger.warn(`[vc-extend] No schedule row found for channel ${session.channelId}; creating fallback row`);
+        const fallbackCh = interaction.guild.channels.cache.get(session.channelId)
+          ?? await interaction.guild.channels.fetch(session.channelId).catch(() => null);
+        const fallbackName = fallbackCh && "name" in fallbackCh && fallbackCh.name
+          ? fallbackCh.name
+          : session.channelId;
+        saveSchedule(interaction.guildId, session.channelId, fallbackName, updated.expiresAt, interaction.user.id)
+          .catch((err) => logger.error(`[vc-extend] Fallback saveSchedule also failed for channel ${session.channelId}`, err));
+      }
       // Update the expiry display in the VC's voice-text channel (best-effort).
       try {
         const textCh = interaction.guild.channels.cache.get(session.channelId)
@@ -1817,9 +1845,21 @@ export async function handleVcPanelExtendSel(interaction: StringSelectMenuIntera
   const result = await buyItem(interaction.guild.id, interaction.user.id, itemId, settings.currencyName);
   if (!result.ok) { await interaction.editReply(result.reason); return; }
   const updated = await extendPrivateVcSession(session.id, duration);
-  await extendSchedule(channelId, updated.expiresAt).catch((err) =>
-    logger.error("[vc-panel] Failed to update schedule after extend", err),
-  );
+  const panelScheduleRow = await extendSchedule(channelId, updated.expiresAt).catch((err) => {
+    logger.error("[vc-panel] Failed to update schedule after extend", err);
+    return null;
+  });
+  if (!panelScheduleRow) {
+    // No schedule row — create one so the pre-expiry warning DM still fires.
+    logger.warn(`[vc-panel] No schedule row found for channel ${channelId}; creating fallback row`);
+    const fallbackCh = interaction.guild.channels.cache.get(channelId)
+      ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
+    const fallbackName = fallbackCh && "name" in fallbackCh && fallbackCh.name
+      ? fallbackCh.name
+      : channelId;
+    saveSchedule(interaction.guild.id, channelId, fallbackName, updated.expiresAt, session.userId ?? undefined)
+      .catch((err) => logger.error(`[vc-panel] Fallback saveSchedule also failed for channel ${channelId}`, err));
+  }
   // パネルの期限表示を更新（best-effort）
   try {
     const textCh = interaction.guild.channels.cache.get(channelId)
