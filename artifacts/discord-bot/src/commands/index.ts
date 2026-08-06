@@ -80,6 +80,8 @@ import {
   setRoleReward,
   transfer,
   getPrivateVcSessionByChannelId,
+  distributeRoleRewards,
+  getGuildWalletUserIds,
 } from "../lib/economy";
 import { upsertTimedRoleGrant } from "@workspace/db";
 
@@ -1490,6 +1492,9 @@ const rewardCommand: Command = {
             .setMinValue(1)
             .setMaxValue(31),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("pay").setDescription("今すぐロール報酬を全メンバーに支給します（管理者用）"),
     ),
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -1544,6 +1549,40 @@ const rewardCommand: Command = {
       const day = interaction.options.getInteger("day", true);
       const settings = await setRewardDayOfMonth(guildId, day);
       await interaction.reply(`給料日を **毎月${settings.rewardDayOfMonth}日** に設定しました。`);
+      return;
+    }
+
+    if (sub === "pay") {
+      await interaction.deferReply();
+      const guild = interaction.guild!;
+      const settings = await getGuildSettings(guildId);
+
+      const userIds = await getGuildWalletUserIds(guildId);
+      const memberRoles = new Map<string, string[]>();
+      for (const userId of userIds) {
+        try {
+          const member = guild.members.cache.get(userId)
+            ?? await guild.members.fetch(userId).catch(() => null);
+          if (!member || member.user.bot) continue;
+          memberRoles.set(userId, [...member.roles.cache.keys()]);
+        } catch {
+          // 退鯖済みなどはスキップ
+        }
+      }
+
+      const { paidCount, totalPaid } = await distributeRoleRewards(
+        guildId,
+        settings.currencyName,
+        memberRoles,
+      );
+
+      if (paidCount === 0) {
+        await interaction.editReply("報酬対象のロールを持つメンバーがいないか、ロール報酬が未設定です。");
+      } else {
+        await interaction.editReply(
+          `✅ **${paidCount}人** に合計 **${totalPaid.toLocaleString()}${settings.currencyName}** を支給しました。`,
+        );
+      }
       return;
     }
   },
