@@ -1807,8 +1807,7 @@ export async function handleVcPanelExpiryBtn(interaction: ButtonInteraction): Pr
 
 // ─── 宝箱 ────────────────────────────────────────────────────────────────────
 
-const CHEST_REQUIRED_MS = 60 * 60 * 1000; // 1時間
-const ADVICE_ROLE_NAME = "評価員アドバイス券";
+const CHEST_REQUIRED_MS = 60 * 60 * 1000; // 未使用だが参照のため残置（判定は getTodayChestOpensCount で行う）
 
 /** 確率テーブル */
 type ChestResult = "miss" | "hit" | "jackpot";
@@ -1827,7 +1826,7 @@ export function buildChestPanelMessage() {
     .setDescription(
       "累計VC接続1時間ごとに1回引けます。\n\n" +
       "🎁 当たり: **10,000$**\n" +
-      "🎊 大当たり: **50,000$** ＋ 評価員アドバイス券\n" +
+      "🎊 大当たり: **50,000$**\n" +
       "💨 ハズレ: 何もなし\n\n" +
       "※ カウントは毎日JST 0:00にリセット",
     );
@@ -1897,26 +1896,8 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   // jackpot
   const amount = 50_000;
-  const lines: string[] = [`📦 宝箱を開けた！\n\n**大当たり** 🎊 **${amount.toLocaleString()}${settings.currencyName}** を獲得しました！`];
   await giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest");
-
-  // 評価員アドバイス券ロール付与
-  try {
-    const role = interaction.guild.roles.cache.find((r) => r.name === ADVICE_ROLE_NAME)
-      ?? await interaction.guild.roles.fetch().then((roles) => roles.find((r) => r.name === ADVICE_ROLE_NAME) ?? null);
-    if (role) {
-      const member = interaction.guild.members.cache.get(interaction.user.id)
-        ?? await interaction.guild.members.fetch(interaction.user.id);
-      await member.roles.add(role);
-      lines.push(`さらに **${ADVICE_ROLE_NAME}** ロールを獲得しました！`);
-    } else {
-      lines.push(`（${ADVICE_ROLE_NAME} ロールはこのサーバーに存在しません）`);
-    }
-  } catch {
-    lines.push(`（ロール付与に失敗しました）`);
-  }
-
-  await interaction.editReply(lines.join("\n"));
+  await interaction.editReply(`📦 宝箱を開けた！\n\n**大当たり** 🎊 **${amount.toLocaleString()}${settings.currencyName}** を獲得しました！`);
 }
 
 export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction): Promise<void> {
