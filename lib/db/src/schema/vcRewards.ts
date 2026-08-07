@@ -102,7 +102,8 @@ export const chestVcAccumTable = pgTable(
     userId:              text("user_id").notNull(),
     date:                text("date").notNull(), // "YYYY-MM-DD" in JST
     accumulatedSeconds:  integer("accumulated_seconds").notNull().default(0),
-    chestOpened:         boolean("chest_opened").notNull().default(false),
+    chestOpened:         boolean("chest_opened").notNull().default(false), // 旧: 互換のため残置
+    chestOpensCount:     integer("chest_opens_count").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.guildId, t.userId, t.date] })],
 );

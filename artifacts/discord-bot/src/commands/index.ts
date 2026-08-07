@@ -84,7 +84,7 @@ import {
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
-import { getVcPresence, getTodayChestVcSeconds, hasTodayChestOpened, markChestOpenedToday } from "../lib/vcReward";
+import { getVcPresence, getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday } from "../lib/vcReward";
 import { upsertTimedRoleGrant } from "@workspace/db";
 
 interface Command {
@@ -1825,11 +1825,11 @@ export function buildChestPanelMessage() {
     .setTitle("📦 宝箱")
     .setColor(0xf1c40f)
     .setDescription(
-      "本日の合計VC接続時間が1時間以上のメンバーだけが開けられます。\n\n" +
+      "累計VC接続1時間ごとに1回引けます。\n\n" +
       "🎁 当たり: **10,000$**\n" +
       "🎊 大当たり: **50,000$** ＋ 評価員アドバイス券\n" +
       "💨 ハズレ: 何もなし\n\n" +
-      "※ 1日1回のみ開封可能（日付はJST基準）",
+      "※ カウントは毎日JST 0:00にリセット",
     );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -1849,12 +1849,6 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
 
   if (!isAdmin) {
-    // 本日開封済みチェック
-    if (await hasTodayChestOpened(interaction.guild.id, interaction.user.id)) {
-      await interaction.editReply("📦 本日はすでに宝箱を開けました。明日またどうぞ！");
-      return;
-    }
-
     // 累積VC時間チェック（過去セッション + 現在セッション）
     const presence = await getVcPresence(interaction.guild.id, interaction.user.id);
     if (!presence) {
@@ -1862,18 +1856,27 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
       return;
     }
     const currentSeconds = Math.floor((Date.now() - presence.joinedAt.getTime()) / 1000);
-    const pastSeconds = await getTodayChestVcSeconds(interaction.guild.id, interaction.user.id);
+    const [pastSeconds, opensCount] = await Promise.all([
+      getTodayChestVcSeconds(interaction.guild.id, interaction.user.id),
+      getTodayChestOpensCount(interaction.guild.id, interaction.user.id),
+    ]);
     const totalSeconds = pastSeconds + currentSeconds;
+    const maxOpens = Math.floor(totalSeconds / 3600);
 
-    if (totalSeconds < 3600) {
+    if (maxOpens === 0) {
       const remaining = Math.ceil((3600 - totalSeconds) / 60);
       await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** のVC接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
+      return;
+    }
+    if (opensCount >= maxOpens) {
+      const nextAt = Math.ceil(((opensCount + 1) * 3600 - totalSeconds) / 60);
+      await interaction.editReply(`📦 次の宝箱まであと **${nextAt}分** のVC接続が必要です（本日${opensCount}回開封済み・累計${Math.floor(totalSeconds / 60)}分）。`);
       return;
     }
   }
 
   // 開封記録（管理者は記録しない＝何度でも開封可能）
-  if (!isAdmin) await markChestOpenedToday(interaction.guild.id, interaction.user.id);
+  if (!isAdmin) await incrementChestOpensToday(interaction.guild.id, interaction.user.id);
 
   const result = rollChest();
   const settings = await getGuildSettings(interaction.guild.id);

@@ -197,11 +197,11 @@ export async function getTodayChestVcSeconds(
   return row?.accumulatedSeconds ?? 0;
 }
 
-/** 本日すでに宝箱を開けたか確認する。 */
-export async function hasTodayChestOpened(guildId: string, userId: string): Promise<boolean> {
+/** 本日の宝箱開封回数を取得する。 */
+export async function getTodayChestOpensCount(guildId: string, userId: string): Promise<number> {
   const date = jstDateString();
   const [row] = await db
-    .select({ chestOpened: chestVcAccumTable.chestOpened })
+    .select({ chestOpensCount: chestVcAccumTable.chestOpensCount })
     .from(chestVcAccumTable)
     .where(
       and(
@@ -210,18 +210,18 @@ export async function hasTodayChestOpened(guildId: string, userId: string): Prom
         eq(chestVcAccumTable.date, date),
       ),
     );
-  return row?.chestOpened ?? false;
+  return row?.chestOpensCount ?? 0;
 }
 
-/** 本日の宝箱を開封済みとしてマークする。 */
-export async function markChestOpenedToday(guildId: string, userId: string): Promise<void> {
+/** 本日の宝箱開封回数を1増やす。 */
+export async function incrementChestOpensToday(guildId: string, userId: string): Promise<void> {
   const date = jstDateString();
   await db
     .insert(chestVcAccumTable)
-    .values({ guildId, userId, date, accumulatedSeconds: 0, chestOpened: true })
+    .values({ guildId, userId, date, accumulatedSeconds: 0, chestOpened: false, chestOpensCount: 1 })
     .onConflictDoUpdate({
       target: [chestVcAccumTable.guildId, chestVcAccumTable.userId, chestVcAccumTable.date],
-      set: { chestOpened: true },
+      set: { chestOpensCount: sql`chest_vc_accum.chest_opens_count + 1` },
     });
 }
 
