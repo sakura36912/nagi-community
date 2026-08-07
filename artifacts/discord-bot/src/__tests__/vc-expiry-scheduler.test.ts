@@ -825,6 +825,41 @@ describe("runVcExpiryScheduler – cross-session isolation (50013 on one session
       permError,
     );
   });
+
+  it("calls deleteSchedule exactly once with session B's channelId when session A throws 50013", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi.fn().mockRejectedValue(permError);
+    const deleteB = vi.fn().mockResolvedValue(undefined);
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+
+    await runVcExpiryScheduler(makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB }));
+
+    // The schedule row for session B must be cleaned up to prevent ghost warning DMs.
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-B");
+  });
+
+  it("does NOT call deleteSchedule for session A's channelId when session A throws 50013", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi.fn().mockRejectedValue(permError);
+    const deleteB = vi.fn().mockResolvedValue(undefined);
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+
+    await runVcExpiryScheduler(makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB }));
+
+    // Session A's channel still exists (50013 means the bot lacks permission, not that the channel
+    // is gone), so its schedule row must be left intact for the retry tick.
+    const calledChannelIds = mocks.deleteSchedule.mock.calls.map(([id]: [string]) => id);
+    expect(calledChannelIds).not.toContain("channel-A");
+  });
 });
 
 // ─── DB cleanup failure ───────────────────────────────────────────────────────
