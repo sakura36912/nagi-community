@@ -860,6 +860,43 @@ describe("runVcExpiryScheduler – cross-session isolation (50013 on one session
     const calledChannelIds = mocks.deleteSchedule.mock.calls.map(([id]: [string]) => id);
     expect(calledChannelIds).not.toContain("channel-A");
   });
+
+  // ── Reversed order: session B (id 20) fails first, session A (id 10) succeeds ──
+
+  it("calls deletePrivateVcSession exactly once (for session A) when session B — listed first — throws 50013", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi.fn().mockResolvedValue(undefined);
+    const deleteB = vi.fn().mockRejectedValue(permError);
+
+    // Session B is first in the array this time.
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionB, sessionA]);
+
+    await runVcExpiryScheduler(makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB }));
+
+    // Session B's 50013 must not prevent session A from being cleaned up.
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledOnce();
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(10);
+  });
+
+  it("does NOT call deletePrivateVcSession for session B when it is listed first and throws 50013", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi.fn().mockResolvedValue(undefined);
+    const deleteB = vi.fn().mockRejectedValue(permError);
+
+    // Session B is first in the array this time.
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionB, sessionA]);
+
+    await runVcExpiryScheduler(makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB }));
+
+    const calledIds = mocks.deletePrivateVcSession.mock.calls.map(([id]: [number]) => id);
+    expect(calledIds).not.toContain(20);
+  });
 });
 
 // ─── DB cleanup failure ───────────────────────────────────────────────────────
