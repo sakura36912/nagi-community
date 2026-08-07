@@ -1852,21 +1852,42 @@ function rollChest(): ChestResult {
 /** 宝箱パネルのメッセージを生成 */
 export function buildChestPanelMessage() {
   const embed = new EmbedBuilder()
-    .setTitle("📦 宝箱")
-    .setColor(0xf1c40f)
+    .setTitle("✨ 宝　箱 ✨")
+    .setColor(0xF6A623)
     .setDescription(
-      "累計VC接続1時間ごとに1回引けます。\n\n" +
-      "🎁 当たり: **10,000$**\n" +
-      "🎊 大当たり: **50,000$**\n" +
-      "💨 ハズレ: 何もなし\n\n" +
-      "※ カウントは毎日JST 0:00にリセット",
-    );
+      "```\n" +
+      "  ┌─────────────────────────────┐\n" +
+      "  │   VC に繋いで宝箱を開けよう！  │\n" +
+      "  └─────────────────────────────┘\n" +
+      "```\n" +
+      "累計VC接続 **1時間ごとに 1回** チャレンジ可能。\n" +
+      "カウントは毎日 **JST 0:00** にリセットされます。",
+    )
+    .addFields(
+      {
+        name: "🎊 大当たり　**5%**",
+        value: "> **50,000$** 獲得！",
+        inline: true,
+      },
+      {
+        name: "🎁 当　 たり　**35%**",
+        value: "> **10,000$** 獲得！",
+        inline: true,
+      },
+      {
+        name: "💨 ハ ズ レ　**60%**",
+        value: "> 何もなし…",
+        inline: true,
+      },
+    )
+    .setFooter({ text: "🎲  運試し、してみる？" });
+
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(CHEST_OPEN_BTN_ID)
       .setLabel("宝箱を開ける")
-      .setStyle(ButtonStyle.Success)
-      .setEmoji("📦"),
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji("✨"),
   );
   return { embeds: [embed], components: [row] };
 }
