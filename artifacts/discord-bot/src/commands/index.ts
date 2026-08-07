@@ -84,7 +84,7 @@ import {
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
-import { getVcPresence, markChestOpened } from "../lib/vcReward";
+import { getVcPresence, getTodayChestVcSeconds, hasTodayChestOpened, markChestOpenedToday } from "../lib/vcReward";
 import { upsertTimedRoleGrant } from "@workspace/db";
 
 interface Command {
@@ -1825,11 +1825,11 @@ export function buildChestPanelMessage() {
     .setTitle("📦 宝箱")
     .setColor(0xf1c40f)
     .setDescription(
-      "1時間以上VCに浮上しているメンバーだけが開けられます。\n\n" +
+      "本日の合計VC接続時間が1時間以上のメンバーだけが開けられます。\n\n" +
       "🎁 当たり: **10,000$**\n" +
       "🎊 大当たり: **50,000$** ＋ 評価員アドバイス券\n" +
       "💨 ハズレ: 何もなし\n\n" +
-      "※ 1回のVC接続につき1回のみ開封可能",
+      "※ 1日1回のみ開封可能（日付はJST基準）",
     );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -1846,26 +1846,33 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   await interaction.deferReply({ ephemeral: true });
 
+  // 本日開封済みチェック
+  if (await hasTodayChestOpened(interaction.guild.id, interaction.user.id)) {
+    await interaction.editReply("📦 本日はすでに宝箱を開けました。明日またどうぞ！");
+    return;
+  }
+
+  // 累積VC時間チェック（過去セッション + 現在セッション）
   const presence = await getVcPresence(interaction.guild.id, interaction.user.id);
+  const currentSeconds = presence
+    ? Math.floor((Date.now() - presence.joinedAt.getTime()) / 1000)
+    : 0;
+  const pastSeconds = await getTodayChestVcSeconds(interaction.guild.id, interaction.user.id);
+  const totalSeconds = pastSeconds + currentSeconds;
+
   if (!presence) {
     await interaction.editReply("❌ VCに接続中でないため宝箱を開けられません。");
     return;
   }
 
-  const elapsed = Date.now() - presence.joinedAt.getTime();
-  if (elapsed < CHEST_REQUIRED_MS) {
-    const remaining = Math.ceil((CHEST_REQUIRED_MS - elapsed) / 60_000);
-    await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** VCに浮上し続ける必要があります。`);
-    return;
-  }
-
-  if (presence.chestOpenedAt) {
-    await interaction.editReply("📦 この滞在中はすでに宝箱を開けました。次回のVC接続後にまた開けられます。");
+  if (totalSeconds < 3600) {
+    const remaining = Math.ceil((3600 - totalSeconds) / 60);
+    await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** のVC接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
     return;
   }
 
   // 開封記録
-  await markChestOpened(interaction.guild.id, interaction.user.id);
+  await markChestOpenedToday(interaction.guild.id, interaction.user.id);
 
   const result = rollChest();
   const settings = await getGuildSettings(interaction.guild.id);

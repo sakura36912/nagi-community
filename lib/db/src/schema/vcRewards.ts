@@ -4,6 +4,7 @@ import {
   integer,
   serial,
   timestamp,
+  boolean,
   primaryKey,
   index,
 } from "drizzle-orm/pg-core";
@@ -89,6 +90,23 @@ export const vcLogPresenceTable = pgTable(
   (t) => [primaryKey({ columns: [t.guildId, t.userId] })],
 );
 export type VcLogPresence = typeof vcLogPresenceTable.$inferSelect;
+
+/**
+ * Daily accumulated VC time per user for treasure chest eligibility.
+ * Incremented on each VC leave. Keyed by (guildId, userId, date).
+ */
+export const chestVcAccumTable = pgTable(
+  "chest_vc_accum",
+  {
+    guildId:             text("guild_id").notNull(),
+    userId:              text("user_id").notNull(),
+    date:                text("date").notNull(), // "YYYY-MM-DD" in JST
+    accumulatedSeconds:  integer("accumulated_seconds").notNull().default(0),
+    chestOpened:         boolean("chest_opened").notNull().default(false),
+  },
+  (t) => [primaryKey({ columns: [t.guildId, t.userId, t.date] })],
+);
+export type ChestVcAccum = typeof chestVcAccumTable.$inferSelect;
 
 /** Completed VC session records. */
 export const vcSessionLogsTable = pgTable(

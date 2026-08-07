@@ -72,6 +72,7 @@ import {
   getVcRewardSettings,
   recordVcJoin,
   clearVcPresence,
+  addChestVcSeconds,
   getAllVcPresences,
   payVcReward,
   getVcLogSettings,
@@ -838,9 +839,16 @@ async function handleVcLeave(
       `[vcsalary] ${userId} in ${guild.id}: +${reward}${guildSettings.currencyName} for ${minutes}min VC${hubSalaryOverride ? " (hub)" : ""}`,
     );
 
-
   } catch (err) {
     logger.error(`[vcsalary] Error paying VC reward for ${userId} in ${guild.id}`, err);
+  }
+
+  // 宝箱用の当日累計VC時間を加算（報酬とは独立して常に記録）
+  try {
+    const seconds = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
+    await addChestVcSeconds(guild.id, userId, seconds);
+  } catch (err) {
+    logger.error(`[chest] addChestVcSeconds error for ${userId} in ${guild.id}`, err);
   }
 }
 

@@ -7,6 +7,7 @@ import {
   vcSessionLogSettingsTable,
   vcLogPresenceTable,
   vcSessionLogsTable,
+  chestVcAccumTable,
   walletsTable,
   transactionsTable,
   type VcPresence,
@@ -145,6 +146,83 @@ export async function getVcPresence(
     .from(vcPresenceTable)
     .where(and(eq(vcPresenceTable.guildId, guildId), eq(vcPresenceTable.userId, userId)));
   return row;
+}
+
+// ─── Chest cumulative VC time ─────────────────────────────────────────────────
+
+/** JST の "YYYY-MM-DD" を返す */
+function jstDateString(): string {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * 当日の累積 VC 秒数に加算する（VC 離脱時に呼ぶ）。
+ */
+export async function addChestVcSeconds(
+  guildId: string,
+  userId: string,
+  seconds: number,
+): Promise<void> {
+  if (seconds <= 0) return;
+  const date = jstDateString();
+  await db
+    .insert(chestVcAccumTable)
+    .values({ guildId, userId, date, accumulatedSeconds: seconds, chestOpened: false })
+    .onConflictDoUpdate({
+      target: [chestVcAccumTable.guildId, chestVcAccumTable.userId, chestVcAccumTable.date],
+      set: { accumulatedSeconds: sql`chest_vc_accum.accumulated_seconds + ${seconds}` },
+    });
+}
+
+/**
+ * 当日の累積 VC 秒数を取得する（現在セッション分は含まない）。
+ */
+export async function getTodayChestVcSeconds(
+  guildId: string,
+  userId: string,
+): Promise<number> {
+  const date = jstDateString();
+  const [row] = await db
+    .select()
+    .from(chestVcAccumTable)
+    .where(
+      and(
+        eq(chestVcAccumTable.guildId, guildId),
+        eq(chestVcAccumTable.userId, userId),
+        eq(chestVcAccumTable.date, date),
+      ),
+    );
+  return row?.accumulatedSeconds ?? 0;
+}
+
+/** 本日すでに宝箱を開けたか確認する。 */
+export async function hasTodayChestOpened(guildId: string, userId: string): Promise<boolean> {
+  const date = jstDateString();
+  const [row] = await db
+    .select({ chestOpened: chestVcAccumTable.chestOpened })
+    .from(chestVcAccumTable)
+    .where(
+      and(
+        eq(chestVcAccumTable.guildId, guildId),
+        eq(chestVcAccumTable.userId, userId),
+        eq(chestVcAccumTable.date, date),
+      ),
+    );
+  return row?.chestOpened ?? false;
+}
+
+/** 本日の宝箱を開封済みとしてマークする。 */
+export async function markChestOpenedToday(guildId: string, userId: string): Promise<void> {
+  const date = jstDateString();
+  await db
+    .insert(chestVcAccumTable)
+    .values({ guildId, userId, date, accumulatedSeconds: 0, chestOpened: true })
+    .onConflictDoUpdate({
+      target: [chestVcAccumTable.guildId, chestVcAccumTable.userId, chestVcAccumTable.date],
+      set: { chestOpened: true },
+    });
 }
 
 /** Mark the treasure chest as opened for this VC session. */
