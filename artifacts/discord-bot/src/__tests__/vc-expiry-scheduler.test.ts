@@ -971,3 +971,79 @@ describe("runVcExpiryScheduler – deletePrivateVcSession failure is logged with
     await expect(runVcExpiryScheduler(makeClient())).resolves.toBeUndefined();
   });
 });
+
+// ─── deleteSchedule failure ───────────────────────────────────────────────────
+
+describe("runVcExpiryScheduler – deleteSchedule failure is logged without crashing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deletePrivateVcSession.mockResolvedValue(undefined);
+  });
+
+  it("logs an error containing the channelId when deleteSchedule rejects", async () => {
+    const scheduleError = new Error("DB connection lost");
+    mocks.deleteSchedule.mockRejectedValueOnce(scheduleError);
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    await runVcExpiryScheduler(makeClient());
+
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("channel-1"),
+      scheduleError,
+    );
+  });
+
+  it("does not throw when deleteSchedule rejects — scheduler run resolves normally", async () => {
+    const scheduleError = new Error("DB connection lost");
+    mocks.deleteSchedule.mockRejectedValueOnce(scheduleError);
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    // Must not throw.
+    await expect(runVcExpiryScheduler(makeClient())).resolves.toBeUndefined();
+  });
+
+  it("still processes subsequent sessions after a deleteSchedule failure on the first session", async () => {
+    const scheduleError = new Error("DB connection lost");
+    // First call rejects, second resolves.
+    mocks.deleteSchedule
+      .mockRejectedValueOnce(scheduleError)
+      .mockResolvedValueOnce(true);
+
+    const sessionA = makeSession({ id: 1, channelId: "channel-1" });
+    const sessionB = makeSession({ id: 2, channelId: "channel-2" });
+
+    // Build a client that has both channels available.
+    const client: MockClient = {
+      guilds: {
+        cache: new Map<string, MockGuild>([
+          [
+            "guild-1",
+            {
+              channels: {
+                cache: new Map<string, MockChannel>([
+                  ["channel-1", { delete: vi.fn().mockResolvedValue(undefined) }],
+                  ["channel-2", { delete: vi.fn().mockResolvedValue(undefined) }],
+                ]),
+                fetch: vi.fn().mockResolvedValue(null),
+              },
+            },
+          ],
+        ]),
+      },
+    };
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+
+    await runVcExpiryScheduler(client);
+
+    // deleteSchedule must have been attempted for both sessions.
+    expect(mocks.deleteSchedule).toHaveBeenCalledTimes(2);
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-2");
+
+    // Both session rows must also have been cleaned up.
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledTimes(2);
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(1);
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(2);
+  });
+});
