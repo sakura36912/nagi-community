@@ -294,7 +294,8 @@ async function purchaseAndCreatePrivateVc(
     }
 
     // ボイステキストにコントロールパネルを投稿（期限あり・無期限どちらでも）
-    channel.send(buildVcPanelMessage(channel.id, member.id, expiresAt))
+    // memberIds=[] because the channel was just created — only the owner has access so far.
+    channel.send(buildVcPanelMessage(channel.id, member.id, expiresAt, []))
       .catch((err) => logger.error("[privateVC] Failed to send VC panel to text", err));
 
     return { ok: true, item: result.item, channelId: channel.id, expiresAt };
@@ -514,7 +515,10 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
             (m) => m.author.id === interaction.client.user?.id
               && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
           );
-          if (panelMsg) await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt));
+          if (panelMsg) {
+            const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds));
+          }
         }
       } catch (panelErr) {
         logger.error(`[vc-extend] Failed to update panel message for channel ${session.channelId}`, panelErr);
@@ -745,7 +749,10 @@ async function applyShopPurchase(
             (m) => m.author.id === interaction.client.user?.id
               && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
           );
-          if (panelMsg) await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt));
+          if (panelMsg) {
+            const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds));
+          }
         }
       } catch (panelErr) {
         logger.error(`[vc-extend] Failed to update panel message for channel ${session.channelId}`, panelErr);
@@ -1689,15 +1696,39 @@ export function parseVcPanelId(prefix: string, customId: string): { channelId: s
   return { channelId: payload.slice(0, sep), ownerId: payload.slice(sep + 1) };
 }
 
-export function buildVcPanelMessage(channelId: string, ownerId: string, expiresAt?: Date) {
+/**
+ * Returns the IDs of members who have an explicit ViewChannel:allow permission
+ * override on the channel, excluding @everyone, the VC owner, and the bot itself.
+ */
+function getVcAccessMemberIds(
+  channel: import("discord.js").GuildChannel,
+  ownerId: string,
+  botId: string | undefined,
+): string[] {
+  if (!("permissionOverwrites" in channel)) return [];
+  return channel.permissionOverwrites.cache
+    .filter(
+      (ow) =>
+        ow.type === 1 /* OverwriteType.Member */
+        && ow.allow.has(PermissionFlagsBits.ViewChannel)
+        && ow.id !== ownerId
+        && (botId === undefined || ow.id !== botId),
+    )
+    .map((ow) => ow.id);
+}
+
+export function buildVcPanelMessage(channelId: string, ownerId: string, expiresAt?: Date, memberIds?: string[]) {
   const ts = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
   const expText = ts
     ? `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>）`
     : "⏳ 期限: 無期限";
+  const memberLine = memberIds !== undefined
+    ? `\n👥 アクセス中のメンバー: ${memberIds.length > 0 ? memberIds.map((id) => `<@${id}>`).join("、") : "メンバーなし"}`
+    : "";
   const embed = new EmbedBuilder()
     .setTitle("🔒 非公開VC コントロールパネル")
     .setColor(0x5865f2)
-    .setDescription(`<@${ownerId}> の非公開VCです。\n${expText}`)
+    .setDescription(`<@${ownerId}> の非公開VCです。\n${expText}${memberLine}`)
     .setFooter({ text: "VCオーナーのみ操作できます" });
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -1914,6 +1945,23 @@ export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction
   }
   await ch.permissionOverwrites.edit(targetId, { ViewChannel: true, Connect: true, Speak: true, Stream: true, SendMessages: true });
   await interaction.reply({ content: `✅ <@${targetId}> をVCに追加しました。`, ephemeral: true });
+  // Refresh the panel so the new member appears in the access list (best-effort).
+  try {
+    const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
+    if ("messages" in ch) {
+      const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
+      const panelMsg = msgs.find(
+        (m) => m.author.id === interaction.client.user?.id
+          && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+      );
+      if (panelMsg) {
+        const session = await getPrivateVcSessionByChannelId(channelId);
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds));
+      }
+    }
+  } catch (err) {
+    logger.error(`[vc-panel] Failed to refresh panel after add for channel ${channelId}`, err);
+  }
 }
 
 export async function handleVcPanelKickSel(interaction: UserSelectMenuInteraction): Promise<void> {
@@ -1934,6 +1982,23 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
     if (member.voice.channelId === channelId) await member.voice.disconnect();
   } catch { /* non-fatal */ }
   await interaction.reply({ content: `✅ <@${targetId}> をキックしました。`, ephemeral: true });
+  // Refresh the panel so the removed member disappears from the access list (best-effort).
+  try {
+    const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
+    if ("messages" in ch) {
+      const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
+      const panelMsg = msgs.find(
+        (m) => m.author.id === interaction.client.user?.id
+          && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+      );
+      if (panelMsg) {
+        const session = await getPrivateVcSessionByChannelId(channelId);
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds));
+      }
+    }
+  } catch (err) {
+    logger.error(`[vc-panel] Failed to refresh panel after kick for channel ${channelId}`, err);
+  }
 }
 
 export async function handleVcPanelExtendSel(interaction: StringSelectMenuInteraction): Promise<void> {
@@ -1976,7 +2041,10 @@ export async function handleVcPanelExtendSel(interaction: StringSelectMenuIntera
         (m) => m.author.id === interaction.client.user?.id
           && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
       );
-      if (panelMsg) await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt));
+      if (panelMsg) {
+        const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt, memberIds));
+      }
     }
   } catch { /* best-effort */ }
   const ts = Math.floor(updated.expiresAt.getTime() / 1000);
