@@ -672,12 +672,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   } catch (err) {
     logger.error("Error handling interaction", err);
-    const errorMsg = err instanceof Error ? err.message : "処理中にエラーが発生しました。";
     if (interaction.isRepliable()) {
+      const msg = "処理中にエラーが発生しました。";
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: errorMsg, flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction.followUp({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => {});
       } else {
-        await interaction.reply({ content: errorMsg, flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => {});
       }
     }
   }

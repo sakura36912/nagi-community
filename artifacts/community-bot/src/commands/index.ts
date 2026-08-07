@@ -1071,6 +1071,12 @@ const botstatusCommand: Command = {
 export async function handleEventJoin(interaction: ButtonInteraction): Promise<void> {
   const eventId = Number(interaction.customId.slice(COMM_EVENT_JOIN_PREFIX.length));
   await interaction.deferUpdate();
+  // Guild ownership check: reject replayed buttons from other guilds.
+  const event = await getEvent(eventId);
+  if (!event || event.guildId !== interaction.guildId) {
+    await interaction.followUp({ content: "❌ このイベントはこのサーバーでは無効です。", ephemeral: true });
+    return;
+  }
   const added = await addParticipant(eventId, interaction.user.id);
   const { embed, rows } = await buildEventEmbed(eventId);
   await interaction.editReply({ embeds: [embed], components: rows });
@@ -1084,6 +1090,12 @@ export async function handleEventJoin(interaction: ButtonInteraction): Promise<v
 export async function handleEventCancel(interaction: ButtonInteraction): Promise<void> {
   const eventId = Number(interaction.customId.slice(COMM_EVENT_CANCEL_PREFIX.length));
   await interaction.deferUpdate();
+  // Guild ownership check: reject replayed buttons from other guilds.
+  const event = await getEvent(eventId);
+  if (!event || event.guildId !== interaction.guildId) {
+    await interaction.followUp({ content: "❌ このイベントはこのサーバーでは無効です。", ephemeral: true });
+    return;
+  }
   const removed = await removeParticipant(eventId, interaction.user.id);
   const { embed, rows } = await buildEventEmbed(eventId);
   await interaction.editReply({ embeds: [embed], components: rows });

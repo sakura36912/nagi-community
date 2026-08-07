@@ -1459,15 +1459,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (code === 10062) return;
 
     logger.error("Error handling interaction", err);
-    const errorMessage =
-      err instanceof Error ? err.message : "処理中にエラーが発生しました。";
-
     if (interaction.isRepliable()) {
       try {
+        const msg = "処理中にエラーが発生しました。";
         if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: errorMessage, flags: MessageFlags.Ephemeral });
+          await interaction.followUp({ content: msg, flags: MessageFlags.Ephemeral });
         } else {
-          await interaction.reply({ content: errorMessage, flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
         }
       } catch {
         // Ignore errors from the error-reply itself (e.g. 40060 already-acknowledged).
