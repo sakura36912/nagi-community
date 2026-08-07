@@ -84,6 +84,7 @@ import {
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
+import { getVcPresence, markChestOpened } from "../lib/vcReward";
 import { upsertTimedRoleGrant } from "@workspace/db";
 
 interface Command {
@@ -1668,6 +1669,7 @@ export const VC_PANEL_BTN_KICK     = "vc:panel:kick:";
 export const VC_PANEL_BTN_EXTEND   = "vc:panel:extend:";
 export const VC_PANEL_BTN_EXPIRY   = "vc:panel:expiry:";
 export const VC_PANEL_BTN_RENAME   = "vc:panel:rename:";
+export const VC_PANEL_BTN_TREASURE = "vc:panel:treasure:";
 export const VC_PANEL_SEL_ADD      = "vc:panel:adds:";
 export const VC_PANEL_SEL_KICK     = "vc:panel:kicks:";
 export const VC_PANEL_SEL_EXTEND   = "vc:panel:exts:";
@@ -1723,7 +1725,14 @@ export function buildVcPanelMessage(channelId: string, ownerId: string, expiresA
       .setStyle(ButtonStyle.Secondary)
       .setEmoji("✏️"),
   );
-  return { embeds: [embed], components: [row] };
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_BTN_TREASURE, channelId, ownerId))
+      .setLabel("宝箱を開ける")
+      .setStyle(ButtonStyle.Success)
+      .setEmoji("📦"),
+  );
+  return { embeds: [embed], components: [row, row2] };
 }
 
 /** ownerId をボタン custom ID から取り出してオーナー確認 */
@@ -1800,6 +1809,89 @@ export async function handleVcPanelExpiryBtn(interaction: ButtonInteraction): Pr
   }
   const ts = Math.floor(session.expiresAt.getTime() / 1000);
   await interaction.reply({ content: `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>）`, ephemeral: true });
+}
+
+// ─── 宝箱 ────────────────────────────────────────────────────────────────────
+
+const CHEST_REQUIRED_MS = 60 * 60 * 1000; // 1時間
+const ADVICE_ROLE_NAME = "評価員アドバイス券";
+
+/** 確率テーブル */
+type ChestResult = "miss" | "hit" | "jackpot";
+function rollChest(): ChestResult {
+  const r = Math.random();
+  if (r < 0.60) return "miss";
+  if (r < 0.95) return "hit";
+  return "jackpot";
+}
+
+export async function handleVcPanelTreasureBtn(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_TREASURE, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const presence = await getVcPresence(interaction.guild.id, interaction.user.id);
+  if (!presence) {
+    await interaction.editReply("❌ VCに接続中でないため宝箱を開けられません。");
+    return;
+  }
+
+  const elapsed = Date.now() - presence.joinedAt.getTime();
+  if (elapsed < CHEST_REQUIRED_MS) {
+    const remaining = Math.ceil((CHEST_REQUIRED_MS - elapsed) / 60_000);
+    await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** VCに浮上し続ける必要があります。`);
+    return;
+  }
+
+  if (presence.chestOpenedAt) {
+    await interaction.editReply("📦 この滞在中はすでに宝箱を開けました。次回のVC接続後にまた開けられます。");
+    return;
+  }
+
+  // 開封記録
+  await markChestOpened(interaction.guild.id, interaction.user.id);
+
+  const result = rollChest();
+  const settings = await getGuildSettings(interaction.guild.id);
+
+  if (result === "miss") {
+    await interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。");
+    return;
+  }
+
+  if (result === "hit") {
+    const amount = 10_000;
+    await giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest");
+    await interaction.editReply(
+      `📦 宝箱を開けた！\n\n**当たり** 🎉 **${amount.toLocaleString()}${settings.currencyName}** を獲得しました！`,
+    );
+    return;
+  }
+
+  // jackpot
+  const amount = 50_000;
+  const lines: string[] = [`📦 宝箱を開けた！\n\n**大当たり** 🎊 **${amount.toLocaleString()}${settings.currencyName}** を獲得しました！`];
+  await giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest");
+
+  // 評価員アドバイス券ロール付与
+  try {
+    const role = interaction.guild.roles.cache.find((r) => r.name === ADVICE_ROLE_NAME)
+      ?? await interaction.guild.roles.fetch().then((roles) => roles.find((r) => r.name === ADVICE_ROLE_NAME) ?? null);
+    if (role) {
+      const member = interaction.guild.members.cache.get(interaction.user.id)
+        ?? await interaction.guild.members.fetch(interaction.user.id);
+      await member.roles.add(role);
+      lines.push(`さらに **${ADVICE_ROLE_NAME}** ロールを獲得しました！`);
+    } else {
+      lines.push(`（${ADVICE_ROLE_NAME} ロールはこのサーバーに存在しません）`);
+    }
+  } catch {
+    lines.push(`（ロール付与に失敗しました）`);
+  }
+
+  await interaction.editReply(lines.join("\n"));
 }
 
 export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction): Promise<void> {

@@ -135,6 +135,26 @@ export async function getAllVcPresences(): Promise<VcPresence[]> {
   return db.select().from(vcPresenceTable);
 }
 
+/** Return a single user's current presence row (undefined if not in VC). */
+export async function getVcPresence(
+  guildId: string,
+  userId: string,
+): Promise<VcPresence | undefined> {
+  const [row] = await db
+    .select()
+    .from(vcPresenceTable)
+    .where(and(eq(vcPresenceTable.guildId, guildId), eq(vcPresenceTable.userId, userId)));
+  return row;
+}
+
+/** Mark the treasure chest as opened for this VC session. */
+export async function markChestOpened(guildId: string, userId: string): Promise<void> {
+  await db
+    .update(vcPresenceTable)
+    .set({ chestOpenedAt: new Date() })
+    .where(and(eq(vcPresenceTable.guildId, guildId), eq(vcPresenceTable.userId, userId)));
+}
+
 /** Update only the channelId of an existing presence (preserves joinedAt for cross-room moves). */
 export async function updateVcPresenceChannel(
   guildId: string,

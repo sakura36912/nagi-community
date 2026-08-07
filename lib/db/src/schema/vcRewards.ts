@@ -22,6 +22,8 @@ export const vcPresenceTable = pgTable(
     userId: text("user_id").notNull(),
     channelId: text("channel_id").notNull(),
     joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Set when the user opens the treasure chest during this VC session. Null = not yet opened. */
+    chestOpenedAt: timestamp("chest_opened_at", { withTimezone: true }),
   },
   (table) => [primaryKey({ columns: [table.guildId, table.userId] })],
 );
