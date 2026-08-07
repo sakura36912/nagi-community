@@ -34,7 +34,8 @@ import {
   VC_PANEL_SEL_KICK,
   VC_PANEL_SEL_EXTEND,
   VC_PANEL_BTN_RENAME,
-  VC_PANEL_BTN_TREASURE,
+  CHEST_OPEN_BTN_ID,
+  buildChestPanelMessage,
   VC_PANEL_SEL_RENAME,
   VC_PANEL_RENAME_MODAL,
   handleVcPanelAddBtn,
@@ -42,7 +43,7 @@ import {
   handleVcPanelExtendBtn,
   handleVcPanelExpiryBtn,
   handleVcPanelRenameBtn,
-  handleVcPanelTreasureBtn,
+  handleChestOpenBtn,
   handleVcPanelAddSel,
   handleVcPanelKickSel,
   handleVcPanelExtendSel,
@@ -1426,8 +1427,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_RENAME)) {
       await handleVcPanelRenameBtn(interaction); return;
     }
-    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_TREASURE)) {
-      await handleVcPanelTreasureBtn(interaction); return;
+    if (interaction.isButton() && interaction.customId === CHEST_OPEN_BTN_ID) {
+      await handleChestOpenBtn(interaction); return;
     }
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_RENAME)) {
       await handleVcPanelRenameSel(interaction); return;

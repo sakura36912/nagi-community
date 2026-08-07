@@ -1669,7 +1669,8 @@ export const VC_PANEL_BTN_KICK     = "vc:panel:kick:";
 export const VC_PANEL_BTN_EXTEND   = "vc:panel:extend:";
 export const VC_PANEL_BTN_EXPIRY   = "vc:panel:expiry:";
 export const VC_PANEL_BTN_RENAME   = "vc:panel:rename:";
-export const VC_PANEL_BTN_TREASURE = "vc:panel:treasure:";
+export const VC_PANEL_BTN_TREASURE = "vc:panel:treasure:"; // 旧: 未使用
+export const CHEST_OPEN_BTN_ID = "chest:open";
 export const VC_PANEL_SEL_ADD      = "vc:panel:adds:";
 export const VC_PANEL_SEL_KICK     = "vc:panel:kicks:";
 export const VC_PANEL_SEL_EXTEND   = "vc:panel:exts:";
@@ -1725,14 +1726,7 @@ export function buildVcPanelMessage(channelId: string, ownerId: string, expiresA
       .setStyle(ButtonStyle.Secondary)
       .setEmoji("✏️"),
   );
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(vcPanelId(VC_PANEL_BTN_TREASURE, channelId, ownerId))
-      .setLabel("宝箱を開ける")
-      .setStyle(ButtonStyle.Success)
-      .setEmoji("📦"),
-  );
-  return { embeds: [embed], components: [row, row2] };
+  return { embeds: [embed], components: [row] };
 }
 
 /** ownerId をボタン custom ID から取り出してオーナー確認 */
@@ -1825,10 +1819,30 @@ function rollChest(): ChestResult {
   return "jackpot";
 }
 
-export async function handleVcPanelTreasureBtn(interaction: ButtonInteraction): Promise<void> {
+/** 宝箱パネルのメッセージを生成 */
+export function buildChestPanelMessage() {
+  const embed = new EmbedBuilder()
+    .setTitle("📦 宝箱")
+    .setColor(0xf1c40f)
+    .setDescription(
+      "1時間以上VCに浮上しているメンバーだけが開けられます。\n\n" +
+      "🎁 当たり: **10,000$**\n" +
+      "🎊 大当たり: **50,000$** ＋ 評価員アドバイス券\n" +
+      "💨 ハズレ: 何もなし\n\n" +
+      "※ 1回のVC接続につき1回のみ開封可能",
+    );
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(CHEST_OPEN_BTN_ID)
+      .setLabel("宝箱を開ける")
+      .setStyle(ButtonStyle.Success)
+      .setEmoji("📦"),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+export async function handleChestOpenBtn(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guild) return;
-  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_TREASURE, interaction.customId);
-  if (!checkOwner(interaction, ownerId)) return;
 
   await interaction.deferReply({ ephemeral: true });
 
@@ -2068,6 +2082,27 @@ export async function handleVcPanelRenameModal(interaction: ModalSubmitInteracti
   }
 }
 
+const chestCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("宝箱")
+    .setDescription("宝箱パネルを設置します（管理者専用）")
+    .addSubcommand((sub) =>
+      sub.setName("set").setDescription("このチャンネルに宝箱パネルを設置します"),
+    ) as SlashCommandBuilder,
+  async execute(interaction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: "❌ 管理者のみ使用できます。", ephemeral: true });
+      return;
+    }
+    const sub = interaction.options.getSubcommand();
+    if (sub === "set") {
+      const panel = buildChestPanelMessage();
+      await (interaction.channel as import("discord.js").TextChannel)?.send(panel);
+      await interaction.reply({ content: "✅ 宝箱パネルを設置しました。", ephemeral: true });
+    }
+  },
+};
+
 export const commands: Command[] = [
   interviewCommand,
   balanceCommand,
@@ -2092,4 +2127,5 @@ export const commands: Command[] = [
   stickyCommand,
   adviceEndCommand,
   clearCommand,
+  chestCommand,
 ];
