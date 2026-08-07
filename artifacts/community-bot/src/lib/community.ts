@@ -1148,8 +1148,21 @@ export { awardVcTime } from "./points.js";
  * `opted_out` is the last column and contains the literal string "true" or
  * "false" so downstream tooling can filter privacy-sensitive rows without
  * needing a secondary lookup.
+ *
+ * Fields are RFC 4180-quoted: any field that contains a comma, a double-quote,
+ * or a newline is wrapped in double-quotes, with any embedded double-quotes
+ * doubled.  This prevents a channelId or userId that happens to contain a
+ * comma from shifting subsequent columns and silently corrupting the export.
  */
 export function buildTempVcCsv(rows: TempVcDeletionRow[]): string {
+  /** Wrap a field value in double-quotes if it contains reserved characters. */
+  function csvField(value: string): string {
+    if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }
+
   const header = "id,user_id,channel_id,joined_at,left_at,duration_seconds,opted_out";
   const lines = rows.map((r) => {
     const joinedIso = r.joinedAt.toISOString();
@@ -1157,7 +1170,15 @@ export function buildTempVcCsv(rows: TempVcDeletionRow[]): string {
     const durationSec = Math.floor(
       (r.leftAt.getTime() - r.joinedAt.getTime()) / 1000,
     );
-    return `${r.id},${r.userId},${r.channelId},${joinedIso},${leftIso},${durationSec},${r.optedOut}`;
+    return [
+      csvField(String(r.id)),
+      csvField(r.userId),
+      csvField(r.channelId),
+      csvField(joinedIso),
+      csvField(leftIso),
+      csvField(String(durationSec)),
+      csvField(String(r.optedOut)),
+    ].join(",");
   });
   return [header, ...lines].join("\n");
 }

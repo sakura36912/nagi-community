@@ -36,6 +36,46 @@ function parseCsv(csv: string): string[][] {
   return csv.split("\n").map((line) => line.split(","));
 }
 
+/**
+ * Minimal RFC 4180-compliant CSV row parser.
+ * Handles double-quoted fields (including embedded commas and doubled quotes).
+ * Returns an array of field strings for one CSV row.
+ */
+function parseCsvRow(line: string): string[] {
+  const fields: string[] = [];
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === '"') {
+      // Quoted field: consume until the closing unescaped double-quote.
+      let field = "";
+      i++; // skip opening quote
+      while (i < line.length) {
+        if (line[i] === '"' && line[i + 1] === '"') {
+          field += '"';
+          i += 2;
+        } else if (line[i] === '"') {
+          i++; // skip closing quote
+          break;
+        } else {
+          field += line[i++];
+        }
+      }
+      fields.push(field);
+      if (line[i] === ",") i++; // skip delimiter
+    } else {
+      // Unquoted field: consume until the next comma.
+      const end = line.indexOf(",", i);
+      if (end === -1) {
+        fields.push(line.slice(i));
+        break;
+      }
+      fields.push(line.slice(i, end));
+      i = end + 1;
+    }
+  }
+  return fields;
+}
+
 // ─── tests ────────────────────────────────────────────────────────────────────
 
 describe("buildTempVcCsv", () => {
@@ -187,5 +227,43 @@ describe("buildTempVcCsv", () => {
   it("rows are joined with newlines (no trailing newline)", () => {
     const csv = buildTempVcCsv([makeRow()]);
     expect(csv.endsWith("\n")).toBe(false);
+  });
+
+  // ── comma in field values ──────────────────────────────────────────────────
+
+  it("opted_out is still in column position 7 when channelId contains a comma", () => {
+    // channelId with an embedded comma would shift all subsequent columns if
+    // the field is not quoted, causing opted_out to land in the wrong position.
+    const row = makeRow({ channelId: "chan,with,commas", optedOut: true });
+    const csv = buildTempVcCsv([row]);
+    const [, dataLine] = csv.split("\n");
+    // Use the RFC 4180-aware parser so the quoted field is treated as one unit.
+    const fields = parseCsvRow(dataLine!);
+    // There must be exactly 7 fields: id, user_id, channel_id, joined_at,
+    // left_at, duration_seconds, opted_out.
+    expect(fields).toHaveLength(7);
+    // The channel_id field (index 2) must equal the original value verbatim.
+    expect(fields[2]).toBe("chan,with,commas");
+    // opted_out must still be the last field and must be "true".
+    expect(fields[6]).toBe("true");
+  });
+
+  it("opted_out is still in column position 7 when userId contains a comma", () => {
+    const row = makeRow({ userId: "user,one", optedOut: false });
+    const csv = buildTempVcCsv([row]);
+    const [, dataLine] = csv.split("\n");
+    const fields = parseCsvRow(dataLine!);
+    expect(fields).toHaveLength(7);
+    expect(fields[1]).toBe("user,one");
+    expect(fields[6]).toBe("false");
+  });
+
+  it("double-quotes inside a field are escaped so the CSV remains parseable", () => {
+    const row = makeRow({ channelId: 'chan"quoted"' });
+    const csv = buildTempVcCsv([row]);
+    const [, dataLine] = csv.split("\n");
+    const fields = parseCsvRow(dataLine!);
+    expect(fields).toHaveLength(7);
+    expect(fields[2]).toBe('chan"quoted"');
   });
 });
