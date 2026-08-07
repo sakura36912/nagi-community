@@ -1846,33 +1846,34 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   await interaction.deferReply({ ephemeral: true });
 
-  // 本日開封済みチェック
-  if (await hasTodayChestOpened(interaction.guild.id, interaction.user.id)) {
-    await interaction.editReply("📦 本日はすでに宝箱を開けました。明日またどうぞ！");
-    return;
+  const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
+
+  if (!isAdmin) {
+    // 本日開封済みチェック
+    if (await hasTodayChestOpened(interaction.guild.id, interaction.user.id)) {
+      await interaction.editReply("📦 本日はすでに宝箱を開けました。明日またどうぞ！");
+      return;
+    }
+
+    // 累積VC時間チェック（過去セッション + 現在セッション）
+    const presence = await getVcPresence(interaction.guild.id, interaction.user.id);
+    if (!presence) {
+      await interaction.editReply("❌ VCに接続中でないため宝箱を開けられません。");
+      return;
+    }
+    const currentSeconds = Math.floor((Date.now() - presence.joinedAt.getTime()) / 1000);
+    const pastSeconds = await getTodayChestVcSeconds(interaction.guild.id, interaction.user.id);
+    const totalSeconds = pastSeconds + currentSeconds;
+
+    if (totalSeconds < 3600) {
+      const remaining = Math.ceil((3600 - totalSeconds) / 60);
+      await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** のVC接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
+      return;
+    }
   }
 
-  // 累積VC時間チェック（過去セッション + 現在セッション）
-  const presence = await getVcPresence(interaction.guild.id, interaction.user.id);
-  const currentSeconds = presence
-    ? Math.floor((Date.now() - presence.joinedAt.getTime()) / 1000)
-    : 0;
-  const pastSeconds = await getTodayChestVcSeconds(interaction.guild.id, interaction.user.id);
-  const totalSeconds = pastSeconds + currentSeconds;
-
-  if (!presence) {
-    await interaction.editReply("❌ VCに接続中でないため宝箱を開けられません。");
-    return;
-  }
-
-  if (totalSeconds < 3600) {
-    const remaining = Math.ceil((3600 - totalSeconds) / 60);
-    await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** のVC接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
-    return;
-  }
-
-  // 開封記録
-  await markChestOpenedToday(interaction.guild.id, interaction.user.id);
+  // 開封記録（管理者は記録しない＝何度でも開封可能）
+  if (!isAdmin) await markChestOpenedToday(interaction.guild.id, interaction.user.id);
 
   const result = rollChest();
   const settings = await getGuildSettings(interaction.guild.id);
