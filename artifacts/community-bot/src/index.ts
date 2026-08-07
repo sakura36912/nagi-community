@@ -299,10 +299,8 @@ client.once(Events.ClientReady, async (readyClient) => {
           ?? await guild.channels.fetch(config.channelId).catch(() => null);
         if (!channel?.isTextBased()) continue;
 
-        const period = (config.period ?? "today") as RankingPeriod;
-        const periodStart = buildRankingPeriodStart(period);
         const [ranking, activeCount] = await Promise.all([
-          getVcRanking(guild.id, periodStart),
+          getVcRanking(guild.id, undefined),
           getActiveSessionCount(guild.id),
         ]);
 
@@ -311,7 +309,7 @@ client.once(Events.ClientReady, async (readyClient) => {
           continue;
         }
 
-        const embed = buildRankingEmbed(ranking, activeCount, period);
+        const embed = buildRankingEmbed(ranking, activeCount, "all");
         await channel.send({ embeds: [embed] });
         logger.info(`[ranking] Posted daily ranking to ${config.channelId} in guild ${config.guildId}`);
       } catch (err) {

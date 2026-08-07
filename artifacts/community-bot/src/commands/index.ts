@@ -227,45 +227,24 @@ const rankingCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("show")
-        .setDescription("VC滞在時間のランキングを表示します")
-        .addStringOption((opt) =>
-          opt
-            .setName("period")
-            .setDescription("集計期間")
-            .setRequired(false)
-            .addChoices(...RANKING_PERIOD_CHOICES),
-        ),
+        .setDescription("VC累計滞在時間ランキングを表示します"),
     )
     .addSubcommand((sub) =>
       sub
         .setName("setup")
-        .setDescription("毎日0時に自動投稿するチャンネルと集計期間を設定します（管理者用）")
+        .setDescription("毎日0時に累計ランキングを自動投稿するチャンネルを設定します（管理者用）")
         .addChannelOption((opt) =>
           opt
             .setName("channel")
             .setDescription("投稿先チャンネル")
             .setRequired(true)
             .addChannelTypes(ChannelType.GuildText),
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName("period")
-            .setDescription("集計期間（デフォルト: 今日）")
-            .setRequired(false)
-            .addChoices(...RANKING_PERIOD_CHOICES),
         ),
     )
     .addSubcommand((sub) =>
       sub
         .setName("me")
-        .setDescription("自分のVC順位と滞在時間を確認します")
-        .addStringOption((opt) =>
-          opt
-            .setName("period")
-            .setDescription("集計期間（デフォルト: 全期間）")
-            .setRequired(false)
-            .addChoices(...RANKING_PERIOD_CHOICES),
-        ),
+        .setDescription("自分のVC順位と累計滞在時間を確認します"),
     )
     .addSubcommand((sub) =>
       sub.setName("disable").setDescription("毎日の自動投稿を停止します（管理者用）"),
@@ -328,36 +307,28 @@ const rankingCommand: Command = {
         return;
       }
 
-      const period = (interaction.options.getString("period") ?? "all") as RankingPeriod;
-      const periodStart = buildRankingPeriodStart(period);
       const now = new Date();
 
       const [rank, seconds, activeSession] = await Promise.all([
-        getUserVcRank(guildId, interaction.user.id, periodStart),
-        getVcTimeInPeriod(
-          guildId,
-          interaction.user.id,
-          periodStart ?? new Date(0),
-          now,
-        ),
+        getUserVcRank(guildId, interaction.user.id, undefined),
+        getVcTimeInPeriod(guildId, interaction.user.id, new Date(0), now),
         getActiveSession(guildId, interaction.user.id),
       ]);
 
-      const periodLabel = RANKING_PERIOD_LABELS[period];
-      const rankText   = rank != null ? `第 **${rank}** 位` : "圏外（記録なし）";
-      const timeText   = formatSeconds(seconds);
+      const rankText = rank != null ? `第 **${rank}** 位` : "圏外（記録なし）";
+      const timeText = formatSeconds(seconds);
 
       const liveSeconds = activeSession
         ? Math.floor((now.getTime() - activeSession.joinedAt.getTime()) / 1000)
         : 0;
 
       const embed = new EmbedBuilder()
-        .setTitle(`🏆 あなたのVCランク（${periodLabel}）`)
+        .setTitle("🏆 あなたのVCランク（累計）")
         .setColor(activeSession ? 0xed4245 : 0xf5a623)
         .setThumbnail((interaction.member as GuildMember)?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
         .addFields(
           { name: "順位", value: rankText, inline: true },
-          { name: "滞在時間", value: timeText, inline: true },
+          { name: "累計滞在時間", value: timeText, inline: true },
         )
         .setTimestamp();
 
@@ -376,11 +347,8 @@ const rankingCommand: Command = {
     // ── show ──────────────────────────────────────────────────────────────────
     if (sub === "show") {
       await interaction.deferReply();
-      const period = (interaction.options.getString("period") ?? "all") as RankingPeriod;
-      const periodStart = buildRankingPeriodStart(period);
-
       const [ranking, activeCount] = await Promise.all([
-        getVcRanking(guildId, periodStart),
+        getVcRanking(guildId, undefined),
         getActiveSessionCount(guildId),
       ]);
 
@@ -389,7 +357,7 @@ const rankingCommand: Command = {
         return;
       }
 
-      await interaction.editReply({ embeds: [buildRankingEmbed(ranking, activeCount, period)] });
+      await interaction.editReply({ embeds: [buildRankingEmbed(ranking, activeCount, "all")] });
       return;
     }
 
@@ -401,10 +369,9 @@ const rankingCommand: Command = {
 
     if (sub === "setup") {
       const channel = interaction.options.getChannel("channel", true);
-      const period = (interaction.options.getString("period") ?? "today") as RankingPeriod;
-      await setRankingSettings(guildId, channel.id, period);
+      await setRankingSettings(guildId, channel.id, "all");
       await interaction.reply({
-        content: `毎日0時（JST）に <#${channel.id}> へ **${RANKING_PERIOD_LABELS[period]}** のランキングを投稿します。`,
+        content: `毎日0時（JST）に <#${channel.id}> へ **累計ランキング** を投稿します。`,
         ephemeral: true,
       });
       return;
@@ -686,14 +653,7 @@ const mystatsCommand: Command = {
 const vcRankCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("vcランク")
-    .setDescription("自分のVC順位と滞在時間を確認します")
-    .addStringOption((opt) =>
-      opt
-        .setName("period")
-        .setDescription("集計期間（デフォルト: 全期間）")
-        .setRequired(false)
-        .addChoices(...RANKING_PERIOD_CHOICES),
-    ),
+    .setDescription("自分のVC順位と累計滞在時間を確認します"),
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -717,40 +677,30 @@ const vcRankCommand: Command = {
       (r) => r.name === "追放者",
     ) ?? false;
 
-    const period = (interaction.options.getString("period") ?? "all") as RankingPeriod;
-    const periodStart = buildRankingPeriodStart(period);
     const now = new Date();
 
     const [rank, seconds, activeSession] = await Promise.all([
-      // Exile users are excluded from the main ranking — always null
-      isExile ? Promise.resolve(null) : getUserVcRank(guildId, interaction.user.id, periodStart),
-      getVcTimeInPeriod(
-        guildId,
-        interaction.user.id,
-        periodStart ?? new Date(0),
-        now,
-        isExile,
-      ),
+      isExile ? Promise.resolve(null) : getUserVcRank(guildId, interaction.user.id, undefined),
+      getVcTimeInPeriod(guildId, interaction.user.id, new Date(0), now, isExile),
       getActiveSession(guildId, interaction.user.id),
     ]);
 
-    const periodLabel = RANKING_PERIOD_LABELS[period];
-    const rankText   = isExile
+    const rankText = isExile
       ? "追放者として別記録中"
       : rank != null ? `第 **${rank}** 位` : "圏外（記録なし）";
-    const timeText   = formatSeconds(seconds);
+    const timeText = formatSeconds(seconds);
 
     const liveSeconds = activeSession
       ? Math.floor((now.getTime() - activeSession.joinedAt.getTime()) / 1000)
       : 0;
 
     const embed = new EmbedBuilder()
-      .setTitle(`🏆 あなたのVCランク（${periodLabel}）`)
+      .setTitle("🏆 あなたのVCランク（累計）")
       .setColor(activeSession ? 0xed4245 : 0xf5a623)
       .setThumbnail(member?.displayAvatarURL() ?? interaction.user.displayAvatarURL())
       .addFields(
         { name: "順位", value: rankText, inline: true },
-        { name: "滞在時間", value: timeText, inline: true },
+        { name: "累計滞在時間", value: timeText, inline: true },
       )
       .setTimestamp();
 
