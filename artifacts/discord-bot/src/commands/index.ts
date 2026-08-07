@@ -1852,35 +1852,18 @@ function rollChest(): ChestResult {
 /** 宝箱パネルのメッセージを生成 */
 export function buildChestPanelMessage() {
   const embed = new EmbedBuilder()
-    .setTitle("✨ 宝　箱 ✨")
+    .setTitle("🎁 宝箱")
     .setColor(0xF6A623)
     .setDescription(
-      "```\n" +
-      "  ┌─────────────────────────────┐\n" +
-      "  │   VC に繋いで宝箱を開けよう！  │\n" +
-      "  └─────────────────────────────┘\n" +
-      "```\n" +
-      "累計VC接続 **1時間ごとに 1回** チャレンジ可能。\n" +
-      "カウントは毎日 **JST 0:00** にリセットされます。",
+      "VC に累計 **1時間** 接続するごとに 1回チャレンジできます。\n" +
+      "カウントは毎日 **JST 0:00** にリセット。\n\n" +
+      "─────────────────────\n" +
+      "　🎊 **大当たり**　5%　→　**50,000$**\n" +
+      "　🎁 **当たり**　　35%　→　**10,000$**\n" +
+      "　💨 **ハズレ**　　60%　→　なし\n" +
+      "─────────────────────",
     )
-    .addFields(
-      {
-        name: "🎊 大当たり　**5%**",
-        value: "> **50,000$** 獲得！",
-        inline: true,
-      },
-      {
-        name: "🎁 当　 たり　**35%**",
-        value: "> **10,000$** 獲得！",
-        inline: true,
-      },
-      {
-        name: "💨 ハ ズ レ　**60%**",
-        value: "> 何もなし…",
-        inline: true,
-      },
-    )
-    .setFooter({ text: "🎲  運試し、してみる？" });
+    .setFooter({ text: "🎲 運試し、してみる？" });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
