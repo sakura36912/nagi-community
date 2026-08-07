@@ -674,6 +674,27 @@ describe("runVcExpiryScheduler – deleteSchedule called to prevent ghost warnin
 
     expect(mocks.deleteSchedule).not.toHaveBeenCalled();
   });
+
+  it("does not log an error and still calls deletePrivateVcSession when deleteSchedule returns false (row already removed)", async () => {
+    // Simulates the race where runVcDeleteScheduler already removed the
+    // schedule row on the same tick — deleteSchedule finds nothing and
+    // returns false instead of true.  This is not an error condition.
+    mocks.deleteSchedule.mockResolvedValue(false);
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    await runVcExpiryScheduler(makeClient());
+
+    // deleteSchedule was called (the attempt was made).
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+
+    // Returning false must not produce any error log.
+    expect(mocks.loggerError).not.toHaveBeenCalled();
+
+    // Session row is still cleaned up regardless.
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledOnce();
+    expect(mocks.deletePrivateVcSession).toHaveBeenCalledWith(1);
+  });
 });
 
 // ─── Cross-session isolation ──────────────────────────────────────────────────
