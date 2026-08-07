@@ -94,6 +94,43 @@ describe("buildTempVcCsv", () => {
     expect(row2?.at(-1)).toBe("false");
   });
 
+  it("renders two rows for the same userId with different optedOut values independently", () => {
+    // Guard against a CSV-builder bug that de-duplicates or collapses rows by
+    // userId.  Both rows must appear with their distinct opted_out cell values.
+    const joinedAt = new Date("2025-03-01T10:00:00.000Z");
+    const leftAt1  = new Date("2025-03-01T11:00:00.000Z");
+    const leftAt2  = new Date("2025-04-01T11:00:00.000Z");
+    const csv = buildTempVcCsv([
+      makeRow({ id: 1, userId: "same-user", joinedAt, leftAt: leftAt1, optedOut: false }),
+      makeRow({ id: 2, userId: "same-user", joinedAt, leftAt: leftAt2, optedOut: true  }),
+    ]);
+    const lines = csv.split("\n");
+    // Header + 2 data rows — no row dropped.
+    expect(lines).toHaveLength(3);
+    const [, dataRow1, dataRow2] = lines;
+    expect(dataRow1?.at(-1)).toBe("e"); // last char of "false"
+    expect(dataRow2?.at(-1)).toBe("e"); // last char of "true"
+    // Full cell values via split.
+    expect(dataRow1?.split(",").at(-1)).toBe("false");
+    expect(dataRow2?.split(",").at(-1)).toBe("true");
+  });
+
+  it("CSV opted_out column reflects the per-row flag when the same userId has mixed values", () => {
+    // Same userId with three sessions: false → true → false.
+    // Each row must preserve its own flag; none must be homogenised.
+    const base = new Date("2025-01-01T00:00:00.000Z");
+    const rows = [
+      makeRow({ id: 10, userId: "user-x", leftAt: new Date(base.getTime() + 1_000), optedOut: false }),
+      makeRow({ id: 11, userId: "user-x", leftAt: new Date(base.getTime() + 2_000), optedOut: true  }),
+      makeRow({ id: 12, userId: "user-x", leftAt: new Date(base.getTime() + 3_000), optedOut: false }),
+    ];
+    const csv = buildTempVcCsv(rows);
+    const [, r1, r2, r3] = csv.split("\n");
+    expect(r1?.split(",").at(-1)).toBe("false");
+    expect(r2?.split(",").at(-1)).toBe("true");
+    expect(r3?.split(",").at(-1)).toBe("false");
+  });
+
   // ── other column values ────────────────────────────────────────────────────
 
   it("writes id in the first column", () => {

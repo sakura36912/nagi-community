@@ -410,4 +410,77 @@ describe("getAllTempVcDeletions – opted_out column in CSV export", () => {
     expect(userIds).toContain("user-b");
     expect(userIds).toContain("user-c");
   });
+
+  // ── Same userId, two rows, different opted_out values ─────────────────────
+  //
+  // The opted_out flag is computed per-session-row by EXISTS subqueries that
+  // reflect the user's privacy state at query time.  A silent bug in a JOIN-based
+  // rewrite (e.g. GROUP BY collapsing rows, or a DISTINCT that merges duplicates)
+  // could flatten all rows for a user to the same flag value.
+  //
+  // These tests guard against that regression by feeding two rows for the same
+  // userId with different opted_out values — exactly the shape that a faulty query
+  // would collapse — and asserting that both rows survive with their distinct flags.
+  //
+  // Context: in the re-opt-in flow an export taken before opt-out and one taken
+  // after re-opt-in show different flags, but both are taken at different moments
+  // (separate db.execute calls).  The multi-row-same-user scenario can arise if
+  // the DB computes opted_out at a boundary moment where rows for the same user
+  // were written with different privacy states, or in any future refactor that
+  // computes opted_out per-row rather than per-user.  The mapper must handle it
+  // faithfully regardless of origin.
+
+  it("maps two rows for the same userId independently when they carry different opted_out values", async () => {
+    // Simulate the DB returning two completed sessions for the same user where
+    // the opted_out column evaluates differently per row (e.g. a partial opt-out
+    // recorded at a boundary, or a future per-row privacy implementation).
+    // The mapper must not collapse them to a single flag value.
+    const t1 = new Date("2025-03-01T10:00:00Z");
+    const t2 = new Date("2025-04-01T10:00:00Z");
+    mocks.execute.mockResolvedValueOnce({
+      rows: [
+        makeDbRow("same-user", { opted_out: false, leftAt: t1 }),
+        makeDbRow("same-user", { opted_out: true,  leftAt: t2 }),
+      ],
+    });
+
+    const result = await getAllTempVcDeletions("guild-test");
+
+    expect(result).toHaveLength(2);
+    // Both rows must survive — no de-duplication by userId.
+    const flags = result.map((r) => r.optedOut);
+    expect(flags).toContain(false);
+    expect(flags).toContain(true);
+    // The earlier row (opted_out=false) must keep its flag.
+    const earlier = result.find((r) => r.leftAt.getTime() === t1.getTime());
+    expect(earlier?.optedOut).toBe(false);
+    // The later row (opted_out=true) must keep its flag.
+    const later = result.find((r) => r.leftAt.getTime() === t2.getTime());
+    expect(later?.optedOut).toBe(true);
+  });
+
+  it("preserves row count and per-row flags when the same userId appears multiple times", async () => {
+    // Three rows for the same user: false, true, false.
+    // A GROUP BY or DISTINCT bug would reduce this to one or two rows.
+    const t1 = new Date("2025-01-01T10:00:00Z");
+    const t2 = new Date("2025-02-01T10:00:00Z");
+    const t3 = new Date("2025-03-01T10:00:00Z");
+    mocks.execute.mockResolvedValueOnce({
+      rows: [
+        makeDbRow("multi-session-user", { opted_out: false, leftAt: t1 }),
+        makeDbRow("multi-session-user", { opted_out: true,  leftAt: t2 }),
+        makeDbRow("multi-session-user", { opted_out: false, leftAt: t3 }),
+      ],
+    });
+
+    const result = await getAllTempVcDeletions("guild-test");
+
+    expect(result).toHaveLength(3);
+    const byTime = Object.fromEntries(
+      result.map((r) => [r.leftAt.getTime(), r.optedOut]),
+    );
+    expect(byTime[t1.getTime()]).toBe(false);
+    expect(byTime[t2.getTime()]).toBe(true);
+    expect(byTime[t3.getTime()]).toBe(false);
+  });
 });
