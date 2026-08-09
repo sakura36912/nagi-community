@@ -1851,7 +1851,7 @@ export async function handleVcPanelExpiryBtn(interaction: ButtonInteraction): Pr
 //   role_voime    0.8%
 type ChestResult =
   | "miss"
-  | "coin_10k"
+  | "coin_100k"
   | "coin_15k"
   | "coin_20k"
   | "coin_30k"
@@ -1963,7 +1963,7 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   // ── 通貨賞品 ──────────────────────────────────────────────────────────────
   const coinPrizes: Partial<Record<ChestResult, { amount: number; label: string; emoji: string }>> = {
-    coin_10k: { amount: 10_000, label: "当たり",   emoji: "🎁" },
+    coin_100k: { amount: 100_000, label: "激レア",  emoji: "✨" },
     coin_15k: { amount: 15_000, label: "当たり",   emoji: "🎁" },
     coin_20k: { amount: 20_000, label: "当たり",   emoji: "🎁" },
     coin_30k: { amount: 30_000, label: "当たり",   emoji: "🎁" },
