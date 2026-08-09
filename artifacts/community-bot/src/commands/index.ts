@@ -556,6 +556,36 @@ const rankingCommand: Command = {
             "設定をリセットしたい場合は `0` を指定してください（デフォルト: **180日**）。",
           ephemeral: true,
         });
+
+        // Notify the audit log channel (if configured) that the floor guard
+        // fired so admins can see a record of the rejected attempt.
+        const auditChannelId = await getAuditLogChannel(guildId);
+        if (auditChannelId) {
+          try {
+            const auditChannel =
+              interaction.guild?.channels.cache.get(auditChannelId) ??
+              (await interaction.guild?.channels.fetch(auditChannelId).catch(() => null));
+            if (auditChannel?.isTextBased()) {
+              const auditEmbed = new EmbedBuilder()
+                .setTitle("⛔ 保持期間の最低日数ガードが発動しました")
+                .setColor(0xed4245)
+                .setDescription(
+                  "管理者が30日未満の保持期間を設定しようとしました。コマンドは拒否されました。",
+                )
+                .addFields(
+                  { name: "操作者", value: `<@${interaction.user.id}>`, inline: true },
+                  { name: "入力値", value: `${days}日`, inline: true },
+                  { name: "最低値", value: "30日", inline: true },
+                )
+                .setFooter({ text: `操作者ID: ${interaction.user.id}` })
+                .setTimestamp();
+              await auditChannel.send({ embeds: [auditEmbed] });
+            }
+          } catch (err) {
+            logger.error("[ranking] Failed to post floor-guard notice to audit log channel", err);
+          }
+        }
+
         return;
       }
 

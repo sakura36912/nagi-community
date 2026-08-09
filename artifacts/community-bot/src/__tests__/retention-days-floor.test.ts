@@ -129,10 +129,17 @@ function makeCommandInteraction(opts: {
   guildId?: string | null;
   days?: number | null;
   isAdmin?: boolean;
+  guild?: {
+    channels: {
+      cache: { get: ReturnType<typeof vi.fn> };
+      fetch?: ReturnType<typeof vi.fn>;
+    };
+  } | null;
 }) {
-  const { guildId = "guild-123", days = null, isAdmin = true } = opts;
+  const { guildId = "guild-123", days = null, isAdmin = true, guild = null } = opts;
   return {
     guildId,
+    guild,
     user: { id: "admin-user", tag: "Admin#0001" },
     memberPermissions: {
       has: vi.fn().mockReturnValue(isAdmin),
@@ -537,5 +544,174 @@ describe("handleRetentionConfirm – nonce registry + floor guard", () => {
     expect(replyArg.content).not.toMatch(/管理者/);
     expect(interaction.deferUpdate).not.toHaveBeenCalled();
     expect(mocks.insert).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Tests: floor guard – audit log notification ───────────────────────────────
+
+describe("/ranking retention-days – floor guard audit log", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    retentionConfirmExpiry.clear();
+    mocks.insertValues.mockReturnValue({ onConflictDoUpdate: mocks.onConflictDoUpdate });
+    mocks.insert.mockReturnValue({ values: mocks.insertValues });
+    mocks.selectFrom.mockReturnValue({ where: mocks.selectWhere });
+    mocks.select.mockReturnValue({ from: mocks.selectFrom });
+  });
+
+  it("sends an audit embed to the configured channel when the floor guard fires", async () => {
+    if (!rankingExecute) return;
+
+    const AUDIT_CHANNEL_ID = "audit-channel-999";
+    // getAuditLogChannel queries rankingSettings; return a row with the channel
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: AUDIT_CHANNEL_ID }]);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = { isTextBased: () => true, send };
+
+    const interaction = makeCommandInteraction({
+      days: 14,
+      guild: {
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(auditChannel) },
+          fetch: vi.fn().mockResolvedValue(null),
+        },
+      },
+    });
+
+    await rankingExecute(interaction as never);
+
+    // The ephemeral rejection still fires
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+
+    // The audit channel must receive exactly one message
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("audit embed includes the rejected day count as a field", async () => {
+    if (!rankingExecute) return;
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch" }]);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = { isTextBased: () => true, send };
+
+    const interaction = makeCommandInteraction({
+      days: 7,
+      guild: {
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        },
+      },
+    });
+
+    await rankingExecute(interaction as never);
+
+    const [[sendArg]] = send.mock.calls as [[{ embeds: { data: { fields?: { name: string; value: string }[] } }[] }]];
+    const fields = sendArg.embeds[0]?.data?.fields ?? [];
+    const inputField = fields.find((f) => f.name === "入力値");
+    expect(inputField?.value).toContain("7");
+  });
+
+  it("audit embed includes the actor's user ID", async () => {
+    if (!rankingExecute) return;
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch" }]);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = { isTextBased: () => true, send };
+
+    const interaction = makeCommandInteraction({
+      days: 10,
+      guild: {
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        },
+      },
+    });
+
+    await rankingExecute(interaction as never);
+
+    const [[sendArg]] = send.mock.calls as [[{ embeds: { data: { fields?: { name: string; value: string }[]; footer?: { text: string } } }[] }]];
+    const embedData = sendArg.embeds[0]?.data;
+    const actorField = (embedData?.fields ?? []).find((f) => f.name === "操作者");
+    expect(actorField?.value).toContain("admin-user");
+    expect(embedData?.footer?.text).toContain("admin-user");
+  });
+
+  it("does NOT send any audit message when no audit channel is configured", async () => {
+    if (!rankingExecute) return;
+
+    // selectWhere returns [] → no audit channel row
+    mocks.selectWhere.mockResolvedValueOnce([]);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = { isTextBased: () => true, send };
+
+    const interaction = makeCommandInteraction({
+      days: 5,
+      guild: {
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        },
+      },
+    });
+
+    await rankingExecute(interaction as never);
+
+    // The ephemeral rejection still fires
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+
+    // No audit message sent because no channel is configured
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("swallows an audit channel send error so the floor rejection is unaffected", async () => {
+    if (!rankingExecute) return;
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-err" }]);
+
+    const send = vi.fn().mockRejectedValue(new Error("Missing Permissions"));
+    const auditChannel = { isTextBased: () => true, send };
+
+    const interaction = makeCommandInteraction({
+      days: 20,
+      guild: {
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        },
+      },
+    });
+
+    // Must not throw even though audit send fails
+    await expect(rankingExecute(interaction as never)).resolves.toBeUndefined();
+
+    // The ephemeral rejection was still sent
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+
+    // The audit send was attempted
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("does NOT send an audit message when the guild is null (no channel to fetch)", async () => {
+    if (!rankingExecute) return;
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch" }]);
+
+    // guild is null → channel fetch is impossible
+    const interaction = makeCommandInteraction({ days: 10, guild: null });
+
+    await rankingExecute(interaction as never);
+
+    // The ephemeral rejection still fires; no error thrown
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
   });
 });
