@@ -1846,9 +1846,9 @@ export async function handleVcPanelExpiryBtn(interaction: ButtonInteraction): Pr
 //   coin_60k      4.0%
 //   role_advice   3.0%
 //   coin_80k      1.5%
-//   role_limited  0.7%
+//   role_limited  0.2%
 //   coin_100k     0.5%
-//   role_voime    0.3%
+//   role_voime    0.8%
 type ChestResult =
   | "miss"
   | "coin_15k"
@@ -1870,8 +1870,8 @@ function rollChest(): ChestResult {
   if (r < 0.94)   return "coin_60k";
   if (r < 0.97)   return "role_advice";
   if (r < 0.985)  return "coin_80k";
-  if (r < 0.992)  return "role_limited";
-  if (r < 0.997)  return "coin_100k";
+  if (r < 0.987)  return "role_limited";
+  if (r < 0.992)  return "coin_100k";
   return "role_voime";
 }
 
