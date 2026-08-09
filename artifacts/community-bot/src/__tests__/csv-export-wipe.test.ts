@@ -435,6 +435,20 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       expect(count).toBe(3);
     });
 
+    it("counts both open and completed sessions when the user has a mix", async () => {
+      // 1 active (left_at = null) + 2 completed rows for the same user across guilds.
+      store.seed([
+        makeRow("wiped-user", "guild-A", { leftAt: null }), // open
+        makeRow("wiped-user", "guild-A"),                   // completed
+        makeRow("wiped-user", "guild-B"),                   // completed
+      ]);
+
+      const count = await deleteAllUserVcSessions("wiped-user");
+
+      // deleteAllUserVcSessions has no left_at guard, so all 3 rows must be deleted.
+      expect(count).toBe(3);
+    });
+
     it("returns 0 when the user had no sessions to delete", async () => {
       store.seed([makeRow("other-user", "guild-A")]);
 
@@ -713,6 +727,20 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       const count = await deleteUserVcSessions("guild-A", "wiped-user");
 
       expect(count).toBe(2);
+    });
+
+    it("counts both open and completed sessions when the user has a mix", async () => {
+      // 1 active (left_at = null) + 2 completed rows for the same user/guild.
+      store.seed([
+        makeRow("wiped-user", "guild-A", { leftAt: null }), // open
+        makeRow("wiped-user", "guild-A"),                   // completed
+        makeRow("wiped-user", "guild-A"),                   // completed
+      ]);
+
+      const count = await deleteUserVcSessions("guild-A", "wiped-user");
+
+      // deleteUserVcSessions has no left_at guard, so all 3 rows must be deleted.
+      expect(count).toBe(3);
     });
 
     it("returns 0 when the user had no sessions in that guild", async () => {
