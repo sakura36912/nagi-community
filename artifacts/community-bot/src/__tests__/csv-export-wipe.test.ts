@@ -103,6 +103,30 @@ const store = vi.hoisted(() => {
     return true;
   }
 
+  // ── db.select stateful implementation ────────────────────────────────────
+  // Supports the select chain: db.select().from(table).where(cond)
+  // Used by isVcTrackingOptedOut which reads from both the global and per-guild
+  // privacy tables.  Returns rows whose shape matches what community.ts expects:
+  //   global table → { userId, optedOut }
+  //   privacy table → { guildId, userId, optedOut }
+  const select = vi.fn(() => ({
+    from: (table: unknown) => ({
+      where: (cond: Record<string, unknown>) => {
+        const t = table as Record<string, string>;
+        const tableName = (t["guildId"] ?? t["userId"] ?? "").split(".")[0];
+        if (tableName === "global") {
+          const rows = globalRows.filter((r) => matchesGlobal(r, cond));
+          return Promise.resolve(rows.map((r) => ({ userId: r.user_id, optedOut: r.opted_out })));
+        }
+        if (tableName === "privacy") {
+          const rows = privacyRows.filter((r) => matchesPrivacy(r, cond));
+          return Promise.resolve(rows.map((r) => ({ guildId: r.guild_id, userId: r.user_id, optedOut: r.opted_out })));
+        }
+        return Promise.resolve([]);
+      },
+    }),
+  }));
+
   // ── db.update stateful implementation ─────────────────────────────────────
   // Used by closeSession: sets left_at on matching open session rows.
   // The WHERE condition from closeSession contains eq(guildId), eq(userId), isNull(leftAt).
@@ -213,7 +237,7 @@ const store = vi.hoisted(() => {
     globalRows  = [];
   }
 
-  return { del, update, execute, seed, seedPrivacy, getPrivacyRows, seedGlobal, getGlobalRows, getSessions, reset };
+  return { del, update, select, execute, seed, seedPrivacy, getPrivacyRows, seedGlobal, getGlobalRows, getSessions, reset };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -227,6 +251,7 @@ vi.mock("@workspace/db", () => {
     db: {
       delete:  store.del,
       update:  store.update,
+      select:  store.select,
       execute: store.execute,
     },
     communityVcSessionsTable:          tbl("sessions"),
@@ -269,6 +294,7 @@ import {
   deleteAllUserVcSessions,
   deleteUserVcSessions,
   closeSession,
+  isVcTrackingOptedOut,
 } from "../lib/community.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -818,6 +844,97 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       // Export must return nothing — no completed row for the user exists.
       const result = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
       expect(result).toHaveLength(0);
+    });
+  });
+
+  // ── Wipe → re-track: isVcTrackingOptedOut returns false after wipe ───────
+  //
+  // deleteAllUserVcSessions deletes both the global opt-out row and all per-guild
+  // opt-out rows.  The following tests confirm that isVcTrackingOptedOut (which
+  // is what openSession consults on every join) returns false for the wiped user
+  // so that tracking resumes automatically on their next join — no explicit
+  // re-opt-in required.
+
+  describe("wipe → re-track: isVcTrackingOptedOut returns false after deleteAllUserVcSessions", () => {
+    it("isVcTrackingOptedOut returns false after the global opt-out row is cleared by the wipe", async () => {
+      // Seed a global opt-out row — user has opted out of tracking across all guilds.
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      // Both global and per-guild opt-out rows are gone, so the user is no
+      // longer opted out and will be tracked on their next join.
+      const optedOut = await isVcTrackingOptedOut("guild-A", "wiped-user");
+      expect(optedOut).toBe(false);
+    });
+
+    it("isVcTrackingOptedOut returns false after both global and per-guild opt-out rows are cleared", async () => {
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+      store.seedPrivacy([{ user_id: "wiped-user", guild_id: "guild-A", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      const optedOut = await isVcTrackingOptedOut("guild-A", "wiped-user");
+      expect(optedOut).toBe(false);
+    });
+
+    it("isVcTrackingOptedOut returns false when only a per-guild opt-out existed before the wipe", async () => {
+      // No global row — only a per-guild opt-out.
+      store.seedPrivacy([{ user_id: "wiped-user", guild_id: "guild-A", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      const optedOut = await isVcTrackingOptedOut("guild-A", "wiped-user");
+      expect(optedOut).toBe(false);
+    });
+
+    it("isVcTrackingOptedOut returns false even when the user had no opt-out rows at all before the wipe", async () => {
+      // Wipe a user who had no opt-out rows — should not throw and tracking
+      // must still be unblocked afterwards.
+      store.seed([makeRow("wiped-user", "guild-A")]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      const optedOut = await isVcTrackingOptedOut("guild-A", "wiped-user");
+      expect(optedOut).toBe(false);
+    });
+
+    it("other users' opt-out status is not affected by the wipe", async () => {
+      store.seedGlobal([
+        { user_id: "wiped-user", opted_out: true },
+        { user_id: "other-user", opted_out: true },
+      ]);
+      store.seedPrivacy([
+        { user_id: "other-user", guild_id: "guild-A", opted_out: true },
+      ]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      // wiped-user is no longer opted out
+      expect(await isVcTrackingOptedOut("guild-A", "wiped-user")).toBe(false);
+
+      // other-user's global opt-out is intact — they remain opted out
+      expect(await isVcTrackingOptedOut("guild-A", "other-user")).toBe(true);
+    });
+
+    it("isVcTrackingOptedOut returns false in every guild the user had a per-guild opt-out in", async () => {
+      store.seedPrivacy([
+        { user_id: "wiped-user", guild_id: "guild-A", opted_out: true },
+        { user_id: "wiped-user", guild_id: "guild-B", opted_out: true },
+        { user_id: "wiped-user", guild_id: "guild-C", opted_out: true },
+      ]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      const [a, b, c] = await Promise.all([
+        isVcTrackingOptedOut("guild-A", "wiped-user"),
+        isVcTrackingOptedOut("guild-B", "wiped-user"),
+        isVcTrackingOptedOut("guild-C", "wiped-user"),
+      ]);
+
+      expect(a).toBe(false);
+      expect(b).toBe(false);
+      expect(c).toBe(false);
     });
   });
 
