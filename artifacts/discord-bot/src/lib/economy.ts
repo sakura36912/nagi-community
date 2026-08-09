@@ -265,6 +265,13 @@ export async function setBanLogChannelId(
   return upsertGuildSetting(guildId, { banLogChannelId });
 }
 
+export async function setVoimeNotifyChannelId(
+  guildId: string,
+  voimeNotifyChannelId: string | null,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, { voimeNotifyChannelId });
+}
+
 export async function createOrUpdateCurrency(
   guildId: string,
   currencyName: string,

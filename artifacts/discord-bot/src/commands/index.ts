@@ -1963,6 +1963,14 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   const settings = await getGuildSettings(interaction.guild.id);
   const cn = settings.currencyName;
 
+  /** 「宝箱チャレンジログ」チャンネルにログを投稿する（失敗しても無視） */
+  const postChestLog = (logText: string) => {
+    const logCh = interaction.guild!.channels.cache.find(
+      (c) => c.name === "宝箱チャレンジログ" && c.isTextBased(),
+    ) as import("discord.js").TextChannel | undefined;
+    if (logCh) logCh.send(logText).catch(() => {});
+  };
+
   // ── 通貨賞品 ──────────────────────────────────────────────────────────────
   const coinPrizes: Partial<Record<ChestResult, { amount: number; label: string; emoji: string }>> = {
     coin_10k: { amount: 10_000, label: "当たり",   emoji: "🎁" },
@@ -1977,9 +1985,9 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   const coin = coinPrizes[result];
   if (coin) {
     await giveCurrency(interaction.guild.id, interaction.user.id, coin.amount, "treasure-chest");
-    await interaction.editReply(
-      `📦 宝箱を開けた！\n\n**${coin.label}** ${coin.emoji} **${coin.amount.toLocaleString()}${cn}** を獲得しました！`,
-    );
+    const replyText = `📦 宝箱を開けた！\n\n**${coin.label}** ${coin.emoji} **${coin.amount.toLocaleString()}${cn}** を獲得しました！`;
+    await interaction.editReply(replyText);
+    postChestLog(`${coin.emoji} <@${interaction.user.id}> が宝箱を開けました！ → **${coin.label}** ${coin.amount.toLocaleString()}${cn}`);
     return;
   }
 
@@ -1997,11 +2005,13 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
       ? `**${rolePrize.roleName}** ロールを獲得しました！`
       : `**${rolePrize.roleName}** ロールを獲得しました！\n※ このサーバーにロールが存在しないため付与できませんでした。`;
     await interaction.editReply(`📦 宝箱を開けた！\n\n**${rolePrize.label}** ${rolePrize.emoji} ${roleNote}`);
+    postChestLog(`${rolePrize.emoji} <@${interaction.user.id}> が宝箱を開けました！ → **${rolePrize.label}** ${rolePrize.roleName}${rolePrize.roleName === CHEST_ROLE_VOIME ? " 🎉" : ""}`);
     return;
   }
 
   // miss
   await interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。");
+  postChestLog(`💨 <@${interaction.user.id}> が宝箱を開けました → ハズレ`);
 }
 
 export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction): Promise<void> {
