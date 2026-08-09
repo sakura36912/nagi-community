@@ -1895,7 +1895,7 @@ export function buildChestPanelMessage() {
     .setTitle("🎁 宝箱")
     .setColor(0xF6A623)
     .setDescription(
-      "VC に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
+      "**酒場** に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
       "カウントは毎日 **JST 0:00** にリセット。\n\n" +
       "─────────────────────\n" +
       "　✨ **激レア**　→　管理者指定ボイメ / 100,000$\n" +
@@ -1925,30 +1925,39 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
 
+  const CHEST_CHANNEL_NAME = "酒場";
+  const CHEST_INTERVAL_SEC = 300; // 5分ごとに1回
+
   if (!isAdmin) {
-    // 累積VC時間チェック（過去セッション + 現在セッション）
+    // 酒場に接続中か確認
     const presence = await getVcPresence(interaction.guild.id, interaction.user.id);
-    if (!presence) {
-      await interaction.editReply("❌ VCに接続中でないため宝箱を開けられません。");
+    const currentChannel = presence
+      ? interaction.guild.channels.cache.get(presence.channelId)
+      : undefined;
+    const isInIzakaya = currentChannel?.name === CHEST_CHANNEL_NAME;
+
+    if (!presence || !isInIzakaya) {
+      await interaction.editReply(`❌ **${CHEST_CHANNEL_NAME}** に接続中でないため宝箱を開けられません。`);
       return;
     }
+
+    // 酒場での累積時間のみカウント（現在セッション + 過去セッション）
     const currentSeconds = Math.floor((Date.now() - presence.joinedAt.getTime()) / 1000);
     const [pastSeconds, opensCount] = await Promise.all([
       getTodayChestVcSeconds(interaction.guild.id, interaction.user.id),
       getTodayChestOpensCount(interaction.guild.id, interaction.user.id),
     ]);
     const totalSeconds = pastSeconds + currentSeconds;
-    const CHEST_INTERVAL_SEC = 300; // 5分ごとに1回
     const maxOpens = Math.floor(totalSeconds / CHEST_INTERVAL_SEC);
 
     if (maxOpens === 0) {
       const remaining = Math.ceil((CHEST_INTERVAL_SEC - totalSeconds) / 60);
-      await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** のVC接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
+      await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** の酒場接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
       return;
     }
     if (opensCount >= maxOpens) {
       const nextAt = Math.ceil(((opensCount + 1) * CHEST_INTERVAL_SEC - totalSeconds) / 60);
-      await interaction.editReply(`📦 次の宝箱まであと **${nextAt}分** のVC接続が必要です（本日${opensCount}回開封済み・累計${Math.floor(totalSeconds / 60)}分）。`);
+      await interaction.editReply(`📦 次の宝箱まであと **${nextAt}分** の酒場接続が必要です（本日${opensCount}回開封済み・累計${Math.floor(totalSeconds / 60)}分）。`);
       return;
     }
   }

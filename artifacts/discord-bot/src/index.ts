@@ -793,12 +793,16 @@ async function getHubSalaryForChannel(
   }
 }
 
+const CHEST_CHANNEL_NAME = "酒場";
+
 async function handleVcLeave(
   guild: VoiceState["guild"],
   userId: string,
   joinedAt: Date,
   /** Hub チャンネルの分給設定。指定時はギルドデフォルト設定の代わりに使用。 */
   hubSalaryOverride?: { ratePerHour: number; minMinutes: number },
+  /** 離脱したチャンネルのID（宝箱時間カウント用）。指定時のみ酒場判定を行う。 */
+  leftChannelId?: string,
 ): Promise<void> {
   try {
     const guildSettings = await getGuildSettings(guild.id);
@@ -843,10 +847,15 @@ async function handleVcLeave(
     logger.error(`[vcsalary] Error paying VC reward for ${userId} in ${guild.id}`, err);
   }
 
-  // 宝箱用の当日累計VC時間を加算（報酬とは独立して常に記録）
+  // 宝箱用の当日累計時間を加算（「酒場」チャンネルのみ）
   try {
-    const seconds = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
-    await addChestVcSeconds(guild.id, userId, seconds);
+    const isIzakaya = leftChannelId
+      ? guild.channels.cache.get(leftChannelId)?.name === CHEST_CHANNEL_NAME
+      : false;
+    if (isIzakaya) {
+      const seconds = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
+      await addChestVcSeconds(guild.id, userId, seconds);
+    }
   } catch (err) {
     logger.error(`[chest] addChestVcSeconds error for ${userId} in ${guild.id}`, err);
   }
@@ -942,7 +951,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         });
         if (presence) {
           const hubSalary = await getHubSalaryForChannel(presence.channelId);
-          await handleVcLeave(guild, userId, presence.joinedAt, hubSalary ?? undefined);
+          await handleVcLeave(guild, userId, presence.joinedAt, hubSalary ?? undefined, presence.channelId);
         }
       })(),
       // Point VC settlement
@@ -993,7 +1002,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           if (wasTracked && !nowTracked) {
             // 報酬対象外に移動 → 精算
             const presence = await clearVcPresence(guild.id, userId).catch(() => undefined);
-            if (presence) await handleVcLeave(guild, userId, presence.joinedAt, oldHubSalary ?? undefined);
+            if (presence) await handleVcLeave(guild, userId, presence.joinedAt, oldHubSalary ?? undefined, oldState.channelId ?? undefined);
           } else if (!wasTracked && nowTracked) {
             // 報酬対象に移動 → 計測開始
             await recordVcJoin(guild.id, userId, newState.channelId!);
