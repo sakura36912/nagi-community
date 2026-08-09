@@ -502,4 +502,40 @@ describe("handleRetentionConfirm – nonce registry + floor guard", () => {
     expect(interaction.deferUpdate).not.toHaveBeenCalled();
     expect(mocks.insert).not.toHaveBeenCalled();
   });
+
+  it("non-admin replaying a sub-30-day confirm button receives the permission error, not the floor error", async () => {
+    // Register a valid nonce with days=5 (below the floor).
+    // The permission check fires BEFORE the nonce lookup and the floor check,
+    // so the non-admin must see the permission error, never the floor error.
+    const { interaction } = registerAndMakeConfirmInteraction({ days: 5, isAdmin: false });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    // Permission gate message contains 管理者; the floor error contains 30
+    expect(replyArg.content).toMatch(/管理者/);
+    expect(replyArg.content).not.toMatch(/30/);
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("admin replaying a sub-30-day confirm button receives the floor error, not the permission error", async () => {
+    // Register a valid nonce with days=5 (below the floor).
+    // An Administrator passes the permission gate but must be stopped by the
+    // defense-in-depth floor check before any DB write occurs.
+    const { interaction } = registerAndMakeConfirmInteraction({ days: 5, isAdmin: true });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    // Floor error contains 30; permission error contains 管理者
+    expect(replyArg.content).toMatch(/30/);
+    expect(replyArg.content).not.toMatch(/管理者/);
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
 });
