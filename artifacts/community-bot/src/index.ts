@@ -70,6 +70,8 @@ import {
   handleRetentionConfirm,
   handleRetentionCancel,
   COMM_ROLEBUTTON_PREFIX,
+  COMM_TICKET_CREATE_PREFIX,
+  handleTicketOpen,
 } from "./commands/index.js";
 
 const token = process.env["COMMUNITY_BOT_TOKEN"];
@@ -667,6 +669,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (id.startsWith(COMM_ROLEBUTTON_PREFIX)) {
         await handleRoleButton(interaction);
+        return;
+      }
+      if (id.startsWith(COMM_TICKET_CREATE_PREFIX)) {
+        await handleTicketOpen(interaction);
         return;
       }
     }

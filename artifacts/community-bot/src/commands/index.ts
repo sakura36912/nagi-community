@@ -57,7 +57,10 @@ import {
   wipeGuildVcSessions,
   getTrackedVcCategoryId,
   setTrackedVcCategoryId,
-
+  getTicketSettings,
+  getTicketPanel,
+  upsertTicketSettings,
+  createTicket,
 } from "../lib/community.js";
 
 // ─── Prefix constants ────────────────────────────────────────────────────────
@@ -77,6 +80,9 @@ export const COMM_BOTSTATUS_REFRESH = "comm:botstatus:refresh";
 export const COMM_RETENTION_CONFIRM_PREFIX = "comm:retention:confirm:";
 export const COMM_RETENTION_CANCEL_PREFIX = "comm:retention:cancel:";
 
+/** Button custom ID prefix for opening a ticket (suffix is an optional panel ID). */
+export const COMM_TICKET_CREATE_PREFIX = "comm:ticket:create:";
+
 /**
  * Server-side expiry registry for short-retention confirmation embeds.
  *
@@ -89,6 +95,141 @@ export const COMM_RETENTION_CANCEL_PREFIX = "comm:retention:cancel:";
  * 60-second timeout fires.
  */
 export const retentionConfirmExpiry = new Map<string, { guildId: string; days: number; expiry: number }>();
+
+// ─── Ticket defaults ─────────────────────────────────────────────────────────
+
+/**
+ * Default values used when no custom welcome message is configured for a guild.
+ * Panel settings override global ticket settings, which override these defaults.
+ */
+export const TICKET_DEFAULTS = {
+  embedTitle: "🎫 サポートチケット",
+  message: "用件をお書きください。スタッフが対応します。",
+} as const;
+
+/**
+ * Resolves the welcome embed title and description from pre-fetched data.
+ * Resolution order (first non-null wins):
+ *   1. Per-panel welcomeEmbedTitle / welcomeMessage (guild-scoped; see caller)
+ *   2. Guild-level ticket settings welcomeEmbedTitle / welcomeMessage
+ *   3. TICKET_DEFAULTS
+ *
+ * Not exported — callers use handleTicketCreate or handleTicketOpen.
+ */
+function buildWelcomeEmbed(
+  settings: { welcomeEmbedTitle?: string | null; welcomeMessage?: string | null } | undefined,
+  panel:    { welcomeEmbedTitle?: string | null; welcomeMessage?: string | null } | undefined,
+): EmbedBuilder {
+  const title =
+    panel?.welcomeEmbedTitle ??
+    settings?.welcomeEmbedTitle ??
+    TICKET_DEFAULTS.embedTitle;
+
+  const description =
+    panel?.welcomeMessage ??
+    settings?.welcomeMessage ??
+    TICKET_DEFAULTS.message;
+
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(description)
+    .setColor(0x5865f2);
+}
+
+/**
+ * Builds the welcome embed posted in a newly created ticket channel.
+ * Exported for unit testing; the production path goes through handleTicketOpen.
+ *
+ * Resolution order (first non-null wins):
+ *   1. Per-panel welcomeEmbedTitle / welcomeMessage (when panelId is provided
+ *      and the panel belongs to guildId — cross-guild panels are ignored)
+ *   2. Guild-level ticket settings welcomeEmbedTitle / welcomeMessage
+ *   3. TICKET_DEFAULTS
+ */
+export async function handleTicketCreate(
+  guildId: string,
+  panelId?: number | null,
+): Promise<EmbedBuilder> {
+  const [settings, rawPanel] = await Promise.all([
+    getTicketSettings(guildId),
+    panelId != null ? getTicketPanel(panelId) : Promise.resolve(undefined),
+  ]);
+
+  // Guild-scope guard: only apply panel overrides when the panel belongs to
+  // the same guild that is opening the ticket.  A panel from another guild
+  // must never influence this guild's welcome embed.
+  const panel = rawPanel?.guildId === guildId ? rawPanel : undefined;
+
+  return buildWelcomeEmbed(settings, panel);
+}
+
+/**
+ * Handles the "open ticket" button click.
+ *
+ * Workflow:
+ *   1. Read ticket settings + optional panel in a single parallel fetch.
+ *   2. Create a private text channel for the user.
+ *   3. Record the ticket in the DB.
+ *   4. Build the welcome embed from the fetched settings (configured
+ *      welcomeEmbedTitle / welcomeMessage, or TICKET_DEFAULTS).
+ *   5. Send the embed as the first message in the new channel.
+ *
+ * The button custom ID must be `${COMM_TICKET_CREATE_PREFIX}<panelId>` where
+ * panelId is an integer, or `${COMM_TICKET_CREATE_PREFIX}` (empty suffix) for
+ * guild-default settings with no panel override.
+ */
+export async function handleTicketOpen(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId || !interaction.guild) {
+    await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+
+  // Parse optional panelId from the button suffix (empty string → null).
+  const suffix = interaction.customId.slice(COMM_TICKET_CREATE_PREFIX.length);
+  const panelId = suffix ? Number(suffix) || null : null;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  // Fetch settings and panel in one round-trip so we don't query the DB twice.
+  const [settings, rawPanel] = await Promise.all([
+    getTicketSettings(guildId),
+    panelId != null ? getTicketPanel(panelId) : Promise.resolve(undefined),
+  ]);
+
+  // Guild-scope guard: ignore panels from other guilds.
+  const panel = rawPanel?.guildId === guildId ? rawPanel : undefined;
+
+  const categoryId = settings?.categoryId ?? null;
+  const prefix     = settings?.channelNamePrefix ?? "ticket";
+
+  // Create the private ticket channel.
+  const channelName = `${prefix}-${interaction.user.username}`.slice(0, 100);
+  const channel = await interaction.guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: categoryId ?? undefined,
+    permissionOverwrites: [
+      { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+      { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+      ...(settings?.staffRoleId
+        ? [{ id: settings.staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] } as OverwriteResolvable]
+        : []),
+    ],
+  });
+
+  // Record the ticket so it can be listed/closed later.
+  await createTicket(guildId, channel.id, userId);
+
+  // Build the welcome embed from the already-fetched settings (no second DB
+  // round-trip) and post it as the first message in the channel.
+  const embed = buildWelcomeEmbed(settings, panel);
+  await channel.send({ embeds: [embed] });
+
+  await interaction.editReply(`✅ チケットを作成しました: <#${channel.id}>`);
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1902,6 +2043,67 @@ const tempvcCommand: Command = {
   },
 };
 
+// ─── /ticket ─────────────────────────────────────────────────────────────────
+
+const ticketCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("ticket")
+    .setDescription("チケットシステムを設定・管理します（管理者用）")
+    .addSubcommand((sub) =>
+      sub
+        .setName("setup")
+        .setDescription("チケットのウェルカムメッセージを設定します")
+        .addStringOption((opt) =>
+          opt
+            .setName("welcome-message")
+            .setDescription("チケット作成時にチャンネルへ投稿するメッセージ本文")
+            .setRequired(false)
+            .setMaxLength(2000),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("embed-title")
+            .setDescription("ウェルカムメッセージのタイトル（省略時はデフォルト値を使用）")
+            .setRequired(false)
+            .setMaxLength(256),
+        ),
+    ),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+
+    if (!requireAdmin(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "setup") {
+      const welcomeMessage = interaction.options.getString("welcome-message");
+      const embedTitle     = interaction.options.getString("embed-title");
+
+      // Only update columns that were explicitly supplied; null leaves the
+      // existing DB value intact (the admin can call setup multiple times to
+      // update individual fields independently).
+      const patch: Record<string, string> = {};
+      if (welcomeMessage !== null) patch["welcomeMessage"]   = welcomeMessage;
+      if (embedTitle      !== null) patch["welcomeEmbedTitle"] = embedTitle;
+
+      await upsertTicketSettings(guildId, patch);
+
+      const lines: string[] = ["✅ チケット設定を更新しました。"];
+      if (embedTitle      !== null) lines.push(`📌 タイトル: **${embedTitle}**`);
+      if (welcomeMessage  !== null) lines.push(`💬 メッセージ: ${welcomeMessage}`);
+      if (embedTitle === null && welcomeMessage === null) {
+        lines.push("（変更なし — オプションを指定して個別に設定してください）");
+      }
+
+      await interaction.reply({ content: lines.join("\n"), ephemeral: true });
+    }
+  },
+};
+
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 import { prebanCommand } from "./preban.js";
@@ -1920,4 +2122,5 @@ export const commands: Command[] = [
   pointCommand,
   tempvcCommand,
   periodicCommand,
+  ticketCommand,
 ];
