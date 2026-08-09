@@ -375,13 +375,13 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       expect(result).toHaveLength(0);
     });
 
-    it("deletes with a userId-only filter (no guildId constraint) for sessions, and also removes the global opt-out row", async () => {
+    it("deletes with a userId-only filter (no guildId constraint) for sessions, removes the global opt-out row, and removes per-guild opt-out rows", async () => {
       store.seed([makeRow("wiped-user", "guild-A")]);
 
       await deleteAllUserVcSessions("wiped-user");
 
-      // Two db.delete calls: first for sessions, second for the global opt-out row.
-      expect(store.del).toHaveBeenCalledTimes(2);
+      // Three db.delete calls: sessions, global opt-out, per-guild opt-out rows.
+      expect(store.del).toHaveBeenCalledTimes(3);
       const tables = store.del.mock.calls.map((c) => c[0] as Record<string, string>);
 
       // First delete must target the sessions table with userId only (no guildId constraint)
@@ -391,6 +391,10 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       // Second delete must target the global opt-out table
       const globalTableArg = tables[1];
       expect(globalTableArg?.["userId"]).toBe("global.userId");
+
+      // Third delete must target the per-guild privacy table (userId-only, all guilds)
+      const privacyTableArg = tables[2];
+      expect(privacyTableArg?.["userId"]).toBe("privacy.userId");
     });
 
     it("returns the count of deleted rows", async () => {
@@ -466,19 +470,92 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       expect(store.getGlobalRows()).toHaveLength(0);
     });
 
-    it("db.delete is called twice — once for sessions, once for global opt-out", async () => {
+    it("db.delete is called three times — once for sessions, once for global opt-out, once for per-guild opt-outs", async () => {
       store.seed([makeRow("wiped-user", "guild-A")]);
       store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+      store.seedPrivacy([{ user_id: "wiped-user", guild_id: "guild-A", opted_out: true }]);
 
       await deleteAllUserVcSessions("wiped-user");
 
-      expect(store.del).toHaveBeenCalledTimes(2);
+      expect(store.del).toHaveBeenCalledTimes(3);
       const tables = store.del.mock.calls.map((c) => {
         const t = c[0] as Record<string, string>;
         return (t["guildId"] ?? t["userId"] ?? "").split(".")[0];
       });
       expect(tables).toContain("sessions");
       expect(tables).toContain("global");
+      expect(tables).toContain("privacy");
+    });
+  });
+
+  // ── Global wipe clears per-guild opt-out rows (clean re-tracking in every guild) ──
+  //
+  // deleteAllUserVcSessions must delete ALL community_vc_privacy rows for the user
+  // (not just the global row) so that isVcTrackingOptedOut returns false for every
+  // guild after the wipe.  Without this step, a user who had per-guild opt-outs would
+  // still be blocked from re-tracking in those guilds even though the global row is gone.
+
+  describe("global wipe clears per-guild opt-out rows (clean re-tracking in every guild)", () => {
+    it("per-guild opt-out row is removed after deleteAllUserVcSessions", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedPrivacy([{ user_id: "wiped-user", guild_id: "guild-A", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      const privacy = store.getPrivacyRows();
+      expect(privacy).toHaveLength(0);
+    });
+
+    it("all per-guild opt-out rows are removed when the user had multiple guild opt-outs", async () => {
+      store.seed([
+        makeRow("wiped-user", "guild-A"),
+        makeRow("wiped-user", "guild-B"),
+      ]);
+      store.seedPrivacy([
+        { user_id: "wiped-user", guild_id: "guild-A", opted_out: true },
+        { user_id: "wiped-user", guild_id: "guild-B", opted_out: true },
+        { user_id: "wiped-user", guild_id: "guild-C", opted_out: true },
+      ]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      expect(store.getPrivacyRows()).toHaveLength(0);
+    });
+
+    it("only the wiped user's per-guild rows are removed; other users' rows survive", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedPrivacy([
+        { user_id: "wiped-user", guild_id: "guild-A", opted_out: true },
+        { user_id: "other-user", guild_id: "guild-A", opted_out: true },
+      ]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      const privacy = store.getPrivacyRows();
+      expect(privacy).toHaveLength(1);
+      expect(privacy[0]).toMatchObject({ user_id: "other-user", guild_id: "guild-A" });
+    });
+
+    it("wipe works cleanly when no per-guild opt-out rows exist for the user", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      // No privacy rows seeded — should not throw and should return correct count.
+
+      await expect(deleteAllUserVcSessions("wiped-user")).resolves.toBe(1);
+      expect(store.getPrivacyRows()).toHaveLength(0);
+    });
+
+    it("both global and per-guild opt-out rows are cleared in a single wipe call", async () => {
+      store.seed([makeRow("wiped-user", "guild-A")]);
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+      store.seedPrivacy([
+        { user_id: "wiped-user", guild_id: "guild-A", opted_out: true },
+        { user_id: "wiped-user", guild_id: "guild-B", opted_out: true },
+      ]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      expect(store.getGlobalRows()).toHaveLength(0);
+      expect(store.getPrivacyRows()).toHaveLength(0);
     });
   });
 
