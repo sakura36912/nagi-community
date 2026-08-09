@@ -1898,7 +1898,7 @@ export function buildChestPanelMessage() {
     .setTitle("🎁 宝箱")
     .setColor(0xF6A623)
     .setDescription(
-      "VC に累計 **1時間** 接続するごとに 1回チャレンジできます。\n" +
+      "VC に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
       "カウントは毎日 **JST 0:00** にリセット。\n\n" +
       "─────────────────────\n" +
       "　✨ **激レア**　→　管理者指定ボイメ\n" +
@@ -1941,15 +1941,16 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
       getTodayChestOpensCount(interaction.guild.id, interaction.user.id),
     ]);
     const totalSeconds = pastSeconds + currentSeconds;
-    const maxOpens = Math.floor(totalSeconds / 3600);
+    const CHEST_INTERVAL_SEC = 300; // 5分ごとに1回
+    const maxOpens = Math.floor(totalSeconds / CHEST_INTERVAL_SEC);
 
     if (maxOpens === 0) {
-      const remaining = Math.ceil((3600 - totalSeconds) / 60);
+      const remaining = Math.ceil((CHEST_INTERVAL_SEC - totalSeconds) / 60);
       await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** のVC接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
       return;
     }
     if (opensCount >= maxOpens) {
-      const nextAt = Math.ceil(((opensCount + 1) * 3600 - totalSeconds) / 60);
+      const nextAt = Math.ceil(((opensCount + 1) * CHEST_INTERVAL_SEC - totalSeconds) / 60);
       await interaction.editReply(`📦 次の宝箱まであと **${nextAt}分** のVC接続が必要です（本日${opensCount}回開封済み・累計${Math.floor(totalSeconds / 60)}分）。`);
       return;
     }
