@@ -205,18 +205,31 @@ export async function handleRolePanelButton(interaction: ButtonInteraction): Pro
   // Fetch member to check current roles
   const member = await interaction.guild.members.fetch(interaction.user.id);
 
-  // Exclusive: reject if already holds any role from this panel
-  const alreadyHas = panelRoleIds.find((rid) => member.roles.cache.has(rid));
-  if (alreadyHas) {
-    await interaction.editReply("❌ すでにこのパネルからロールを選択済みです。変更はできません。");
+  // Toggle: 同じロールを既に持っていれば外す
+  if (member.roles.cache.has(roleId)) {
+    try {
+      await member.roles.remove(roleId);
+      await interaction.editReply(`✅ <@&${roleId}> を外しました。`);
+      logger.info(`[rolepanel] removed user=${interaction.user.id} guild=${interaction.guildId} role=${roleId}`);
+    } catch (err) {
+      logger.error("[rolepanel] role remove failed", err);
+      await interaction.editReply("❌ ロールの削除に失敗しました。Botの権限を確認してください。");
+    }
     return;
   }
 
-  // Assign the chosen role — permanent, no removal
+  // 他のパネルロールを持っている場合は排他制御
+  const alreadyHas = panelRoleIds.find((rid) => rid !== roleId && member.roles.cache.has(rid));
+  if (alreadyHas) {
+    await interaction.editReply("❌ すでにこのパネルから別のロールを選択済みです。先に現在のロールのボタンを押して外してください。");
+    return;
+  }
+
+  // ロールを付与
   try {
     await member.roles.add(roleId);
     await interaction.editReply(`✅ <@&${roleId}> を付与しました。`);
-    logger.info(`[rolepanel] user=${interaction.user.id} guild=${interaction.guildId} role=${roleId}`);
+    logger.info(`[rolepanel] added user=${interaction.user.id} guild=${interaction.guildId} role=${roleId}`);
   } catch (err) {
     logger.error("[rolepanel] role add failed", err);
     await interaction.editReply("❌ ロールの付与に失敗しました。Botの権限を確認してください。");
