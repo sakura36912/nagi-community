@@ -1839,42 +1839,39 @@ export async function handleVcPanelExpiryBtn(interaction: ButtonInteraction): Pr
 // ─── 宝箱 ────────────────────────────────────────────────────────────────────
 
 // 当選確率テーブル（累積）:
-//   miss       45.0%
-//   coin_10k   20.0%
-//   coin_15k   12.0%
-//   coin_20k    8.0%
-//   coin_30k    5.0%
-//   coin_50k    3.0%
-//   role_advice 3.0%
-//   coin_60k    2.0%
-//   role_limited 1.0%
-//   coin_80k    0.7%
-//   role_voime  0.3%
+//   miss         50.0%
+//   coin_15k     20.0%
+//   coin_30k     12.0%
+//   coin_50k      8.0%
+//   coin_60k      4.0%
+//   role_advice   3.0%
+//   coin_80k      1.5%
+//   role_limited  0.7%
+//   coin_100k     0.5%
+//   role_voime    0.3%
 type ChestResult =
   | "miss"
-  | "coin_10k"
   | "coin_15k"
-  | "coin_20k"
   | "coin_30k"
   | "coin_50k"
   | "coin_60k"
   | "coin_80k"
+  | "coin_100k"
   | "role_advice"
   | "role_limited"
   | "role_voime";
 
 function rollChest(): ChestResult {
   const r = Math.random();
-  if (r < 0.45)  return "miss";
-  if (r < 0.65)  return "coin_10k";
-  if (r < 0.77)  return "coin_15k";
-  if (r < 0.85)  return "coin_20k";
-  if (r < 0.90)  return "coin_30k";
-  if (r < 0.93)  return "coin_50k";
-  if (r < 0.96)  return "role_advice";
-  if (r < 0.98)  return "coin_60k";
-  if (r < 0.99)  return "role_limited";
-  if (r < 0.997) return "coin_80k";
+  if (r < 0.50)   return "miss";
+  if (r < 0.70)   return "coin_15k";
+  if (r < 0.82)   return "coin_30k";
+  if (r < 0.90)   return "coin_50k";
+  if (r < 0.94)   return "coin_60k";
+  if (r < 0.97)   return "role_advice";
+  if (r < 0.985)  return "coin_80k";
+  if (r < 0.992)  return "role_limited";
+  if (r < 0.997)  return "coin_100k";
   return "role_voime";
 }
 
@@ -1901,11 +1898,11 @@ export function buildChestPanelMessage() {
       "VC に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
       "カウントは毎日 **JST 0:00** にリセット。\n\n" +
       "─────────────────────\n" +
-      "　✨ **激レア**　→　管理者指定ボイメ\n" +
+      "　✨ **激レア**　→　管理者指定ボイメ / 100,000$\n" +
       "　💎 **超レア**　→　プレオープン限定 / 80,000$\n" +
       "　🌟 **レア**　　→　評価員アドバイス券 / 60,000$\n" +
       "　🎊 **大当たり** →　50,000$\n" +
-      "　🎁 **当たり**　→　10,000$ / 15,000$ / 20,000$ / 30,000$\n" +
+      "　🎁 **当たり**　→　15,000$ / 30,000$\n" +
       "　💨 **ハズレ**　→　なし\n" +
       "─────────────────────",
     )
@@ -1973,13 +1970,12 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   // ── 通貨賞品 ──────────────────────────────────────────────────────────────
   const coinPrizes: Partial<Record<ChestResult, { amount: number; label: string; emoji: string }>> = {
-    coin_10k: { amount: 10_000, label: "当たり",   emoji: "🎁" },
-    coin_15k: { amount: 15_000, label: "当たり",   emoji: "🎁" },
-    coin_20k: { amount: 20_000, label: "当たり",   emoji: "🎁" },
-    coin_30k: { amount: 30_000, label: "当たり",   emoji: "🎁" },
-    coin_50k: { amount: 50_000, label: "大当たり", emoji: "🎊" },
-    coin_60k: { amount: 60_000, label: "レア",     emoji: "🌟" },
-    coin_80k: { amount: 80_000, label: "超レア",   emoji: "💎" },
+    coin_15k:  { amount:  15_000, label: "当たり",   emoji: "🎁" },
+    coin_30k:  { amount:  30_000, label: "当たり",   emoji: "🎁" },
+    coin_50k:  { amount:  50_000, label: "大当たり", emoji: "🎊" },
+    coin_60k:  { amount:  60_000, label: "レア",     emoji: "🌟" },
+    coin_80k:  { amount:  80_000, label: "超レア",   emoji: "💎" },
+    coin_100k: { amount: 100_000, label: "激レア",   emoji: "✨" },
   };
 
   const coin = coinPrizes[result];
