@@ -1851,12 +1851,13 @@ export async function handleVcPanelExpiryBtn(interaction: ButtonInteraction): Pr
 //   role_voime    0.8%
 type ChestResult =
   | "miss"
+  | "coin_10k"
   | "coin_15k"
+  | "coin_20k"
   | "coin_30k"
   | "coin_50k"
   | "coin_60k"
   | "coin_80k"
-  | "coin_100k"
   | "role_advice"
   | "role_limited"
   | "role_voime";
@@ -1895,14 +1896,14 @@ export function buildChestPanelMessage() {
     .setTitle("🎁 宝箱")
     .setColor(0xF6A623)
     .setDescription(
-      "**酒場** に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
+      "VC に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
       "カウントは毎日 **JST 0:00** にリセット。\n\n" +
       "─────────────────────\n" +
-      "　✨ **激レア**　→　管理者指定ボイメ / 100,000$\n" +
+      "　✨ **激レア**　→　管理者指定ボイメ\n" +
       "　💎 **超レア**　→　プレオープン限定 / 80,000$\n" +
       "　🌟 **レア**　　→　評価員アドバイス券 / 60,000$\n" +
       "　🎊 **大当たり** →　50,000$\n" +
-      "　🎁 **当たり**　→　15,000$ / 30,000$\n" +
+      "　🎁 **当たり**　→　10,000$ / 15,000$ / 20,000$ / 30,000$\n" +
       "　💨 **ハズレ**　→　なし\n" +
       "─────────────────────",
     )
@@ -1925,39 +1926,30 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
 
-  const CHEST_CHANNEL_NAME = "酒場";
-  const CHEST_INTERVAL_SEC = 300; // 5分ごとに1回
-
   if (!isAdmin) {
-    // 酒場に接続中か確認
+    // 累積VC時間チェック（過去セッション + 現在セッション）
     const presence = await getVcPresence(interaction.guild.id, interaction.user.id);
-    const currentChannel = presence
-      ? interaction.guild.channels.cache.get(presence.channelId)
-      : undefined;
-    const isInIzakaya = currentChannel?.name === CHEST_CHANNEL_NAME;
-
-    if (!presence || !isInIzakaya) {
-      await interaction.editReply(`❌ **${CHEST_CHANNEL_NAME}** に接続中でないため宝箱を開けられません。`);
+    if (!presence) {
+      await interaction.editReply("❌ VCに接続中でないため宝箱を開けられません。");
       return;
     }
-
-    // 酒場での累積時間のみカウント（現在セッション + 過去セッション）
     const currentSeconds = Math.floor((Date.now() - presence.joinedAt.getTime()) / 1000);
     const [pastSeconds, opensCount] = await Promise.all([
       getTodayChestVcSeconds(interaction.guild.id, interaction.user.id),
       getTodayChestOpensCount(interaction.guild.id, interaction.user.id),
     ]);
     const totalSeconds = pastSeconds + currentSeconds;
+    const CHEST_INTERVAL_SEC = 300; // 5分ごとに1回
     const maxOpens = Math.floor(totalSeconds / CHEST_INTERVAL_SEC);
 
     if (maxOpens === 0) {
       const remaining = Math.ceil((CHEST_INTERVAL_SEC - totalSeconds) / 60);
-      await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** の酒場接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
+      await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** のVC接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
       return;
     }
     if (opensCount >= maxOpens) {
       const nextAt = Math.ceil(((opensCount + 1) * CHEST_INTERVAL_SEC - totalSeconds) / 60);
-      await interaction.editReply(`📦 次の宝箱まであと **${nextAt}分** の酒場接続が必要です（本日${opensCount}回開封済み・累計${Math.floor(totalSeconds / 60)}分）。`);
+      await interaction.editReply(`📦 次の宝箱まであと **${nextAt}分** のVC接続が必要です（本日${opensCount}回開封済み・累計${Math.floor(totalSeconds / 60)}分）。`);
       return;
     }
   }
@@ -1969,30 +1961,23 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   const settings = await getGuildSettings(interaction.guild.id);
   const cn = settings.currencyName;
 
-  /** 「宝箱チャレンジログ」チャンネルにログを投稿する（失敗しても無視） */
-  const postChestLog = (logText: string) => {
-    const logCh = interaction.guild!.channels.cache.find(
-      (c) => c.name === "宝箱チャレンジログ" && c.isTextBased(),
-    ) as import("discord.js").TextChannel | undefined;
-    if (logCh) logCh.send(logText).catch(() => {});
-  };
-
   // ── 通貨賞品 ──────────────────────────────────────────────────────────────
   const coinPrizes: Partial<Record<ChestResult, { amount: number; label: string; emoji: string }>> = {
-    coin_15k:  { amount:  15_000, label: "当たり",   emoji: "🎁" },
-    coin_30k:  { amount:  30_000, label: "当たり",   emoji: "🎁" },
-    coin_50k:  { amount:  50_000, label: "大当たり", emoji: "🎊" },
-    coin_60k:  { amount:  60_000, label: "レア",     emoji: "🌟" },
-    coin_80k:  { amount:  80_000, label: "超レア",   emoji: "💎" },
-    coin_100k: { amount: 100_000, label: "激レア",   emoji: "✨" },
+    coin_10k: { amount: 10_000, label: "当たり",   emoji: "🎁" },
+    coin_15k: { amount: 15_000, label: "当たり",   emoji: "🎁" },
+    coin_20k: { amount: 20_000, label: "当たり",   emoji: "🎁" },
+    coin_30k: { amount: 30_000, label: "当たり",   emoji: "🎁" },
+    coin_50k: { amount: 50_000, label: "大当たり", emoji: "🎊" },
+    coin_60k: { amount: 60_000, label: "レア",     emoji: "🌟" },
+    coin_80k: { amount: 80_000, label: "超レア",   emoji: "💎" },
   };
 
   const coin = coinPrizes[result];
   if (coin) {
     await giveCurrency(interaction.guild.id, interaction.user.id, coin.amount, "treasure-chest");
-    const replyText = `📦 宝箱を開けた！\n\n**${coin.label}** ${coin.emoji} **${coin.amount.toLocaleString()}${cn}** を獲得しました！`;
-    await interaction.editReply(replyText);
-    postChestLog(`${coin.emoji} <@${interaction.user.id}> が宝箱を開けました！ → **${coin.label}** ${coin.amount.toLocaleString()}${cn}`);
+    await interaction.editReply(
+      `📦 宝箱を開けた！\n\n**${coin.label}** ${coin.emoji} **${coin.amount.toLocaleString()}${cn}** を獲得しました！`,
+    );
     return;
   }
 
@@ -2010,13 +1995,11 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
       ? `**${rolePrize.roleName}** ロールを獲得しました！`
       : `**${rolePrize.roleName}** ロールを獲得しました！\n※ このサーバーにロールが存在しないため付与できませんでした。`;
     await interaction.editReply(`📦 宝箱を開けた！\n\n**${rolePrize.label}** ${rolePrize.emoji} ${roleNote}`);
-    postChestLog(`${rolePrize.emoji} <@${interaction.user.id}> が宝箱を開けました！ → **${rolePrize.label}** ${rolePrize.roleName}${rolePrize.roleName === CHEST_ROLE_VOIME ? " 🎉" : ""}`);
     return;
   }
 
   // miss
   await interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。");
-  postChestLog(`💨 <@${interaction.user.id}> が宝箱を開けました → ハズレ`);
 }
 
 export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction): Promise<void> {
