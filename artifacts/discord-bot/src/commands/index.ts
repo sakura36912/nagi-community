@@ -1919,12 +1919,22 @@ export function buildChestPanelMessage() {
   return { embeds: [embed], components: [row] };
 }
 
+/** 宝箱イベント開始日時（JST 2026-08-09 23:00 = UTC 2026-08-09 14:00） */
+const CHEST_START_AT = new Date("2026-08-09T14:00:00Z");
+
 export async function handleChestOpenBtn(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guild) return;
 
   await interaction.deferReply({ ephemeral: true });
 
   const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
+
+  // イベント開始前はブロック（管理者は通過）
+  if (!isAdmin && Date.now() < CHEST_START_AT.getTime()) {
+    const ts = Math.floor(CHEST_START_AT.getTime() / 1000);
+    await interaction.editReply(`🔒 宝箱イベントは <t:${ts}:F> に開始します。もう少しお待ちください！`);
+    return;
+  }
 
   if (!isAdmin) {
     // 累積VC時間チェック（過去セッション + 現在セッション）
