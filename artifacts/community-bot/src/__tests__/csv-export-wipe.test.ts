@@ -442,6 +442,51 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
 
       expect(count).toBe(0);
     });
+
+    it("global wipe removes an active (open) session and export returns 0 rows across all guilds", async () => {
+      // Seed only an open session (left_at = null) — the user is still in VC at wipe time.
+      store.seed([
+        makeRow("wiped-user", "guild-A", { leftAt: null }),
+        makeRow("wiped-user", "guild-B", { leftAt: null }),
+      ]);
+
+      const count = await deleteAllUserVcSessions("wiped-user");
+
+      // Both active rows must have been deleted (no guildId guard on the global wipe).
+      expect(count).toBe(2);
+
+      // The export must return 0 rows for every guild — the active rows are gone,
+      // not merely excluded by the left_at IS NOT NULL export filter.
+      const [a, b] = await Promise.all([
+        getAllTempVcDeletions("guild-A", { userId: "wiped-user" }),
+        getAllTempVcDeletions("guild-B", { userId: "wiped-user" }),
+      ]);
+      expect(a).toHaveLength(0);
+      expect(b).toHaveLength(0);
+
+      // The underlying store must be empty — no row can later become exportable.
+      expect(store.getSessions().filter((r) => r.user_id === "wiped-user")).toHaveLength(0);
+    });
+
+    it("global wipe removes a session that was closed immediately before the wipe and export returns 0 rows", async () => {
+      // Seed an open session — user is in VC.
+      store.seed([makeRow("wiped-user", "guild-A", { leftAt: null })]);
+
+      // The user leaves (closeSession stamps left_at) — the row becomes completed.
+      await closeSession("guild-A", "wiped-user");
+
+      // Sanity: the completed row now appears in the export.
+      const before = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
+      expect(before).toHaveLength(1);
+
+      // The global wipe is then invoked.
+      const count = await deleteAllUserVcSessions("wiped-user");
+      expect(count).toBe(1); // the completed row was deleted
+
+      // Export must now return 0 rows — the completed row was hard-deleted by the wipe.
+      const after = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
+      expect(after).toHaveLength(0);
+    });
   });
 
   // ── Global wipe clears the global opt-out row (clean re-tracking) ───────
