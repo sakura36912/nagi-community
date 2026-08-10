@@ -214,11 +214,6 @@ function buildResultEmbed(
         value: `${sign}${netDelta.toLocaleString()} ${game.currencyName}`,
         inline: true,
       },
-      {
-        name: "残高",
-        value: `${finalBalance.toLocaleString()} ${game.currencyName}`,
-        inline: true,
-      },
     )
     .setTimestamp();
 }
