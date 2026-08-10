@@ -109,4 +109,27 @@ describe("runPerGuildVcPrune", () => {
     expect(pruneGuild).toHaveBeenCalledWith("guild-ok", 90);
     expect(pruneGuild).not.toHaveBeenCalledWith("guild-bad", expect.anything());
   });
+
+  it("continues pruning remaining guilds when pruneGuild itself throws for one guild", async () => {
+    getRetentionDays.mockResolvedValue(90);
+
+    // pruneGuild throws a DB connection failure for the first guild.
+    pruneGuild.mockImplementation(async (guildId: string) => {
+      if (guildId === "guild-failing") throw new Error("DB connection failure");
+      return 0;
+    });
+
+    // Should not throw — error is caught per-guild.
+    await expect(
+      runPerGuildVcPrune(
+        ["guild-failing", "guild-ok-1", "guild-ok-2"],
+        getRetentionDays,
+        pruneGuild,
+      ),
+    ).resolves.toBeUndefined();
+
+    // Both healthy guilds must be pruned despite guild-failing throwing.
+    expect(pruneGuild).toHaveBeenCalledWith("guild-ok-1", 90);
+    expect(pruneGuild).toHaveBeenCalledWith("guild-ok-2", 90);
+  });
 });
