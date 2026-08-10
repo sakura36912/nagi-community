@@ -87,7 +87,7 @@ import {
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds } from "../lib/vcReward";
 import { getCurrentTavernSeconds } from "../lib/chestTracker";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
-import { gte, lt, and, eq, sql as drizzleSql } from "drizzle-orm";
+import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -2291,7 +2291,7 @@ const chestCommand: Command = {
       const rangeStart = new Date(rangeEnd.getTime()  - 86_400_000);        // 昨日 0:00 JST
 
       // vc_session_logs から昨日の酒場セッションを集計（両チャンネル合算）
-      const tavernIds = tavernChannels.map((ch) => ch.id);
+      const tavernIds = [...tavernChannels.values()].map((ch) => ch.id);
       const rows = await db
         .select({
           userId:       vcSessionLogsTable.userId,
@@ -2301,7 +2301,7 @@ const chestCommand: Command = {
         .where(
           and(
             eq(vcSessionLogsTable.guildId, interaction.guildId),
-            drizzleSql`${vcSessionLogsTable.channelId} = ANY(ARRAY[${drizzleSql.join(tavernIds.map((id) => drizzleSql`${id}`), drizzleSql`, `)}]::text[])`,
+            inArray(vcSessionLogsTable.channelId, tavernIds),
             gte(vcSessionLogsTable.joinedAt, rangeStart),
             lt(vcSessionLogsTable.joinedAt,  rangeEnd),
           ),
