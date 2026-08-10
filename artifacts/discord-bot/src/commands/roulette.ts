@@ -77,11 +77,41 @@ interface ResolveResult {
   betDesc: string;
 }
 
+// ─── Animation helpers ────────────────────────────────────────────────────────
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function randNum(): number { return Math.floor(Math.random() * 37); }
+
+/** 5枠のホイール表示。centerIdx（デフォルト2）が選択位置。 */
+function wheelRow(nums: number[], centerIdx = 2): string {
+  return nums
+    .map((n, i) => {
+      const c = numColor(n);
+      return i === centerIdx
+        ? `**｢ ${c} ${n} ｣**`
+        : `${c} ${n}`;
+    })
+    .join("  ·  ");
+}
+
+function randomWheelNums(): number[] {
+  return Array.from({ length: 5 }, () => randNum());
+}
+
+function spinningEmbed(row: string, status: string): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle("🎡 ルーレット")
+    .setDescription(`-# ${status}\n\n${row}\n`)
+    .setColor(COLOR_NEUTRAL);
+}
+
 // ─── Core handler ─────────────────────────────────────────────────────────────
 
 async function playRoulette(
   interaction: ChatInputCommandInteraction,
   bet: number,
+  landed: number,          // 各ハンドラで事前決定済み
   result: ResolveResult,
 ): Promise<void> {
   const { guildId } = interaction;
@@ -107,13 +137,35 @@ async function playRoulette(
     return;
   }
 
-  // スピン演出のため deferReply
   await interaction.deferReply();
 
-  // ルーレットを回す
-  const landed = spin();
-  const landedColor = numColor(landed);
+  // ── アニメーション ──────────────────────────────────────────────
+  // 高速スピン（ランダム数字）
+  for (let i = 0; i < 4; i++) {
+    await interaction.editReply({
+      embeds: [spinningEmbed(wheelRow(randomWheelNums()), "🔄 スピン中...")],
+    });
+    await sleep(420);
+  }
+  // 減速（結果が端に現れる）
+  await interaction.editReply({
+    embeds: [spinningEmbed(
+      wheelRow([randNum(), randNum(), randNum(), randNum(), landed]),
+      "📉 速度が落ちています...",
+    )],
+  });
+  await sleep(650);
+  // ほぼ停止（結果が中央近くに）
+  await interaction.editReply({
+    embeds: [spinningEmbed(
+      wheelRow([randNum(), landed, randNum(), randNum(), randNum()], 1),
+      "🛑 もうすぐ止まります...",
+    )],
+  });
+  await sleep(900);
+  // ──────────────────────────────────────────────────────────────
 
+  // 決済
   let netDelta: number;
   if (result.win) {
     const winnings = bet * result.multiplier;
@@ -129,9 +181,14 @@ async function playRoulette(
   }
 
   const sign = netDelta > 0 ? "+" : "";
+  const landedColor = numColor(landed);
+
   const embed = new EmbedBuilder()
     .setTitle(`🎡 ルーレット — ${result.win ? "✅ 勝利！" : "❌ 敗北"}`)
     .setColor(result.win ? COLOR_WIN : COLOR_LOSE)
+    .setDescription(
+      wheelRow([randNum(), randNum(), landed, randNum(), randNum()]),
+    )
     .addFields(
       {
         name: "ボールが止まった数字",
@@ -159,7 +216,7 @@ async function handleNumber(interaction: ChatInputCommandInteraction): Promise<v
 
   const landed = spin();
   const win = landed === target;
-  await playRoulette(interaction, bet, {
+  await playRoulette(interaction, bet, landed, {
     win,
     multiplier: 35,
     betDesc: `ストレートアップ **${target}**（${numColor(target)}）`,
@@ -174,7 +231,7 @@ async function handleColor(interaction: ChatInputCommandInteraction): Promise<vo
   const isRed  = RED_NUMBERS.has(landed);
   const win    = (color === "red" && isRed) || (color === "black" && !isRed && landed !== 0);
   const label  = color === "red" ? "🔴 レッド" : "⚫ ブラック";
-  await playRoulette(interaction, bet, { win, multiplier: 1, betDesc: label });
+  await playRoulette(interaction, bet, landed, { win, multiplier: 1, betDesc: label });
 }
 
 async function handleParity(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -184,7 +241,7 @@ async function handleParity(interaction: ChatInputCommandInteraction): Promise<v
   const landed = spin();
   const win    = landed !== 0 && (parity === "odd" ? landed % 2 === 1 : landed % 2 === 0);
   const label  = parity === "odd" ? "🔢 オッド（奇数）" : "🔢 イーブン（偶数）";
-  await playRoulette(interaction, bet, { win, multiplier: 1, betDesc: label });
+  await playRoulette(interaction, bet, landed, { win, multiplier: 1, betDesc: label });
 }
 
 async function handleHalf(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -194,7 +251,7 @@ async function handleHalf(interaction: ChatInputCommandInteraction): Promise<voi
   const landed = spin();
   const win    = landed !== 0 && (range === "low" ? landed <= 18 : landed >= 19);
   const label  = range === "low" ? "📉 ロー（1〜18）" : "📈 ハイ（19〜36）";
-  await playRoulette(interaction, bet, { win, multiplier: 1, betDesc: label });
+  await playRoulette(interaction, bet, landed, { win, multiplier: 1, betDesc: label });
 }
 
 async function handleDozen(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -206,7 +263,7 @@ async function handleDozen(interaction: ChatInputCommandInteraction): Promise<vo
   const [lo, hi] = ranges[dozen];
   const win      = landed >= lo && landed <= hi;
   const label    = `🎰 ダズン ${dozen}（${lo}〜${hi}）`;
-  await playRoulette(interaction, bet, { win, multiplier: 2, betDesc: label });
+  await playRoulette(interaction, bet, landed, { win, multiplier: 2, betDesc: label });
 }
 
 // ─── Command export ───────────────────────────────────────────────────────────
