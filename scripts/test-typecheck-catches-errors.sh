@@ -28,6 +28,12 @@ probe_file() {
   local TARGET="$1"
   local BACKUP="${TARGET}.bak"
 
+  if [ ! -f "$TARGET" ]; then
+    echo "[typecheck-guard] FAIL: probe target not found: $TARGET" >&2
+    echo "[typecheck-guard] Rename or deletion of this file must be reflected in this guard script." >&2
+    exit 1
+  fi
+
   cleanup_probe() {
     if [ -f "$BACKUP" ]; then
       mv "$BACKUP" "$TARGET"
