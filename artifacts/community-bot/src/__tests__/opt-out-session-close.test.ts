@@ -2093,3 +2093,137 @@ describe("handlePrivacyAdminDeleteCancel – admin cancel button permission guar
     expect(mocks.update).not.toHaveBeenCalled();
   });
 });
+
+// ─── isVcTrackingOptedOut – parallel query execution ─────────────────────────
+//
+// isVcTrackingOptedOut uses Promise.all to fire the global-table select and the
+// per-guild-table select simultaneously.  These tests verify that concurrency
+// contract by controlling when each query resolves and asserting that both
+// queries are *initiated* before either *resolves*.
+//
+// If the implementation were accidentally changed to await the queries in
+// series (e.g. `await globalQuery; await guildQuery;`), the second test would
+// catch it: after a single microtask tick the second `selectWhere` mock would
+// not yet have been called, causing the assertion to fail.
+
+describe("isVcTrackingOptedOut – parallel query execution", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("initiates both DB selects before either resolves (Promise.all concurrency contract)", async () => {
+    // Track which query was initiated and in what order.
+    const initiated: string[] = [];
+
+    // Deferred handles so we control exactly when each query promise resolves.
+    let resolveGlobal!: (value: unknown[]) => void;
+    let resolveGuild!: (value: unknown[]) => void;
+    const globalPending = new Promise<unknown[]>((res) => { resolveGlobal = res; });
+    const guildPending  = new Promise<unknown[]>((res) => { resolveGuild  = res; });
+
+    // First call → global table query; second call → per-guild table query.
+    mocks.selectWhere
+      .mockImplementationOnce(() => {
+        initiated.push("global");
+        return globalPending;
+      })
+      .mockImplementationOnce(() => {
+        initiated.push("guild");
+        return guildPending;
+      });
+
+    // Start the function but don't await — we want to inspect state mid-flight.
+    const pending = isVcTrackingOptedOut("guild-par-1", "user-par-1");
+
+    // Flush exactly one microtask tick.  In the parallel (correct) implementation
+    // Promise.all initiates both queries synchronously before any .then()
+    // callback fires, so both selectWhere mocks should already have been called.
+    await Promise.resolve();
+
+    expect(initiated).toContain("global");
+    expect(initiated).toContain("guild");
+
+    // Let both queries settle so the overall promise can resolve cleanly.
+    resolveGlobal([]);
+    resolveGuild([]);
+    await pending;
+  });
+
+  it("the second select is NOT gated on the first resolving (catches a serialised implementation)", async () => {
+    // Arrange: the first query is held open indefinitely during the assertion
+    // window.  If the implementation were serial, the second selectWhere mock
+    // would not be called until the first resolves — the assertion below would
+    // then catch the regression.
+    const initiated: string[] = [];
+
+    let resolveFirst!:  (value: unknown[]) => void;
+    let resolveSecond!: (value: unknown[]) => void;
+    const firstHeld   = new Promise<unknown[]>((res) => { resolveFirst  = res; });
+    const secondReady = new Promise<unknown[]>((res) => { resolveSecond = res; });
+
+    mocks.selectWhere
+      .mockImplementationOnce(() => {
+        initiated.push("first");
+        return firstHeld;   // deliberately does not resolve yet
+      })
+      .mockImplementationOnce(() => {
+        initiated.push("second");
+        return secondReady;
+      });
+
+    const pending = isVcTrackingOptedOut("guild-par-2", "user-par-2");
+
+    // After one microtask tick the second select must already be in-flight even
+    // though the first query has not yet resolved.  A serial implementation
+    // would only have "first" in the array at this point.
+    await Promise.resolve();
+    expect(initiated).toEqual(["first", "second"]);
+
+    // Resolve both so the function can finish.
+    resolveFirst([]);
+    resolveSecond([]);
+    await pending;
+  });
+
+  it("returns false when both tables return no rows (no opt-out active)", async () => {
+    mocks.selectWhere.mockResolvedValueOnce([]); // global → no row
+    mocks.selectWhere.mockResolvedValueOnce([]); // per-guild → no row
+
+    const result = await isVcTrackingOptedOut("guild-par-3", "user-par-3");
+    expect(result).toBe(false);
+  });
+
+  it("returns true when only the global row has optedOut=true (global wins)", async () => {
+    mocks.selectWhere.mockResolvedValueOnce([{ userId: "user-par-4", optedOut: true }]); // global
+    mocks.selectWhere.mockResolvedValueOnce([]); // per-guild → no row
+
+    const result = await isVcTrackingOptedOut("guild-par-4", "user-par-4");
+    expect(result).toBe(true);
+  });
+
+  it("returns true when only the per-guild row has optedOut=true (global absent)", async () => {
+    mocks.selectWhere.mockResolvedValueOnce([]); // global → no row
+    mocks.selectWhere.mockResolvedValueOnce([{ guildId: "guild-par-5", userId: "user-par-5", optedOut: true }]);
+
+    const result = await isVcTrackingOptedOut("guild-par-5", "user-par-5");
+    expect(result).toBe(true);
+  });
+
+  it("returns false when per-guild row exists but optedOut=false (and global absent)", async () => {
+    mocks.selectWhere.mockResolvedValueOnce([]); // global → no row
+    mocks.selectWhere.mockResolvedValueOnce([{ guildId: "guild-par-6", userId: "user-par-6", optedOut: false }]);
+
+    const result = await isVcTrackingOptedOut("guild-par-6", "user-par-6");
+    expect(result).toBe(false);
+  });
+
+  it("calls db.select() exactly twice — one per table — for each invocation", async () => {
+    mocks.selectWhere.mockResolvedValueOnce([]);
+    mocks.selectWhere.mockResolvedValueOnce([]);
+
+    await isVcTrackingOptedOut("guild-par-7", "user-par-7");
+
+    // Two selects: one for communityVcPrivacyGlobalTable, one for communityVcPrivacyTable
+    expect(mocks.select).toHaveBeenCalledTimes(2);
+  });
+});
