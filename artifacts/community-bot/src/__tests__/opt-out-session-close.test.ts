@@ -2283,3 +2283,106 @@ describe("openSession – privacy check DB failure (fail-closed)", () => {
     ).resolves.toBeNull();
   });
 });
+
+// ─── setVcGlobalPrivacyOptOut – cold-start opt-out path (optedOut=true) ───────
+//
+// A user who has never touched the global opt-out setting has no row in
+// communityVcPrivacyGlobalTable. Calling setVcGlobalPrivacyOptOut(userId, true)
+// must succeed on the very first call: it takes the INSERT branch of the upsert
+// (no conflict), stores optedOut=true, and MUST call closeOpenSessionsForUser
+// (the session-close path is only for optedOut=true).
+
+describe("setVcGlobalPrivacyOptOut – cold-start opt-out path (optedOut=true)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 0 when the user has no prior global opt-out row and no open sessions", async () => {
+    // No pre-existing row → INSERT branch; onConflictDoUpdate resolves without conflict.
+    // closeOpenSessionsForUser finds no open sessions → returning resolves to [].
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    const result = await setVcGlobalPrivacyOptOut("user-ct-1", true);
+
+    expect(result).toBe(0);
+  });
+
+  it("returns the number of sessions closed when open sessions existed", async () => {
+    // INSERT branch succeeds; closeOpenSessionsForUser closes 2 sessions.
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+
+    const result = await setVcGlobalPrivacyOptOut("user-ct-2", true);
+
+    expect(result).toBe(2);
+  });
+
+  it("calls db.insert() with optedOut: true (persists the cold-start row)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    await setVcGlobalPrivacyOptOut("user-ct-3", true);
+
+    // db.insert() must have been called exactly once
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+
+    // The values() payload must carry optedOut: true and the correct userId
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.userId).toBe("user-ct-3");
+    expect(valuesArg.optedOut).toBe(true);
+  });
+
+  it("calls db.update() (closeOpenSessionsForUser IS invoked on opt-out path)", async () => {
+    // The opt-out=true path must always call closeOpenSessionsForUser, even
+    // when there is no pre-existing global row.
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    await setVcGlobalPrivacyOptOut("user-ct-4", true);
+
+    // db.update() is only used by closeOpenSessionsForUser
+    expect(mocks.update).toHaveBeenCalled();
+  });
+
+  it("targets the global table (insert must reach communityVcPrivacyGlobalTable)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    await setVcGlobalPrivacyOptOut("user-ct-5", true);
+
+    // The table stub passed to db.insert() must be communityVcPrivacyGlobalTable
+    // (the proxy returns "global.<prop>" for every property on that stub).
+    const [tableArg] = mocks.insert.mock.calls[0] as unknown as [Record<string, string>];
+    expect(tableArg["userId"]).toBe("global.userId");
+  });
+
+  it("closeOpenSessionsForUser stamps leftAt with a Date on the vc sessions table", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([{ id: 7 }]);
+
+    const before = Date.now();
+    await setVcGlobalPrivacyOptOut("user-ct-6", true);
+    const after = Date.now();
+
+    // The set() payload inside closeOpenSessionsForUser must carry a leftAt Date
+    const [setPayload] = mocks.set.mock.calls[0] as unknown as [{ leftAt: Date }];
+    expect(setPayload.leftAt).toBeInstanceOf(Date);
+    expect(setPayload.leftAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(setPayload.leftAt.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it("onConflictDoUpdate payload also carries optedOut: true (update branch is consistent)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+
+    await setVcGlobalPrivacyOptOut("user-ct-7", true);
+
+    const [conflictArg] = mocks.onConflictDoUpdate.mock.calls[0] as unknown as [
+      { set: { optedOut: boolean } }
+    ];
+    expect(conflictArg.set.optedOut).toBe(true);
+  });
+});
