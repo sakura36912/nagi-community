@@ -2,6 +2,7 @@ import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayInt
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
 import { handlePokerButton, POKER_PREFIX } from "./commands/poker";
+import { handleRouletteInteraction, ROULETTE_PREFIX } from "./commands/roulette";
 import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
 import { EmbedBuilder } from "discord.js";
 import {
@@ -1378,6 +1379,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(POKER_PREFIX)) {
       await handlePokerButton(interaction);
+      return;
+    }
+
+    if (
+      (interaction.isButton() || interaction.isStringSelectMenu()) &&
+      interaction.customId.startsWith(ROULETTE_PREFIX)
+    ) {
+      await handleRouletteInteraction(interaction as Parameters<typeof handleRouletteInteraction>[0]);
       return;
     }
 

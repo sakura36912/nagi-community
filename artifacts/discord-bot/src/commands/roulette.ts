@@ -1,32 +1,37 @@
 /**
  * /roulette — ヨーロピアンルーレット（0〜36、シングルゼロ）
  *
- * サブコマンド:
- *   number  — ストレートアップ（特定の数字）  35x
- *   color   — レッド / ブラック              1x
- *   parity  — オッド / イーブン              1x
- *   half    — ロー (1-18) / ハイ (19-36)    1x
- *   dozen   — 1〜12 / 13〜24 / 25〜36       2x
+ * フロー:
+ *   1. /roulette <bet> → 賭け方選択UI（ボタン10個）
+ *   2. 色・奇偶・ロー/ハイ・ダズン → 即スピン
+ *   3. 「数字を選ぶ」→ 0〜36 セレクトメニュー表示 → スピン
  */
 
 import {
+  ActionRowBuilder,
   AttachmentBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   EmbedBuilder,
   MessageFlags,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
+  type StringSelectMenuInteraction,
 } from "discord.js";
-import { generateRouletteGif } from "../lib/rouletteWheel";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
+import { generateRouletteGif } from "../lib/rouletteWheel";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MIN_BET = 10;
-const MAX_BET = 100_000;
+const MIN_BET       = 10;
+const MAX_BET       = 100_000;
+const SESSION_TTL   = 3 * 60 * 1000; // 3分
 
-// ヨーロピアン・ルーレットの赤い数字
 const RED_NUMBERS = new Set([
   1, 3, 5, 7, 9, 12, 14, 16, 18,
   19, 21, 23, 25, 27, 30, 32, 34, 36,
@@ -35,12 +40,92 @@ const RED_NUMBERS = new Set([
 const COLOR_NEUTRAL = 0x5865f2;
 const COLOR_WIN     = 0x57f287;
 const COLOR_LOSE    = 0xed4245;
-const COLOR_PUSH    = 0xfee75c; // 使わないが保留
 
-// 数字 → 色絵文字
+export const ROULETTE_PREFIX = "rlt:";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function numColor(n: number): string {
   if (n === 0) return "🟢";
   return RED_NUMBERS.has(n) ? "🔴" : "⚫";
+}
+
+function spin(): number { return Math.floor(Math.random() * 37); }
+
+// ─── Session management ───────────────────────────────────────────────────────
+
+interface RouletteSession {
+  guildId: string;
+  userId: string;
+  bet: number;
+  currencyName: string;
+  expiresAt: number;
+}
+
+const sessions = new Map<string, RouletteSession>();
+const sKey = (guildId: string, userId: string) => `${guildId}:${userId}`;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, s] of sessions) if (s.expiresAt < now) sessions.delete(k);
+}, 60_000);
+
+// ─── UI builders ──────────────────────────────────────────────────────────────
+
+function betTypeComponents() {
+  const r1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("rlt:color:red")  .setLabel("レッド")     .setEmoji("🔴").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("rlt:color:black").setLabel("ブラック")   .setEmoji("⚫").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("rlt:par:odd")    .setLabel("奇数")       .setEmoji("🔢").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("rlt:par:even")   .setLabel("偶数")       .setEmoji("🔢").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("rlt:numsel")     .setLabel("数字を選ぶ") .setEmoji("🎯").setStyle(ButtonStyle.Primary),
+  );
+  const r2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("rlt:half:low")  .setLabel("ロー  1〜18") .setEmoji("📉").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("rlt:half:high") .setLabel("ハイ 19〜36") .setEmoji("📈").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("rlt:doz:1")     .setLabel("1〜12")       .setEmoji("1️⃣").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("rlt:doz:2")     .setLabel("13〜24")      .setEmoji("2️⃣").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("rlt:doz:3")     .setLabel("25〜36")      .setEmoji("3️⃣").setStyle(ButtonStyle.Secondary),
+  );
+  return [r1, r2];
+}
+
+function numberSelectComponents() {
+  // 0〜24 (25件) と 25〜36 (12件) で2つのセレクトメニューに分割
+  const mkOpt = (n: number) =>
+    new StringSelectMenuOptionBuilder()
+      .setLabel(String(n))
+      .setValue(String(n))
+      .setEmoji(numColor(n))
+      .setDescription(n === 0 ? "グリーン" : RED_NUMBERS.has(n) ? "レッド" : "ブラック");
+
+  const lo = new StringSelectMenuBuilder()
+    .setCustomId("rlt:num:lo")
+    .setPlaceholder("0〜24 から選ぶ")
+    .addOptions(Array.from({ length: 25 }, (_, i) => mkOpt(i)));
+
+  const hi = new StringSelectMenuBuilder()
+    .setCustomId("rlt:num:hi")
+    .setPlaceholder("25〜36 から選ぶ")
+    .addOptions(Array.from({ length: 12 }, (_, i) => mkOpt(i + 25)));
+
+  const back = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("rlt:back").setLabel("← 戻る").setStyle(ButtonStyle.Secondary),
+  );
+
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(lo),
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(hi),
+    back,
+  ];
+}
+
+function selectionEmbed(session: RouletteSession, title = "何に賭けますか？"): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle("🎡 ルーレット")
+    .setDescription(`賭け金: **${session.bet.toLocaleString()}** ${session.currencyName}\n\n${title}`)
+    .setColor(COLOR_NEUTRAL)
+    .setFooter({ text: "配当: 数字×35 | 色/奇偶/ロー・ハイ×1 | ダズン×2 | 0は全て外れ | 3分でタイムアウト" });
 }
 
 // ─── Balance helpers ──────────────────────────────────────────────────────────
@@ -67,38 +152,17 @@ async function creditAmount(guildId: string, userId: string, amount: number) {
   return row?.balance ?? 0;
 }
 
-// ─── Spin & resolve ──────────────────────────────────────────────────────────
-
-function spin(): number {
-  return Math.floor(Math.random() * 37); // 0〜36
-}
-
-interface ResolveResult {
-  win: boolean;
-  multiplier: number; // 0 = lose, 1 = 1x, 2 = 2x, 35 = 35x
-  betDesc: string;
-}
-
 // ─── Animation helpers ────────────────────────────────────────────────────────
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function randNum(): number { return Math.floor(Math.random() * 37); }
 
-/** 5枠のホイール表示。centerIdx（デフォルト2）が選択位置。 */
-function wheelRow(nums: number[], centerIdx = 2): string {
-  return nums
-    .map((n, i) => {
-      const c = numColor(n);
-      return i === centerIdx
-        ? `**｢ ${c} ${n} ｣**`
-        : `${c} ${n}`;
-    })
-    .join("  ·  ");
-}
-
-function randomWheelNums(): number[] {
-  return Array.from({ length: 5 }, () => randNum());
+function wheelRow(nums: number[], ci = 2): string {
+  return nums.map((n, i) => {
+    const c = numColor(n);
+    return i === ci ? `**｢ ${c} ${n} ｣**` : `${c} ${n}`;
+  }).join("  ·  ");
 }
 
 function spinningEmbed(row: string, status: string): EmbedBuilder {
@@ -108,66 +172,70 @@ function spinningEmbed(row: string, status: string): EmbedBuilder {
     .setColor(COLOR_NEUTRAL);
 }
 
-// ─── Core handler ─────────────────────────────────────────────────────────────
+// ─── Resolve helpers ──────────────────────────────────────────────────────────
 
-async function playRoulette(
-  interaction: ChatInputCommandInteraction,
-  bet: number,
-  landed: number,          // 各ハンドラで事前決定済み
+interface ResolveResult { win: boolean; multiplier: number; betDesc: string }
+
+function resolveColor(landed: number, color: "red" | "black"): ResolveResult {
+  const isRed = RED_NUMBERS.has(landed);
+  const win = color === "red" ? isRed : (!isRed && landed !== 0);
+  return { win, multiplier: 1, betDesc: color === "red" ? "🔴 レッド" : "⚫ ブラック" };
+}
+function resolveParity(landed: number, p: "odd" | "even"): ResolveResult {
+  const win = landed !== 0 && (p === "odd" ? landed % 2 === 1 : landed % 2 === 0);
+  return { win, multiplier: 1, betDesc: p === "odd" ? "🔢 オッド（奇数）" : "🔢 イーブン（偶数）" };
+}
+function resolveHalf(landed: number, r: "low" | "high"): ResolveResult {
+  const win = landed !== 0 && (r === "low" ? landed <= 18 : landed >= 19);
+  return { win, multiplier: 1, betDesc: r === "low" ? "📉 ロー（1〜18）" : "📈 ハイ（19〜36）" };
+}
+function resolveDozen(landed: number, d: 1 | 2 | 3): ResolveResult {
+  const [lo, hi] = ({ 1: [1,12], 2: [13,24], 3: [25,36] } as Record<number,[number,number]>)[d];
+  return { win: landed >= lo && landed <= hi, multiplier: 2, betDesc: `🎰 ダズン${d}（${lo}〜${hi}）` };
+}
+function resolveNumber(landed: number, target: number): ResolveResult {
+  return { win: landed === target, multiplier: 35, betDesc: `🎯 **${target}**（${numColor(target)}）` };
+}
+
+// ─── Spin runner ──────────────────────────────────────────────────────────────
+
+async function runSpin(
+  interaction: ButtonInteraction | StringSelectMenuInteraction,
+  session: RouletteSession,
+  landed: number,
   result: ResolveResult,
 ): Promise<void> {
-  const { guildId } = interaction;
-  if (!guildId) return;
-  const userId = interaction.user.id;
+  const { guildId, userId, bet, currencyName } = session;
+  sessions.delete(sKey(guildId, userId));
 
-  const [, { currencyName }] = await Promise.all([
-    getOrCreateWallet(guildId, userId),
-    getGuildSettings(guildId),
-  ]);
-
+  // ベット控除 — deferUpdate より先に実行してエラーを早期返却
   const afterDeduct = await deductBet(guildId, userId, bet);
   if (!afterDeduct) {
     await interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🎡 ルーレット")
-          .setDescription("❌ 残高が不足しています。")
-          .setColor(COLOR_LOSE),
-      ],
+      content: "❌ 残高が不足しています。",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  await interaction.deferReply();
+  await interaction.deferUpdate();
 
-  // GIF生成をテキストアニメーションと並行実行（約1.1秒）
+  // GIF生成をアニメーションと並行実行
   const gifPromise = generateRouletteGif(landed).catch(() => null);
 
-  // ── テキストアニメーション（GIF生成の待ち時間を活用）──────────────
   for (let i = 0; i < 4; i++) {
-    await interaction.editReply({
-      embeds: [spinningEmbed(wheelRow(randomWheelNums()), "🔄 スピン中...")],
-    });
+    await interaction.editReply({ embeds: [spinningEmbed(wheelRow(Array.from({length:5},()=>randNum())), "🔄 スピン中...")], components: [] });
     await sleep(420);
   }
   await interaction.editReply({
-    embeds: [spinningEmbed(
-      wheelRow([randNum(), randNum(), randNum(), randNum(), landed]),
-      "📉 速度が落ちています...",
-    )],
+    embeds: [spinningEmbed(wheelRow([randNum(), randNum(), randNum(), randNum(), landed]), "📉 速度が落ちています...")],
   });
   await sleep(650);
   await interaction.editReply({
-    embeds: [spinningEmbed(
-      wheelRow([randNum(), landed, randNum(), randNum(), randNum()], 1),
-      "🛑 もうすぐ止まります...",
-    )],
+    embeds: [spinningEmbed(wheelRow([randNum(), landed, randNum(), randNum(), randNum()], 1), "🛑 もうすぐ止まります...")],
   });
   await sleep(900);
-  // ──────────────────────────────────────────────────────────────
 
-  // GIF完成を待つ（この時点でほぼ確実に終わっている）
   const gifBuffer = await gifPromise;
 
   // 決済
@@ -179,193 +247,139 @@ async function playRoulette(
   } else {
     netDelta = -bet;
   }
-
   if (netDelta !== 0) {
-    const reason = `ルーレット ${result.betDesc}（賭け: ${bet}）`;
-    await recordTransaction(guildId, userId, netDelta, reason).catch(() => {});
+    await recordTransaction(guildId, userId, netDelta, `ルーレット ${result.betDesc}（賭け: ${bet}）`).catch(() => {});
   }
 
-  const sign = netDelta > 0 ? "+" : "";
-  const landedColor = numColor(landed);
+  const sign  = netDelta > 0 ? "+" : "";
+  const lc    = numColor(landed);
 
   const embed = new EmbedBuilder()
     .setTitle(`🎡 ルーレット — ${result.win ? "✅ 勝利！" : "❌ 敗北"}`)
     .setColor(result.win ? COLOR_WIN : COLOR_LOSE)
     .addFields(
-      {
-        name: "ボールが止まった数字",
-        value: `## ${landedColor} **${landed}**`,
-      },
+      { name: "ボールが止まった数字", value: `## ${lc} **${landed}**` },
       { name: "ベット", value: result.betDesc, inline: true },
-      {
-        name: "収支",
-        value: `${sign}${netDelta.toLocaleString()} ${currencyName}`,
-        inline: true,
-      },
+      { name: "収支", value: `${sign}${netDelta.toLocaleString()} ${currencyName}`, inline: true },
       ...(result.win ? [{ name: "倍率", value: `${result.multiplier}x`, inline: true }] : []),
     )
     .setFooter({ text: "配当: 数字×35 | 色/奇偶/ロー・ハイ×1 | ダズン×2 | 0は全て外れ" })
     .setTimestamp();
 
   if (gifBuffer) {
-    const attachment = new AttachmentBuilder(gifBuffer, { name: "roulette.gif" });
+    const att = new AttachmentBuilder(gifBuffer, { name: "roulette.gif" });
     embed.setImage("attachment://roulette.gif");
-    await interaction.editReply({ embeds: [embed], files: [attachment] });
+    await interaction.editReply({ embeds: [embed], files: [att], components: [] });
   } else {
     embed.setDescription(wheelRow([randNum(), randNum(), landed, randNum(), randNum()]));
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [embed], components: [] });
   }
 }
 
-// ─── Subcommand handlers ──────────────────────────────────────────────────────
+// ─── Button / Select handler (exported to index.ts) ───────────────────────────
 
-async function handleNumber(interaction: ChatInputCommandInteraction): Promise<void> {
-  const bet    = interaction.options.getInteger("bet", true);
-  const target = interaction.options.getInteger("number", true);
+export async function handleRouletteInteraction(
+  interaction: ButtonInteraction | StringSelectMenuInteraction,
+): Promise<void> {
+  const { guildId, user } = interaction;
+  if (!guildId) return;
+
+  const key    = sKey(guildId, user.id);
+  const action = interaction.customId.slice(ROULETTE_PREFIX.length); // e.g. "color:red"
+
+  // ── 戻るボタン ──
+  if (action === "back") {
+    const s = sessions.get(key);
+    if (!s) { await interaction.update({ embeds: [], components: [] }); return; }
+    await interaction.update({ embeds: [selectionEmbed(s)], components: betTypeComponents() });
+    return;
+  }
+
+  // ── 数字セレクトメニューを表示 ──
+  if (action === "numsel") {
+    const s = sessions.get(key);
+    if (!s) { await interaction.update({ embeds: [], components: [] }); return; }
+    if (s.userId !== user.id) {
+      await interaction.reply({ content: "このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await interaction.update({
+      embeds: [selectionEmbed(s, "数字（0〜36）を選んでください")],
+      components: numberSelectComponents(),
+    });
+    return;
+  }
+
+  // ── ここから先: セッション必須 & 所有者チェック ──
+  const session = sessions.get(key);
+  if (!session || session.expiresAt < Date.now()) {
+    sessions.delete(key);
+    await interaction.reply({ content: "セッションが切れました。`/roulette` でやり直してください。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  if (session.userId !== user.id) {
+    await interaction.reply({ content: "このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
+    return;
+  }
 
   const landed = spin();
-  const win = landed === target;
-  await playRoulette(interaction, bet, landed, {
-    win,
-    multiplier: 35,
-    betDesc: `ストレートアップ **${target}**（${numColor(target)}）`,
+
+  // ── 数字セレクトメニュー選択 ──
+  if ((action === "num:lo" || action === "num:hi") && interaction.isStringSelectMenu()) {
+    const target = parseInt(interaction.values[0], 10);
+    await runSpin(interaction, session, landed, resolveNumber(landed, target));
+    return;
+  }
+
+  // ── ベット種別ボタン ──
+  if (!interaction.isButton()) return;
+  const [type, value] = action.split(":");
+  if (type === "color") await runSpin(interaction, session, landed, resolveColor(landed, value as "red"|"black"));
+  if (type === "par")   await runSpin(interaction, session, landed, resolveParity(landed, value as "odd"|"even"));
+  if (type === "half")  await runSpin(interaction, session, landed, resolveHalf(landed, value as "low"|"high"));
+  if (type === "doz")   await runSpin(interaction, session, landed, resolveDozen(landed, parseInt(value) as 1|2|3));
+}
+
+// ─── /roulette ────────────────────────────────────────────────────────────────
+
+async function handlePlay(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+  const userId = interaction.user.id;
+  const bet    = interaction.options.getInteger("bet", true);
+
+  const key = sKey(guildId, userId);
+  if (sessions.has(key)) {
+    await interaction.reply({ content: "すでにゲームが進行中です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const [, { currencyName }] = await Promise.all([
+    getOrCreateWallet(guildId, userId),
+    getGuildSettings(guildId),
+  ]);
+
+  const session: RouletteSession = { guildId, userId, bet, currencyName, expiresAt: Date.now() + SESSION_TTL };
+  sessions.set(key, session);
+
+  await interaction.reply({
+    embeds: [selectionEmbed(session)],
+    components: betTypeComponents(),
   });
 }
-
-async function handleColor(interaction: ChatInputCommandInteraction): Promise<void> {
-  const bet   = interaction.options.getInteger("bet", true);
-  const color = interaction.options.getString("color", true) as "red" | "black";
-
-  const landed = spin();
-  const isRed  = RED_NUMBERS.has(landed);
-  const win    = (color === "red" && isRed) || (color === "black" && !isRed && landed !== 0);
-  const label  = color === "red" ? "🔴 レッド" : "⚫ ブラック";
-  await playRoulette(interaction, bet, landed, { win, multiplier: 1, betDesc: label });
-}
-
-async function handleParity(interaction: ChatInputCommandInteraction): Promise<void> {
-  const bet    = interaction.options.getInteger("bet", true);
-  const parity = interaction.options.getString("parity", true) as "odd" | "even";
-
-  const landed = spin();
-  const win    = landed !== 0 && (parity === "odd" ? landed % 2 === 1 : landed % 2 === 0);
-  const label  = parity === "odd" ? "🔢 オッド（奇数）" : "🔢 イーブン（偶数）";
-  await playRoulette(interaction, bet, landed, { win, multiplier: 1, betDesc: label });
-}
-
-async function handleHalf(interaction: ChatInputCommandInteraction): Promise<void> {
-  const bet   = interaction.options.getInteger("bet", true);
-  const range = interaction.options.getString("range", true) as "low" | "high";
-
-  const landed = spin();
-  const win    = landed !== 0 && (range === "low" ? landed <= 18 : landed >= 19);
-  const label  = range === "low" ? "📉 ロー（1〜18）" : "📈 ハイ（19〜36）";
-  await playRoulette(interaction, bet, landed, { win, multiplier: 1, betDesc: label });
-}
-
-async function handleDozen(interaction: ChatInputCommandInteraction): Promise<void> {
-  const bet   = interaction.options.getInteger("bet", true);
-  const dozen = interaction.options.getInteger("dozen", true) as 1 | 2 | 3;
-
-  const landed  = spin();
-  const ranges: Record<1 | 2 | 3, [number, number]> = { 1: [1, 12], 2: [13, 24], 3: [25, 36] };
-  const [lo, hi] = ranges[dozen];
-  const win      = landed >= lo && landed <= hi;
-  const label    = `🎰 ダズン ${dozen}（${lo}〜${hi}）`;
-  await playRoulette(interaction, bet, landed, { win, multiplier: 2, betDesc: label });
-}
-
-// ─── Command export ───────────────────────────────────────────────────────────
 
 export const rouletteCommand = {
   data: new SlashCommandBuilder()
     .setName("roulette")
-    .setDescription("ヨーロピアンルーレット（0〜36）")
-    .addSubcommand((sub) =>
-      sub
-        .setName("number")
-        .setDescription("特定の数字（0〜36）に賭ける — 的中で35倍！")
-        .addIntegerOption((o) =>
-          o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-            .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
-        )
-        .addIntegerOption((o) =>
-          o.setName("number").setDescription("数字（0〜36）")
-            .setMinValue(0).setMaxValue(36).setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("color")
-        .setDescription("🔴レッド / ⚫ブラックに賭ける — 的中で1倍（0は外れ）")
-        .addIntegerOption((o) =>
-          o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-            .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
-        )
-        .addStringOption((o) =>
-          o.setName("color").setDescription("色を選ぶ").setRequired(true)
-            .addChoices(
-              { name: "🔴 レッド", value: "red" },
-              { name: "⚫ ブラック", value: "black" },
-            ),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("parity")
-        .setDescription("奇数 / 偶数に賭ける — 的中で1倍（0は外れ）")
-        .addIntegerOption((o) =>
-          o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-            .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
-        )
-        .addStringOption((o) =>
-          o.setName("parity").setDescription("奇数 / 偶数").setRequired(true)
-            .addChoices(
-              { name: "🔢 オッド（奇数）", value: "odd" },
-              { name: "🔢 イーブン（偶数）", value: "even" },
-            ),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("half")
-        .setDescription("1〜18（ロー）/ 19〜36（ハイ）に賭ける — 的中で1倍（0は外れ）")
-        .addIntegerOption((o) =>
-          o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-            .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
-        )
-        .addStringOption((o) =>
-          o.setName("range").setDescription("範囲を選ぶ").setRequired(true)
-            .addChoices(
-              { name: "📉 ロー（1〜18）", value: "low" },
-              { name: "📈 ハイ（19〜36）", value: "high" },
-            ),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("dozen")
-        .setDescription("12個の数字グループに賭ける — 的中で2倍（0は外れ）")
-        .addIntegerOption((o) =>
-          o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-            .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
-        )
-        .addIntegerOption((o) =>
-          o.setName("dozen").setDescription("ダズンを選ぶ").setRequired(true)
-            .addChoices(
-              { name: "1st（1〜12）", value: 1 },
-              { name: "2nd（13〜24）", value: 2 },
-              { name: "3rd（25〜36）", value: 3 },
-            ),
-        ),
+    .setDescription("ヨーロピアンルーレット — ボタンで賭け方を選ぶ")
+    .addIntegerOption((o) =>
+      o.setName("bet")
+        .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
+        .setMinValue(MIN_BET)
+        .setMaxValue(MAX_BET)
+        .setRequired(true),
     ),
-
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-    if (sub === "number") await handleNumber(interaction);
-    else if (sub === "color")  await handleColor(interaction);
-    else if (sub === "parity") await handleParity(interaction);
-    else if (sub === "half")   await handleHalf(interaction);
-    else if (sub === "dozen")  await handleDozen(interaction);
+    await handlePlay(interaction);
   },
 };
