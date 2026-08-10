@@ -10,11 +10,13 @@
  */
 
 import {
+  AttachmentBuilder,
   EmbedBuilder,
   MessageFlags,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
+import { generateRouletteGif } from "../lib/rouletteWheel";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
@@ -139,15 +141,16 @@ async function playRoulette(
 
   await interaction.deferReply();
 
-  // ── アニメーション ──────────────────────────────────────────────
-  // 高速スピン（ランダム数字）
+  // GIF生成をテキストアニメーションと並行実行（約1.1秒）
+  const gifPromise = generateRouletteGif(landed).catch(() => null);
+
+  // ── テキストアニメーション（GIF生成の待ち時間を活用）──────────────
   for (let i = 0; i < 4; i++) {
     await interaction.editReply({
       embeds: [spinningEmbed(wheelRow(randomWheelNums()), "🔄 スピン中...")],
     });
     await sleep(420);
   }
-  // 減速（結果が端に現れる）
   await interaction.editReply({
     embeds: [spinningEmbed(
       wheelRow([randNum(), randNum(), randNum(), randNum(), landed]),
@@ -155,7 +158,6 @@ async function playRoulette(
     )],
   });
   await sleep(650);
-  // ほぼ停止（結果が中央近くに）
   await interaction.editReply({
     embeds: [spinningEmbed(
       wheelRow([randNum(), landed, randNum(), randNum(), randNum()], 1),
@@ -164,6 +166,9 @@ async function playRoulette(
   });
   await sleep(900);
   // ──────────────────────────────────────────────────────────────
+
+  // GIF完成を待つ（この時点でほぼ確実に終わっている）
+  const gifBuffer = await gifPromise;
 
   // 決済
   let netDelta: number;
@@ -186,9 +191,6 @@ async function playRoulette(
   const embed = new EmbedBuilder()
     .setTitle(`🎡 ルーレット — ${result.win ? "✅ 勝利！" : "❌ 敗北"}`)
     .setColor(result.win ? COLOR_WIN : COLOR_LOSE)
-    .setDescription(
-      wheelRow([randNum(), randNum(), landed, randNum(), randNum()]),
-    )
     .addFields(
       {
         name: "ボールが止まった数字",
@@ -205,7 +207,14 @@ async function playRoulette(
     .setFooter({ text: "配当: 数字×35 | 色/奇偶/ロー・ハイ×1 | ダズン×2 | 0は全て外れ" })
     .setTimestamp();
 
-  await interaction.editReply({ embeds: [embed] });
+  if (gifBuffer) {
+    const attachment = new AttachmentBuilder(gifBuffer, { name: "roulette.gif" });
+    embed.setImage("attachment://roulette.gif");
+    await interaction.editReply({ embeds: [embed], files: [attachment] });
+  } else {
+    embed.setDescription(wheelRow([randNum(), randNum(), landed, randNum(), randNum()]));
+    await interaction.editReply({ embeds: [embed] });
+  }
 }
 
 // ─── Subcommand handlers ──────────────────────────────────────────────────────
