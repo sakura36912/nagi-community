@@ -8,6 +8,10 @@
  *       and never reaches the DB.
  *   (c) The /ranking reset command performs the wipe when confirm: true.
  *   (d) Non-admins are blocked from running /ranking reset.
+ *   (e) An audit embed is posted to the configured audit log channel after a
+ *       successful wipe.
+ *   (f) The audit embed step is silently skipped when no audit channel is set.
+ *   (g) A send error in the audit channel step does not surface to the admin.
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -109,15 +113,27 @@ import { wipeGuildVcSessions } from "../lib/community.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+function makeAuditChannel(opts: { send?: ReturnType<typeof vi.fn> } = {}) {
+  return {
+    isTextBased: () => true,
+    send: opts.send ?? vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 function makeResetInteraction(opts: {
   guildId?: string | null;
   confirm?: boolean | null;
   isAdmin?: boolean;
+  guild?: {
+    name?: string;
+    channels: { cache: { get: ReturnType<typeof vi.fn> }; fetch: ReturnType<typeof vi.fn> };
+  } | null;
 }) {
-  const { guildId = "guild-123", confirm = null, isAdmin = true } = opts;
+  const { guildId = "guild-123", confirm = null, isAdmin = true, guild = null } = opts;
   return {
     guildId,
     user: { id: "admin-user", tag: "Admin#0001" },
+    guild,
     memberPermissions: {
       has: vi.fn().mockReturnValue(isAdmin),
     },
@@ -242,5 +258,75 @@ describe("/ranking reset – command handler", () => {
 
     const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string }]];
     expect(replyArg.content).toMatch(/confirm/i);
+  });
+});
+
+// ─── Tests: /ranking reset – audit log embed ──────────────────────────────────
+
+describe("/ranking reset – audit log embed", () => {
+  it("posts an audit embed to the configured channel after a successful wipe", async () => {
+    if (!rankingExecute) return;
+
+    const sendMock = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = makeAuditChannel({ send: sendMock });
+
+    const guild = {
+      name: "Test Guild",
+      channels: {
+        cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        fetch: vi.fn().mockResolvedValue(null),
+      },
+    };
+
+    // Make getAuditLogChannel return a channel ID by having the DB select
+    // return a row with auditLogChannelId set.
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-123" }]);
+
+    const interaction = makeResetInteraction({ confirm: true, guild });
+    await rankingExecute(interaction as never);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const [sendArg] = sendMock.mock.calls[0] as [{ embeds: unknown[] }];
+    expect(sendArg).toHaveProperty("embeds");
+    expect(sendArg.embeds).toHaveLength(1);
+  });
+
+  it("skips the audit embed silently when no audit channel is configured", async () => {
+    if (!rankingExecute) return;
+
+    const sendMock = vi.fn();
+
+    // selectWhere returns [] by default → getAuditLogChannel returns null
+    const interaction = makeResetInteraction({ confirm: true, guild: null });
+    await rankingExecute(interaction as never);
+
+    expect(sendMock).not.toHaveBeenCalled();
+    // The admin still gets a success reply
+    expect(interaction.editReply).toHaveBeenCalled();
+  });
+
+  it("does not propagate a send error to the admin when the audit channel send fails", async () => {
+    if (!rankingExecute) return;
+
+    const sendMock = vi.fn().mockRejectedValue(new Error("Missing Access"));
+    const auditChannel = makeAuditChannel({ send: sendMock });
+
+    const guild = {
+      name: "Test Guild",
+      channels: {
+        cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        fetch: vi.fn().mockResolvedValue(null),
+      },
+    };
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-123" }]);
+
+    const interaction = makeResetInteraction({ confirm: true, guild });
+
+    // Must not throw
+    await expect(rankingExecute(interaction as never)).resolves.toBeUndefined();
+
+    // The admin received the success reply despite the send failure
+    expect(interaction.editReply).toHaveBeenCalled();
   });
 });

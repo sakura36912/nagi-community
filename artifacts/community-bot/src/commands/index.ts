@@ -715,6 +715,35 @@ const rankingCommand: Command = {
       await interaction.deferReply({ ephemeral: true });
       const deleted = await wipeGuildVcSessions(guildId);
       await interaction.editReply(`✅ このサーバーのVC滞在時間データを **${deleted}件** 削除しました。`);
+
+      // Post an audit-log embed so admins can see who triggered the wipe and
+      // how many rows were removed.  Errors are swallowed so a missing or
+      // unreachable audit channel never surfaces to the acting admin.
+      const auditChannelId = await getAuditLogChannel(guildId);
+      if (auditChannelId) {
+        try {
+          const auditChannel =
+            interaction.guild?.channels.cache.get(auditChannelId) ??
+            (await interaction.guild?.channels.fetch(auditChannelId).catch(() => null));
+          if (auditChannel?.isTextBased()) {
+            const auditEmbed = new EmbedBuilder()
+              .setTitle("🗑️ VCセッションデータ全消去")
+              .setColor(0xed4245)
+              .setDescription("管理者がこのサーバーの全VCセッションデータを削除しました。")
+              .addFields(
+                { name: "操作者", value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
+                { name: "削除件数", value: `${deleted}件`, inline: true },
+                { name: "サーバー", value: interaction.guild?.name ?? guildId, inline: true },
+              )
+              .setFooter({ text: `操作者ID: ${interaction.user.id}` })
+              .setTimestamp();
+            await auditChannel.send({ embeds: [auditEmbed] });
+          }
+        } catch (err) {
+          logger.error("[ranking reset] Failed to post wipe notice to audit log channel", err);
+        }
+      }
+
       return;
     }
   },
