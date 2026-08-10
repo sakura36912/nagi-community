@@ -133,6 +133,25 @@ export const communityVcSessionsTable = pgTable("community_vc_sessions", {
 
 export type CommunityVcSession = typeof communityVcSessionsTable.$inferSelect;
 
+// ─── Tavern Channel Log ──────────────────────────────────────────────────────
+
+/**
+ * Permanent log of every channel ID that was ever created from a tavern hub
+ * (大酒場🍺 / 小酒場🍺). Records are never deleted so historical VC sessions
+ * in community_vc_sessions can be identified as tavern sessions even after
+ * the temp VC is gone from Discord.
+ */
+export const communityTavernChannelsTable = pgTable("community_tavern_channels", {
+  id: serial("id").primaryKey(),
+  guildId: text("guild_id").notNull(),
+  channelId: text("channel_id").notNull().unique(),
+  /** name_template of the hub that created this channel (e.g. 大酒場🍺) */
+  hubName: text("hub_name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type CommunityTavernChannel = typeof communityTavernChannelsTable.$inferSelect;
+
 // ─── VC Privacy Opt-out ──────────────────────────────────────────────────────
 
 /**

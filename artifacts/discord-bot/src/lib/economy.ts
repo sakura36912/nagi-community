@@ -1239,11 +1239,7 @@ export async function getSheetVcSeconds(
   userId: string,
   startDate: Date,
   endDate: Date,
-  channelIds?: string[],
 ): Promise<number> {
-  const channelFilter = channelIds?.length
-    ? sql`AND channel_id = ANY(ARRAY[${sql.join(channelIds.map((id) => sql`${id}`), sql`, `)}]::text[])`
-    : sql``;
   const rows = await db.execute<{ total_seconds: string }>(sql`
     SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
       LEAST(COALESCE(left_at, NOW()), ${endDate})
@@ -1254,7 +1250,9 @@ export async function getSheetVcSeconds(
       AND user_id = ${userId}
       AND joined_at < ${endDate}
       AND COALESCE(left_at, NOW()) > ${startDate}
-      ${channelFilter}
+      AND channel_id IN (
+        SELECT channel_id FROM community_tavern_channels WHERE guild_id = ${guildId}
+      )
   `);
   return Number(rows.rows[0]?.total_seconds ?? 0);
 }

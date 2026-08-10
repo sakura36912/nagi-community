@@ -233,13 +233,6 @@ export async function handleTicketOpen(interaction: ButtonInteraction): Promise<
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** 酒場チャンネル（大酒場🍺・小酒場🍺）の ID を guild キャッシュから返す */
-const TAVERN_CHANNEL_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
-function getTavernChannelIds(guild: import("discord.js").Guild): string[] {
-  return [...guild.channels.cache.values()]
-    .filter((ch) => TAVERN_CHANNEL_NAMES.has(ch.name))
-    .map((ch) => ch.id);
-}
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -458,10 +451,9 @@ const rankingCommand: Command = {
 
       const now = new Date();
 
-      const tavernIds = getTavernChannelIds(interaction.guild!);
       const [rank, seconds, activeSession] = await Promise.all([
-        getUserVcRank(guildId, interaction.user.id, undefined, tavernIds),
-        getVcTimeInPeriod(guildId, interaction.user.id, new Date(0), now, undefined, tavernIds),
+        getUserVcRank(guildId, interaction.user.id, undefined),
+        getVcTimeInPeriod(guildId, interaction.user.id, new Date(0), now),
         getActiveSession(guildId, interaction.user.id),
       ]);
 
@@ -498,7 +490,7 @@ const rankingCommand: Command = {
     if (sub === "show") {
       await interaction.deferReply();
       const [ranking, activeCount] = await Promise.all([
-        getVcRanking(guildId, undefined, getTavernChannelIds(interaction.guild!)),
+        getVcRanking(guildId, undefined),
         getActiveSessionCount(guildId),
       ]);
 
@@ -779,13 +771,12 @@ const mystatsCommand: Command = {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
     // Fetch all periods in parallel, along with any active session
-    const tavernIds = getTavernChannelIds(interaction.guild!);
     const [todaySeconds, weekSeconds, monthSeconds, allSeconds, allRank, activeSession] = await Promise.all([
-      getVcTimeInPeriod(guildId, target.id, todayStart, now, undefined, tavernIds),
-      getVcTimeInPeriod(guildId, target.id, weekStart, now, undefined, tavernIds),
-      getVcTimeInPeriod(guildId, target.id, monthStart, now, undefined, tavernIds),
-      getVcTimeInPeriod(guildId, target.id, new Date(0), now, undefined, tavernIds),
-      getUserVcRank(guildId, target.id, undefined, tavernIds),
+      getVcTimeInPeriod(guildId, target.id, todayStart, now),
+      getVcTimeInPeriod(guildId, target.id, weekStart, now),
+      getVcTimeInPeriod(guildId, target.id, monthStart, now),
+      getVcTimeInPeriod(guildId, target.id, new Date(0), now),
+      getUserVcRank(guildId, target.id),
       getActiveSession(guildId, target.id),
     ]);
 
@@ -860,10 +851,9 @@ const vcRankCommand: Command = {
 
     const now = new Date();
 
-    const tavernIds = getTavernChannelIds(interaction.guild!);
     const [rank, seconds, activeSession] = await Promise.all([
-      isExile ? Promise.resolve(null) : getUserVcRank(guildId, interaction.user.id, undefined, tavernIds),
-      getVcTimeInPeriod(guildId, interaction.user.id, new Date(0), now, isExile, tavernIds),
+      isExile ? Promise.resolve(null) : getUserVcRank(guildId, interaction.user.id, undefined),
+      getVcTimeInPeriod(guildId, interaction.user.id, new Date(0), now, isExile),
       getActiveSession(guildId, interaction.user.id),
     ]);
 

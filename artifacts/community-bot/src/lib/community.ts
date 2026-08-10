@@ -678,7 +678,7 @@ export interface RankingEntry {
  * Returns top-10 users by cumulative VC time.
  * periodStart = undefined means all time.
  */
-export async function getVcRanking(guildId: string, periodStart?: Date, channelIds?: string[]): Promise<RankingEntry[]> {
+export async function getVcRanking(guildId: string, periodStart?: Date): Promise<RankingEntry[]> {
   const periodFilter = periodStart
     ? sql`AND COALESCE(${communityVcSessionsTable.leftAt}, NOW()) > ${periodStart}`
     : sql``;
@@ -686,10 +686,6 @@ export async function getVcRanking(guildId: string, periodStart?: Date, channelI
   const startClamp = periodStart
     ? sql`GREATEST(${communityVcSessionsTable.joinedAt}, ${periodStart})`
     : sql`${communityVcSessionsTable.joinedAt}`;
-
-  const channelFilter = channelIds?.length
-    ? sql`AND channel_id = ANY(ARRAY[${sql.join(channelIds.map((id) => sql`${id}`), sql`, `)}]::text[])`
-    : sql``;
 
   const rows = await db.execute<{ user_id: string; total_seconds: string; is_live: boolean }>(sql`
     SELECT user_id,
@@ -700,7 +696,9 @@ export async function getVcRanking(guildId: string, periodStart?: Date, channelI
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       ${periodFilter}
-      ${channelFilter}
+      AND channel_id IN (
+        SELECT channel_id FROM community_tavern_channels WHERE guild_id = ${guildId}
+      )
       AND is_exile = false
       AND user_id NOT IN (
         SELECT user_id FROM community_vc_privacy
@@ -731,13 +729,9 @@ export async function getVcTimeInPeriod(
   startDate: Date,
   endDate: Date,
   isExile?: boolean,
-  channelIds?: string[],
 ): Promise<number> {
   const exileFilter = isExile !== undefined
     ? sql`AND is_exile = ${isExile}`
-    : sql``;
-  const channelFilter = channelIds?.length
-    ? sql`AND channel_id = ANY(ARRAY[${sql.join(channelIds.map((id) => sql`${id}`), sql`, `)}]::text[])`
     : sql``;
   const rows = await db.execute<{ total_seconds: string }>(sql`
     SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
@@ -750,7 +744,9 @@ export async function getVcTimeInPeriod(
       AND joined_at < ${endDate}
       AND COALESCE(left_at, NOW()) > ${startDate}
       ${exileFilter}
-      ${channelFilter}
+      AND channel_id IN (
+        SELECT channel_id FROM community_tavern_channels WHERE guild_id = ${guildId}
+      )
       AND user_id NOT IN (
         SELECT user_id FROM community_vc_privacy
         WHERE guild_id = ${guildId} AND opted_out = true
@@ -771,7 +767,6 @@ export async function getUserVcRank(
   guildId: string,
   userId: string,
   periodStart?: Date,
-  channelIds?: string[],
 ): Promise<number | null> {
   const periodFilter = periodStart
     ? sql`AND COALESCE(${communityVcSessionsTable.leftAt}, NOW()) > ${periodStart}`
@@ -780,10 +775,6 @@ export async function getUserVcRank(
   const startClamp = periodStart
     ? sql`GREATEST(${communityVcSessionsTable.joinedAt}, ${periodStart})`
     : sql`${communityVcSessionsTable.joinedAt}`;
-
-  const channelFilter = channelIds?.length
-    ? sql`AND channel_id = ANY(ARRAY[${sql.join(channelIds.map((id) => sql`${id}`), sql`, `)}]::text[])`
-    : sql``;
 
   const rows = await db.execute<{ rank: string }>(sql`
     SELECT rank FROM (
@@ -794,7 +785,9 @@ export async function getUserVcRank(
       FROM community_vc_sessions
       WHERE guild_id = ${guildId}
         ${periodFilter}
-        ${channelFilter}
+        AND channel_id IN (
+          SELECT channel_id FROM community_tavern_channels WHERE guild_id = ${guildId}
+        )
         AND is_exile = false
         AND user_id NOT IN (
           SELECT user_id FROM community_vc_privacy

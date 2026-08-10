@@ -15,6 +15,8 @@ import {
   type VoiceState,
 } from "discord.js";
 import {
+  communityTavernChannelsTable,
+  db,
   addHubChannel,
   getHubChannels,
   removeHubChannel,
@@ -362,6 +364,15 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
     });
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
+
+    // 酒場ハブから生成されたチャンネルを永続ログに記録（過去データ検索に使用）
+    const TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
+    if (TAVERN_NAMES.has(hub.nameTemplate)) {
+      await db.insert(communityTavernChannelsTable)
+        .values({ guildId: guild.id, channelId: newVc.id, hubName: hub.nameTemplate })
+        .onConflictDoNothing()
+        .catch(() => {}); // ログ失敗は無視
+    }
 
     // メンバーを新VCに転送
     await member.voice.setChannel(newVc).catch(async () => {
