@@ -593,4 +593,116 @@ describe("pruneOrphanedVcSessions", () => {
     expect(ltClause!.col).toBe("sessions.leftAt");
     expect(ltClause!.val).toBeInstanceOf(Date);
   });
+
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// pruneOrphanedVcSessions – predicate-evaluation tests
+//
+// The drizzle mock returns plain objects for each SQL operator.  The helper
+// below walks that object tree and evaluates the predicate against a simulated
+// row so we can confirm the combined WHERE clause produces the right
+// row-level decision — not just that the right operator appears somewhere.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Pred =
+  | { op: "and"; args: Pred[] }
+  | { op: "notInArray"; col: string; vals: unknown[] }
+  | { op: "isNotNull"; col: string }
+  | { op: "lt"; col: string; val: unknown }
+  | { op: string; [k: string]: unknown };
+
+/** Strip the "tableName." prefix so "sessions.leftAt" → "leftAt". */
+function colName(col: string): string {
+  return col.includes(".") ? col.slice(col.indexOf(".") + 1) : col;
+}
+
+/** Evaluate a mock predicate tree against a simulated DB row. */
+function evalPredicate(pred: Pred, row: Record<string, unknown>): boolean {
+  switch (pred.op) {
+    case "and":
+      return (pred as { op: "and"; args: Pred[] }).args.every((a) => evalPredicate(a, row));
+    case "notInArray": {
+      const p = pred as { op: "notInArray"; col: string; vals: unknown[] };
+      return !(p.vals as unknown[]).includes(row[colName(p.col)]);
+    }
+    case "isNotNull": {
+      const p = pred as { op: "isNotNull"; col: string };
+      return row[colName(p.col)] !== null && row[colName(p.col)] !== undefined;
+    }
+    case "lt": {
+      const p = pred as { op: "lt"; col: string; val: unknown };
+      const rowVal = row[colName(p.col)];
+      if (rowVal instanceof Date && p.val instanceof Date) {
+        return rowVal.getTime() < (p.val as Date).getTime();
+      }
+      return false;
+    }
+    default:
+      return false;
+  }
+}
+
+describe("pruneOrphanedVcSessions – predicate evaluation (active sessions in orphaned guilds)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Core edge case: a user still "in" a VC in an orphaned guild (leftAt = NULL)
+   * must not be deleted.  We capture the real WHERE predicate and evaluate it
+   * against a simulated row to confirm the combined AND clause rejects it.
+   */
+  it("does NOT match a row from an orphaned guild with leftAt = null (active session)", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    // "guild-orphaned" is NOT in the active list — it is an orphaned guild.
+    await pruneOrphanedVcSessions(["guild-active"]);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [Pred];
+
+    // Simulate an active session in the orphaned guild (leftAt = null).
+    const activeSessionInOrphanedGuild: Record<string, unknown> = {
+      guildId: "guild-orphaned",
+      leftAt: null,
+    };
+
+    // The predicate must NOT match this row — active sessions must never be deleted.
+    expect(evalPredicate(whereArg, activeSessionInOrphanedGuild)).toBe(false);
+  });
+
+  /**
+   * Contrast: a closed, old session in the same orphaned guild DOES match so we
+   * know the guard is selective — it blocks open sessions, not all orphaned rows.
+   */
+  it("DOES match a row from an orphaned guild with an old leftAt (closed, expired session)", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    await pruneOrphanedVcSessions(["guild-active"]);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [Pred];
+
+    // A session that closed 200 days ago in the orphaned guild — should be deleted.
+    const oldClosedSessionInOrphanedGuild: Record<string, unknown> = {
+      guildId: "guild-orphaned",
+      leftAt: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000),
+    };
+
+    expect(evalPredicate(whereArg, oldClosedSessionInOrphanedGuild)).toBe(true);
+  });
+
+  /**
+   * Zero-row return: when the orphaned guild has ONLY active sessions the
+   * predicate matches nothing, so the DB returns [] and the function returns 0.
+   * db.delete is still called (the guild list is non-empty, so no short-circuit).
+   */
+  it("returns 0 when the only orphaned guild rows are active sessions (leftAt = null)", async () => {
+    // Predicate evaluation above proves those rows would not be matched.
+    // The mock simulates a DB that correctly returns no rows.
+    mocks.returning.mockResolvedValueOnce([]);
+
+    const count = await pruneOrphanedVcSessions(["guild-active"]);
+
+    // db.delete must have been called — we did NOT hit the empty-list short-circuit.
+    expect(mocks.del).toHaveBeenCalledOnce();
+    expect(count).toBe(0);
+  });
 });
