@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
+import { logger } from "./logger.js";
 import {
   db,
   communityEventSettingsTable,
@@ -1148,6 +1149,55 @@ export async function setTrackedVcCategoryId(
 
 // Re-export awardVcTime so tests can mock it from this module
 export { awardVcTime } from "./points.js";
+
+/** Injectable dependencies for openVcSessionIfTracked (used in tests). */
+export interface OpenVcSessionIfTrackedDeps {
+  getTrackedVcCategoryId: (guildId: string) => Promise<string | null>;
+  openSession: (guildId: string, userId: string, channelId: string, isExile: boolean) => Promise<CommunityVcSession | null>;
+}
+
+/**
+ * Opens a VC session for the user when the destination channel belongs to the
+ * guild's configured tracked category (or when no category restriction is set).
+ *
+ * This function is the canonical decision point for category-gating.  It is
+ * exported so tests can import and call it directly (with injected mock deps)
+ * rather than duplicating the logic inline and risking silent divergence.
+ *
+ * Behaviour:
+ *   - Reads trackedVcCategoryId via getTrackedVcCategoryId (or the injected override).
+ *   - If the read throws, logs the error and returns (fail closed — does NOT
+ *     fall back to "track everything").
+ *   - If trackedVcCategoryId is null, every channel is tracked.
+ *   - If trackedVcCategoryId is set, only channels whose parentId matches are
+ *     tracked; others are silently skipped.
+ *
+ * @param deps  Optional dependency overrides.  Production code omits this
+ *              parameter (defaults to the real implementations).  Tests pass
+ *              mock functions so no module-wide mock is required.
+ */
+export async function openVcSessionIfTracked(
+  guildId: string,
+  userId: string,
+  channelId: string,
+  channelParentId: string | null,
+  isExile: boolean,
+  deps: OpenVcSessionIfTrackedDeps = { getTrackedVcCategoryId, openSession },
+): Promise<void> {
+  let trackedCategoryId: string | null;
+  try {
+    trackedCategoryId = await deps.getTrackedVcCategoryId(guildId);
+  } catch (err) {
+    logger.error(`[vc] getTrackedVcCategoryId error guildId=${guildId} user=${userId}`, err);
+    return;
+  }
+  const isTracked = !trackedCategoryId || channelParentId === trackedCategoryId;
+  if (isTracked) {
+    await deps.openSession(guildId, userId, channelId, isExile).catch((err) =>
+      logger.error(`[vc] openSession error user=${userId}`, err),
+    );
+  }
+}
 
 /**
  * Converts a TempVcDeletionRow array into a CSV string.

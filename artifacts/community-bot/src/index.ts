@@ -26,6 +26,7 @@ import {
   getLeaveLogChannel,
   markReminderSent,
   openSession,
+  openVcSessionIfTracked,
   getVcSessionRetentionDays,
   pruneGuildVcSessions,
   pruneOrphanedVcSessions,
@@ -569,25 +570,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 
   if (newChannelId) {
-    // Fail closed: if the tracked-category setting cannot be read we must not
-    // assume "track everything" (null = no restriction).  An unreadable setting
-    // could mean the admin configured a category restriction that we cannot
-    // verify, so skip opening the session and log the error.
-    let trackedCategoryId: string | null;
-    try {
-      trackedCategoryId = await getTrackedVcCategoryId(guildId);
-    } catch (err) {
-      logger.error(`[vc] getTrackedVcCategoryId error guildId=${guildId} user=${userId}`, err);
-      return;
-    }
     const channelParentId = newState.channel?.parentId ?? null;
-    const isTracked = !trackedCategoryId || channelParentId === trackedCategoryId;
-    if (isTracked) {
-      const isExile = newState.member?.roles.cache.some((r) => r.name === "追放者") ?? false;
-      await openSession(guildId, userId, newChannelId, isExile).catch((err) =>
-        logger.error(`[vc] openSession error user=${userId}`, err),
-      );
-    }
+    const isExile = newState.member?.roles.cache.some((r) => r.name === "追放者") ?? false;
+    await openVcSessionIfTracked(guildId, userId, newChannelId, channelParentId, isExile);
   }
 });
 
