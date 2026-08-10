@@ -28,7 +28,13 @@ const mocks = vi.hoisted(() => {
       })),
     })),
   }));
-  return { execute, update };
+  // select is hoisted so per-test implementations can control isVcTrackingOptedOut
+  const select = vi.fn(() => ({
+    from: vi.fn(() => ({
+      where: vi.fn(() => Promise.resolve([])),
+    })),
+  }));
+  return { execute, update, select };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -41,7 +47,7 @@ vi.mock("@workspace/db", () => {
   return {
     db: {
       execute: mocks.execute,
-      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => Promise.resolve([])) })) })),
+      select: mocks.select,
       update: mocks.update,
       insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue([]) })) })),
       delete: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })) })),
@@ -84,7 +90,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
-import { getVcRanking, setVcPrivacyOptOut, setVcGlobalPrivacyOptOut } from "../lib/community.js";
+import { getVcRanking, openSession, setVcPrivacyOptOut, setVcGlobalPrivacyOptOut } from "../lib/community.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const GUILD = "guild-001";
@@ -495,5 +501,117 @@ describe("getVcRanking – opt-out then opt-back-in round-trip", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.isLive).toBe(true);
+  });
+});
+
+// ─── Mixed state: guild opt-in while global opt-out is still active ───────────
+
+describe("openSession / getVcRanking – guild opt-in does not override active global opt-out", () => {
+  /**
+   * Scenario: a user has a global opt-out active and then opts back in at the
+   * guild level (per-guild opted_out = false, global opted_out = true).
+   *
+   * isVcTrackingOptedOut must return true because the global flag takes
+   * precedence over any guild-level setting.  As a result:
+   *   - openSession must return null (no new session is created).
+   *   - getVcRanking must still exclude the user (the SQL NOT IN sub-selects
+   *     on community_vc_privacy_global keep them out).
+   */
+
+  /**
+   * Helper: configure db.select so the first call (global privacy table)
+   * returns a globally-opted-out row and the second call (guild privacy table)
+   * returns a guild-opted-in row.  Both calls happen inside isVcTrackingOptedOut
+   * via Promise.all, with the global query constructed first.
+   */
+  function mockMixedOptOutState() {
+    // First db.select() call — global privacy table → opted out globally
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([{ optedOut: true }])),
+      })),
+    }));
+    // Second db.select() call — per-guild privacy table → opted in at guild level
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([{ optedOut: false }])),
+      })),
+    }));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Restore the default select implementation after each clearAllMocks so
+    // other tests that do not call mockMixedOptOutState continue to work.
+    mocks.select.mockImplementation(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([])),
+      })),
+    }));
+  });
+
+  it("openSession returns null when per-guild opt-in is set but global opt-out is still active", async () => {
+    mockMixedOptOutState();
+
+    const result = await openSession(GUILD, "user-mixed", "channel-001");
+
+    // Global opt-out takes precedence — no session should be created.
+    expect(result).toBeNull();
+  });
+
+  it("openSession does not call db.insert when blocked by active global opt-out", async () => {
+    mockMixedOptOutState();
+
+    // Spy on db.insert to confirm no session row is written.
+    const { db } = await import("@workspace/db");
+    const insertSpy = vi.mocked(db.insert);
+
+    await openSession(GUILD, "user-mixed", "channel-001");
+
+    expect(insertSpy).not.toHaveBeenCalled();
+  });
+
+  it("getVcRanking excludes a user who is globally opted out even when they have a guild opt-in row", async () => {
+    // getVcRanking uses a raw SQL query (db.execute) that applies the NOT IN
+    // sub-selects directly, so we simulate the DB filtering the user out.
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(GUILD);
+
+    // The user does not appear because the community_vc_privacy_global NOT IN
+    // sub-select removes them regardless of the per-guild row.
+    expect(result).toEqual([]);
+  });
+
+  it("getVcRanking SQL still contains the global privacy NOT IN sub-select in mixed state", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("community_vc_privacy_global");
+    expect(query).toContain("opted_out = true");
+    const notInMatches = query.match(/NOT IN/g) ?? [];
+    expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("openSession returns null regardless of isExile flag in mixed state", async () => {
+    mockMixedOptOutState();
+
+    const result = await openSession(GUILD, "user-mixed", "channel-001", true /* isExile */);
+
+    expect(result).toBeNull();
+  });
+
+  it("openSession returns null for a second guild join attempt while global opt-out is active", async () => {
+    // Simulate a second guild where the user also has a per-guild opt-in.
+    const OTHER_GUILD = "guild-002";
+
+    // First pair: global opted-out, guild-A opted-in (already tested above)
+    mockMixedOptOutState();
+
+    const result = await openSession(OTHER_GUILD, "user-mixed", "channel-002");
+
+    expect(result).toBeNull();
   });
 });
