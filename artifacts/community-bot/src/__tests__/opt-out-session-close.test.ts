@@ -1381,6 +1381,51 @@ describe('handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe',
     const description = replyArg.embeds[0]?.data?.description ?? "";
     expect(description).toContain("3件");
   });
+
+  it("clears the stale audit channel id (setAuditLogChannel null) when channels.fetch throws with code 10003", async () => {
+    // deleteUserVcSessions calls db.delete() twice (sessions + privacy row)
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }]);
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+    // getAuditLogChannel returns a stale channel id via db.select()
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "stale-audit-ch" }]);
+
+    // Simulate Discord Unknown Channel error (code 10003)
+    const unknownChannelErr = Object.assign(new Error("Unknown Channel"), { code: 10003 });
+    const interaction = {
+      user: { id: "admin-audit-clr", tag: "admin-audit-clr#0000" },
+      guildId: "guild-audit-clr",
+      customId: `${COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX}target-audit-clr`,
+      member: { permissions: { has: vi.fn().mockReturnValue(true) } },
+      guild: {
+        name: "Test Guild",
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(null) },
+          fetch: vi.fn().mockRejectedValue(unknownChannelErr),
+        },
+      },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(handlePrivacyAdminDeleteConfirm(interaction as never)).resolves.toBeUndefined();
+
+    // Admin must still receive the confirmation embed
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("1件");
+
+    // setAuditLogChannel(guildId, null) must have been invoked to clear the stale id.
+    // It uses db.insert().values().onConflictDoUpdate() — the set payload carries null.
+    expect(mocks.onConflictDoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({ auditLogChannelId: null }),
+      }),
+    );
+  });
 });
 
 // ─── deleteAllUserVcSessions – global wipe scoped to one user only ────────────

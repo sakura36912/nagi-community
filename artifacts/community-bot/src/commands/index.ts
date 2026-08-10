@@ -1516,8 +1516,18 @@ export async function handlePrivacyAdminDeleteConfirm(interaction: ButtonInterac
   const auditChannelId = await getAuditLogChannel(guildId);
   if (auditChannelId) {
     try {
-      const auditChannel = interaction.guild?.channels.cache.get(auditChannelId)
-        ?? await interaction.guild?.channels.fetch(auditChannelId).catch(() => null);
+      let auditChannel = interaction.guild?.channels.cache.get(auditChannelId) ?? null;
+      if (!auditChannel) {
+        try {
+          auditChannel = await interaction.guild?.channels.fetch(auditChannelId) ?? null;
+        } catch (fetchErr: unknown) {
+          // Unknown Channel (10003) means the channel was deleted from Discord.
+          // Clear the stale id so future admin actions don't keep hitting the dead channel.
+          if ((fetchErr as { code?: number })?.code === 10003) {
+            await setAuditLogChannel(guildId, null);
+          }
+        }
+      }
       if (auditChannel?.isTextBased()) {
         const auditEmbed = new EmbedBuilder()
           .setTitle("🔍 管理者によるVC記録削除")
