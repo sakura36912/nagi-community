@@ -116,6 +116,10 @@ function makeInteraction(userId: string, guildId?: string) {
   return {
     user: { id: userId },
     guildId: guildId ?? null,
+    guild: null,
+    // Provide a client stub with an empty guilds cache so handlers that access
+    // interaction.client.guilds.cache in the DM path don't throw.
+    client: { guilds: { cache: new Map() } },
     deferUpdate: vi.fn().mockResolvedValue(undefined),
     editReply: vi.fn().mockResolvedValue(undefined),
     reply: vi.fn().mockResolvedValue(undefined),
@@ -1871,13 +1875,160 @@ describe('handlePrivacyGlobalOptoutDelete – audit log path', () => {
     expect(mocks.selectWhere).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT attempt the audit log channel lookup when interaction has no guildId (DM context)", async () => {
-    setupMocks([]);
-    // makeInteraction has no guildId → selectWhere must never be reached
-    const interaction = makeInteraction("user-gal-2");
+  // ── DM context helpers ────────────────────────────────────────────────────
+  //
+  // When triggered from a DM the interaction has no guildId.  The handler
+  // must enumerate interaction.client.guilds.cache, check membership for each
+  // guild, and post an audit entry in every guild that (a) has the user as a
+  // member and (b) has an audit channel configured.
+
+  /**
+   * Build a fake DM ButtonInteraction backed by a set of guild mocks.
+   * Each guild mock exposes the members and channels APIs used by the handler.
+   */
+  function makeDmInteractionWithGuilds(
+    userId: string,
+    guilds: Array<{
+      guildId: string;
+      isMember: boolean;
+      auditChannel?: { isTextBased: () => boolean; send: ReturnType<typeof vi.fn> } | null;
+    }>,
+  ) {
+    const guildEntries = guilds.map(({ guildId, isMember, auditChannel = null }) => {
+      const member = isMember ? { id: userId } : null;
+      return [
+        guildId,
+        {
+          members: {
+            cache: { get: vi.fn().mockReturnValue(member) },
+            fetch: vi.fn().mockResolvedValue(member),
+          },
+          channels: {
+            cache: { get: vi.fn().mockReturnValue(auditChannel) },
+            fetch: vi.fn().mockResolvedValue(auditChannel),
+          },
+        },
+      ] as const;
+    });
+
+    return {
+      user: { id: userId },
+      guildId: null,
+      guild: null,
+      client: {
+        guilds: { cache: new Map(guildEntries) },
+      },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it("DM interaction with no shared guilds: does not attempt audit log lookup (selectWhere never called)", async () => {
+    // No guilds in the cache → no membership checks → no audit channel lookups.
+    mocks.deleteReturning.mockResolvedValueOnce([]); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]); // global opt-out row cleared
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global opt-out upsert
+    mocks.returning.mockResolvedValueOnce([]);          // closeOpenSessionsForUser
+
+    const interaction = makeDmInteractionWithGuilds("user-gal-dm-0", []);
     await handlePrivacyGlobalOptoutDelete(interaction as never);
 
+    // No guilds → no audit channel DB lookups
     expect(mocks.selectWhere).not.toHaveBeenCalled();
+    // User-facing reply still sent
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("DM interaction → audit entries posted to guilds A and B when both have configured audit channels", async () => {
+    // Two guilds, both with the user as a member, both with audit channels.
+    const sendA = vi.fn().mockResolvedValue(undefined);
+    const sendB = vi.fn().mockResolvedValue(undefined);
+    const channelA = { isTextBased: () => true, send: sendA };
+    const channelB = { isTextBased: () => true, send: sendB };
+
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }]); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);            // global opt-out row cleared
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);         // global opt-out upsert
+    mocks.returning.mockResolvedValueOnce([]);                  // closeOpenSessionsForUser
+    // getAuditLogChannel for guild A
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-dm-A" }]);
+    // getAuditLogChannel for guild B
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-dm-B" }]);
+
+    const interaction = makeDmInteractionWithGuilds("user-gal-dm-1", [
+      { guildId: "guild-dm-A", isMember: true, auditChannel: channelA },
+      { guildId: "guild-dm-B", isMember: true, auditChannel: channelB },
+    ]);
+
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    // Both audit channels must have received exactly one message
+    expect(sendA).toHaveBeenCalledTimes(1);
+    expect(sendB).toHaveBeenCalledTimes(1);
+
+    // The audit embed must carry the correct deleted-row count in both messages
+    const [[argA]] = sendA.mock.calls as [[{ embeds: { data: { fields?: { name: string; value: string }[] } }[] }]];
+    const [[argB]] = sendB.mock.calls as [[{ embeds: { data: { fields?: { name: string; value: string }[] } }[] }]];
+    const fieldsA = argA.embeds[0]?.data?.fields ?? [];
+    const fieldsB = argB.embeds[0]?.data?.fields ?? [];
+    expect(fieldsA.find((f) => f.value === "1件")).toBeDefined();
+    expect(fieldsB.find((f) => f.value === "1件")).toBeDefined();
+  });
+
+  it("DM interaction → handler still completes when no guild has an audit channel", async () => {
+    // Two guilds where the user is a member, but neither has an audit channel.
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+    // getAuditLogChannel returns null for both guilds (no row → empty array)
+    mocks.selectWhere.mockResolvedValueOnce([]); // guild A → no audit channel
+    mocks.selectWhere.mockResolvedValueOnce([]); // guild B → no audit channel
+
+    const interaction = makeDmInteractionWithGuilds("user-gal-dm-2", [
+      { guildId: "guild-dm-C", isMember: true, auditChannel: null },
+      { guildId: "guild-dm-D", isMember: true, auditChannel: null },
+    ]);
+
+    // Must resolve without throwing
+    await expect(handlePrivacyGlobalOptoutDelete(interaction as never)).resolves.toBeUndefined();
+
+    // User-facing reply still sent
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+
+    // Audit channel lookup was attempted for both guilds (confirmed the user is a member)
+    expect(mocks.selectWhere).toHaveBeenCalledTimes(2);
+  });
+
+  it("DM interaction → guilds where the user is NOT a member are skipped (no audit lookup)", async () => {
+    // Guild A: user is a member. Guild B: user is NOT a member.
+    // Only guild A should trigger an audit channel lookup.
+    const sendA = vi.fn().mockResolvedValue(undefined);
+    const channelA = { isTextBased: () => true, send: sendA };
+
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]);
+    // Only guild A triggers getAuditLogChannel
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-dm-E" }]);
+
+    const interaction = makeDmInteractionWithGuilds("user-gal-dm-3", [
+      { guildId: "guild-dm-E", isMember: true,  auditChannel: channelA },
+      { guildId: "guild-dm-F", isMember: false, auditChannel: null },
+    ]);
+
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    // Exactly one audit channel lookup (guild A only)
+    expect(mocks.selectWhere).toHaveBeenCalledTimes(1);
+    // Guild A's audit channel received one message
+    expect(sendA).toHaveBeenCalledTimes(1);
   });
 
   it("handler still completes (resolves) without throwing when no audit channel is configured", async () => {

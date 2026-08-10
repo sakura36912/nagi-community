@@ -1455,29 +1455,54 @@ export async function handlePrivacyGlobalOptoutDelete(interaction: ButtonInterac
     .setTimestamp();
   await interaction.editReply({ embeds: [embed], components: [] });
 
-  // Post to the audit log channel of the invoking guild (if the interaction
-  // came from a guild and an audit channel is configured for it).
-  if (interaction.guildId) {
-    const auditChannelId = await getAuditLogChannel(interaction.guildId);
-    if (auditChannelId) {
-      try {
-        const auditChannel = interaction.guild?.channels.cache.get(auditChannelId)
-          ?? await interaction.guild?.channels.fetch(auditChannelId).catch(() => null);
-        if (auditChannel?.isTextBased()) {
-          const auditEmbed = new EmbedBuilder()
-            .setTitle("🔍 ユーザーによる全データ削除（グローバルオプトアウト）")
-            .setColor(0xed4245)
-            .addFields(
-              { name: "ユーザー", value: `<@${userId}>`, inline: true },
-              { name: "削除件数", value: `${deleted}件`, inline: true },
-            )
-            .setFooter({ text: `ユーザーID: ${userId}` })
-            .setTimestamp();
-          await auditChannel.send({ embeds: [auditEmbed] });
-        }
-      } catch (err) {
-        logger.error("[privacy] Failed to post global wipe to audit log channel", err);
+  // Build the list of guilds to send the audit log to.
+  //
+  // Guild interaction  → only the invoking guild's audit channel is checked.
+  // DM interaction     → the bot enumerates every guild it is in, checks whether
+  //                      the user is a member, and posts to each guild that has an
+  //                      audit channel configured.  This covers the common privacy
+  //                      flow where the wipe is triggered from a cross-posted embed
+  //                      in a DM: admins in every guild the user belonged to receive
+  //                      an audit entry even though no guildId is present on the
+  //                      interaction itself.
+  type AuditTarget = { guildId: string; guild: NonNullable<typeof interaction.guild> };
+  const guildsToAudit: AuditTarget[] = [];
+
+  if (interaction.guildId && interaction.guild) {
+    guildsToAudit.push({ guildId: interaction.guildId, guild: interaction.guild });
+  } else {
+    // DM context: check every guild the bot is in for user membership.
+    for (const [guildId, guild] of interaction.client.guilds.cache) {
+      const member =
+        guild.members.cache.get(userId) ??
+        await guild.members.fetch(userId).catch(() => null);
+      if (member) {
+        guildsToAudit.push({ guildId, guild: guild as NonNullable<typeof interaction.guild> });
       }
+    }
+  }
+
+  for (const { guildId, guild } of guildsToAudit) {
+    const auditChannelId = await getAuditLogChannel(guildId);
+    if (!auditChannelId) continue;
+    try {
+      const auditChannel =
+        guild.channels.cache.get(auditChannelId) ??
+        await guild.channels.fetch(auditChannelId).catch(() => null);
+      if (auditChannel?.isTextBased()) {
+        const auditEmbed = new EmbedBuilder()
+          .setTitle("🔍 ユーザーによる全データ削除（グローバルオプトアウト）")
+          .setColor(0xed4245)
+          .addFields(
+            { name: "ユーザー", value: `<@${userId}>`, inline: true },
+            { name: "削除件数", value: `${deleted}件`, inline: true },
+          )
+          .setFooter({ text: `ユーザーID: ${userId}` })
+          .setTimestamp();
+        await auditChannel.send({ embeds: [auditEmbed] });
+      }
+    } catch (err) {
+      logger.error("[privacy] Failed to post global wipe to audit log channel", err);
     }
   }
 }
