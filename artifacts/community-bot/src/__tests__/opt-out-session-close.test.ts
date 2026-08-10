@@ -1339,6 +1339,48 @@ describe('handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe',
     // Exactly 2 deletes (sessions + privacy row), nothing more
     expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
   });
+
+  it("admin still sees the 'deleted N rows' embed when auditChannel.send() throws (permissions/rate-limit)", async () => {
+    // deleteUserVcSessions calls db.delete() twice (sessions + privacy row)
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }, { id: 3 }]);
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+    // getAuditLogChannel returns a configured channel id via db.select()
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-send-throws" }]);
+
+    // Audit channel is fetched successfully and isTextBased() is true,
+    // but send() itself rejects (e.g. missing Send Messages permission)
+    const auditChannel = {
+      isTextBased: vi.fn().mockReturnValue(true),
+      send: vi.fn().mockRejectedValue(new Error("Missing Permissions")),
+    };
+    const interaction = {
+      user: { id: "admin-audit-3", tag: "admin-audit-3#0000" },
+      guildId: "guild-audit-3",
+      customId: `${COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX}target-audit-3`,
+      member: { permissions: { has: vi.fn().mockReturnValue(true) } },
+      guild: {
+        name: "Test Guild",
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(null) },
+          fetch: vi.fn().mockResolvedValue(auditChannel),
+        },
+      },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    // Must not throw even though send() fails
+    await expect(handlePrivacyAdminDeleteConfirm(interaction as never)).resolves.toBeUndefined();
+
+    // Admin must still have received the confirmation embed with the correct count
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+    const [[replyArg]] = interaction.editReply.mock.calls as [[{ embeds: { data: { description?: string } }[] }]];
+    const description = replyArg.embeds[0]?.data?.description ?? "";
+    expect(description).toContain("3件");
+  });
 });
 
 // ─── deleteAllUserVcSessions – global wipe scoped to one user only ────────────
