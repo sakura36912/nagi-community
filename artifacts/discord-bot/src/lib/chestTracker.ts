@@ -7,8 +7,8 @@ import type { Guild } from "discord.js";
 import { addChestVcSeconds } from "./vcReward";
 import { logger } from "./logger";
 
-/** 酒場チャンネルとして認識するチャンネル名（完全一致） */
-const TAVERN_CHANNEL_NAME = "酒場";
+/** 酒場チャンネルとして認識するチャンネル名（完全一致）。複数指定可。 */
+const TAVERN_CHANNEL_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
 
 /** `${guildId}:${userId}` → 酒場への入室時刻 */
 const tavernJoinedAt = new Map<string, Date>();
@@ -17,10 +17,10 @@ function tavernKey(guildId: string, userId: string): string {
   return `${guildId}:${userId}`;
 }
 
-/** 指定チャンネルが「酒場」かどうかを返す */
+/** 指定チャンネルが酒場（大酒場🍺 / 小酒場🍺）かどうかを返す */
 export function isTavernChannel(guild: Guild, channelId: string): boolean {
   const ch = guild.channels.cache.get(channelId);
-  return ch?.name === TAVERN_CHANNEL_NAME;
+  return ch != null && TAVERN_CHANNEL_NAMES.has(ch.name);
 }
 
 /** 酒場に入室したとき呼ぶ */

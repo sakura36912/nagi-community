@@ -1898,7 +1898,7 @@ export function buildChestPanelMessage() {
     .setTitle("🎁 宝箱")
     .setColor(0xF6A623)
     .setDescription(
-      "**酒場** VC に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
+      "**大酒場🍺・小酒場🍺** に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
       "カウントは毎日 **JST 0:00** にリセット。\n\n" +
       "─────────────────────\n" +
       "　✨ **激レア**　→　管理者指定ボイメ\n" +
@@ -2273,13 +2273,14 @@ const chestCommand: Command = {
       }
       await interaction.deferReply({ ephemeral: true });
 
-      // 酒場チャンネルをサーバー内で名前検索
+      // 酒場チャンネル（大酒場🍺 / 小酒場🍺）をサーバー内で名前検索
+      const TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
       await interaction.guild.channels.fetch();
-      const tavernCh = interaction.guild.channels.cache.find(
-        (ch) => ch.name === "酒場" && (ch.type === 2 /* GuildVoice */ || ch.type === 13 /* GuildStageVoice */),
+      const tavernChannels = interaction.guild.channels.cache.filter(
+        (ch) => TAVERN_NAMES.has(ch.name) && (ch.type === 2 /* GuildVoice */ || ch.type === 13 /* GuildStageVoice */),
       );
-      if (!tavernCh) {
-        await interaction.editReply("❌ 「酒場」という名前のVCが見つかりませんでした。");
+      if (tavernChannels.size === 0) {
+        await interaction.editReply("❌ 「大酒場🍺」「小酒場🍺」という名前のVCが見つかりませんでした。");
         return;
       }
 
@@ -2289,17 +2290,18 @@ const chestCommand: Command = {
       const rangeEnd   = new Date(jstMidnightTodayMs - 9 * 3600 * 1000);   // 今日 0:00 JST を UTC に変換
       const rangeStart = new Date(rangeEnd.getTime()  - 86_400_000);        // 昨日 0:00 JST
 
-      // vc_session_logs から昨日の酒場セッションを集計
+      // vc_session_logs から昨日の酒場セッションを集計（両チャンネル合算）
+      const tavernIds = tavernChannels.map((ch) => ch.id);
       const rows = await db
         .select({
-          userId:          vcSessionLogsTable.userId,
-          totalSeconds:    drizzleSql<number>`sum(${vcSessionLogsTable.durationSeconds})::int`,
+          userId:       vcSessionLogsTable.userId,
+          totalSeconds: drizzleSql<number>`sum(${vcSessionLogsTable.durationSeconds})::int`,
         })
         .from(vcSessionLogsTable)
         .where(
           and(
-            eq(vcSessionLogsTable.guildId,   interaction.guildId),
-            eq(vcSessionLogsTable.channelId, tavernCh.id),
+            eq(vcSessionLogsTable.guildId, interaction.guildId),
+            drizzleSql`${vcSessionLogsTable.channelId} = ANY(ARRAY[${drizzleSql.join(tavernIds.map((id) => drizzleSql`${id}`), drizzleSql`, `)}]::text[])`,
             gte(vcSessionLogsTable.joinedAt, rangeStart),
             lt(vcSessionLogsTable.joinedAt,  rangeEnd),
           ),
@@ -2308,8 +2310,8 @@ const chestCommand: Command = {
 
       if (rows.length === 0) {
         await interaction.editReply(
-          `⚠️ 昨日（JST）の 酒場 VC セッションログが見つかりませんでした。\n` +
-          `（酒場がログカテゴリに設定されていない場合、セッションは記録されません。\`/宝箱 add-time\` で手動補填してください）`,
+          `⚠️ 昨日（JST）の 大酒場🍺・小酒場🍺 のセッションログが見つかりませんでした。\n` +
+          `（該当チャンネルがVCログカテゴリに設定されていない場合、セッションは記録されません。\`/宝箱 add-time\` で手動補填してください）`,
         );
         return;
       }
@@ -2326,7 +2328,7 @@ const chestCommand: Command = {
         return `<@${userId}> — ${min}分`;
       });
       await interaction.editReply(
-        `✅ **${rows.length}名** に昨日の酒場VC時間を本日分として付与しました。\n\n${lines.join("\n")}`,
+        `✅ **${rows.length}名** に昨日の大酒場🍺・小酒場🍺のVC時間を本日分として付与しました。\n\n${lines.join("\n")}`,
       );
     }
   },
