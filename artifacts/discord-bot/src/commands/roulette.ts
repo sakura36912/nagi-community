@@ -145,6 +145,7 @@ async function playRoulette(
       },
       ...(result.win ? [{ name: "倍率", value: `${result.multiplier}x`, inline: true }] : []),
     )
+    .setFooter({ text: "配当: 数字×35 | 色/奇偶/ロー・ハイ×1 | ダズン×2 | 0は全て外れ" })
     .setTimestamp();
 
   await interaction.editReply({ embeds: [embed] });
@@ -217,7 +218,7 @@ export const rouletteCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("number")
-        .setDescription("ストレートアップ：特定の数字に賭ける（35倍）")
+        .setDescription("特定の数字（0〜36）に賭ける — 的中で35倍！")
         .addIntegerOption((o) =>
           o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
             .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
@@ -230,7 +231,7 @@ export const rouletteCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("color")
-        .setDescription("カラーベット：レッド / ブラック（1倍）")
+        .setDescription("🔴レッド / ⚫ブラックに賭ける — 的中で1倍（0は外れ）")
         .addIntegerOption((o) =>
           o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
             .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
@@ -246,7 +247,7 @@ export const rouletteCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("parity")
-        .setDescription("パリティベット：奇数 / 偶数（1倍）")
+        .setDescription("奇数 / 偶数に賭ける — 的中で1倍（0は外れ）")
         .addIntegerOption((o) =>
           o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
             .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
@@ -262,7 +263,7 @@ export const rouletteCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("half")
-        .setDescription("ハーフベット：1〜18 / 19〜36（1倍）")
+        .setDescription("1〜18（ロー）/ 19〜36（ハイ）に賭ける — 的中で1倍（0は外れ）")
         .addIntegerOption((o) =>
           o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
             .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
@@ -278,7 +279,7 @@ export const rouletteCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("dozen")
-        .setDescription("ダズンベット：12個単位（2倍）")
+        .setDescription("12個の数字グループに賭ける — 的中で2倍（0は外れ）")
         .addIntegerOption((o) =>
           o.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
             .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),

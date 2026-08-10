@@ -224,7 +224,7 @@ function buildDealEmbed(game: PokerGame): EmbedBuilder {
       { name: "賭け金", value: `**${game.bet.toLocaleString()}** ${game.currencyName}`, inline: true },
       { name: "状態", value: holdDesc, inline: true },
     )
-    .setFooter({ text: "ジャックスオアベター形式 | 5分でタイムアウト" });
+    .setFooter({ text: "役・配当: J以上ペア×1 | 2ペア×2 | スリー×3 | ストレート×4 | フラッシュ×6 | フルハウス×9 | フォーカ×25 | SF×50 | RF×250 | 5分でタイムアウト" });
 }
 
 function buildResultEmbed(game: PokerGame, handRank: HandRank, netDelta: number): EmbedBuilder {
@@ -411,22 +411,16 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 export const pokerCommand = {
   data: new SlashCommandBuilder()
     .setName("poker")
-    .setDescription("ビデオポーカー（5カードドロー）")
-    .addSubcommand((sub) =>
-      sub
-        .setName("play")
-        .setDescription(`ポーカーをプレイ（賭け: ${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-        .addIntegerOption((opt) =>
-          opt
-            .setName("bet")
-            .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-            .setMinValue(MIN_BET)
-            .setMaxValue(MAX_BET)
-            .setRequired(true),
-        ),
+    .setDescription("5カードドロー — ホールドしてドロー、役で最大250倍！")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("bet")
+        .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
+        .setMinValue(MIN_BET)
+        .setMaxValue(MAX_BET)
+        .setRequired(true),
     ),
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-    if (sub === "play") await handlePlay(interaction);
+    await handlePlay(interaction);
   },
 };

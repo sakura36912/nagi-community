@@ -174,7 +174,12 @@ function buildGameEmbed(game: BJGame, hideDealer = true): EmbedBuilder {
         value: `**${game.bet.toLocaleString()}** ${game.currencyName}${game.doubled ? "（ダブルダウン）" : ""}`,
         inline: true,
       },
-    );
+      {
+        name: "操作方法",
+        value: "🃏 **ヒット** — 1枚追加　🛑 **スタンド** — このままで勝負　⬆️ **ダブルダウン** — 賭け倍額+1枚（初手のみ）",
+      },
+    )
+    .setFooter({ text: "ブラックジャック=1.5倍 / 通常勝利=1倍 / 引き分け=返金 | 5分でタイムアウト" });
 }
 
 function buildResultEmbed(
@@ -462,22 +467,16 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 export const blackjackCommand = {
   data: new SlashCommandBuilder()
     .setName("blackjack")
-    .setDescription("ブラックジャックをプレイ")
-    .addSubcommand((sub) =>
-      sub
-        .setName("play")
-        .setDescription(`ブラックジャック（賭け: ${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-        .addIntegerOption((opt) =>
-          opt
-            .setName("bet")
-            .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-            .setMinValue(MIN_BET)
-            .setMaxValue(MAX_BET)
-            .setRequired(true),
-        ),
+    .setDescription("ブラックジャック — 21を目指せ！BJ=1.5倍・通常勝利=1倍")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("bet")
+        .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
+        .setMinValue(MIN_BET)
+        .setMaxValue(MAX_BET)
+        .setRequired(true),
     ),
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-    if (sub === "play") await handlePlay(interaction);
+    await handlePlay(interaction);
   },
 };
