@@ -1082,11 +1082,22 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     }).catch((err) => logger.error("[points] boost award error", err));
   }
 
+  logger.info(`[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} addedRoles=[${addedRoleIds.join(",")}] partial=${oldMember.partial}`);
+
   if (addedRoleIds.length === 0) return;
 
   // ── 複数フォーラム × ロール マッピングで一致するものをすべて処理 ─────────
-  const matchedConfigs = await getEvalSheetConfigsForRoles(guildId, addedRoleIds).catch(() => []);
-  if (matchedConfigs.length === 0) return;
+  let matchedConfigs: Awaited<ReturnType<typeof getEvalSheetConfigsForRoles>> = [];
+  try {
+    matchedConfigs = await getEvalSheetConfigsForRoles(guildId, addedRoleIds);
+  } catch (err) {
+    logger.error(`[sheet] getEvalSheetConfigsForRoles failed guild=${guildId}`, err);
+    return;
+  }
+  if (matchedConfigs.length === 0) {
+    logger.info(`[sheet] no config matched for roles [${addedRoleIds.join(",")}] in guild ${guildId} — /evalsheet setup を確認してください`);
+    return;
+  }
 
   // 共通設定（nameboard・rosterCategory）は community_sheet_settings から取得
   const globalSettings = await getEvalSheetSettings(guildId).catch(() => undefined);
@@ -1464,7 +1475,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_RENAME)) {
       await handleVcPanelRenameBtn(interaction); return;
     }
-    if (interaction.isButton() && interaction.customId === CHEST_OPEN_BTN_ID) {
+    if (interaction.isButton() && interaction.customId.startsWith("chest:open")) {
       await handleChestOpenBtn(interaction); return;
     }
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_RENAME)) {

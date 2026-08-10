@@ -1682,7 +1682,12 @@ export const VC_PANEL_BTN_EXTEND   = "vc:panel:extend:";
 export const VC_PANEL_BTN_EXPIRY   = "vc:panel:expiry:";
 export const VC_PANEL_BTN_RENAME   = "vc:panel:rename:";
 export const VC_PANEL_BTN_TREASURE = "vc:panel:treasure:"; // 旧: 未使用
-export const CHEST_OPEN_BTN_ID = "chest:open";
+/** 新入り宝箱ボタン ID */
+export const CHEST_OPEN_BTN_SHINNIRI  = "chest:open:shinniri";
+/** 本船員宝箱ボタン ID */
+export const CHEST_OPEN_BTN_HONSENNIN = "chest:open:honsennin";
+/** 後方互換 alias（旧パネルが残っている場合は新入り扱い） */
+export const CHEST_OPEN_BTN_ID = CHEST_OPEN_BTN_SHINNIRI;
 export const VC_PANEL_SEL_ADD      = "vc:panel:adds:";
 export const VC_PANEL_SEL_KICK     = "vc:panel:kicks:";
 export const VC_PANEL_SEL_EXTEND   = "vc:panel:exts:";
@@ -1896,19 +1901,21 @@ async function grantRoleByName(guild: Guild, userId: string, roleName: string): 
 }
 
 /** 宝箱パネルのメッセージを生成 */
-export function buildChestPanelMessage() {
+export function buildChestPanelMessage(chestType: "shinniri" | "honsennin") {
+  const isHon = chestType === "honsennin";
   const embed = new EmbedBuilder()
-    .setTitle("🎁 宝箱")
-    .setColor(0xF6A623)
+    .setTitle(isHon ? "🎁 本船員宝箱" : "🎁 新入り宝箱")
+    .setColor(isHon ? 0x5865f2 : 0xf6a623)
     .setDescription(
-      "**大酒場🍺・小酒場🍺** に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
+      `**${isHon ? "本船員" : "新入り"}** ロールを持つメンバー限定\n\n` +
+      "**酒場🍺** に累計 **1時間** 接続すると 1回チャレンジできます。\n" +
       "カウントは毎日 **JST 0:00** にリセット。\n\n" +
       "─────────────────────\n" +
       "　✨ **激レア**　→　管理者指定ボイメ\n" +
       "　💎 **超レア**　→　プレオープン限定 / 80,000$\n" +
       "　🌟 **レア**　　→　評価員アドバイス券 / 60,000$\n" +
       "　🎊 **大当たり** →　50,000$\n" +
-      "　🎁 **当たり**　→　10,000$ / 15,000$ / 20,000$ / 30,000$\n" +
+      "　🎁 **当たり**　→　15,000$ / 30,000$\n" +
       "　💨 **ハズレ**　→　なし\n" +
       "─────────────────────",
     )
@@ -1916,7 +1923,7 @@ export function buildChestPanelMessage() {
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(CHEST_OPEN_BTN_ID)
+      .setCustomId(isHon ? CHEST_OPEN_BTN_HONSENNIN : CHEST_OPEN_BTN_SHINNIRI)
       .setLabel("宝箱を開ける")
       .setStyle(ButtonStyle.Primary)
       .setEmoji("✨"),
@@ -1924,8 +1931,11 @@ export function buildChestPanelMessage() {
   return { embeds: [embed], components: [row] };
 }
 
-/** 宝箱イベント開始日時（JST 2026-08-09 23:00 = UTC 2026-08-09 14:00） */
-const CHEST_START_AT = new Date("2026-08-09T14:00:00Z");
+// 宝箱は常設（期限なし）
+// ロール名定数
+const CHEST_ROLE_SHINNIRI  = "新入り";
+const CHEST_ROLE_HONSENNIN = "本船員";
+const CHEST_INTERVAL_SEC   = 3600; // 1時間ごとに1回
 
 export async function handleChestOpenBtn(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guild) return;
@@ -1934,36 +1944,43 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
 
-  // イベント開始前はブロック（管理者は通過）
-  if (!isAdmin && Date.now() < CHEST_START_AT.getTime()) {
-    const ts = Math.floor(CHEST_START_AT.getTime() / 1000);
-    await interaction.editReply(`🔒 宝箱イベントは <t:${ts}:F> に開始します。もう少しお待ちください！`);
-    return;
+  // どちらの宝箱か判定（旧 "chest:open" は 新入り扱い）
+  const chestType: "shinniri" | "honsennin" =
+    interaction.customId === CHEST_OPEN_BTN_HONSENNIN ? "honsennin" : "shinniri";
+  const requiredRole = chestType === "honsennin" ? CHEST_ROLE_HONSENNIN : CHEST_ROLE_SHINNIRI;
+
+  // ロールチェック（管理者は免除）
+  if (!isAdmin) {
+    const member = interaction.member as GuildMember;
+    const hasRole = member.roles.cache.some((r) => r.name === requiredRole);
+    if (!hasRole) {
+      await interaction.editReply(`❌ この宝箱は **${requiredRole}** ロールを持つメンバーのみ引けます。`);
+      return;
+    }
   }
 
   if (!isAdmin) {
-    // 累積VC時間チェック（過去セッション + 現在酒場セッション）
-    // 2026-08-10 は昨日（8/9）の救済分のみ有効。当日の酒場滞在はカウントしない。
-    const jstDate = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const currentSeconds = jstDate === "2026-08-10"
-      ? 0
-      : getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
+    // 累積VC時間チェック（DB保存分 + 現在のセッション中の時間）
+    const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
     const [pastSeconds, opensCount] = await Promise.all([
       getTodayChestVcSeconds(interaction.guild.id, interaction.user.id),
       getTodayChestOpensCount(interaction.guild.id, interaction.user.id),
     ]);
     const totalSeconds = pastSeconds + currentSeconds;
-    const CHEST_INTERVAL_SEC = 300; // 5分ごとに1回
     const maxOpens = Math.floor(totalSeconds / CHEST_INTERVAL_SEC);
 
     if (maxOpens === 0) {
       const remaining = Math.ceil((CHEST_INTERVAL_SEC - totalSeconds) / 60);
-      await interaction.editReply(`⏳ 宝箱を開けるにはあと **${remaining}分** のVC接続が必要です（本日の合計: ${Math.floor(totalSeconds / 60)}分）。`);
+      await interaction.editReply(
+        `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です（本日: ${Math.floor(totalSeconds / 60)}分）。`,
+      );
       return;
     }
     if (opensCount >= maxOpens) {
       const nextAt = Math.ceil(((opensCount + 1) * CHEST_INTERVAL_SEC - totalSeconds) / 60);
-      await interaction.editReply(`📦 次の宝箱まであと **${nextAt}分** のVC接続が必要です（本日${opensCount}回開封済み・累計${Math.floor(totalSeconds / 60)}分）。`);
+      await interaction.editReply(
+        `📦 次の宝箱まであと **${nextAt}分** の酒場VC接続が必要です（本日${opensCount}回開封済み）。`,
+      );
       return;
     }
   }
@@ -2232,7 +2249,18 @@ const chestCommand: Command = {
     .setName("宝箱")
     .setDescription("宝箱パネルを設置します（管理者専用）")
     .addSubcommand((sub) =>
-      sub.setName("set").setDescription("このチャンネルに宝箱パネルを設置します"),
+      sub
+        .setName("set")
+        .setDescription("このチャンネルに宝箱パネルを設置します")
+        .addStringOption((o) =>
+          o.setName("type")
+            .setDescription("宝箱の種類")
+            .setRequired(true)
+            .addChoices(
+              { name: "🎁 新入り宝箱", value: "shinniri" },
+              { name: "🎁 本船員宝箱", value: "honsennin" },
+            ),
+        ),
     )
     .addSubcommand((sub) =>
       sub
@@ -2257,9 +2285,11 @@ const chestCommand: Command = {
     }
     const sub = interaction.options.getSubcommand();
     if (sub === "set") {
-      const panel = buildChestPanelMessage();
+      const type = (interaction.options.getString("type", true) ?? "shinniri") as "shinniri" | "honsennin";
+      const panel = buildChestPanelMessage(type);
       await (interaction.channel as import("discord.js").TextChannel)?.send(panel);
-      await interaction.reply({ content: "✅ 宝箱パネルを設置しました。", ephemeral: true });
+      const label = type === "honsennin" ? "本船員宝箱" : "新入り宝箱";
+      await interaction.reply({ content: `✅ **${label}** パネルを設置しました。`, ephemeral: true });
     } else if (sub === "add-time") {
       const targetUser = interaction.options.getUser("user", true);
       const minutes = interaction.options.getInteger("minutes", true);
