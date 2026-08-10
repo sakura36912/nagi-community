@@ -1198,11 +1198,13 @@ describe("deleteAllUserVcSessions – global wipe scoped to one user only", () =
     mocks.deleteReturning.mockResolvedValueOnce([]);
     // Second call is for the global opt-out delete; return empty array.
     mocks.deleteReturning.mockResolvedValueOnce([]);
+    // Third call is for the per-guild privacy rows delete; return empty array.
+    mocks.deleteReturning.mockResolvedValueOnce([]);
 
     await deleteAllUserVcSessions("user-dav-2");
 
-    // db.delete() is called twice: once for sessions, once for the global opt-out row.
-    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
+    // db.delete() is called three times: sessions + global opt-out row + per-guild opt-out rows.
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(3);
 
     // Check the FIRST call (sessions) – its WHERE must carry only the userId.
     // Accept both a bare eq and an AND that contains an eq so the test stays
@@ -1304,26 +1306,29 @@ describe("handlePrivacyGlobalOptoutDelete – global opt-out + full wipe path", 
   // deleteAllUserVcSessions:
   //   → db.delete(sessions).where().returning()      → `deletedRows`
   //   → db.delete(global).where().returning()        → [] (clear global opt-out row)
+  //   → db.delete(privacy).where().returning()       → [] (clear per-guild opt-out rows)
   // setVcGlobalPrivacyOptOut → db.insert().values().onConflictDoUpdate() (upsert)
   //                          → db.update().set().where().returning() (closeOpenSessionsForUser)
   function setupMocks(deletedRows: { id: number }[]) {
     mocks.deleteReturning.mockResolvedValueOnce(deletedRows); // session rows deleted
     mocks.deleteReturning.mockResolvedValueOnce([]);           // global opt-out row cleared
+    mocks.deleteReturning.mockResolvedValueOnce([]);           // per-guild opt-out rows cleared
     mocks.onConflictDoUpdate.mockResolvedValueOnce([]);        // global opt-out upsert (re-set)
     mocks.returning.mockResolvedValueOnce([]);                 // closeOpenSessionsForUser (no open sessions)
   }
 
-  it("calls db.delete() twice — once for sessions, once to clear the global opt-out row", async () => {
+  it("calls db.delete() three times — sessions, global opt-out row, and per-guild opt-out rows", async () => {
     setupMocks([]);
 
     const interaction = makeInteraction("user-god-1");
     await handlePrivacyGlobalOptoutDelete(interaction as never);
 
-    // deleteAllUserVcSessions performs two deletes: sessions + global opt-out row.
-    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
+    // deleteAllUserVcSessions performs three deletes: sessions + global opt-out row + per-guild opt-out rows.
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(3);
     const tables = (mocks.deleteFn.mock.calls as unknown as [Record<string, string>][]).map((c) => c[0]?.["userId"]);
     expect(tables).toContain("sessions.userId");
     expect(tables).toContain("global.userId");
+    expect(tables).toContain("privacy.userId");
   });
 
   it("WHERE clause on the delete carries only the userId (not a guildId)", async () => {
@@ -2225,5 +2230,56 @@ describe("isVcTrackingOptedOut – parallel query execution", () => {
 
     // Two selects: one for communityVcPrivacyGlobalTable, one for communityVcPrivacyTable
     expect(mocks.select).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── openSession – privacy check DB failure (fail-closed) ────────────────────
+//
+// If the DB is unreachable when isVcTrackingOptedOut runs, openSession must
+// return null (fail-closed) instead of propagating an unhandled rejection to
+// the VoiceStateUpdate handler.  These tests pin that behaviour so any future
+// change to the failure mode is a conscious decision.
+
+describe("openSession – privacy check DB failure (fail-closed)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns null when the global privacy select rejects", async () => {
+    // First selectWhere call (global table) throws; second never runs.
+    mocks.selectWhere.mockRejectedValueOnce(new Error("DB unreachable"));
+
+    const session = await openSession("guild-dbfail-1", "user-dbfail-1", "channel-dbfail-1");
+
+    expect(session).toBeNull();
+  });
+
+  it("returns null when the per-guild privacy select rejects", async () => {
+    // First selectWhere call (global table) resolves normally.
+    mocks.selectWhere.mockResolvedValueOnce([]);
+    // Second selectWhere call (per-guild table) throws.
+    mocks.selectWhere.mockRejectedValueOnce(new Error("DB unreachable"));
+
+    const session = await openSession("guild-dbfail-2", "user-dbfail-2", "channel-dbfail-2");
+
+    expect(session).toBeNull();
+  });
+
+  it("does not create a session row when the privacy check throws", async () => {
+    mocks.selectWhere.mockRejectedValueOnce(new Error("connection timeout"));
+
+    await openSession("guild-dbfail-3", "user-dbfail-3", "channel-dbfail-3");
+
+    // db.insert() must NOT have been called — no partial session row created.
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it("returns null rather than throwing, so callers receive a value not an unhandled rejection", async () => {
+    mocks.selectWhere.mockRejectedValueOnce(new Error("query failed"));
+
+    // openSession must resolve (not reject) even when isVcTrackingOptedOut throws.
+    await expect(
+      openSession("guild-dbfail-4", "user-dbfail-4", "channel-dbfail-4"),
+    ).resolves.toBeNull();
   });
 });

@@ -526,7 +526,17 @@ export async function openSession(
   channelId: string,
   isExile = false,
 ): Promise<CommunityVcSession | null> {
-  const optedOut = await isVcTrackingOptedOut(guildId, userId);
+  let optedOut: boolean;
+  try {
+    optedOut = await isVcTrackingOptedOut(guildId, userId);
+  } catch (err) {
+    // Fail-closed: if the privacy check itself throws (e.g. DB unreachable)
+    // we treat the user as opted-out so no session row is created during the
+    // outage.  The error is logged for observability but is not re-thrown so
+    // the VoiceStateUpdate handler doesn't receive an unhandled rejection.
+    logger.warn("openSession: privacy check failed; treating as opted-out (fail-closed)", { err, guildId, userId });
+    return null;
+  }
   if (optedOut) return null;
 
   const [row] = await db
