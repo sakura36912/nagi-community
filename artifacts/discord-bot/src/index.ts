@@ -72,7 +72,6 @@ import {
   getVcRewardSettings,
   recordVcJoin,
   clearVcPresence,
-  addChestVcSeconds,
   getAllVcPresences,
   payVcReward,
   getVcLogSettings,
@@ -82,6 +81,7 @@ import {
   getVcLogPresence,
   updateVcPresenceChannel,
 } from "./lib/vcReward";
+import { isTavernChannel, onTavernJoin, onTavernLeave } from "./lib/chestTracker";
 import {
   recordPointVcJoin,
   settlePointVcSession,
@@ -843,13 +843,6 @@ async function handleVcLeave(
     logger.error(`[vcsalary] Error paying VC reward for ${userId} in ${guild.id}`, err);
   }
 
-  // 宝箱用の当日累計VC時間を加算（報酬とは独立して常に記録）
-  try {
-    const seconds = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
-    await addChestVcSeconds(guild.id, userId, seconds);
-  } catch (err) {
-    logger.error(`[chest] addChestVcSeconds error for ${userId} in ${guild.id}`, err);
-  }
 }
 
 /** Returns the category ID if the channel is in the log category list, else null. */
@@ -884,6 +877,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   // ── Joined VC (from nothing or from AFK) ─────────────────────────────────
   if (isInVc && !isInAfk && (!wasInVc || wasInAfk)) {
+    // 宝箱トラッカー：酒場に入室したら記録
+    if (isTavernChannel(guild, newState.channelId!)) {
+      onTavernJoin(guild.id, userId);
+    }
     await Promise.all([
       // Reward tracking (hub salary takes priority over general eligibility)
       (async () => {
@@ -933,6 +930,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   // ── Left VC (to nothing or to AFK) ───────────────────────────────────────
   if (wasInVc && !wasInAfk && (!isInVc || isInAfk)) {
+    // 宝箱トラッカー：酒場から退出したら秒数を確定して DB に記録
+    await onTavernLeave(guild.id, userId);
     await Promise.all([
       // Reward payout (use hub salary if the channel was a hub-salary VC)
       (async () => {
@@ -974,6 +973,15 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   // ── Moved between two non-AFK VCs ────────────────────────────────────────
   if (wasInVc && !wasInAfk && isInVc && !isInAfk && oldState.channelId !== newState.channelId) {
+    // 宝箱トラッカー：酒場→別 or 別→酒場 の移動を処理
+    const wasTavern = isTavernChannel(guild, oldState.channelId!);
+    const nowTavern = isTavernChannel(guild, newState.channelId!);
+    if (wasTavern && !nowTavern) {
+      await onTavernLeave(guild.id, userId); // 酒場から出た → 秒数確定
+    } else if (!wasTavern && nowTavern) {
+      onTavernJoin(guild.id, userId); // 酒場に入った → 計測開始
+    }
+    // 酒場→酒場 の移動は起こり得ないため else は不要
     await Promise.all([
       // Reward tracking – hub salary and/or category eligibility may have changed
       (async () => {

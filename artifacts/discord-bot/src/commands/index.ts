@@ -84,7 +84,8 @@ import {
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
-import { getVcPresence, getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday } from "../lib/vcReward";
+import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds } from "../lib/vcReward";
+import { getCurrentTavernSeconds } from "../lib/chestTracker";
 import { upsertTimedRoleGrant } from "@workspace/db";
 
 interface Command {
@@ -1896,7 +1897,7 @@ export function buildChestPanelMessage() {
     .setTitle("🎁 宝箱")
     .setColor(0xF6A623)
     .setDescription(
-      "VC に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
+      "**酒場** VC に累計 **5分** 接続するごとに 1回チャレンジできます。\n" +
       "カウントは毎日 **JST 0:00** にリセット。\n\n" +
       "─────────────────────\n" +
       "　✨ **激レア**　→　管理者指定ボイメ\n" +
@@ -1937,13 +1938,8 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   }
 
   if (!isAdmin) {
-    // 累積VC時間チェック（過去セッション + 現在セッション）
-    const presence = await getVcPresence(interaction.guild.id, interaction.user.id);
-    if (!presence) {
-      await interaction.editReply("❌ VCに接続中でないため宝箱を開けられません。");
-      return;
-    }
-    const currentSeconds = Math.floor((Date.now() - presence.joinedAt.getTime()) / 1000);
+    // 累積VC時間チェック（過去セッション + 現在酒場セッション）
+    const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
     const [pastSeconds, opensCount] = await Promise.all([
       getTodayChestVcSeconds(interaction.guild.id, interaction.user.id),
       getTodayChestOpensCount(interaction.guild.id, interaction.user.id),
@@ -2229,6 +2225,17 @@ const chestCommand: Command = {
     .setDescription("宝箱パネルを設置します（管理者専用）")
     .addSubcommand((sub) =>
       sub.setName("set").setDescription("このチャンネルに宝箱パネルを設置します"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("add-time")
+        .setDescription("【救済】指定ユーザーの本日の酒場VC時間を手動で加算します（管理者専用）")
+        .addUserOption((opt) =>
+          opt.setName("user").setDescription("対象ユーザー").setRequired(true),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName("minutes").setDescription("加算する分数").setRequired(true).setMinValue(1).setMaxValue(1440),
+        ),
     ) as SlashCommandBuilder,
   async execute(interaction) {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
@@ -2240,6 +2247,19 @@ const chestCommand: Command = {
       const panel = buildChestPanelMessage();
       await (interaction.channel as import("discord.js").TextChannel)?.send(panel);
       await interaction.reply({ content: "✅ 宝箱パネルを設置しました。", ephemeral: true });
+    } else if (sub === "add-time") {
+      const targetUser = interaction.options.getUser("user", true);
+      const minutes = interaction.options.getInteger("minutes", true);
+      const seconds = minutes * 60;
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "❌ サーバー内でのみ使用できます。", ephemeral: true });
+        return;
+      }
+      await addChestVcSeconds(interaction.guildId, targetUser.id, seconds);
+      await interaction.reply({
+        content: `✅ <@${targetUser.id}> の本日の酒場VC時間に **${minutes}分** を追加しました。`,
+        ephemeral: true,
+      });
     }
   },
 };
