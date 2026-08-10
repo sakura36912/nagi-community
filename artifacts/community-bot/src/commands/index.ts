@@ -347,18 +347,13 @@ export function buildRankingEmbed(
   const medals = ["🥇", "🥈", "🥉"];
   const lines = ranking.map((entry, i) => {
     const prefix = medals[i] ?? `**${i + 1}.**`;
-    const liveMark = entry.isLive ? " 🔴" : "";
-    return `${prefix} <@${entry.userId}> — ${formatSeconds(entry.totalSeconds)}${liveMark}`;
+    return `${prefix} <@${entry.userId}> — ${formatSeconds(entry.totalSeconds)}`;
   });
-  const liveIndicator = activeCount > 0
-    ? `🔴 現在 ${activeCount}名 がVC参加中（スコアはリアルタイム集計）`
-    : "（現在VC参加者なし）";
 
   return new EmbedBuilder()
     .setTitle(`🎙️ VC滞在時間ランキング（${RANKING_PERIOD_LABELS[period]}）`)
     .setColor(0xf5a623)
     .setDescription(lines.join("\n"))
-    .setFooter({ text: liveIndicator })
     .setTimestamp();
 }
 
