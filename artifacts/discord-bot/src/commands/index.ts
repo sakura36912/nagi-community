@@ -1940,7 +1940,11 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   if (!isAdmin) {
     // 累積VC時間チェック（過去セッション + 現在酒場セッション）
-    const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
+    // 2026-08-10 は昨日（8/9）の救済分のみ有効。当日の酒場滞在はカウントしない。
+    const jstDate = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const currentSeconds = jstDate === "2026-08-10"
+      ? 0
+      : getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
     const [pastSeconds, opensCount] = await Promise.all([
       getTodayChestVcSeconds(interaction.guild.id, interaction.user.id),
       getTodayChestOpensCount(interaction.guild.id, interaction.user.id),
