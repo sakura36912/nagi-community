@@ -23,6 +23,8 @@
  *  14. A DB error in getGuildSettings is caught; setBanLogChannelId is NOT called.
  *  15. A DB error in setBanLogChannelId is caught and logged.
  *  16. getGuildSettings receives the correct guildId.
+ *  17. A setBanLogChannelId write failure does NOT prevent setLeaveLogChannelId from being called
+ *      when both channels match the deleted channel (each setter has its own try-catch).
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -441,7 +443,29 @@ describe("handleChannelDelete – leaveLogChannelId auto-clear", () => {
     );
   });
 
-  // ── banLog and leaveLog are independent within the same try block ─────────
+  // ── Isolation: a setBanLogChannelId failure must not skip setLeaveLogChannelId ──
+
+  it("still calls setLeaveLogChannelId even when setBanLogChannelId rejects (each setter has its own try-catch)", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-shared",
+      leaveLogChannelId: "ch-shared",
+    });
+    const banWriteError = new Error("ban-log write failed");
+    mocks.setBanLogChannelId.mockRejectedValue(banWriteError);
+
+    await handleChannelDelete(makeGuildChannel("ch-shared", "guild-both"));
+
+    // The ban-log write failed, so its error should be logged.
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("[economy] ChannelDelete"),
+      banWriteError,
+    );
+    // Despite the ban-log failure, the leave-log clear must still proceed.
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledWith("guild-both", null);
+  });
+
+  // ── banLog and leaveLog are independent ───────────────────────────────────
 
   it("clears both banLogChannelId and leaveLogChannelId when both match the deleted channel", async () => {
     mocks.getGuildSettings.mockResolvedValue({

@@ -36,29 +36,49 @@ export async function handleChannelDelete(
     );
   }
 
-  // ── BAN ログチャンネル ────────────────────────────────────────────────────
+  // ── ギルド設定を一度だけ読み込む ─────────────────────────────────────────
+  let guildSettings: { banLogChannelId: string | null; leaveLogChannelId: string | null } | null =
+    null;
   try {
-    const guildSettings = await getGuildSettings(guildId);
-    if (guildSettings.banLogChannelId === channel.id) {
+    guildSettings = await getGuildSettings(guildId);
+  } catch (err) {
+    logger.error(
+      `[economy] ChannelDelete: ギルド設定の読み込みに失敗 (guild=${guildId}, channel=${channel.id})`,
+      err,
+    );
+  }
+
+  if (guildSettings === null) return;
+
+  // ── BAN ログチャンネル ────────────────────────────────────────────────────
+  if (guildSettings.banLogChannelId === channel.id) {
+    try {
       await setBanLogChannelId(guildId, null);
       logger.warn(
         `[bannotify] BAN ログチャンネル ${channel.id} がギルド ${guildId} で削除されたため banLogChannelId を自動クリアしました。` +
         ` 再設定してください。`,
       );
+    } catch (err) {
+      logger.error(
+        `[economy] ChannelDelete: banLogChannelId のクリアに失敗 (guild=${guildId}, channel=${channel.id})`,
+        err,
+      );
     }
+  }
 
-    // ── 退出ログチャンネル ──────────────────────────────────────────────────
-    if (guildSettings.leaveLogChannelId === channel.id) {
+  // ── 退出ログチャンネル ──────────────────────────────────────────────────
+  if (guildSettings.leaveLogChannelId === channel.id) {
+    try {
       await setLeaveLogChannelId(guildId, null);
       logger.warn(
         `[leavelog] 退出ログチャンネル ${channel.id} がギルド ${guildId} で削除されたため leaveLogChannelId を自動クリアしました。` +
         ` 再設定してください。`,
       );
+    } catch (err) {
+      logger.error(
+        `[economy] ChannelDelete: leaveLogChannelId のクリアに失敗 (guild=${guildId}, channel=${channel.id})`,
+        err,
+      );
     }
-  } catch (err) {
-    logger.error(
-      `[economy] ChannelDelete: banLog/leaveLog チャンネル設定のクリアに失敗 (guild=${guildId}, channel=${channel.id})`,
-      err,
-    );
   }
 }
