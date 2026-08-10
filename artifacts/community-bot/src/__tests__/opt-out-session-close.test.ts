@@ -241,6 +241,169 @@ describe('handlePrivacyGlobalOptoutKeep – "keep data" global opt-out path', ()
     // to confirm only update (close) was used, not a delete (purge).
     expect(mocks.update).toHaveBeenCalled(); // close path
   });
+
+  // ── Replay-safety tests ────────────────────────────────────────────────────
+  // A replayed interaction is one where user B obtains the interaction token
+  // originally issued to user A and re-submits it. Discord resolves the
+  // interaction as belonging to user B (interaction.user.id = B), so the
+  // handler must use interaction.user.id — not any external state — for all
+  // DB writes. These tests confirm that the clicking user's id is the only
+  // id that appears in the opt-out upsert, and that no cross-user data
+  // deletion occurs.
+
+  it("replayed interaction: opt-out upsert targets only the clicking user's id, not the original user's id", async () => {
+    // The original user who triggered the embed
+    const originalUserId = "user-original-global";
+    // A bystander who replays the interaction (different token holder)
+    const replayerUserId = "user-replayer-global";
+
+    // setVcGlobalPrivacyOptOut path:
+    //   1. closeOpenSessionsForUser → db.update (returns no open sessions)
+    //   2. global opt-out upsert   → db.insert
+    mocks.returning.mockResolvedValueOnce([]);        // closeOpenSessionsForUser
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global opt-out upsert
+
+    // The replayer clicks the button — interaction.user.id is the replayer's id
+    const interaction = makeInteraction(replayerUserId);
+    await handlePrivacyGlobalOptoutKeep(interaction as never);
+
+    // The insert must have been called exactly once
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+
+    // The values() payload must reference the replayer's id, NOT the original user's id
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.userId).toBe(replayerUserId);
+    expect(valuesArg.userId).not.toBe(originalUserId);
+    expect(valuesArg.optedOut).toBe(true);
+  });
+
+  it("replayed interaction: no data deletion occurs (db.delete is never called)", async () => {
+    // Even when a different user replays the keep-data interaction, the handler
+    // must not delete any session rows — that is the delete-data path, not the
+    // keep-data path.
+    mocks.returning.mockResolvedValueOnce([]);
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    const interaction = makeInteraction("user-replayer-global-2");
+    await handlePrivacyGlobalOptoutKeep(interaction as never);
+
+    // db.delete() must never be invoked on the keep-data path
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+  });
+
+  it("replayed interaction: only the replaying user's sessions are closed (update WHERE carries replayer's id)", async () => {
+    // The session-close update must scope to the replayer's userId, not to
+    // any externally-stored "original" user id.
+    mocks.returning.mockResolvedValueOnce([{ id: 77 }]); // one open session closed
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    const replayerUserId = "user-replayer-global-3";
+    const interaction = makeInteraction(replayerUserId);
+    await handlePrivacyGlobalOptoutKeep(interaction as never);
+
+    // db.update() must have been called (closeOpenSessionsForUser)
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+
+    // The where() clause must reference the replayer's id
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    expect(whereArg.op).toBe("and");
+    const eqVals = whereArg.args
+      .filter((a) => a.op === "eq")
+      .map((a) => a.val);
+    expect(eqVals).toContain(replayerUserId);
+    // Another user's id must not appear in the WHERE clause
+    expect(eqVals).not.toContain("user-original-global");
+  });
+});
+
+// ─── handlePrivacyGlobalOptoutKeep – replay safety as global delete-flow cancel button ─
+//
+// The /privacy optout-all command posts an ephemeral embed with two buttons:
+//   • "全サーバーで停止（データを保持）" (COMM_PRIVACY_GLOBAL_OPTOUT_KEEP)
+//     → handlePrivacyGlobalOptoutKeep  ← this is the "cancel deletion" choice
+//   • "全サーバーで停止＋全データ削除" (COMM_PRIVACY_GLOBAL_OPTOUT_DELETE)
+//     → handlePrivacyGlobalOptoutDelete
+//
+// The KEEP button is the "cancel" of the destructive branch: clicking it opts
+// the user out globally (stop tracking, keep history) instead of wiping data.
+//
+// Replay risk: the button's customId is a plain constant with no nonce or
+// userId encoded. Any user who obtains the interaction token could click it.
+//
+// Unlike handlePrivacyDeleteCancel (which does no DB writes at all), this
+// handler DOES write data — but the safety guarantee is different:
+//   1. Every write (opt-out upsert, session-close update) exclusively targets
+//      interaction.user.id — the clicking user, whoever that turns out to be.
+//   2. db.delete() is NEVER called on this path, so no cross-user data
+//      deletion can occur regardless of who holds the token.
+//
+// Tests verify:
+//   - A replayed call from a different userId cannot cause db.delete() to fire
+//   - The opt-out upsert targets only interaction.user.id — not the original user's id
+//   - The session-close WHERE clause carries only the replayer's userId
+//   - The original user's data is not touched (their id appears in no DB write)
+
+describe("handlePrivacyGlobalOptoutKeep – replay safety (global opt-out delete cancel button)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("a replayed cancel from a different userId cannot trigger db.delete() (no cross-user data wipe)", async () => {
+    // User A triggered the embed; user B replays the interaction token.
+    // The keep-data path must never call db.delete() — for either user.
+    mocks.returning.mockResolvedValueOnce([]);         // closeOpenSessionsForUser → 0 sessions
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global opt-out upsert
+
+    const replayerUserId = "user-replayer-cancel-1";
+    const interaction = makeInteraction(replayerUserId);
+    await handlePrivacyGlobalOptoutKeep(interaction as never);
+
+    // db.delete() must never fire on the keep-data/cancel path
+    expect(mocks.deleteFn).not.toHaveBeenCalled();
+  });
+
+  it("a replayed cancel opts out only the clicking user — the original user's id never appears in any DB write", async () => {
+    const originalUserId = "user-original-cancel-2";
+    const replayerUserId = "user-replayer-cancel-2";
+
+    mocks.returning.mockResolvedValueOnce([]);
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    // Replayer clicks the button
+    const interaction = makeInteraction(replayerUserId);
+    await handlePrivacyGlobalOptoutKeep(interaction as never);
+
+    // The opt-out upsert (insert) must target the replayer's userId, not the original user's
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [{ userId: string; optedOut: boolean }];
+    expect(valuesArg.userId).toBe(replayerUserId);
+    expect(valuesArg.userId).not.toBe(originalUserId);
+    expect(valuesArg.optedOut).toBe(true);
+
+    // The session-close update WHERE must reference the replayer's userId only
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    const eqVals = whereArg.args.filter((a) => a.op === "eq").map((a) => a.val);
+    expect(eqVals).toContain(replayerUserId);
+    expect(eqVals).not.toContain(originalUserId);
+  });
+
+  it("a replayed cancel still defers and clears the embed components (UI update fires correctly)", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    const interaction = makeInteraction("user-replayer-cancel-3");
+    await handlePrivacyGlobalOptoutKeep(interaction as never);
+
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
 });
 
 describe('handlePrivacyOptoutKeep – "keep data" per-guild opt-out path', () => {
