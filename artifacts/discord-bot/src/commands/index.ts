@@ -86,7 +86,8 @@ import {
 } from "../lib/economy";
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds } from "../lib/vcReward";
 import { getCurrentTavernSeconds } from "../lib/chestTracker";
-import { upsertTimedRoleGrant } from "@workspace/db";
+import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
+import { gte, lt, and, eq, sql as drizzleSql } from "drizzle-orm";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -2236,6 +2237,11 @@ const chestCommand: Command = {
         .addIntegerOption((opt) =>
           opt.setName("minutes").setDescription("加算する分数").setRequired(true).setMinValue(1).setMaxValue(1440),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("rescue-yesterday")
+        .setDescription("【救済】昨日(JST)酒場にいたメンバーを自動検出し、本日分の時間を付与します（管理者専用）"),
     ) as SlashCommandBuilder,
   async execute(interaction) {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
@@ -2260,6 +2266,68 @@ const chestCommand: Command = {
         content: `✅ <@${targetUser.id}> の本日の酒場VC時間に **${minutes}分** を追加しました。`,
         ephemeral: true,
       });
+    } else if (sub === "rescue-yesterday") {
+      if (!interaction.guildId || !interaction.guild) {
+        await interaction.reply({ content: "❌ サーバー内でのみ使用できます。", ephemeral: true });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true });
+
+      // 酒場チャンネルをサーバー内で名前検索
+      await interaction.guild.channels.fetch();
+      const tavernCh = interaction.guild.channels.cache.find(
+        (ch) => ch.name === "酒場" && (ch.type === 2 /* GuildVoice */ || ch.type === 13 /* GuildStageVoice */),
+      );
+      if (!tavernCh) {
+        await interaction.editReply("❌ 「酒場」という名前のVCが見つかりませんでした。");
+        return;
+      }
+
+      // 昨日（JST）の範囲を UTC で計算
+      const nowJstMs = Date.now() + 9 * 3600 * 1000;
+      const jstMidnightTodayMs = Math.floor(nowJstMs / 86_400_000) * 86_400_000;
+      const rangeEnd   = new Date(jstMidnightTodayMs - 9 * 3600 * 1000);   // 今日 0:00 JST を UTC に変換
+      const rangeStart = new Date(rangeEnd.getTime()  - 86_400_000);        // 昨日 0:00 JST
+
+      // vc_session_logs から昨日の酒場セッションを集計
+      const rows = await db
+        .select({
+          userId:          vcSessionLogsTable.userId,
+          totalSeconds:    drizzleSql<number>`sum(${vcSessionLogsTable.durationSeconds})::int`,
+        })
+        .from(vcSessionLogsTable)
+        .where(
+          and(
+            eq(vcSessionLogsTable.guildId,   interaction.guildId),
+            eq(vcSessionLogsTable.channelId, tavernCh.id),
+            gte(vcSessionLogsTable.joinedAt, rangeStart),
+            lt(vcSessionLogsTable.joinedAt,  rangeEnd),
+          ),
+        )
+        .groupBy(vcSessionLogsTable.userId);
+
+      if (rows.length === 0) {
+        await interaction.editReply(
+          `⚠️ 昨日（JST）の 酒場 VC セッションログが見つかりませんでした。\n` +
+          `（酒場がログカテゴリに設定されていない場合、セッションは記録されません。\`/宝箱 add-time\` で手動補填してください）`,
+        );
+        return;
+      }
+
+      // 今日分として addChestVcSeconds を付与
+      await Promise.all(
+        rows.map(({ userId, totalSeconds }) =>
+          addChestVcSeconds(interaction.guildId!, userId, totalSeconds ?? 0),
+        ),
+      );
+
+      const lines = rows.map(({ userId, totalSeconds }) => {
+        const min = Math.floor((totalSeconds ?? 0) / 60);
+        return `<@${userId}> — ${min}分`;
+      });
+      await interaction.editReply(
+        `✅ **${rows.length}名** に昨日の酒場VC時間を本日分として付与しました。\n\n${lines.join("\n")}`,
+      );
     }
   },
 };
