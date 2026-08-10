@@ -399,6 +399,18 @@ client.once(Events.ClientReady, async (readyClient) => {
     // active guilds with a retention > 180 days are never touched here.
     try {
       const activeGuildIds = [...readyClient.guilds.cache.keys()];
+      if (activeGuildIds.length === 0) {
+        // An empty guild list most likely means the guild-fetch step failed or
+        // the bot has not yet received GUILD_CREATE events.  Proceeding would
+        // treat *every* session as orphaned and mass-delete all VC history, so
+        // we skip this run entirely and rely on the next scheduled invocation.
+        logger.warn(
+          "[vc/prune] Skipping orphaned VC session prune — active guild list is empty. " +
+          "This may indicate the guild cache has not yet populated or a guild-fetch error was swallowed. " +
+          "Pruning is deferred to the next scheduled run to prevent accidental mass data loss.",
+        );
+        return;
+      }
       const deleted = await pruneOrphanedVcSessions(activeGuildIds, 180);
       if (deleted > 0) {
         logger.info(`[vc/prune] Pruned ${deleted} orphaned VC session(s) (>180 days, bot-left guilds only)`);
