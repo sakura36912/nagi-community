@@ -861,6 +861,115 @@ describe('handlePrivacyOptoutDelete – per-guild opt-out + wipe path', () => {
   });
 });
 
+// ─── handlePrivacyOptoutDelete – replay-safety tests ─────────────────────────
+//
+// The per-guild "delete + opt-out" button (COMM_PRIVACY_OPTOUT_DELETE) has a
+// plain constant customId with no nonce or userId encoded. Any user who obtains
+// the interaction token could click it.
+//
+// The handler must always scope both the DELETE and the opt-out upsert to
+// interaction.user.id — the clicking user — regardless of who originally
+// triggered the embed. These tests confirm that user B replaying user A's
+// button only deletes user B's sessions (in that guild) and only opts out
+// user B; user A's data must not be touched.
+
+describe("handlePrivacyOptoutDelete – replay safety", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Helper: stage mock results for one successful invocation.
+  // deleteUserVcSessions  → db.delete().where().returning()  → `deletedRows` (sessions)
+  //                       → db.delete().where().returning()  → []            (privacy row)
+  // setVcPrivacyOptOut    → db.insert().values().onConflictDoUpdate() (upsert)
+  //                       → db.update().set().where().returning() → [] (no open session)
+  function setupMocks(deletedRows: { id: number }[]) {
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);          // privacy row delete
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);       // setVcPrivacyOptOut upsert
+    mocks.returning.mockResolvedValueOnce([]);                // closeSession inside setVcPrivacyOptOut
+  }
+
+  it("replayed interaction: delete WHERE targets the clicking user's id, not the original user's id", async () => {
+    const originalUserId = "user-original-pd";
+    const replayerUserId = "user-replayer-pd";
+    setupMocks([]);
+
+    // User B (replayer) clicks the button; interaction.user.id = replayerUserId
+    const interaction = makeInteraction(replayerUserId, "guild-replay-pd-1");
+    await handlePrivacyOptoutDelete(interaction as never);
+
+    // db.delete() must have been called twice (sessions + privacy row)
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
+
+    // The WHERE clause of the first delete (sessions) must carry the replayer's userId
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    expect(whereArg.op).toBe("and");
+    const eqVals = whereArg.args.filter((a) => a.op === "eq").map((a) => a.val);
+    expect(eqVals).toContain(replayerUserId);
+    // The original user's id must not appear in the WHERE clause
+    expect(eqVals).not.toContain(originalUserId);
+  });
+
+  it("replayed interaction: opt-out upsert targets only the clicking user's id", async () => {
+    const originalUserId = "user-original-pd-2";
+    const replayerUserId = "user-replayer-pd-2";
+    setupMocks([]);
+
+    const interaction = makeInteraction(replayerUserId, "guild-replay-pd-2");
+    await handlePrivacyOptoutDelete(interaction as never);
+
+    // db.insert() must have been called once (setVcPrivacyOptOut)
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+
+    // The values() payload must reference the replayer's id, NOT the original user's id
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { guildId: string; userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.userId).toBe(replayerUserId);
+    expect(valuesArg.userId).not.toBe(originalUserId);
+    expect(valuesArg.optedOut).toBe(true);
+  });
+
+  it("replayed interaction: the guild scope is also taken from the interaction, not from a stored value", async () => {
+    const replayerUserId = "user-replayer-pd-3";
+    const guildId = "guild-replay-pd-3";
+    setupMocks([{ id: 5 }]);
+
+    const interaction = makeInteraction(replayerUserId, guildId);
+    await handlePrivacyOptoutDelete(interaction as never);
+
+    // Both the session-delete WHERE and the opt-out upsert must reference the
+    // correct guildId taken from interaction.guildId (not a cached/external value).
+    const [deleteWhereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    const deleteVals = deleteWhereArg.args.filter((a) => a.op === "eq").map((a) => a.val);
+    expect(deleteVals).toContain(guildId);
+    expect(deleteVals).toContain(replayerUserId);
+
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { guildId: string; userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.guildId).toBe(guildId);
+    expect(valuesArg.userId).toBe(replayerUserId);
+  });
+
+  it("replayed interaction: UI update fires correctly (deferUpdate + editReply with components:[])", async () => {
+    setupMocks([]);
+
+    const interaction = makeInteraction("user-replayer-pd-4", "guild-replay-pd-4");
+    await handlePrivacyOptoutDelete(interaction as never);
+
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+});
+
 // ─── handlePrivacyDeleteConfirm – two-step delete confirm path ───────────────
 //
 // This is the handler shown after the user taps "delete + opt-out" and confirms
