@@ -68,6 +68,7 @@ import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/shee
 import { getStickyMessage, updateStickyLastMessageId } from "./lib/sticky";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 import { handleChannelDelete } from "./lib/handleChannelDelete";
+import { runStartupChannelValidation, validateGuildConfiguredChannels } from "./lib/validateConfiguredChannels";
 import { handleVcLogMove } from "./lib/vcLogMove";
 
 import { logger } from "./lib/logger";
@@ -654,6 +655,19 @@ client.once(Events.ClientReady, (readyClient) => {
     );
   }
 
+  // Validate configured channel IDs for every guild that was already in cache
+  // when the bot connected.  If the bot was offline when a channel was deleted
+  // the ChannelDelete handler never fired and the stale ID remains in the DB;
+  // this pass clears any such IDs so the bot starts in a consistent state.
+  //
+  // NOTE: Events.GuildAvailable is NOT fired for guilds received during initial
+  // READY, so we must iterate readyClient.guilds.cache here.  GuildAvailable
+  // is kept below only as a runtime recovery path (unavailable → available).
+  runStartupChannelValidation(
+    readyClient.guilds.cache.values(),
+    (guild) => makeChannelResolver(guild),
+  ).catch((err) => logger.error("[startup] チャンネル検証に失敗しました", err));
+
   // Tick every 60 s; actual payout only happens when an interval has elapsed.
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
@@ -692,6 +706,50 @@ client.once(Events.ClientReady, (readyClient) => {
   }, shiftDelay);
 });
 
+
+// ─── Startup channel validation ───────────────────────────────────────────────
+//
+// When the bot was offline while a channel was deleted, the ChannelDelete
+// handler never fired and the stale ID remains in the database.  We validate
+// every configured channel ID against the live cache on startup (ClientReady)
+// and again whenever a guild transitions from unavailable → available at
+// runtime (GuildAvailable).
+
+/**
+ * Build a resolveChannel callback for the given guild.
+ *
+ * Returns true  when the channel still exists on Discord (cache hit or REST).
+ * Returns false when it is confirmed gone (API error 10003 / null fetch).
+ * Throws        on transient errors (network, 50013 Missing Access, etc.) so
+ *               validateGuildConfiguredChannels treats the channel as "still
+ *               exists" rather than clearing it spuriously.
+ */
+function makeChannelResolver(
+  guild: { channels: { cache: { has: (id: string) => boolean }; fetch: (id: string) => Promise<unknown> } },
+): (channelId: string) => Promise<boolean> {
+  return async function resolveChannel(channelId: string): Promise<boolean> {
+    if (guild.channels.cache.has(channelId)) return true;
+    try {
+      const fetched = await guild.channels.fetch(channelId);
+      return fetched !== null;
+    } catch (err) {
+      if (err instanceof DiscordAPIError && err.code === 10003) {
+        // Unknown Channel — channel is definitely gone
+        return false;
+      }
+      // Any other error is transient — re-throw so the caller keeps the setting
+      throw err;
+    }
+  };
+}
+
+// Runtime recovery: fired when a guild transitions from unavailable → available
+// during an active session.  Not fired for guilds present at initial READY.
+client.on(Events.GuildAvailable, (guild) => {
+  validateGuildConfiguredChannels(guild.id, makeChannelResolver(guild)).catch((err) =>
+    logger.error(`[startup] チャンネル検証中にエラーが発生しました (guild=${guild.id})`, err),
+  );
+});
 
 // ─── VC 入退室通知 ────────────────────────────────────────────────────────────
 
