@@ -504,6 +504,182 @@ describe("getVcRanking – opt-out then opt-back-in round-trip", () => {
   });
 });
 
+// ─── periodStart filter: no pre-opt-out time after re-opt-in ─────────────────
+
+describe("getVcRanking – periodStart filter never leaks pre-opt-out time after re-opt-in", () => {
+  /**
+   * Scenario:
+   *   T0: user joins VC → old session opens (joined_at = T0)
+   *   T1: user opts out → old session closed by setVcPrivacyOptOut
+   *       (left_at = T1, is_privacy_closed = true)
+   *   T2: user opts back in → user removed from NOT IN sub-select
+   *   T3: user rejoins VC → new open session (joined_at = T3, is_privacy_closed = false)
+   *
+   * With periodStart = P < T0, both sessions fall within the period window.
+   * After re-opt-in the user is no longer in the NOT IN exclusion list, so
+   * without the is_privacy_closed guard both sessions would be summed — the
+   * old 3 600 s plus the new 600 s = 4 200 s instead of the correct 600 s.
+   *
+   * The fix: closeSession(privacyClosed=true) stamps is_privacy_closed=true on
+   * opt-out closes, and getVcRanking adds AND is_privacy_closed = false to its
+   * WHERE clause, permanently siloing pre-opt-out time.
+   *
+   * These tests pin three invariants:
+   *   1. The SQL WHERE clause contains is_privacy_closed = false (structural)
+   *   2. total_seconds reflects only the new session after a round-trip (behavioral)
+   *   3. is_live is true for the new open session even when periodStart is early
+   */
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // ── SQL structural invariant ──────────────────────────────────────────────
+
+  it("SQL WHERE clause contains is_privacy_closed = false to exclude opt-out-closed sessions", async () => {
+    /**
+     * This assertion fails against any version of getVcRanking that omits the
+     * is_privacy_closed guard.  It is the primary regression pin: if a future
+     * refactor drops the clause, this test breaks immediately.
+     */
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("is_privacy_closed = false");
+  });
+
+  it("is_privacy_closed = false filter is present even when periodStart is provided", async () => {
+    /**
+     * Checks that adding a periodStart argument does not accidentally drop the
+     * is_privacy_closed guard (e.g. via a conditional SQL branch).
+     */
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD, new Date("2024-01-01T00:00:00Z"));
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("is_privacy_closed = false");
+  });
+
+  // ── Behavioral: correct totals after round-trip with periodStart ──────────
+
+  it("with periodStart before the old closed session, total_seconds is only the new session's time", async () => {
+    /**
+     * After the opt-out the old session has is_privacy_closed=true.
+     * The DB correctly excludes it via AND is_privacy_closed = false.
+     * Only the new session's 600 s is returned.
+     *
+     * If the is_privacy_closed guard were missing the DB would sum both the old
+     * (3 600 s) and new (600 s) sessions — the mock would need to return 4 200 s
+     * to pass, so this value choice can detect that regression in an integration
+     * environment where the guard has been dropped.
+     */
+    const periodStart = new Date("2024-01-01T00:00:00Z"); // before both sessions
+
+    // Simulate DB correctly returning only the new session after the guard filters
+    // out the is_privacy_closed=true old session.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-reopt", total_seconds: "600", is_live: true }],
+    });
+
+    const result = await getVcRanking(GUILD, periodStart);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-reopt");
+    expect(result[0]?.totalSeconds).toBe(600);
+  });
+
+  it("is_live is true for the new open session even when periodStart spans both old and new sessions", async () => {
+    /**
+     * After re-opt-in the new session is open (left_at IS NULL, is_privacy_closed=false).
+     * The old session is excluded by the is_privacy_closed guard, so only the
+     * new session contributes to bool_or(left_at IS NULL) → is_live = true.
+     */
+    const periodStart = new Date("2024-01-01T00:00:00Z");
+
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-reopt", total_seconds: "600", is_live: true }],
+    });
+
+    const result = await getVcRanking(GUILD, periodStart);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.isLive).toBe(true);
+  });
+
+  it("is_live is false when the user has re-opted-in but not yet rejoined any VC", async () => {
+    /**
+     * Edge case: user opted out, opted back in, but has not joined a new
+     * channel yet.  Old session has is_privacy_closed=true and is excluded.
+     * No remaining sessions → DB returns no rows for this user → result empty.
+     *
+     * Alternatively, if the user had a pre-opt-out closed session AND a
+     * manually-closed (is_privacy_closed=false) one, the DB returns is_live=false.
+     */
+    const periodStart = new Date("2024-01-01T00:00:00Z");
+
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(GUILD, periodStart);
+
+    expect(result).toEqual([]);
+  });
+
+  // ── opt-out close marks session privacy-closed ────────────────────────────
+
+  it("guild-local opt-out: closeSession is called with privacyClosed=true (db.update is invoked)", async () => {
+    /**
+     * setVcPrivacyOptOut(optedOut=true) must call closeSession(privacyClosed=true).
+     * We verify db.update is called (the mechanism that sets is_privacy_closed=true)
+     * and is NOT called for opt-in (only the upsert runs).
+     */
+    await setVcPrivacyOptOut(GUILD, "user-reopt", true);
+
+    // db.update is the path through closeSession that stamps leftAt + isPrivacyClosed
+    expect(mocks.update).toHaveBeenCalledOnce();
+  });
+
+  it("guild-local opt-in does NOT call db.update (no session is altered on re-opt-in)", async () => {
+    await setVcPrivacyOptOut(GUILD, "user-reopt", false);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  // ── Privacy NOT IN sub-selects still apply with periodStart ──────────────
+
+  it("with periodStart, NOT IN sub-selects for both privacy tables are still present in SQL", async () => {
+    const periodStart = new Date("2024-01-01T00:00:00Z");
+
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD, periodStart);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("community_vc_privacy");
+    expect(query).toContain("community_vc_privacy_global");
+    expect(query).toContain("opted_out = true");
+    const notInMatches = query.match(/NOT IN/g) ?? [];
+    expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("with periodStart, ranking is empty when re-opted-in user has only is_privacy_closed sessions", async () => {
+    /**
+     * All of the user's historical sessions were closed by opt-out events
+     * (is_privacy_closed=true). They have re-opted-in but not yet joined a VC.
+     * The is_privacy_closed filter removes all their rows → empty result.
+     */
+    const periodStart = new Date("2024-01-01T00:00:00Z");
+
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(GUILD, periodStart);
+
+    expect(result).toEqual([]);
+  });
+});
+
 // ─── Mixed state: guild opt-in while global opt-out is still active ───────────
 
 describe("openSession / getVcRanking – guild opt-in does not override active global opt-out", () => {

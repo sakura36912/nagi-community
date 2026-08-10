@@ -375,7 +375,9 @@ export async function setVcPrivacyOptOut(guildId: string, userId: string, optedO
       set: { optedOut, updatedAt: new Date() },
     });
   if (optedOut) {
-    return closeSession(guildId, userId);
+    // Mark the session is_privacy_closed=true so it is permanently excluded from
+    // getVcRanking even after the user re-opts-in (see closeSession JSDoc).
+    return closeSession(guildId, userId, true);
   }
   return false;
 }
@@ -535,10 +537,18 @@ export async function openSession(
   return row;
 }
 
-export async function closeSession(guildId: string, userId: string): Promise<boolean> {
+/**
+ * Stamps left_at on the user's currently-open session for the given guild.
+ *
+ * @param privacyClosed  Pass true when closing due to a privacy opt-out event
+ *   (setVcPrivacyOptOut / setVcGlobalPrivacyOptOut).  Sets is_privacy_closed=true
+ *   on the row so getVcRanking can permanently exclude it — preventing pre-opt-out
+ *   time from leaking back into the ranking after a user re-opts-in.
+ */
+export async function closeSession(guildId: string, userId: string, privacyClosed = false): Promise<boolean> {
   const result = await db
     .update(communityVcSessionsTable)
-    .set({ leftAt: new Date() })
+    .set({ leftAt: new Date(), isPrivacyClosed: privacyClosed })
     .where(
       and(
         eq(communityVcSessionsTable.guildId, guildId),
@@ -592,12 +602,14 @@ export async function pruneOldVcSessions(retentionDays = 180): Promise<number> {
 
 /**
  * Closes all open VC sessions (left_at IS NULL) for a single user across all guilds.
+ * Always marks the closed rows as is_privacy_closed=true because this function is
+ * called exclusively from the global opt-out path (setVcGlobalPrivacyOptOut).
  * Returns the number of sessions closed.
  */
 export async function closeOpenSessionsForUser(userId: string): Promise<number> {
   const result = await db
     .update(communityVcSessionsTable)
-    .set({ leftAt: new Date() })
+    .set({ leftAt: new Date(), isPrivacyClosed: true })
     .where(
       and(
         eq(communityVcSessionsTable.userId, userId),
@@ -696,6 +708,7 @@ export async function getVcRanking(guildId: string, periodStart?: Date): Promise
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       ${periodFilter}
+      AND is_privacy_closed = false
       AND channel_id IN (
         SELECT channel_id FROM community_tavern_channels WHERE guild_id = ${guildId}
       )
@@ -785,6 +798,7 @@ export async function getUserVcRank(
       FROM community_vc_sessions
       WHERE guild_id = ${guildId}
         ${periodFilter}
+        AND is_privacy_closed = false
         AND channel_id IN (
           SELECT channel_id FROM community_tavern_channels WHERE guild_id = ${guildId}
         )

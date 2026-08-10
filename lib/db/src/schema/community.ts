@@ -129,6 +129,14 @@ export const communityVcSessionsTable = pgTable("community_vc_sessions", {
   leftAt: timestamp("left_at", { withTimezone: true }),
   /** True when the session belongs to a user with the 追放者 role — tracked separately from the main ranking. */
   isExile: boolean("is_exile").notNull().default(false),
+  /**
+   * True when left_at was stamped by a privacy opt-out (setVcPrivacyOptOut or
+   * setVcGlobalPrivacyOptOut) rather than by a normal VC leave event.
+   *
+   * getVcRanking always filters these out so that time accumulated before an
+   * opt-out round-trip never leaks back into the ranking after a user re-opts-in.
+   */
+  isPrivacyClosed: boolean("is_privacy_closed").notNull().default(false),
 });
 
 export type CommunityVcSession = typeof communityVcSessionsTable.$inferSelect;
