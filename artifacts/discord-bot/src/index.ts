@@ -1,5 +1,6 @@
 import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayIntentBits, GuildMember, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
+import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
 import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
 import { EmbedBuilder } from "discord.js";
 import {
@@ -1366,6 +1367,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
       await command.execute(interaction);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(BJ_PREFIX)) {
+      await handleBlackjackButton(interaction);
       return;
     }
 
