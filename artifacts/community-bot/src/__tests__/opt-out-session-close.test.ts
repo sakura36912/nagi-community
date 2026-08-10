@@ -1956,6 +1956,106 @@ describe('handlePrivacyGlobalOptoutDelete – audit log path', () => {
     // No channel fetch should have been attempted
     expect(interaction.guild.channels.fetch).not.toHaveBeenCalled();
   });
+
+  it("each guild's audit channel receives exactly one message when the handler is invoked from two different guilds", async () => {
+    // Helper to build a minimal guild interaction backed by a specific channel mock
+    function makeInteractionForGuild(
+      userId: string,
+      guildId: string,
+      channel: { isTextBased: () => boolean; send: ReturnType<typeof vi.fn> },
+    ) {
+      return {
+        user: { id: userId, tag: `${userId}#0000` },
+        guildId,
+        guild: {
+          channels: {
+            cache: { get: vi.fn().mockReturnValue(channel) },
+            fetch: vi.fn().mockResolvedValue(channel),
+          },
+        },
+        deferUpdate: vi.fn().mockResolvedValue(undefined),
+        editReply: vi.fn().mockResolvedValue(undefined),
+        reply: vi.fn().mockResolvedValue(undefined),
+      };
+    }
+
+    // ── Invocation 1: guild-mg-A ──────────────────────────────────────────────
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 10 }]); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);            // global opt-out row cleared
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);         // global opt-out upsert
+    mocks.returning.mockResolvedValueOnce([]);                  // closeOpenSessionsForUser
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-guild-A" }]);
+
+    const sendA = vi.fn().mockResolvedValue(undefined);
+    const channelA = { isTextBased: () => true, send: sendA };
+    const interactionA = makeInteractionForGuild("user-mg-A", "guild-mg-A", channelA);
+
+    await handlePrivacyGlobalOptoutDelete(interactionA as never);
+
+    // After guild-A's invocation: its channel must have one message, guild-B untouched
+    expect(sendA).toHaveBeenCalledTimes(1);
+
+    // ── Invocation 2: guild-mg-B ──────────────────────────────────────────────
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 20 }]); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);            // global opt-out row cleared
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);         // global opt-out upsert
+    mocks.returning.mockResolvedValueOnce([]);                  // closeOpenSessionsForUser
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-guild-B" }]);
+
+    const sendB = vi.fn().mockResolvedValue(undefined);
+    const channelB = { isTextBased: () => true, send: sendB };
+    const interactionB = makeInteractionForGuild("user-mg-B", "guild-mg-B", channelB);
+
+    await handlePrivacyGlobalOptoutDelete(interactionB as never);
+
+    // After guild-B's invocation: its channel must have exactly one message
+    expect(sendB).toHaveBeenCalledTimes(1);
+    // Guild-A's channel must not have been called again (still at 1, not 2)
+    expect(sendA).toHaveBeenCalledTimes(1);
+
+    // Each audit-channel lookup must have used the correct guild id in its WHERE clause
+    // (2 total: one per invocation)
+    expect(mocks.selectWhere).toHaveBeenCalledTimes(2);
+    const firstLookup = (mocks.selectWhere.mock.calls[0] as unknown as [{ op: string; val: string }])[0];
+    const secondLookup = (mocks.selectWhere.mock.calls[1] as unknown as [{ op: string; val: string }])[0];
+    expect(firstLookup.op).toBe("eq");
+    expect(firstLookup.val).toBe("guild-mg-A");
+    expect(secondLookup.op).toBe("eq");
+    expect(secondLookup.val).toBe("guild-mg-B");
+  });
+
+  it("the audit channel lookup uses the invoking guild's id (WHERE carries the exact guildId, not a hardcoded value)", async () => {
+    // Use a non-trivial guild id so a hardcoded string would be obvious
+    const invokingGuildId = "guild-multi-B-invoke";
+    setupMocks([], invokingGuildId + "-audit");
+
+    const channelB = { isTextBased: () => true, send: vi.fn().mockResolvedValue(undefined) };
+    const interaction = {
+      user: { id: "user-multi-2", tag: "user-multi-2#0000" },
+      guildId: invokingGuildId,
+      guild: {
+        channels: {
+          cache: { get: vi.fn().mockReturnValue(channelB) },
+          fetch: vi.fn().mockResolvedValue(channelB),
+        },
+      },
+      deferUpdate: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handlePrivacyGlobalOptoutDelete(interaction as never);
+
+    // getAuditLogChannel(guildId) → db.select().from().where(eq(guildId, <value>))
+    // selectWhere must have been called once and its argument must carry the invoking guild's id
+    expect(mocks.selectWhere).toHaveBeenCalledTimes(1);
+    const [whereArg] = mocks.selectWhere.mock.calls[0] as unknown as [
+      { op: string; col: unknown; val: string }
+    ];
+    // The eq operator's value must match the invoking guild, not a hardcoded string
+    expect(whereArg.op).toBe("eq");
+    expect(whereArg.val).toBe(invokingGuildId);
+  });
 });
 
 // ─── isVcTrackingOptedOut – all four global/per-guild flag combinations ────────
