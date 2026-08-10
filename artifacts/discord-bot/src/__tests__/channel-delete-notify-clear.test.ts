@@ -387,6 +387,18 @@ describe("handleChannelDelete – leaveLogChannelId auto-clear", () => {
     expect(mocks.setLeaveLogChannelId).not.toHaveBeenCalled();
   });
 
+  it("does NOT call setLeaveLogChannelId when a different channel in the same guild is deleted (isolation)", async () => {
+    // leaveLogChannelId is configured; a completely different channel is deleted.
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: null,
+      leaveLogChannelId: "ch-leavelog",
+    });
+
+    await handleChannelDelete(makeGuildChannel("ch-unrelated", "guild-leave"));
+
+    expect(mocks.setLeaveLogChannelId).not.toHaveBeenCalled();
+  });
+
   it("does NOT log a [leavelog] warn when the deleted channel does not match leaveLogChannelId", async () => {
     mocks.getGuildSettings.mockResolvedValue({
       banLogChannelId: null,
