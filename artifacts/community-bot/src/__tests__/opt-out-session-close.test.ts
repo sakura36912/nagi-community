@@ -108,7 +108,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Imports (resolved after all mocks are in place) ─────────────────────────
-import { closeOpenSessionsForUser, deleteAllUserVcSessions, isVcTrackingOptedOut, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
+import { closeOpenSessionsForUser, deleteAllUserVcSessions, isVcTrackingGloballyOptedOut, isVcTrackingOptedOut, openSession, setVcGlobalPrivacyOptOut, setVcPrivacyOptOut } from "../lib/community.js";
 import { handlePrivacyGlobalOptoutDelete, handlePrivacyGlobalOptoutKeep, handlePrivacyOptoutDelete, handlePrivacyOptoutKeep, handlePrivacyDeleteConfirm, handlePrivacyDeleteCancel, handlePrivacyAdminDeleteConfirm, handlePrivacyAdminDeleteCancel, COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX } from "../commands/index.js";
 
 // ─── Fake discord.js ButtonInteraction ───────────────────────────────────────
@@ -550,6 +550,20 @@ describe("setVcGlobalPrivacyOptOut – cold-start opt-in path (optedOut=false)",
       { set: { optedOut: boolean } }
     ];
     expect(conflictArg.set.optedOut).toBe(false);
+  });
+
+  // The end-to-end read-back tests (cold-start opt-in → isVcTrackingGloballyOptedOut)
+  // require a stateful mock that wires the write and read through the same in-memory
+  // store.  Those tests live in global-optin-cold-start-stateful.test.ts.
+
+  it("isVcTrackingGloballyOptedOut returns false when no row exists (absence of a row is not opted-out)", async () => {
+    // Even if the upsert never ran (truly cold start), the checker must return false
+    // when there is no row at all — absence of a row ≠ opted-out.
+    mocks.selectWhere.mockResolvedValueOnce([]); // no row in DB
+
+    const result = await isVcTrackingGloballyOptedOut("user-cg-rb-4");
+
+    expect(result).toBe(false);
   });
 });
 
