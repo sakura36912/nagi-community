@@ -83,6 +83,14 @@ if (!token) {
 
 const commandsByName = new Map(commands.map((c) => [c.data.name, c]));
 
+/** 酒場チャンネル（大酒場🍺・小酒場🍺）の ID を guild キャッシュから返す */
+const _TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
+function getTavernChannelIds(guild: import("discord.js").Guild): string[] {
+  return [...guild.channels.cache.values()]
+    .filter((ch) => _TAVERN_NAMES.has(ch.name))
+    .map((ch) => ch.id);
+}
+
 // Required intents:
 //   GuildVoiceStates — for VC tracking and temp VC management
 //   GuildMembers     — to fetch member info (privileged; enable in Developer Portal)
@@ -303,7 +311,7 @@ client.once(Events.ClientReady, async (readyClient) => {
         if (!channel?.isTextBased()) continue;
 
         const [ranking, activeCount] = await Promise.all([
-          getVcRanking(guild.id, undefined),
+          getVcRanking(guild.id, undefined, getTavernChannelIds(guild)),
           getActiveSessionCount(guild.id),
         ]);
 

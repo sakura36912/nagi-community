@@ -82,6 +82,14 @@ import {
   updateVcPresenceChannel,
 } from "./lib/vcReward";
 import { isTavernChannel, onTavernJoin, onTavernLeave } from "./lib/chestTracker";
+
+/** 酒場チャンネル（大酒場🍺・小酒場🍺）の ID を guild キャッシュから返す */
+const _TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
+function getTavernChannelIds(guild: import("discord.js").Guild): string[] {
+  return [...guild.channels.cache.values()]
+    .filter((ch) => _TAVERN_NAMES.has(ch.name))
+    .map((ch) => ch.id);
+}
 import {
   recordPointVcJoin,
   settlePointVcSession,
@@ -377,8 +385,9 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
       } catch { /* use user displayName */ }
 
       const settings = await getEvalSheetSettings(sheet.guildId);
+      const tavernIds = sheetGuild ? getTavernChannelIds(sheetGuild) : undefined;
       const [vcSeconds, selfIntro] = await Promise.all([
-        getSheetVcSeconds(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
+        getSheetVcSeconds(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate, tavernIds),
         sheetGuild
           ? findSelfIntro(sheetGuild, sheet.userId, settings?.rosterCategoryId)
           : Promise.resolve(null),
@@ -1109,7 +1118,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const endDate = new Date(startDate.getTime() + cfg.evalPeriodDays * 24 * 60 * 60 * 1000);
 
     const [vcSeconds, selfIntro] = await Promise.all([
-      getSheetVcSeconds(guildId, newMember.id, startDate, endDate).catch(() => 0),
+      getSheetVcSeconds(guildId, newMember.id, startDate, endDate, getTavernChannelIds(newMember.guild)).catch(() => 0),
       findSelfIntro(newMember.guild, newMember.id, globalSettings?.rosterCategoryId ?? null).catch(() => null),
     ]);
 

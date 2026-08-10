@@ -1,4 +1,12 @@
-import { type Client, type User, EmbedBuilder } from "discord.js";
+import { type Client, type Guild, type User, EmbedBuilder } from "discord.js";
+
+/** 酒場チャンネル（大酒場🍺・小酒場🍺）の ID を guild キャッシュから返す */
+const _TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
+function getTavernChannelIds(guild: Guild): string[] {
+  return [...guild.channels.cache.values()]
+    .filter((ch) => _TAVERN_NAMES.has(ch.name))
+    .map((ch) => ch.id);
+}
 import {
   getEvalSheetSettings,
   getLatestEvalSheet,
@@ -146,7 +154,7 @@ export async function applySheetEmbedUpdate(
 
     const settings = await getEvalSheetSettings(guildId);
     const [vcSeconds, selfIntro] = await Promise.all([
-      getSheetVcSeconds(guildId, userId, startDate, newEndDate),
+      getSheetVcSeconds(guildId, userId, startDate, newEndDate, guild ? getTavernChannelIds(guild) : undefined),
       guild ? findSelfIntro(guild, userId, settings?.rosterCategoryId) : Promise.resolve(null),
     ]);
 
@@ -204,7 +212,7 @@ export async function refreshSheetEmbedForUser(
       guildForIcon = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
     } catch { /* fallback */ }
     const [vcSeconds, selfIntro] = await Promise.all([
-      getSheetVcSeconds(guildId, userId, sheet.startDate, sheet.endDate),
+      getSheetVcSeconds(guildId, userId, sheet.startDate, sheet.endDate, guildForIcon ? getTavernChannelIds(guildForIcon) : undefined),
       guildForIcon
         ? findSelfIntro(guildForIcon, userId, settings?.rosterCategoryId)
         : Promise.resolve(null),
