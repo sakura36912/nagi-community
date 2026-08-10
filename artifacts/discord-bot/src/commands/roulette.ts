@@ -21,10 +21,16 @@ import {
   type ChatInputCommandInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
-import { generateRouletteGif } from "../lib/rouletteWheel";
+
+// 自作GIFを起動時に読み込む（毎スピン生成不要、即時添付可能）
+const __dir = dirname(fileURLToPath(import.meta.url));
+const ROULETTE_GIF = readFileSync(join(__dir, "../../assets/roulette.gif"));
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -122,7 +128,7 @@ function numberSelectComponents() {
 
 function selectionEmbed(session: RouletteSession, title = "何に賭けますか？"): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle("🎡 ルーレット")
+    .setTitle("🏴‍☠️ 海賊ルーレット")
     .setDescription(`賭け金: **${session.bet.toLocaleString()}** ${session.currencyName}\n\n${title}`)
     .setColor(COLOR_NEUTRAL)
     .setFooter({ text: "配当: 数字×35 | 色/奇偶/ロー・ハイ×1 | ダズン×2 | 0は全て外れ | 3分でタイムアウト" });
@@ -167,7 +173,7 @@ function wheelRow(nums: number[], ci = 2): string {
 
 function spinningEmbed(row: string, status: string): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle("🎡 ルーレット")
+    .setTitle("🏴‍☠️ 海賊ルーレット")
     .setDescription(`-# ${status}\n\n${row}\n`)
     .setColor(COLOR_NEUTRAL);
 }
@@ -220,9 +226,6 @@ async function runSpin(
 
   await interaction.deferUpdate();
 
-  // GIF生成をアニメーションと並行実行
-  const gifPromise = generateRouletteGif(landed).catch(() => null);
-
   for (let i = 0; i < 4; i++) {
     await interaction.editReply({ embeds: [spinningEmbed(wheelRow(Array.from({length:5},()=>randNum())), "🔄 スピン中...")], components: [] });
     await sleep(420);
@@ -235,8 +238,6 @@ async function runSpin(
     embeds: [spinningEmbed(wheelRow([randNum(), landed, randNum(), randNum(), randNum()], 1), "🛑 もうすぐ止まります...")],
   });
   await sleep(900);
-
-  const gifBuffer = await gifPromise;
 
   // 決済
   let netDelta: number;
@@ -253,10 +254,12 @@ async function runSpin(
 
   const sign  = netDelta > 0 ? "+" : "";
   const lc    = numColor(landed);
+  const att   = new AttachmentBuilder(ROULETTE_GIF, { name: "roulette.gif" });
 
   const embed = new EmbedBuilder()
-    .setTitle(`🎡 ルーレット — ${result.win ? "✅ 勝利！" : "❌ 敗北"}`)
+    .setTitle(`🏴‍☠️ 海賊ルーレット — ${result.win ? "✅ 勝利！" : "❌ 敗北"}`)
     .setColor(result.win ? COLOR_WIN : COLOR_LOSE)
+    .setImage("attachment://roulette.gif")
     .addFields(
       { name: "ボールが止まった数字", value: `## ${lc} **${landed}**` },
       { name: "ベット", value: result.betDesc, inline: true },
@@ -266,14 +269,7 @@ async function runSpin(
     .setFooter({ text: "配当: 数字×35 | 色/奇偶/ロー・ハイ×1 | ダズン×2 | 0は全て外れ" })
     .setTimestamp();
 
-  if (gifBuffer) {
-    const att = new AttachmentBuilder(gifBuffer, { name: "roulette.gif" });
-    embed.setImage("attachment://roulette.gif");
-    await interaction.editReply({ embeds: [embed], files: [att], components: [] });
-  } else {
-    embed.setDescription(wheelRow([randNum(), randNum(), landed, randNum(), randNum()]));
-    await interaction.editReply({ embeds: [embed], components: [] });
-  }
+  await interaction.editReply({ embeds: [embed], files: [att], components: [] });
 }
 
 // ─── Button / Select handler (exported to index.ts) ───────────────────────────
