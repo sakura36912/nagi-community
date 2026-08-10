@@ -109,21 +109,17 @@ function total(hand: Card[]): number {
 const isBust       = (hand: Card[]) => total(hand) > 21;
 const isBlackjack  = (hand: Card[]) => hand.length === 2 && total(hand) === 21;
 
-// Unicode playing card glyphs (U+1F0A0–U+1F0FF)
-const CARD_GLYPH: Record<Suit, Record<Rank, string>> = {
-  "♠": { A:"🂡", "2":"🂢", "3":"🂣", "4":"🂤", "5":"🂥", "6":"🂦", "7":"🂧", "8":"🂨", "9":"🂩", "10":"🂪", J:"🂫", Q:"🂭", K:"🂮" },
-  "♥": { A:"🂱", "2":"🂲", "3":"🂳", "4":"🂴", "5":"🂵", "6":"🂶", "7":"🂷", "8":"🂸", "9":"🂹", "10":"🂺", J:"🂻", Q:"🂽", K:"🂾" },
-  "♦": { A:"🃁", "2":"🃂", "3":"🃃", "4":"🃄", "5":"🃅", "6":"🃆", "7":"🃇", "8":"🃈", "9":"🃉", "10":"🃊", J:"🃋", Q:"🃍", K:"🃎" },
-  "♣": { A:"🃑", "2":"🃒", "3":"🃓", "4":"🃔", "5":"🃕", "6":"🃖", "7":"🃗", "8":"🃘", "9":"🃙", "10":"🃚", J:"🃛", Q:"🃝", K:"🃞" },
+// スーツ絵文字（♠️♥️♦️♣️）+ ランク文字。どの環境でも確実に表示される。
+const SUIT_EMOJI: Record<Suit, string> = {
+  "♠": "♠️", "♥": "♥️", "♦": "♦️", "♣": "♣️",
 };
-const HIDDEN_GLYPH = "🂠";
 
 function formatCard(c: Card): string {
-  return CARD_GLYPH[c.suit][c.rank];
+  return `${c.rank}${SUIT_EMOJI[c.suit]}`;
 }
 
 function formatHand(hand: Card[], hideSecond = false): string {
-  return hand.map((c, i) => (hideSecond && i === 1 ? HIDDEN_GLYPH : formatCard(c))).join(" ");
+  return hand.map((c, i) => (hideSecond && i === 1 ? "🎴" : formatCard(c))).join(" ");
 }
 
 // ─── Balance helpers ──────────────────────────────────────────────────────────
