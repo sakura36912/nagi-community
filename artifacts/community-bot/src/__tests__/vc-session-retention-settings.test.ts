@@ -189,6 +189,27 @@ describe("setVcSessionRetentionDays", () => {
     expect(conflictArg.set.vcSessionRetentionDays).toBe(42);
   });
 
+  // (c) Placeholder safety: channelId=null and period="all" are in .values()
+  it("uses channelId=null and period='all' as safe placeholder values in insert", async () => {
+    await setVcSessionRetentionDays("guild-1", 90);
+
+    const [valuesArg] = mocks.insertValues.mock.calls[0] as unknown as [
+      { channelId: string | null; period: string }
+    ];
+    expect(valuesArg.channelId).toBeNull();
+    expect(valuesArg.period).toBe("all");
+  });
+
+  it("does not include channelId or period in the onConflictDoUpdate set payload", async () => {
+    await setVcSessionRetentionDays("guild-1", 90);
+
+    const [conflictArg] = mocks.onConflictDoUpdate.mock.calls[0] as unknown as [
+      { target: unknown; set: Record<string, unknown> }
+    ];
+    expect(conflictArg.set).not.toHaveProperty("channelId");
+    expect(conflictArg.set).not.toHaveProperty("period");
+  });
+
   // (a) Round-trip: after set(90), a subsequent get reads back 90 (not 180)
   it("round-trip: getVcSessionRetentionDays returns the value that was set, not the 180-day default", async () => {
     // First wire insert chain for the set call

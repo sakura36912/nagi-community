@@ -896,7 +896,7 @@ export async function setVcSessionRetentionDays(
 ): Promise<void> {
   await db
     .insert(communityRankingSettingsTable)
-    .values({ guildId, period: "all", vcSessionRetentionDays: days })
+    .values({ guildId, channelId: null, period: "all", vcSessionRetentionDays: days })
     .onConflictDoUpdate({
       target: communityRankingSettingsTable.guildId,
       set: { vcSessionRetentionDays: days, updatedAt: new Date() },
