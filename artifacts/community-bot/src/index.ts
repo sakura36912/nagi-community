@@ -32,6 +32,7 @@ import {
   pruneOrphanedVcSessions,
   getTrackedVcCategoryId,
 } from "./lib/community.js";
+import { resolveIsExile } from "./lib/vc-exile.js";
 import { runPerGuildVcPrune } from "./lib/vc-prune-scheduler.js";
 import { awardVcTime, awardEventParticipation, runRoleTenureBatch } from "./lib/points.js";
 import { getPreban } from "@workspace/db";
@@ -571,7 +572,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   if (newChannelId) {
     const channelParentId = newState.channel?.parentId ?? null;
-    const isExile = newState.member?.roles.cache.some((r) => r.name === "追放者") ?? false;
+    const isExile = resolveIsExile(newState.member);
     await openVcSessionIfTracked(guildId, userId, newChannelId, channelParentId, isExile);
   }
 });
