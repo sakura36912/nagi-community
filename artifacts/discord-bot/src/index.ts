@@ -385,9 +385,10 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
 
       let displayName = targetUser.displayName;
       let sheetGuild: import("discord.js").Guild | null = null;
+      let mem: import("discord.js").GuildMember | null = null;
       try {
         sheetGuild = bot.guilds.cache.get(sheet.guildId) ?? await bot.guilds.fetch(sheet.guildId);
-        const mem = await sheetGuild.members.fetch(sheet.userId).catch(() => null);
+        mem = await sheetGuild.members.fetch(sheet.userId).catch(() => null);
         if (mem) displayName = mem.displayName;
       } catch { /* use user displayName */ }
 
@@ -401,6 +402,7 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
 
       const embed = buildSheetEmbed({
         targetUser,
+        member: mem ?? null,
         displayName,
         startDate: sheet.startDate,
         endDate: sheet.endDate,
@@ -1194,6 +1196,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
     const embed = buildSheetEmbed({
       targetUser,
+      member: newMember,
       displayName,
       startDate,
       endDate,

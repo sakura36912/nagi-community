@@ -1,4 +1,4 @@
-import { type Client, type User, EmbedBuilder } from "discord.js";
+import { type Client, type GuildMember, type User, EmbedBuilder } from "discord.js";
 import {
   getEvalSheetSettings,
   getLatestEvalSheet,
@@ -27,6 +27,7 @@ function formatSeconds(totalSeconds: number): string {
 
 export function buildSheetEmbed(opts: {
   targetUser: User;
+  member?: GuildMember | null;
   displayName: string;
   startDate: Date;
   endDate: Date;
@@ -34,10 +35,10 @@ export function buildSheetEmbed(opts: {
   nameboardUrl: string | null | undefined;
   selfIntro: string | null | undefined;
   createdByLabel: string;
-  /** サーバーアイコンURL。指定時はサムネイルにサーバーアイコンを使用する */
+  /** サーバーアイコンURL */
   guildIconUrl?: string | null;
 }): EmbedBuilder {
-  const { targetUser, displayName, startDate, endDate, vcSeconds, nameboardUrl, selfIntro, createdByLabel, guildIconUrl } = opts;
+  const { targetUser, member, displayName, startDate, endDate, vcSeconds, nameboardUrl, selfIntro, createdByLabel, guildIconUrl } = opts;
   const startTs = Math.floor(startDate.getTime() / 1000);
   const endTs = Math.floor(endDate.getTime() / 1000);
   const nameboardValue = nameboardUrl ? `[名簿を見る](${nameboardUrl})` : "未設定";
@@ -45,7 +46,7 @@ export function buildSheetEmbed(opts: {
   const embed = new EmbedBuilder()
     .setTitle(`📋 評価シート — ${displayName}`)
     .setColor(0x2ecc71)
-    .setThumbnail(targetUser.displayAvatarURL())
+    .setThumbnail(member?.displayAvatarURL() ?? targetUser.displayAvatarURL())
     .addFields(
       { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
       { name: "📋 名簿", value: nameboardValue, inline: false },
@@ -138,9 +139,10 @@ export async function applySheetEmbedUpdate(
 
     let displayName = targetUser.displayName;
     let guild: import("discord.js").Guild | null = null;
+    let member: GuildMember | null = null;
     try {
       guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId);
+      member = await guild.members.fetch(userId);
       displayName = member.displayName;
     } catch { /* fallback */ }
 
@@ -152,6 +154,7 @@ export async function applySheetEmbedUpdate(
 
     const embed = buildSheetEmbed({
       targetUser,
+      member: member ?? null,
       displayName,
       startDate,
       endDate: newEndDate,
@@ -210,8 +213,13 @@ export async function refreshSheetEmbedForUser(
         : Promise.resolve(null),
     ]);
 
+    let memberForEmbed: GuildMember | null = null;
+    if (guildForIcon) {
+      memberForEmbed = await guildForIcon.members.fetch(userId).catch(() => null);
+    }
     const embed = buildSheetEmbed({
       targetUser,
+      member: memberForEmbed,
       displayName: newDisplayName,
       startDate: sheet.startDate,
       endDate: sheet.endDate,
