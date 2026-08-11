@@ -525,6 +525,10 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       type: ChannelType.GuildVoice,
       parent: categoryId,
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
+      // カテゴリの設定に関わらず画面共有を有効化
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, allow: [PermissionFlagsBits.Stream] },
+      ],
     });
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
