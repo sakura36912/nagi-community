@@ -278,6 +278,8 @@ async function purchaseAndCreatePrivateVc(
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.Connect,
             PermissionFlagsBits.Speak,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.AttachFiles,
           ],
         },
       ],
@@ -2102,7 +2104,7 @@ export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction
   const streamEnabledOnAdd = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, ownerId);
   await ch.permissionOverwrites.edit(targetId, {
     ViewChannel: true, Connect: true, Speak: true,
-    Stream: streamEnabledOnAdd, SendMessages: true,
+    Stream: streamEnabledOnAdd, SendMessages: true, AttachFiles: true,
   });
   await interaction.reply({ content: `✅ <@${targetId}> をVCに追加しました。`, ephemeral: true });
   // Refresh the panel so the new member appears in the access list (best-effort).
