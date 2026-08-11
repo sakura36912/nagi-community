@@ -1896,8 +1896,12 @@ type ChestResult =
   | "role_limited"
   | "role_voime";
 
-/** 新入り宝箱: 10,000〜100,000$ を均等確率（各10%）で返す */
+/**
+ * 新入り宝箱: 50% ハズレ、残り50%で10,000〜100,000$ を均等（各5%）
+ * 戻り値: 当選コイン数、0 = ハズレ
+ */
 function rollShinniriChest(): number {
+  if (Math.random() < 0.5) return 0; // ハズレ 50%
   const prizes = [10_000, 20_000, 30_000, 40_000, 50_000, 60_000, 70_000, 80_000, 90_000, 100_000];
   return prizes[Math.floor(Math.random() * prizes.length)]!;
 }
@@ -1949,11 +1953,11 @@ export function buildChestPanelMessage(chestType: "shinniri" | "honsennin") {
           "　🎊 **大当たり** →　50,000$\n" +
           "　🎁 **当たり**　→　15,000$ / 30,000$\n" +
           "　💨 **ハズレ**　→　なし\n"
-        : "　💎 90,000$ / 100,000$\n" +
-          "　🌟 60,000$ / 70,000$ / 80,000$\n" +
-          "　🎊 40,000$ / 50,000$\n" +
-          "　🎁 10,000$ / 20,000$ / 30,000$\n" +
-          "　※ 全10種・各10%・ハズレなし\n") +
+        : "　💎 90,000$ / 100,000$　（各5%）\n" +
+          "　🌟 60,000$ / 70,000$ / 80,000$　（各5%）\n" +
+          "　🎊 40,000$ / 50,000$　（各5%）\n" +
+          "　🎁 10,000$ / 20,000$ / 30,000$　（各5%）\n" +
+          "　💨 **ハズレ**　（50%）\n") +
       "─────────────────────",
     )
     .setFooter({ text: "🎲 運試し、してみる？" });
@@ -2031,11 +2035,15 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   // ── 新入り宝箱: 10,000〜100,000$ を均等10%で抽選 ─────────────────────────
   if (chestType === "shinniri") {
     const amount = rollShinniriChest();
-    await giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest");
-    const emoji = amount >= 90_000 ? "💎" : amount >= 60_000 ? "🌟" : amount >= 40_000 ? "🎊" : "🎁";
-    await interaction.editReply(
-      `📦 宝箱を開けた！\n\n${emoji} **${amount.toLocaleString()}${cn}** を獲得しました！`,
-    );
+    if (amount === 0) {
+      await interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。");
+    } else {
+      await giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest");
+      const emoji = amount >= 90_000 ? "💎" : amount >= 60_000 ? "🌟" : amount >= 40_000 ? "🎊" : "🎁";
+      await interaction.editReply(
+        `📦 宝箱を開けた！\n\n${emoji} **${amount.toLocaleString()}${cn}** を獲得しました！`,
+      );
+    }
     return;
   }
 
