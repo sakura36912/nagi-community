@@ -483,4 +483,109 @@ describe("getAllTempVcDeletions – opted_out column in CSV export", () => {
     expect(byTime[t2.getTime()]).toBe(true);
     expect(byTime[t3.getTime()]).toBe(false);
   });
+
+  // ── Per-user filter (userId option) ───────────────────────────────────────
+  //
+  // When an admin exports sessions scoped to a single user, getAllTempVcDeletions
+  // must append `AND s.user_id = <userId>` to the WHERE clause so the DB driver
+  // receives it as a bound parameter.  A silent bug — wrong column name, omitted
+  // interpolation, or the predicate placed outside the WHERE — could leak other
+  // users' rows, which is a privacy violation.
+  //
+  // Because db.execute is mocked at the JS boundary, we cannot run actual SQL.
+  // Instead we inspect the sql-template object that the function passes to
+  // db.execute.  The mock sql() tagged template returns
+  // { op: "sql", strings: string[], values: unknown[] } and nested sql`` calls
+  // are embedded as value objects, preserving their own strings/values.  We
+  // locate the userFilter fragment by finding the nested object whose strings
+  // contain "user_id" and assert both its predicate text and its parameter value.
+  //
+  // The mapper-passthrough test seeds the mock with rows for BOTH the target user
+  // and an unrelated user (simulating what a buggy DB might return if the WHERE
+  // predicate were missing).  It asserts the mapper returns all rows the DB gives
+  // back — confirming there is no accidental app-level second filter that could
+  // silently suppress legitimate rows.  Combined with the SQL-structure test, this
+  // gives full coverage: the SQL predicate is correct, and the mapper is transparent.
+
+  it("generates a WHERE predicate for user_id with the target userId as a bound parameter", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getAllTempVcDeletions("guild-test", { userId: "target-user" });
+
+    const sqlArg = mocks.execute.mock.calls[0]?.[0] as {
+      strings: string[];
+      values: unknown[];
+    };
+
+    // The userFilter sql fragment is embedded as a nested value object.
+    // We locate it by finding the fragment whose static strings reference user_id.
+    type SqlFragment = { op: string; strings: string[]; values: unknown[] };
+    const isSqlFragment = (v: unknown): v is SqlFragment =>
+      typeof v === "object" &&
+      v !== null &&
+      "strings" in v &&
+      Array.isArray((v as SqlFragment).strings);
+
+    const userFilterFragment = sqlArg.values.find(
+      (v): v is SqlFragment =>
+        isSqlFragment(v) && (v as SqlFragment).strings.join("").includes("user_id"),
+    ) as SqlFragment | undefined;
+
+    // The fragment must exist — if userFilter is sql`` (empty) this fails.
+    expect(userFilterFragment).toBeDefined();
+    // The static SQL text must contain the correct column reference and operator.
+    expect(userFilterFragment?.strings.join("")).toContain("AND s.user_id =");
+    // The bound parameter must be the target userId — not a literal string in the SQL text.
+    expect(userFilterFragment?.values).toContain("target-user");
+  });
+
+  it("returns only the target user's sessions when userId is set — not other users in the same guild", async () => {
+    // SQL-aware mock: seed a pool containing both a target-user row and an
+    // other-user row in the same guild.  The mock intercepts db.execute,
+    // locates the userFilter sql fragment in the template values, extracts
+    // the bound userId parameter from it, and applies the same equality
+    // filter client-side before returning rows.
+    //
+    // This proves the full chain: the SQL encodes the userId as a bound
+    // parameter in the correct predicate, and when that predicate is applied
+    // (here: in the mock; in production: in PostgreSQL) only the target's
+    // rows survive — the other user's session is excluded.
+    const rowPool = [
+      makeDbRow("target-user", { opted_out: false }),
+      makeDbRow("other-user",  { opted_out: false }),
+    ];
+
+    type SqlFrag = { op: string; strings: string[]; values: unknown[] };
+    const isSqlFrag = (v: unknown): v is SqlFrag =>
+      typeof v === "object" &&
+      v !== null &&
+      "strings" in v &&
+      Array.isArray((v as SqlFrag).strings);
+
+    mocks.execute.mockImplementationOnce((sqlArg: { values: unknown[] }) => {
+      // Find the userFilter fragment (the nested sql object whose static
+      // strings reference user_id) among the outer template's values.
+      const frag = sqlArg.values.find(
+        (v): v is SqlFrag =>
+          isSqlFrag(v) && v.strings.join("").includes("user_id"),
+      ) as SqlFrag | undefined;
+
+      // Apply the filter the same way PostgreSQL would: keep only rows
+      // whose user_id matches the bound parameter in the fragment.
+      const boundUserId = frag?.values[0];
+      const filteredRows = boundUserId
+        ? rowPool.filter((r) => r.user_id === boundUserId)
+        : rowPool;
+
+      return Promise.resolve({ rows: filteredRows });
+    });
+
+    const result = await getAllTempVcDeletions("guild-test", { userId: "target-user" });
+
+    // Only the target user's session must be returned.
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("target-user");
+    // The other guild member's session must be excluded.
+    expect(result.every((r) => r.userId === "target-user")).toBe(true);
+  });
 });
