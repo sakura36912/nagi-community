@@ -1156,7 +1156,8 @@ const giveCommand: Command = {
           );
         await interaction.editReply({ embeds: [embed] });
       } catch (err) {
-        await interaction.editReply(err instanceof Error ? err.message : "入金に失敗しました。");
+        logger.error("[treasury] depositToTreasury failed", err);
+        await interaction.editReply("入金に失敗しました。");
       }
       return;
     }
