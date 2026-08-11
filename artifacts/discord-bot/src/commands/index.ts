@@ -1896,6 +1896,13 @@ type ChestResult =
   | "role_limited"
   | "role_voime";
 
+/** 新入り宝箱: 10,000〜100,000$ を均等確率（各10%）で返す */
+function rollShinniriChest(): number {
+  const prizes = [10_000, 20_000, 30_000, 40_000, 50_000, 60_000, 70_000, 80_000, 90_000, 100_000];
+  return prizes[Math.floor(Math.random() * prizes.length)]!;
+}
+
+/** 本船員宝箱: 既存の確率テーブル */
 function rollChest(): ChestResult {
   const r = Math.random();
   if (r < 0.50)   return "miss";
@@ -1935,12 +1942,18 @@ export function buildChestPanelMessage(chestType: "shinniri" | "honsennin") {
       "**酒場🍺** に累計 **1時間** 接続すると 1回チャレンジできます。\n" +
       "カウントは毎日 **JST 0:00** にリセット。\n\n" +
       "─────────────────────\n" +
-      "　✨ **激レア**　→　管理者指定ボイメ\n" +
-      "　💎 **超レア**　→　プレオープン限定 / 80,000$\n" +
-      "　🌟 **レア**　　→　評価員アドバイス券 / 60,000$\n" +
-      "　🎊 **大当たり** →　50,000$\n" +
-      "　🎁 **当たり**　→　15,000$ / 30,000$\n" +
-      "　💨 **ハズレ**　→　なし\n" +
+      (isHon
+        ? "　✨ **激レア**　→　管理者指定ボイメ\n" +
+          "　💎 **超レア**　→　プレオープン限定 / 80,000$\n" +
+          "　🌟 **レア**　　→　評価員アドバイス券 / 60,000$\n" +
+          "　🎊 **大当たり** →　50,000$\n" +
+          "　🎁 **当たり**　→　15,000$ / 30,000$\n" +
+          "　💨 **ハズレ**　→　なし\n"
+        : "　💎 90,000$ / 100,000$\n" +
+          "　🌟 60,000$ / 70,000$ / 80,000$\n" +
+          "　🎊 40,000$ / 50,000$\n" +
+          "　🎁 10,000$ / 20,000$ / 30,000$\n" +
+          "　※ 全10種・各10%・ハズレなし\n") +
       "─────────────────────",
     )
     .setFooter({ text: "🎲 運試し、してみる？" });
@@ -2012,9 +2025,22 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   // 開封記録（管理者は記録しない＝何度でも開封可能）
   if (!isAdmin) await incrementChestOpensToday(interaction.guild.id, interaction.user.id);
 
-  const result = rollChest();
   const settings = await getGuildSettings(interaction.guild.id);
   const cn = settings.currencyName;
+
+  // ── 新入り宝箱: 10,000〜100,000$ を均等10%で抽選 ─────────────────────────
+  if (chestType === "shinniri") {
+    const amount = rollShinniriChest();
+    await giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest");
+    const emoji = amount >= 90_000 ? "💎" : amount >= 60_000 ? "🌟" : amount >= 40_000 ? "🎊" : "🎁";
+    await interaction.editReply(
+      `📦 宝箱を開けた！\n\n${emoji} **${amount.toLocaleString()}${cn}** を獲得しました！`,
+    );
+    return;
+  }
+
+  // ── 本船員宝箱: 既存の確率テーブル ────────────────────────────────────────
+  const result = rollChest();
 
   // ── 通貨賞品 ──────────────────────────────────────────────────────────────
   const coinPrizes: Partial<Record<ChestResult, { amount: number; label: string; emoji: string }>> = {
