@@ -56,6 +56,20 @@ export async function togglePeriodicMessage(guildId: string, id: number): Promis
   return row ?? null;
 }
 
+/** Edit the message text and/or interval of a periodic message. Returns the updated row, or null if not found. */
+export async function editPeriodicMessage(
+  guildId: string,
+  id: number,
+  updates: { message?: string; intervalHours?: number },
+): Promise<PeriodicMessage | null> {
+  const [row] = await db
+    .update(periodicMessagesTable)
+    .set(updates)
+    .where(sql`${periodicMessagesTable.id} = ${id} AND ${periodicMessagesTable.guildId} = ${guildId}`)
+    .returning();
+  return row ?? null;
+}
+
 /** Mark a periodic message as just posted. */
 export async function markPeriodicMessagePosted(id: number): Promise<void> {
   await db

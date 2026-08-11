@@ -7,6 +7,7 @@ import {
 } from "discord.js";
 import {
   addPeriodicMessage,
+  editPeriodicMessage,
   listPeriodicMessages,
   removePeriodicMessage,
   togglePeriodicMessage,
@@ -66,6 +67,28 @@ export const periodicCommand: Command = {
     )
     .addSubcommand((sub) =>
       sub.setName("list").setDescription("このサーバーの定期メッセージ一覧を表示します"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("edit")
+        .setDescription("定期メッセージのテキストや間隔を編集します")
+        .addIntegerOption((opt) =>
+          opt.setName("id").setDescription("編集するメッセージのID（/periodic list で確認）").setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("message")
+            .setDescription("新しいメッセージ内容（省略すると変更なし）")
+            .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("interval")
+            .setDescription("新しい投稿間隔（時間）（省略すると変更なし）")
+            .setMinValue(1)
+            .setMaxValue(720)
+            .setRequired(false),
+        ),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -125,6 +148,51 @@ export const periodicCommand: Command = {
       }
       const state = row.enabled ? "✅ 有効" : "⏸ 無効";
       await interaction.reply({ content: `${state} にしました（ID: \`${id}\`）`, ephemeral: true });
+      return;
+    }
+
+    // ── edit ──────────────────────────────────────────────────────────────────
+    if (sub === "edit") {
+      const id = interaction.options.getInteger("id", true);
+      const newMessage = interaction.options.getString("message") ?? undefined;
+      const newInterval = interaction.options.getInteger("interval") ?? undefined;
+
+      if (newMessage === undefined && newInterval === undefined) {
+        await interaction.reply({
+          content: "❌ `message` か `interval` のどちらか一方以上を指定してください。",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const row = await editPeriodicMessage(interaction.guildId, id, {
+        ...(newMessage !== undefined && { message: newMessage }),
+        ...(newInterval !== undefined && { intervalHours: newInterval }),
+      });
+
+      if (!row) {
+        await interaction.reply({
+          content: `❌ ID \`${id}\` が見つかりません。\`/periodic list\` でIDを確認してください。`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xf39c12)
+            .setTitle("✏️ 定期メッセージを編集しました")
+            .addFields(
+              { name: "ID", value: String(row.id), inline: true },
+              { name: "チャンネル", value: `<#${row.channelId}>`, inline: true },
+              { name: "間隔", value: `${row.intervalHours}時間ごと`, inline: true },
+              { name: "メッセージ", value: row.message.slice(0, 1024) },
+            )
+            .setTimestamp(),
+        ],
+        ephemeral: true,
+      });
       return;
     }
 
