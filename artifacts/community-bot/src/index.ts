@@ -446,15 +446,30 @@ client.once(Events.ClientReady, async (readyClient) => {
       return [] as Awaited<ReturnType<typeof getDuePeriodicMessages>>;
     });
     for (const msg of due) {
+      // Optimistic update: mark posted BEFORE sending so a bot crash between
+      // send and DB write cannot cause a duplicate post on the next startup.
+      // If the DB write itself fails we skip the send entirely rather than
+      // risk the message being seen as due again on the next tick.
+      try {
+        await markPeriodicMessagePosted(msg.id);
+      } catch (err) {
+        logger.error(`[periodic] Failed to mark message id=${msg.id} as posted — skipping send`, err);
+        continue;
+      }
       try {
         const guild = readyClient.guilds.cache.get(msg.guildId)
           ?? await readyClient.guilds.fetch(msg.guildId).catch(() => null);
-        if (!guild) continue;
+        if (!guild) {
+          logger.warn(`[periodic] Guild ${msg.guildId} not found — skipping message id=${msg.id}`);
+          continue;
+        }
         const channel = guild.channels.cache.get(msg.channelId)
           ?? await guild.channels.fetch(msg.channelId).catch(() => null);
-        if (!channel?.isTextBased()) continue;
+        if (!channel?.isTextBased()) {
+          logger.warn(`[periodic] Channel ${msg.channelId} not found or not text-based — skipping message id=${msg.id}`);
+          continue;
+        }
         await channel.send(msg.message);
-        await markPeriodicMessagePosted(msg.id);
         logger.info(`[periodic] Posted message id=${msg.id} to channel ${msg.channelId} in guild ${msg.guildId}`);
       } catch (err) {
         logger.error(`[periodic] Failed to post message id=${msg.id}`, err);
