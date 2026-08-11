@@ -993,6 +993,38 @@ describe("runVcExpiryScheduler – deletePrivateVcSession failure is logged with
     // Must not throw.
     await expect(runVcExpiryScheduler(makeClient())).resolves.toBeUndefined();
   });
+
+  it("still calls deleteSchedule with the channelId when deletePrivateVcSession rejects for the same session", async () => {
+    // Validates that the two .catch() handlers are independent — a rejection in
+    // deletePrivateVcSession must not short-circuit the deleteSchedule call that
+    // follows it, otherwise a stale schedule row would continue sending spurious
+    // warning DMs for the already-deleted channel.
+    const dbError = new Error("DB connection lost");
+    mocks.deletePrivateVcSession.mockRejectedValueOnce(dbError);
+    mocks.deleteSchedule.mockResolvedValue(true);
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession()]);
+
+    await runVcExpiryScheduler(makeClient());
+
+    // deleteSchedule must still be called for the same session's channelId.
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+  });
+
+  it("logs an error for the deletePrivateVcSession failure when deleteSchedule still runs", async () => {
+    const dbError = new Error("DB connection lost");
+    mocks.deletePrivateVcSession.mockRejectedValueOnce(dbError);
+    mocks.deleteSchedule.mockResolvedValue(true);
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([makeSession({ id: 7 })]);
+
+    await runVcExpiryScheduler(makeClient());
+
+    // The deletePrivateVcSession failure must be logged (with the session id).
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("7"),
+      dbError,
+    );
+  });
 });
 
 // ─── deleteSchedule failure ───────────────────────────────────────────────────
