@@ -65,8 +65,7 @@ import {
   handleHubStreamBtn,
   handleHubRenameModal,
 } from "./commands/vc";
-import { getHubSession, getHubChannelById, db, walletsTable, transactionsTable } from "@workspace/db";
-import { sql as drizzleSql } from "drizzle-orm";
+import { getHubSession, getHubChannelById } from "@workspace/db";
 import {
   getExpiredSchedules,
   getSchedulesExpiringSoon,
@@ -89,6 +88,7 @@ import {
   clearVcPresence,
   getAllVcPresences,
   payVcReward,
+  payHubSalary,
   getVcLogSettings,
   setVcLogNotifyChannel,
   recordVcLogJoin,
@@ -877,21 +877,17 @@ async function handleVcLeave(
     let reward: number;
 
     if (hubSalaryOverride) {
-      // Hub 分給: guild 設定を使わず hub 設定で直接計算
-      const minutes = (Date.now() - joinedAt.getTime()) / 60_000;
-      if (minutes < hubSalaryOverride.minMinutes) return;
-      reward = Math.floor((minutes / 60) * hubSalaryOverride.ratePerHour);
+      // Hub 分給: guild 設定を使わず hub 設定で直接計算し、DM で通知する
+      const member = guild.members.cache.get(userId);
+      reward = await payHubSalary(
+        guild.id,
+        userId,
+        joinedAt,
+        guildSettings.currencyName,
+        hubSalaryOverride,
+        member ? (msg: string) => member.send(msg) : undefined,
+      );
       if (reward <= 0) return;
-
-      const reason = `Hub VC滞在報酬（${Math.floor(minutes)}分）`;
-      await db
-        .insert(walletsTable)
-        .values({ guildId: guild.id, userId, balance: reward })
-        .onConflictDoUpdate({
-          target: [walletsTable.guildId, walletsTable.userId],
-          set: { balance: drizzleSql`${walletsTable.balance} + ${reward}` },
-        });
-      await db.insert(transactionsTable).values({ guildId: guild.id, userId, amount: reward, reason });
     } else {
       const settings = await getVcRewardSettings(guild.id);
       const member = guild.members.cache.get(userId);

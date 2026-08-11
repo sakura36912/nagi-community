@@ -298,6 +298,56 @@ export async function payVcReward(
   return reward;
 }
 
+// ─── Hub salary payout ───────────────────────────────────────────────────────
+
+/**
+ * Calculate and pay the Hub-VC salary for a completed session, then notify
+ * the member via DM.  Silently ignores Discord error 50007 (DMs closed).
+ * Returns the coin amount credited (0 if below minMinutes or computed reward ≤ 0).
+ */
+export async function payHubSalary(
+  guildId: string,
+  userId: string,
+  joinedAt: Date,
+  currencyName: string,
+  settings: { ratePerHour: number; minMinutes: number },
+  sendDm?: (message: string) => Promise<unknown>,
+): Promise<number> {
+  const minutes = (Date.now() - joinedAt.getTime()) / 60_000;
+  if (minutes < settings.minMinutes) return 0;
+
+  const reward = Math.floor((minutes / 60) * settings.ratePerHour);
+  if (reward <= 0) return 0;
+
+  const reason = `Hub VC滞在報酬（${Math.floor(minutes)}分）`;
+
+  // Upsert wallet and credit balance.
+  await db
+    .insert(walletsTable)
+    .values({ guildId, userId, balance: reward })
+    .onConflictDoUpdate({
+      target: [walletsTable.guildId, walletsTable.userId],
+      set: { balance: sql`${walletsTable.balance} + ${reward}` },
+    });
+
+  await db.insert(transactionsTable).values({ guildId, userId, amount: reward, reason });
+
+  // Notify member via DM.  Silently ignore 50007 (Cannot send messages to this user / DMs closed).
+  if (sendDm) {
+    try {
+      await sendDm(`Hub VC滞在報酬として **${reward} ${currencyName}** を受け取りました！`);
+    } catch (err) {
+      if (err instanceof DiscordAPIError && err.code === 50007) {
+        // Member has DMs closed — silently ignore.
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  return reward;
+}
+
 // ─── VC Session Log Settings ──────────────────────────────────────────────────
 
 export async function getVcLogSettings(guildId: string): Promise<VcSessionLogSettings> {
