@@ -7,11 +7,21 @@
  */
 
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   EmbedBuilder,
+  ModalBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
+  type GuildChannel,
+  type ModalSubmitInteraction,
+  type TextBasedChannel,
   type VoiceState,
 } from "discord.js";
 import {
@@ -28,6 +38,160 @@ import {
 } from "@workspace/db";
 import { getGuildSettings, setVcWarnBeforeMinutes } from "../lib/economy";
 import { logger } from "../lib/logger";
+
+// ─── Hub VC panel constants ──────────────────────────────────────────────────
+
+export const HUB_PANEL_BTN_RENAME   = "vc:hub:rename:";
+export const HUB_PANEL_BTN_STREAM   = "vc:hub:stream:";
+export const HUB_PANEL_RENAME_MODAL = "vc:hub:rnm:";
+const HUB_PANEL_RENAME_INPUT_ID     = "vc-hub-new-name";
+
+function hubPanelId(prefix: string, channelId: string, ownerId: string) {
+  return `${prefix}${channelId}:${ownerId}`;
+}
+function parseHubPanelId(prefix: string, customId: string): { channelId: string; ownerId: string } {
+  const payload = customId.slice(prefix.length);
+  const sep = payload.lastIndexOf(":");
+  return { channelId: payload.slice(0, sep), ownerId: payload.slice(sep + 1) };
+}
+
+/**
+ * @everyone に Stream: false の上書きがあれば OFF、なければ ON とみなす。
+ * 初回作成時は上書きがないので ON が返る。
+ */
+function isHubStreamEnabled(ch: GuildChannel, everyoneId: string): boolean {
+  if (!("permissionOverwrites" in ch)) return true;
+  const ow = ch.permissionOverwrites.cache.get(everyoneId);
+  return !(ow?.deny.has(PermissionFlagsBits.Stream) ?? false);
+}
+
+export function buildHubVcPanelMessage(channelId: string, ownerId: string, streamEnabled: boolean) {
+  const embed = new EmbedBuilder()
+    .setTitle("🚢 船室コントロールパネル")
+    .setColor(0x5865f2)
+    .setDescription(
+      `<@${ownerId}> の船室です。\n📺 画面共有: **${streamEnabled ? "ON ✅" : "OFF 🚫"}**`,
+    )
+    .setFooter({ text: "船室オーナーのみ操作できます" });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(hubPanelId(HUB_PANEL_BTN_RENAME, channelId, ownerId))
+      .setLabel("VC名変更")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("✏️"),
+    new ButtonBuilder()
+      .setCustomId(hubPanelId(HUB_PANEL_BTN_STREAM, channelId, ownerId))
+      .setLabel(streamEnabled ? "画面共有: ON" : "画面共有: OFF")
+      .setStyle(streamEnabled ? ButtonStyle.Success : ButtonStyle.Secondary)
+      .setEmoji("📺"),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+function checkHubOwner(
+  interaction: ButtonInteraction | ModalSubmitInteraction,
+  ownerId: string,
+): boolean {
+  if (interaction.user.id !== ownerId) {
+    interaction
+      .reply({ content: "❌ 船室オーナーのみ操作できます。", ephemeral: true })
+      .catch(() => {});
+    return false;
+  }
+  return true;
+}
+
+/** ✏️ VC名変更ボタン → モーダル表示 */
+export async function handleHubRenameBtn(interaction: ButtonInteraction): Promise<void> {
+  const { channelId, ownerId } = parseHubPanelId(HUB_PANEL_BTN_RENAME, interaction.customId);
+  if (!checkHubOwner(interaction, ownerId)) return;
+
+  const modal = new ModalBuilder()
+    .setCustomId(`${HUB_PANEL_RENAME_MODAL}${channelId}:${ownerId}`)
+    .setTitle("船室名変更")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId(HUB_PANEL_RENAME_INPUT_ID)
+          .setLabel("新しいVC名")
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(100)
+          .setRequired(true),
+      ),
+    );
+  await interaction.showModal(modal);
+}
+
+/** モーダル送信 → チャンネル名を変更 */
+export async function handleHubRenameModal(interaction: ModalSubmitInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const payload = interaction.customId.slice(HUB_PANEL_RENAME_MODAL.length);
+  const sep = payload.lastIndexOf(":");
+  const channelId = payload.slice(0, sep);
+  const ownerId   = payload.slice(sep + 1);
+  if (!checkHubOwner(interaction, ownerId)) return;
+
+  const newName = interaction.fields.getTextInputValue(HUB_PANEL_RENAME_INPUT_ID).trim();
+  if (!newName) {
+    await interaction.reply({ content: "❌ VC名を入力してください。", ephemeral: true });
+    return;
+  }
+  await interaction.deferReply({ ephemeral: true });
+  const ch = interaction.guild.channels.cache.get(channelId)
+    ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
+  if (!ch) {
+    await interaction.editReply("❌ チャンネルが見つかりません。");
+    return;
+  }
+  await ch.setName(newName.slice(0, 100));
+  await interaction.editReply(`✅ 船室を「**${newName.slice(0, 100)}**」にリネームしました。`);
+}
+
+/** 📺 画面共有トグルボタン */
+export async function handleHubStreamBtn(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId } = parseHubPanelId(HUB_PANEL_BTN_STREAM, interaction.customId);
+  if (!checkHubOwner(interaction, ownerId)) return;
+  await interaction.deferReply({ ephemeral: true });
+
+  const ch = interaction.guild.channels.cache.get(channelId)
+    ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
+  if (!ch || !("permissionOverwrites" in ch)) {
+    await interaction.editReply("❌ チャンネルが見つかりません。");
+    return;
+  }
+  const everyoneId = interaction.guild.roles.everyone.id;
+  const nowEnabled = isHubStreamEnabled(ch as GuildChannel, everyoneId);
+  const newState   = !nowEnabled;
+
+  // @everyone の Stream を ON:true / OFF:false で上書き
+  await (ch as GuildChannel).permissionOverwrites.edit(
+    everyoneId,
+    newState ? { Stream: true } : { Stream: false },
+  );
+
+  // パネルメッセージを更新（best-effort）
+  try {
+    if ("messages" in ch) {
+      const msgs = await (ch as TextBasedChannel).messages.fetch({ limit: 20 });
+      const panelMsg = msgs.find(
+        (m) =>
+          m.author.id === interaction.client.user?.id &&
+          m.embeds[0]?.title === "🚢 船室コントロールパネル",
+      );
+      if (panelMsg) {
+        await panelMsg.edit(buildHubVcPanelMessage(channelId, ownerId, newState));
+      }
+    }
+  } catch (err) {
+    logger.error(`[vcHub] Failed to update panel after stream toggle channel=${channelId}`, err);
+  }
+
+  await interaction.editReply(
+    `✅ 画面共有を **${newState ? "有効 ✅" : "無効 🚫"}** にしました。`,
+  );
+}
 
 // ─── /vc command ────────────────────────────────────────────────────────────
 
@@ -364,6 +528,11 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
     });
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
+
+    // コントロールパネルをVCテキストに投稿（best-effort）
+    newVc
+      .send(buildHubVcPanelMessage(newVc.id, member.id, true))
+      .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
 
     // 酒場ハブから生成されたチャンネルを永続ログに記録（過去データ検索に使用）
     const TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);

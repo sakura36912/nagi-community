@@ -53,7 +53,16 @@ import {
   handleVcPanelRenameSel,
   handleVcPanelRenameModal,
 } from "./commands";
-import { handleHubJoin, handleHubLeave } from "./commands/vc";
+import {
+  handleHubJoin,
+  handleHubLeave,
+  HUB_PANEL_BTN_RENAME,
+  HUB_PANEL_BTN_STREAM,
+  HUB_PANEL_RENAME_MODAL,
+  handleHubRenameBtn,
+  handleHubStreamBtn,
+  handleHubRenameModal,
+} from "./commands/vc";
 import { getHubSession, getHubChannelById, db, walletsTable, transactionsTable } from "@workspace/db";
 import { sql as drizzleSql } from "drizzle-orm";
 import {
@@ -1541,6 +1550,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith(VC_PANEL_RENAME_MODAL)) {
       await handleVcPanelRenameModal(interaction); return;
+    }
+
+    // ─── Hub VC panel ────────────────────────────────────────────────────────
+    if (interaction.isButton() && interaction.customId.startsWith(HUB_PANEL_BTN_RENAME)) {
+      await handleHubRenameBtn(interaction); return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(HUB_PANEL_BTN_STREAM)) {
+      await handleHubStreamBtn(interaction); return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(HUB_PANEL_RENAME_MODAL)) {
+      await handleHubRenameModal(interaction); return;
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith(NICKNAME_MODAL_PREFIX)) {
