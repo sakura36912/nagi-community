@@ -14,6 +14,7 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
+  type GuildMember,
 } from "discord.js";
 import {
   upsertEvalSheetConfig,
@@ -26,7 +27,10 @@ import {
   setRosterCategoryId,
   setEvalDeadlineNotify,
   setEvalReminderDaysBefore,
+  listEvalSheets,
+  getSheetVcSeconds,
 } from "../lib/economy";
+import { buildSheetEmbed, findSelfIntro } from "../lib/sheet";
 
 export const evalsheetCommand = {
   data: new SlashCommandBuilder()
@@ -147,6 +151,13 @@ export const evalsheetCommand = {
       sub
         .setName("info")
         .setDescription("現在の全紐付けと共通設定を表示します"),
+    )
+
+    // ── refresh-embeds ──────────────────────────────────────────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName("refresh-embeds")
+        .setDescription("このサーバーの全評価シートのアバターをサーバープロフィールに更新します"),
     ),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -350,6 +361,75 @@ export const evalsheetCommand = {
       }
 
       await interaction.reply({ embeds: [embed], ephemeral: true });
+      return;
+    }
+
+    // ── refresh-embeds ────────────────────────────────────────────────────
+    if (sub === "refresh-embeds") {
+      await interaction.deferReply({ ephemeral: true });
+
+      const sheets = await listEvalSheets(interaction.guildId);
+      const targets = sheets.filter((s) => s.messageId);
+
+      let updated = 0;
+      let failed = 0;
+
+      const settings = await getEvalSheetSettings(interaction.guildId);
+
+      for (const sheet of targets) {
+        try {
+          const thread = await interaction.client.channels
+            .fetch(sheet.messageId!)
+            .catch(() => null);
+          if (!thread?.isTextBased()) { failed++; continue; }
+
+          const message = await thread.messages
+            .fetch(sheet.messageId!)
+            .catch(() => null);
+          if (!message) { failed++; continue; }
+
+          const targetUser = await interaction.client.users
+            .fetch(sheet.userId)
+            .catch(() => null);
+          if (!targetUser) { failed++; continue; }
+
+          let displayName = targetUser.displayName;
+          let member: GuildMember | null = null;
+          try {
+            member = await interaction.guild!.members.fetch(sheet.userId).catch(() => null);
+            if (member) displayName = member.displayName;
+          } catch { /* fallback */ }
+
+          const [vcSeconds, selfIntro] = await Promise.all([
+            getSheetVcSeconds(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
+            findSelfIntro(interaction.guild!, sheet.userId, settings?.rosterCategoryId ?? null),
+          ]);
+
+          const embed = buildSheetEmbed({
+            targetUser,
+            member,
+            displayName,
+            startDate: sheet.startDate,
+            endDate: sheet.endDate,
+            vcSeconds,
+            nameboardUrl: settings?.nameboardUrl ?? null,
+            selfIntro,
+            createdByLabel: "アバター一括更新",
+            guildIconUrl: interaction.guild?.iconURL() ?? null,
+          });
+
+          await message.edit({ embeds: [embed] });
+          updated++;
+        } catch {
+          failed++;
+        }
+      }
+
+      await interaction.editReply(
+        `✅ ${updated} 件の評価シートを更新しました。` +
+        (failed > 0 ? `（${failed} 件はスレッドが見つからないためスキップ）` : ""),
+      );
+      return;
     }
   },
 };
