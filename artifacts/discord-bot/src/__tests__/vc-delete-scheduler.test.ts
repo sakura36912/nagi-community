@@ -1253,3 +1253,138 @@ describe("runVcDeleteScheduler – ghost warning DM prevention (channel already 
     expect(mocks.deleteSchedule).not.toHaveBeenCalled();
   });
 });
+
+// ─── Race: extend near expiry vs scheduler tick ───────────────────────────────
+//
+// Boundary condition documented here:
+//   getExpiredSchedules() is called at the TOP of each tick and the result list
+//   is processed AFTER the warning phase completes.  If a user calls
+//   extendSchedule() between the moment the scheduler fetches the expired list
+//   and the moment it acts on that list, the scheduler holds a stale row.
+//
+//   The scheduler cannot observe the extension mid-tick because its loop
+//   iterates over the already-fetched slice.  It therefore calls
+//   channel.delete() and deleteSchedule() exactly ONCE based on the stale data.
+//
+//   What does NOT happen:
+//     • deleteSchedule is NOT called a second time (no double-delete).
+//     • The tick does NOT re-arm the schedule (markScheduleNotified is not
+//       called in the deletion path).
+//     • On the NEXT tick, getExpiredSchedules returns nothing (the row was
+//       removed), so the channel is never deleted a second time.
+//
+//   Trade-off: the user loses the channel they just paid to extend.
+//   Mitigation: the extension handler should cancel / pre-empt an in-flight
+//   deletion before writing the new expiresAt.  That guard is outside the
+//   scheduler's scope; the scheduler itself behaves consistently.
+
+describe("runVcDeleteScheduler – race: extend near expiry vs scheduler tick", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.deleteSchedule.mockResolvedValue(true);
+  });
+
+  it("deletes the channel exactly once when the scheduler holds a stale expired row that was subsequently extended", async () => {
+    // The scheduler fetched the row while it was still expired (stale data).
+    // The user extended after the fetch — simulated by the mock returning the
+    // row regardless.  The scheduler must process it exactly once: one
+    // channel.delete(), one deleteSchedule().  No second pass should happen.
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    // channel.delete() is called exactly once — not zero, not two.
+    expect(client._channelDelete).toHaveBeenCalledOnce();
+    expect(client._channelDelete).toHaveBeenCalledWith("スケジュールによる自動削除");
+    // The DB row is removed exactly once.
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+  });
+
+  it("does NOT call markScheduleNotified in the deletion path (no re-arm)", async () => {
+    // The deletion phase must NOT call markScheduleNotified.  If it did, the
+    // scheduler would effectively re-arm a schedule that was just cleaned up,
+    // causing confusing state on the next tick.
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+
+    await runVcDeleteScheduler(makeClient());
+
+    // markScheduleNotified belongs to the warning phase only.
+    expect(mocks.markScheduleNotified).not.toHaveBeenCalled();
+  });
+
+  it("two-tick: no second deletion after the first tick removes the stale row", async () => {
+    // Tick 1 — stale expired row triggers deletion.
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    expect(client._channelDelete).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
+    mocks.deleteSchedule.mockResolvedValue(true);
+
+    // Tick 2 — row is gone (deleted on tick 1); nothing to process.
+    mocks.getExpiredSchedules.mockResolvedValueOnce([]);
+
+    await runVcDeleteScheduler(client);
+
+    // No second channel deletion — the row was already cleaned up.
+    expect(client._channelDelete).not.toHaveBeenCalled();
+    expect(mocks.deleteSchedule).not.toHaveBeenCalled();
+  });
+
+  it("stale row appears in expired list only — warning phase sees nothing (no simultaneous delete + re-arm)", async () => {
+    // If the extension updated expiresAt to a future time, a consistent DB read
+    // would show the row in getSchedulesExpiringSoon (not expired) and NOT in
+    // getExpiredSchedules.  The stale-read race means only getExpiredSchedules
+    // has the row.  The warning phase must NOT also process it — there must be
+    // no simultaneous DM send and channel delete for the same schedule.
+    //
+    // This test simulates the consistent case: stale row in expired list,
+    // nothing in the warning list.  Exactly one action fires (deletion).
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+    // getSchedulesExpiringSoon returns [] (the extended row is NOT in the
+    // warning window from the scheduler's snapshot perspective).
+    mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
+
+    const client = makeClient();
+    await runVcDeleteScheduler(client);
+
+    // Only the deletion path fired — no warning DM, no markScheduleNotified.
+    expect(client._userSend).not.toHaveBeenCalled();
+    expect(mocks.markScheduleNotified).not.toHaveBeenCalled();
+    // Deletion happened exactly once.
+    expect(client._channelDelete).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+  });
+
+  it("deleteSchedule is called exactly once even when deleteSchedule itself resolves false (row already gone)", async () => {
+    // Simulates the case where extendSchedule updated the row's expiresAt to a
+    // future time and then the user's session ended — by the time the scheduler
+    // calls deleteSchedule, the row has already been removed by another path.
+    // deleteSchedule returns false (0 rows deleted) but must still be invoked
+    // exactly once and must not throw or retry.
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+    mocks.deleteSchedule.mockResolvedValueOnce(false); // row already absent
+
+    const client = makeClient();
+
+    // Must not throw even when no DB row was actually removed.
+    await expect(runVcDeleteScheduler(client)).resolves.toBeUndefined();
+
+    // deleteSchedule was called exactly once despite the false return value.
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+    // No retry: deleteSchedule must not be called a second time.
+    expect(mocks.deleteSchedule).not.toHaveBeenCalledTimes(2);
+  });
+});
