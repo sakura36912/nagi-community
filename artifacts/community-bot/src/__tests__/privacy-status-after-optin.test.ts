@@ -143,6 +143,52 @@ vi.mock("@workspace/db", () => ({
   communityRoleButtonsTable:        mocks.tables.roleButtons,
 }));
 
+// ─── Mock discord.js ─────────────────────────────────────────────────────────
+// EmbedBuilder instances track their own _color and _fields so tests can
+// inspect the exact embed handed to editReply without re-implementing the logic.
+vi.mock("discord.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("discord.js")>();
+  return {
+    ...actual,
+    EmbedBuilder: vi.fn().mockImplementation(() => {
+      const self: {
+        _color: number | undefined;
+        _fields: { name: string; value: string; inline?: boolean }[];
+        setTitle: ReturnType<typeof vi.fn>;
+        setColor: ReturnType<typeof vi.fn>;
+        setDescription: ReturnType<typeof vi.fn>;
+        addFields: ReturnType<typeof vi.fn>;
+        setFooter: ReturnType<typeof vi.fn>;
+        setTimestamp: ReturnType<typeof vi.fn>;
+        data: Record<string, unknown>;
+      } = {
+        _color: undefined,
+        _fields: [],
+        setTitle:       vi.fn().mockReturnThis(),
+        setColor:       vi.fn((color: number) => { self._color = color; return self; }),
+        setDescription: vi.fn().mockReturnThis(),
+        addFields:      vi.fn((...fields: { name: string; value: string; inline?: boolean }[]) => {
+          self._fields.push(...fields);
+          return self;
+        }),
+        setFooter:      vi.fn().mockReturnThis(),
+        setTimestamp:   vi.fn().mockReturnThis(),
+        data: {},
+      };
+      return self;
+    }),
+    ActionRowBuilder: vi.fn().mockImplementation(() => ({
+      addComponents: vi.fn().mockReturnThis(),
+    })),
+    ButtonBuilder: vi.fn().mockImplementation(() => ({
+      setCustomId: vi.fn().mockReturnThis(),
+      setLabel:    vi.fn().mockReturnThis(),
+      setStyle:    vi.fn().mockReturnThis(),
+      setDisabled: vi.fn().mockReturnThis(),
+    })),
+  };
+});
+
 // ─── Mock drizzle-orm ─────────────────────────────────────────────────────────
 vi.mock("drizzle-orm", () => ({
   and:        (...args: unknown[]) => ({ op: "and", args }),
@@ -164,23 +210,41 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Imports after mocks ──────────────────────────────────────────────────────
-import { handlePrivacyOptin } from "../commands/index.js";
+import { handlePrivacyOptin, commands } from "../commands/index.js";
 import {
   isVcTrackingGloballyOptedOut,
   isVcTrackingGuildLocalOptedOut,
   isVcTrackingOptedOut,
 } from "../lib/community.js";
 
-// ─── Interaction factory ──────────────────────────────────────────────────────
+// ─── Interaction factories ────────────────────────────────────────────────────
 function makeInteraction(opts: { userId?: string; guildId?: string } = {}) {
   const { userId = "user-001", guildId = "guild-001" } = opts;
   return {
-    user:       { id: userId, tag: "TestUser#0001" },
+    user:              { id: userId, tag: "TestUser#0001" },
     guildId,
-    deferReply: vi.fn().mockResolvedValue(undefined),
-    editReply:  vi.fn().mockResolvedValue(undefined),
-    reply:      vi.fn().mockResolvedValue(undefined),
-    options:    { getSubcommand: vi.fn().mockReturnValue("optin") },
+    memberPermissions: null,
+    deferReply:        vi.fn().mockResolvedValue(undefined),
+    editReply:         vi.fn().mockResolvedValue(undefined),
+    reply:             vi.fn().mockResolvedValue(undefined),
+    options:           { getSubcommand: vi.fn().mockReturnValue("optin") },
+  };
+}
+
+function makeStatusInteraction(opts: { userId?: string; guildId?: string } = {}) {
+  const { userId = "user-001", guildId = "guild-001" } = opts;
+  return {
+    user:              { id: userId, tag: "TestUser#0001" },
+    guildId,
+    memberPermissions: null,
+    deferReply:        vi.fn().mockResolvedValue(undefined),
+    editReply:         vi.fn().mockResolvedValue(undefined),
+    reply:             vi.fn().mockResolvedValue(undefined),
+    options: {
+      getSubcommand: vi.fn().mockReturnValue("status"),
+      getBoolean:    vi.fn().mockReturnValue(null),
+      getChannel:    vi.fn().mockReturnValue(null),
+    },
   };
 }
 
@@ -225,35 +289,34 @@ describe("privacy status check after handlePrivacyOptin — stateful DB mock", (
     expect(result).toBe(false);
   });
 
-  // ── Status embed content ────────────────────────────────────────────────────
+  // ── Status embed content (via real privacyCommand.execute) ─────────────────
 
-  it("status logic produces the 'active' label (🟢) after opt-in when both rows were absent", async () => {
+  it("privacyCommand.execute status sends 🟢 embed (color 0x57f287) after opt-in when both rows were absent", async () => {
     const userId  = "user-status-embed";
     const guildId = "guild-status-embed";
 
+    // Opt in (both rows absent before)
     await handlePrivacyOptin(makeInteraction({ userId, guildId }) as never);
 
-    const [globalOptedOut, guildOptedOut] = await Promise.all([
-      isVcTrackingGloballyOptedOut(userId),
-      isVcTrackingGuildLocalOptedOut(guildId, userId),
-    ]);
+    // Run the real status execute path through the exported commands list
+    const privacyCommand = commands.find((c) => c.data.name === "privacy");
+    if (!privacyCommand) throw new Error("privacy command not found in commands array");
 
-    // Neither flag must be set — user is active
-    expect(globalOptedOut).toBe(false);
-    expect(guildOptedOut).toBe(false);
+    const statusInteraction = makeStatusInteraction({ userId, guildId });
+    await privacyCommand.execute(statusInteraction as never);
 
-    // Replicate the status branch logic from privacyCommand.execute
-    const effectivelyOptedOut = globalOptedOut || guildOptedOut;
-    expect(effectivelyOptedOut).toBe(false);
+    // editReply must have been called with an embed
+    expect(statusInteraction.editReply).toHaveBeenCalledOnce();
+    const call = statusInteraction.editReply.mock.calls[0][0] as { embeds: { _color: number; _fields: { name: string; value: string }[] }[] };
+    const embed = call.embeds[0];
 
-    // The status value the embed would display
-    const statusValue = globalOptedOut
-      ? "🔴 **全サーバーで停止中（グローバル）**"
-      : guildOptedOut
-        ? "🔴 **このサーバーで停止中**"
-        : "🟢 **有効**";
+    // Color must be green (not opted-out)
+    expect(embed._color).toBe(0x57f287);
 
-    expect(statusValue).toMatch(/🟢/);
+    // VCトラッキング field value must contain 🟢
+    const trackingField = embed._fields.find((f) => f.name === "VCトラッキング");
+    expect(trackingField).toBeDefined();
+    expect(trackingField!.value).toMatch(/🟢/);
   });
 
   // ── Per-user / per-guild isolation ─────────────────────────────────────────
@@ -292,6 +355,74 @@ describe("privacy status check after handlePrivacyOptin — stateful DB mock", (
 
     const result = await isVcTrackingOptedOut(guildId, userId);
     expect(result).toBe(false);
+  });
+
+  // ── Per-guild opt-out only (global row absent) → opt-in ───────────────────
+
+  it("isVcTrackingGloballyOptedOut returns false after opt-in when only the per-guild row was opted-out (global row absent)", async () => {
+    const userId  = "user-guild-only-001";
+    const guildId = "guild-guild-only-001";
+
+    // Seed per-guild opt-out; global store remains empty
+    mocks.privacyStore.set(`${guildId}:${userId}`, true);
+
+    // Sanity-check: guild is opted out, global is not set (absent → not opted out)
+    expect(await isVcTrackingGuildLocalOptedOut(guildId, userId)).toBe(true);
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(false);
+
+    // User runs /privacy optin
+    await handlePrivacyOptin(makeInteraction({ userId, guildId }) as never);
+
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(false);
+  });
+
+  it("isVcTrackingGuildLocalOptedOut returns false after opt-in when only the per-guild row was opted-out (global row absent)", async () => {
+    const userId  = "user-guild-only-002";
+    const guildId = "guild-guild-only-002";
+
+    // Seed per-guild opt-out; global store remains empty
+    mocks.privacyStore.set(`${guildId}:${userId}`, true);
+
+    expect(await isVcTrackingGuildLocalOptedOut(guildId, userId)).toBe(true);
+
+    await handlePrivacyOptin(makeInteraction({ userId, guildId }) as never);
+
+    expect(await isVcTrackingGuildLocalOptedOut(guildId, userId)).toBe(false);
+  });
+
+  it("privacyCommand.execute status sends 🟢 embed (color 0x57f287) after opt-in when only the per-guild opt-out was set (global row absent)", async () => {
+    const userId  = "user-guild-only-embed";
+    const guildId = "guild-guild-only-embed";
+
+    // Per-guild opted out, global row absent — this is the key edge case
+    mocks.privacyStore.set(`${guildId}:${userId}`, true);
+
+    // Confirm initial state: guild opted out, global absent (not opted out)
+    expect(await isVcTrackingGuildLocalOptedOut(guildId, userId)).toBe(true);
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(false);
+
+    // User opts back in
+    await handlePrivacyOptin(makeInteraction({ userId, guildId }) as never);
+
+    // Now run the real /privacy status execute path
+    const privacyCommand = commands.find((c) => c.data.name === "privacy");
+    if (!privacyCommand) throw new Error("privacy command not found in commands array");
+
+    const statusInteraction = makeStatusInteraction({ userId, guildId });
+    await privacyCommand.execute(statusInteraction as never);
+
+    // editReply must have been called with an embed
+    expect(statusInteraction.editReply).toHaveBeenCalledOnce();
+    const call = statusInteraction.editReply.mock.calls[0][0] as { embeds: { _color: number; _fields: { name: string; value: string }[] }[] };
+    const embed = call.embeds[0];
+
+    // Color must be green — effectivelyOptedOut must be false
+    expect(embed._color).toBe(0x57f287);
+
+    // VCトラッキング field value must contain 🟢
+    const trackingField = embed._fields.find((f) => f.name === "VCトラッキング");
+    expect(trackingField).toBeDefined();
+    expect(trackingField!.value).toMatch(/🟢/);
   });
 
   // ── Opt-out → opt-in round-trip ────────────────────────────────────────────
