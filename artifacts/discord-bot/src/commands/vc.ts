@@ -525,11 +525,11 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       type: ChannelType.GuildVoice,
       parent: categoryId,
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
-      // カテゴリの設定に関わらず画面共有を有効化
-      permissionOverwrites: [
-        { id: guild.roles.everyone.id, allow: [PermissionFlagsBits.Stream] },
-      ],
     });
+
+    // カテゴリの権限同期を保ちつつ、@everyone に画面共有を明示的に許可する
+    await newVc.permissionOverwrites.edit(guild.roles.everyone, { Stream: true })
+      .catch((err) => logger.warn("[vcHub] Failed to set Stream permission", err));
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
 
