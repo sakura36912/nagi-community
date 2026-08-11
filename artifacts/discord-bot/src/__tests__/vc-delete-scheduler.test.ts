@@ -792,6 +792,69 @@ describe("runVcDeleteScheduler – extended expiry DM timestamp accuracy", () =>
     expect(notifiedDate2.getTime()).toBeGreaterThanOrEqual(beforeTick2);
     expect(notifiedDate2.getTime()).toBeLessThanOrEqual(afterTick2);
   });
+
+  it("two-tick: fires a second DM when the user extends during the warning window and the new deadline is still within the warning window", async () => {
+    // Scenario: tick 1 fires a warning for a schedule expiring soon (within 10 min).
+    // The user then extends — but only by a small amount, so the new expiresAt is
+    // still within the 10-minute warning window.  extendSchedule clears notifiedAt.
+    // Tick 2 must still send a fresh DM with the updated timestamp even though the
+    // new deadline is still "soon" — the cleared notifiedAt is the sole re-arm signal.
+    const now = Date.now();
+    // Original: 5 minutes from now (inside the 10-min window).
+    const originalExpiresAt = new Date(now + 5 * 60 * 1000);
+    // Extended by 3 minutes — new deadline is 8 minutes from now, still inside the window.
+    const extendedExpiresAt = new Date(now + 8 * 60 * 1000);
+    const originalTs = Math.floor(originalExpiresAt.getTime() / 1000);
+    const extendedTs = Math.floor(extendedExpiresAt.getTime() / 1000);
+
+    // ── Tick 1: original schedule within warning window ────────────────────────
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: originalExpiresAt, notifiedAt: null }),
+    ]);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    // DM was sent with the original expiry.
+    expect(client._userSend).toHaveBeenCalledOnce();
+    expect(client._userSend.mock.calls[0][0]).toContain(`<t:${originalTs}:R>`);
+    // notifiedAt was stamped.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.getExpiredSchedules.mockResolvedValue([]);
+
+    // Between ticks the user extended the VC by 3 minutes.
+    // extendSchedule wrote the new expiresAt and cleared notifiedAt.
+    // The new deadline (8 min away) is still inside the 10-min warning window,
+    // but notifiedAt=null means the scheduler must treat this as un-notified.
+
+    // ── Tick 2: re-armed schedule whose new deadline is still in the warning window
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: extendedExpiresAt, notifiedAt: null }),
+    ]);
+
+    const beforeTick2 = Date.now();
+    await runVcDeleteScheduler(client);
+    const afterTick2 = Date.now();
+
+    // A second DM must fire — it must use the *extended* expiry timestamp.
+    expect(client._userSend).toHaveBeenCalledOnce();
+    const dmText: string = client._userSend.mock.calls[0][0];
+    expect(dmText).toContain(`<t:${extendedTs}:R>`);
+    expect(dmText).toContain(`<t:${extendedTs}:T>`);
+    // The stale original timestamp must NOT appear.
+    expect(dmText).not.toContain(`<t:${originalTs}:R>`);
+    // markScheduleNotified must be called again for this tick.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+    // The notified timestamp must be the current tick time, not expiresAt.
+    const [, notifiedDate2] = mocks.markScheduleNotified.mock.calls[0] as [number, Date];
+    expect(notifiedDate2).toBeInstanceOf(Date);
+    expect(notifiedDate2.getTime()).toBeGreaterThanOrEqual(beforeTick2);
+    expect(notifiedDate2.getTime()).toBeLessThanOrEqual(afterTick2);
+  });
 });
 
 // ─── Unit tests for the DB query helpers (no Discord client needed) ───────────
