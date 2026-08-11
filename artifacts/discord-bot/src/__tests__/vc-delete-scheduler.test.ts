@@ -855,6 +855,70 @@ describe("runVcDeleteScheduler – extended expiry DM timestamp accuracy", () =>
     expect(notifiedDate2.getTime()).toBeGreaterThanOrEqual(beforeTick2);
     expect(notifiedDate2.getTime()).toBeLessThanOrEqual(afterTick2);
   });
+
+  it("double-extension before the tick: scheduler sends exactly one DM and calls markScheduleNotified exactly once", async () => {
+    // ── Scenario ────────────────────────────────────────────────────────────────
+    // Tick 1 fires a warning for the original schedule (5 min to expiry).
+    // The user then extends TWICE in rapid succession — both calls to
+    // extendSchedule clear notifiedAt and advance expiresAt.  Both extensions
+    // land before tick 2 runs, so by the time the scheduler fires again the DB
+    // holds exactly ONE row: the result of the second extension (9 min to
+    // expiry, notifiedAt = null).  The scheduler must send exactly one DM using
+    // the final deadline and call markScheduleNotified exactly once.
+    const now = Date.now();
+    const originalExpiresAt     = new Date(now + 5 * 60 * 1000); // 5 min — within 10-min window
+    const firstExtendedExpiresAt  = new Date(now + 7 * 60 * 1000); // 7 min — still in window
+    const secondExtendedExpiresAt = new Date(now + 9 * 60 * 1000); // 9 min — still in window (final)
+    const firstTs  = Math.floor(firstExtendedExpiresAt.getTime()  / 1000);
+    const finalTs  = Math.floor(secondExtendedExpiresAt.getTime() / 1000);
+
+    // ── Tick 1: original schedule fires its warning ──────────────────────────
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: originalExpiresAt, notifiedAt: null }),
+    ]);
+    const client = makeClient();
+    await runVcDeleteScheduler(client);
+
+    expect(client._userSend).toHaveBeenCalledOnce();
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.getExpiredSchedules.mockResolvedValue([]);
+
+    // Between tick 1 and tick 2 the user extends twice (first → 7 min, then →
+    // 9 min).  Each extendSchedule call writes a new expiresAt and resets
+    // notifiedAt to null.  The DB now holds one row: the second extension's
+    // state (9 min to expiry, notifiedAt = null).  The intermediate 7-min row
+    // never persists independently — the second write overwrites it.
+
+    // ── Tick 2: only the final extension row is visible ──────────────────────
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: secondExtendedExpiresAt, notifiedAt: null }),
+    ]);
+
+    const before = Date.now();
+    await runVcDeleteScheduler(client);
+    const after = Date.now();
+
+    // Exactly one DM must be sent — the second extension's timestamp.
+    expect(client._userSend).toHaveBeenCalledOnce();
+    const dmText: string = client._userSend.mock.calls[0][0];
+    expect(dmText).toContain(`<t:${finalTs}:R>`);
+    expect(dmText).toContain(`<t:${finalTs}:T>`);
+    // Neither the first extension's intermediate timestamp nor the original
+    // should appear — only the final deadline is in the DM.
+    expect(dmText).not.toContain(`<t:${firstTs}:R>`);
+
+    // markScheduleNotified must be called exactly once — not twice.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
+    const [, notifiedDate] = mocks.markScheduleNotified.mock.calls[0] as [number, Date];
+    expect(notifiedDate).toBeInstanceOf(Date);
+    // The timestamp passed must be the current tick time, not the final expiresAt.
+    expect(notifiedDate.getTime()).toBeGreaterThanOrEqual(before);
+    expect(notifiedDate.getTime()).toBeLessThanOrEqual(after);
+  });
 });
 
 // ─── Unit tests for the DB query helpers (no Discord client needed) ───────────
