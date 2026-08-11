@@ -476,6 +476,19 @@ describe("runVcDeleteScheduler – pre-expiry warning", () => {
     expect(mocks.markScheduleNotified).toHaveBeenCalledOnce();
   });
 
+  it("does NOT log a warn when userId is null but channelName is present", async () => {
+    // The warn branch is gated on !schedule.channelName — a missing userId alone
+    // must NOT trigger it, otherwise contributors would incorrectly believe that
+    // any absent field produces a warning.
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ userId: null, channelName: "テストVC" }),
+    ]);
+
+    await runVcDeleteScheduler(makeClient());
+
+    expect(mocks.loggerWarn).not.toHaveBeenCalled();
+  });
+
   it("skips the DM when user cannot be fetched from Discord", async () => {
     mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([makeSchedule()]);
     const client = makeClient({ noUser: true });
