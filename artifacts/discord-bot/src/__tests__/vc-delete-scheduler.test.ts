@@ -1387,4 +1387,27 @@ describe("runVcDeleteScheduler – race: extend near expiry vs scheduler tick", 
     // No retry: deleteSchedule must not be called a second time.
     expect(mocks.deleteSchedule).not.toHaveBeenCalledTimes(2);
   });
+
+  it("does NOT log an error when deleteSchedule returns false (row already absent — silent miss)", async () => {
+    // Context: the expiry scheduler (runVcExpiryScheduler) may win the race and
+    // call deleteSchedule first.  When the delete scheduler then calls
+    // deleteSchedule for the same channelId, no DB row exists and deleteSchedule
+    // returns false (0 rows deleted).  This is an expected race condition, not an
+    // error; the scheduler must stay completely silent (no logger.error call).
+    //
+    // Note: deletePrivateVcSession is the expiry scheduler's responsibility.
+    // The delete scheduler only manages vc_schedules rows via deleteSchedule and
+    // never touches vc_sessions directly.
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+    mocks.deleteSchedule.mockResolvedValueOnce(false); // row already removed by expiry scheduler
+
+    const client = makeClient();
+
+    // Scheduler must complete normally.
+    await expect(runVcDeleteScheduler(client)).resolves.toBeUndefined();
+
+    // The false return value must NOT trigger an error log — this is a normal
+    // race outcome, not a failure worth alerting on.
+    expect(mocks.loggerError).not.toHaveBeenCalled();
+  });
 });
