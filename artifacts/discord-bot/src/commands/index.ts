@@ -1962,7 +1962,7 @@ export function buildChestPanelMessage(chestType: "shinniri" | "honsennin") {
           "　🌟 **レア**　　→　80,000$　（8%）\n" +
           "　🎊 **大当たり** →　50,000$　（12%）\n" +
           "　🎁 **当たり**　→　30,000$　（20%）\n" +
-          "　👑 **限定ロール** →　プレオープン限定　（0.5%）\n" +
+          "　👑 **限定ロール**　（0.5%）\n" +
           "　💨 **ハズレ**　→　なし　（50%）\n"
         : "　💎 90,000$ / 100,000$　（各 **0.1%**）\n" +
           "　🌟 70,000$ / 80,000$　（各 **0.5%**）\n" +
@@ -2089,8 +2089,8 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   if (rolePrize) {
     const granted = await grantRoleByName(interaction.guild, interaction.user.id, rolePrize.roleName);
     const roleNote = granted
-      ? `**${rolePrize.roleName}** ロールを獲得しました！`
-      : `**${rolePrize.roleName}** ロールを獲得しました！\n※ このサーバーにロールが存在しないため付与できませんでした。`;
+      ? `**限定ロール** を獲得しました！`
+      : `**限定ロール** を獲得しました！\n※ このサーバーにロールが存在しないため付与できませんでした。`;
     await interaction.editReply(`📦 宝箱を開けた！\n\n**${rolePrize.label}** ${rolePrize.emoji} ${roleNote}`);
     return;
   }
