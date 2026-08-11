@@ -48,6 +48,7 @@ import {
   handleVcPanelExpiryBtn,
   handleVcPanelRenameBtn,
   handleVcPanelStreamBtn,
+  handleVcRefreshPanels,
   handleChestOpenBtn,
   handleVcPanelAddSel,
   handleVcPanelKickSel,
@@ -1446,6 +1447,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await interaction.reply({ content: "このロールでは `/送金` と `/残高確認` のみ使用できます。", ephemeral: true });
           return;
         }
+      }
+      // /vc refresh-panels は commands/index.ts にあるハンドラで処理
+      // (vc.ts から commands/index.ts を import すると循環参照になるため)
+      if (interaction.commandName === "vc" && interaction.options.getSubcommand(false) === "refresh-panels") {
+        await handleVcRefreshPanels(interaction);
+        return;
       }
       await command.execute(interaction);
       return;

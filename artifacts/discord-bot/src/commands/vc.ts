@@ -296,6 +296,12 @@ export const vcCommand = {
         .setName("hub-list")
         .setDescription("登録済みの Hub チャンネル一覧を表示します"),
     )
+    // ── refresh-panels ────────────────────────────────────────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName("refresh-panels")
+        .setDescription("既存の非公開VCパネルをすべて最新レイアウトに更新します（管理者）"),
+    )
     // ── warn-time ─────────────────────────────────────────────────────────
     .addSubcommandGroup((group) =>
       group
@@ -426,6 +432,9 @@ export const vcCommand = {
       });
       return;
     }
+
+    // ── refresh-panels ────────────────────────────────────────────────────
+    // (handled in src/index.ts before execute() to avoid circular imports)
 
     // ── hub-list ──────────────────────────────────────────────────────────
     if (sub === "hub-list") {

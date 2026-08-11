@@ -81,6 +81,7 @@ import {
   setRoleReward,
   transfer,
   getPrivateVcSessionByChannelId,
+  getActivePrivateVcSessionsByGuild,
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
@@ -2316,6 +2317,46 @@ export async function handleVcPanelRenameModal(interaction: ModalSubmitInteracti
       await interaction.editReply("❌ チャンネルのリネームに失敗しました。");
     }
   }
+}
+
+/** 🔄 既存の非公開VCパネルを一括更新（/vc refresh-panels） */
+export async function handleVcRefreshPanels(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!interaction.guild || !interaction.guildId) return;
+  await interaction.deferReply({ ephemeral: true });
+
+  const sessions = await getActivePrivateVcSessionsByGuild(interaction.guildId);
+  if (sessions.length === 0) {
+    await interaction.editReply("このサーバーにアクティブな非公開VCはありません。");
+    return;
+  }
+
+  let updated = 0;
+  let skipped = 0;
+  for (const session of sessions) {
+    try {
+      const ch = interaction.guild.channels.cache.get(session.channelId)
+        ?? await interaction.guild.channels.fetch(session.channelId).catch(() => null);
+      if (!ch || !("messages" in ch)) { skipped++; continue; }
+      const textCh = ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel;
+      const msgs = await textCh.messages.fetch({ limit: 50 });
+      const panelMsg = msgs.find(
+        (m) => m.author.id === interaction.client.user?.id
+          && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+      );
+      if (!panelMsg) { skipped++; continue; }
+      const memberIds = getVcAccessMemberIds(textCh, session.userId, interaction.client.user?.id);
+      const streamEnabled = isPrivateVcStreamEnabled(textCh, session.userId);
+      await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt, memberIds, streamEnabled));
+      updated++;
+    } catch (err) {
+      logger.warn(`[vc-refresh] Failed to refresh panel for channel ${session.channelId}`, err);
+      skipped++;
+    }
+  }
+
+  await interaction.editReply(
+    `✅ 非公開VCパネルを更新しました。\n更新: ${updated} 件 / スキップ: ${skipped} 件（チャンネル消失・パネルなし）`,
+  );
 }
 
 /** 📺 画面共有トグル（非公開VC） */

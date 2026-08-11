@@ -711,6 +711,20 @@ export async function extendPrivateVcSession(
   return updated;
 }
 
+// Returns all active (not yet expired) private VC sessions for a guild.
+export async function getActivePrivateVcSessionsByGuild(guildId: string): Promise<PrivateVcSession[]> {
+  const now = new Date();
+  return db
+    .select()
+    .from(privateVcSessionsTable)
+    .where(
+      and(
+        eq(privateVcSessionsTable.guildId, guildId),
+        gt(privateVcSessionsTable.expiresAt, now),
+      ),
+    );
+}
+
 // Returns all sessions whose lease has expired (expiresAt <= now).
 export async function getExpiredPrivateVcSessions(now: Date): Promise<PrivateVcSession[]> {
   return db
