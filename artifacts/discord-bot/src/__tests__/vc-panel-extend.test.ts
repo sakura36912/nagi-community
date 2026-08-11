@@ -443,4 +443,35 @@ describe("handleVcPanelExtendSel", () => {
     expect(reply).toContain("非公開VC延長（1日）");
     expect(reply).toContain("延長されました");
   });
+
+  it("scenario 9: channel deleted before extend — extendOrRepairVcSchedule uses channelId as fallback name and success reply is sent", async () => {
+    // Both cache.get (empty cache) and channels.fetch return null — simulates a VC channel
+    // that was deleted before the user clicked extend.
+    const interaction = makeExtendSelInteraction(OWNER_ID, String(ITEM_ID)); // no textChannel arg
+    // Ensure fetch explicitly returns null (channel gone from Discord too)
+    interaction.guild.channels.fetch = vi.fn().mockResolvedValue(null);
+
+    const session = makeSession();
+    mocks.getPrivateVcSessionByChannelId.mockResolvedValue(session);
+    mocks.getShopItem.mockResolvedValue(makeExtendItem());
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+    mocks.buyItem.mockResolvedValue({ ok: true, item: makeExtendItem() });
+    mocks.extendPrivateVcSession.mockResolvedValue({ ...session, expiresAt: EXTENDED_AT });
+
+    // Must not throw even though the channel no longer exists
+    await expect(handleVcPanelExtendSel(interaction as never)).resolves.toBeUndefined();
+
+    // extendOrRepairVcSchedule must still be called, using channelId as the fallback name
+    // because no channel object could be resolved to get a real name.
+    expect(mocks.extendOrRepairVcSchedule).toHaveBeenCalledOnce();
+    expect(mocks.extendOrRepairVcSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({ fallbackName: CHANNEL_ID }),
+    );
+
+    // The success reply must still be delivered to the user
+    expect(interaction.editReply).toHaveBeenCalledOnce();
+    const reply = interaction.editReply.mock.calls[0][0] as string;
+    expect(reply).toContain("非公開VC延長（1日）");
+    expect(reply).toContain("延長されました");
+  });
 });
