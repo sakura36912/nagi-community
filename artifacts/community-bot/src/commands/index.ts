@@ -2133,6 +2133,233 @@ const tempvcCommand: Command = {
   },
 };
 
+// ─── /event ──────────────────────────────────────────────────────────────────
+
+const eventCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("event")
+    .setDescription("イベントを管理します")
+    .addSubcommand((sub) =>
+      sub
+        .setName("create")
+        .setDescription("新しいイベントを作成します（管理者用）")
+        .addStringOption((opt) =>
+          opt.setName("title").setDescription("イベントのタイトル").setRequired(true).setMaxLength(100),
+        )
+        .addStringOption((opt) =>
+          opt.setName("date").setDescription("開催日時（YYYY-MM-DD または YYYY-MM-DD HH:MM、JST）").setRequired(true),
+        )
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("イベントを投稿するチャンネル")
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildText),
+        )
+        .addStringOption((opt) =>
+          opt.setName("description").setDescription("イベントの説明").setRequired(false).setMaxLength(1000),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("予定されているイベントの一覧を表示します"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("delete")
+        .setDescription("イベントを削除します（管理者用）")
+        .addIntegerOption((opt) =>
+          opt.setName("event_id").setDescription("イベントID").setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("edit")
+        .setDescription("イベントを編集します（管理者用）")
+        .addIntegerOption((opt) =>
+          opt.setName("event_id").setDescription("イベントID").setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName("title").setDescription("新しいタイトル").setRequired(false).setMaxLength(100),
+        )
+        .addStringOption((opt) =>
+          opt.setName("date").setDescription("新しい開催日時（YYYY-MM-DD または YYYY-MM-DD HH:MM、JST）").setRequired(false),
+        )
+        .addStringOption((opt) =>
+          opt.setName("description").setDescription("新しい説明").setRequired(false).setMaxLength(1000),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("setup")
+        .setDescription("イベント通知設定を変更します（管理者用）")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("通知チャンネル（省略すると現在の設定を表示）")
+            .setRequired(false)
+            .addChannelTypes(ChannelType.GuildText),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("role").setDescription("通知ロール（省略すると現在の設定を表示）").setRequired(false),
+        ),
+    ),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    const sub = interaction.options.getSubcommand();
+
+    // ── list ──────────────────────────────────────────────────────────────────
+    if (sub === "list") {
+      await interaction.deferReply({ ephemeral: true });
+      const events = await listUpcomingEvents(guildId);
+      if (events.length === 0) {
+        await interaction.editReply("予定されているイベントはありません。");
+        return;
+      }
+      const lines = events.map((e) => {
+        const ts = Math.floor(e.scheduledAt.getTime() / 1000);
+        return `• **${e.title}** — <t:${ts}:F>（ID: \`${e.id}\`）`;
+      });
+      await interaction.editReply(`## 📅 予定イベント\n${lines.join("\n")}`);
+      return;
+    }
+
+    // ── create / delete / edit / setup — admin only ───────────────────────────
+    if (!requireAdmin(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      return;
+    }
+
+    // ── create ────────────────────────────────────────────────────────────────
+    if (sub === "create") {
+      const title       = interaction.options.getString("title", true);
+      const dateStr     = interaction.options.getString("date", true);
+      const channel     = interaction.options.getChannel("channel", true);
+      const description = interaction.options.getString("description");
+
+      const scheduledAt = parseDate(dateStr);
+      if (!scheduledAt) {
+        await interaction.reply({
+          content: "❌ 日付の形式が正しくありません。`YYYY-MM-DD` または `YYYY-MM-DD HH:MM` 形式で指定してください。",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+      const event = await createEvent(guildId, channel.id, title, description ?? null, scheduledAt);
+
+      // Post the event embed in the target channel
+      if (interaction.guild) {
+        const targetChannel = interaction.guild.channels.cache.get(channel.id);
+        if (targetChannel?.isTextBased()) {
+          const { embed, rows } = await buildEventEmbed(event.id, interaction.guild);
+          const msg = await targetChannel.send({ embeds: [embed], components: rows });
+          await updateEventMessageId(event.id, msg.id);
+        }
+      }
+
+      await interaction.editReply(`✅ イベント **${title}** を作成しました（ID: \`${event.id}\`）。`);
+      return;
+    }
+
+    // ── delete ────────────────────────────────────────────────────────────────
+    if (sub === "delete") {
+      const eventId = interaction.options.getInteger("event_id", true);
+      await interaction.deferReply({ ephemeral: true });
+
+      // Guild-ownership guard: reject if the event belongs to a different guild.
+      const event = await getEvent(eventId);
+      if (!event || event.guildId !== guildId) {
+        await interaction.editReply(`❌ イベント ID **${eventId}** が見つかりません。`);
+        return;
+      }
+
+      await deleteEvent(eventId);
+      await interaction.editReply(`✅ イベント **${event.title}**（ID: \`${eventId}\`）を削除しました。`);
+      return;
+    }
+
+    // ── edit ──────────────────────────────────────────────────────────────────
+    if (sub === "edit") {
+      const eventId        = interaction.options.getInteger("event_id", true);
+      const newTitle       = interaction.options.getString("title");
+      const newDateStr     = interaction.options.getString("date");
+      const newDescription = interaction.options.getString("description");
+
+      await interaction.deferReply({ ephemeral: true });
+
+      // Guild-ownership guard: reject if the event belongs to a different guild.
+      const event = await getEvent(eventId);
+      if (!event || event.guildId !== guildId) {
+        await interaction.editReply(`❌ イベント ID **${eventId}** が見つかりません。`);
+        return;
+      }
+
+      if (!newTitle && newDateStr === null && newDescription === null) {
+        await interaction.editReply("❌ 変更する項目を指定してください（title / date / description）。");
+        return;
+      }
+
+      const opts: { title?: string; description?: string | null; scheduledAt?: Date } = {};
+      if (newTitle)              opts.title = newTitle;
+      if (newDescription !== null) opts.description = newDescription || null;
+      if (newDateStr) {
+        const parsed = parseDate(newDateStr);
+        if (!parsed) {
+          await interaction.editReply(
+            "❌ 日付の形式が正しくありません。`YYYY-MM-DD` または `YYYY-MM-DD HH:MM` 形式で指定してください。",
+          );
+          return;
+        }
+        opts.scheduledAt = parsed;
+      }
+
+      await editEvent(eventId, opts);
+
+      // Refresh the event embed in Discord if it was previously posted.
+      if (event.messageId && interaction.guild) {
+        const eventChannel = interaction.guild.channels.cache.get(event.channelId);
+        if (eventChannel?.isTextBased()) {
+          const msg = await eventChannel.messages.fetch(event.messageId).catch(() => null);
+          if (msg) {
+            const { embed, rows } = await buildEventEmbed(eventId, interaction.guild);
+            await msg.edit({ embeds: [embed], components: rows }).catch(() => {});
+          }
+        }
+      }
+
+      await interaction.editReply(`✅ イベント **${event.title}**（ID: \`${eventId}\`）を更新しました。`);
+      return;
+    }
+
+    // ── setup ─────────────────────────────────────────────────────────────────
+    if (sub === "setup") {
+      const channel = interaction.options.getChannel("channel");
+      const role    = interaction.options.getRole("role");
+
+      // No arguments → show current settings
+      if (!channel && !role) {
+        const settings = await getEventSettings(guildId);
+        const channelVal = settings?.notifyChannelId ? `<#${settings.notifyChannelId}>` : "未設定";
+        const roleVal    = settings?.notifyRoleId    ? `<@&${settings.notifyRoleId}>`   : "未設定";
+        await interaction.reply({
+          content: `## 📋 イベント通知設定\n通知チャンネル: ${channelVal}\n通知ロール: ${roleVal}`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await setEventSettings(guildId, {
+        notifyChannelId: channel?.id ?? undefined,
+        notifyRoleId:    role?.id    ?? undefined,
+      });
+      await interaction.reply({ content: "✅ イベント通知設定を更新しました。", ephemeral: true });
+      return;
+    }
+  },
+};
+
 // ─── /ticket ─────────────────────────────────────────────────────────────────
 
 const ticketCommand: Command = {
@@ -2213,4 +2440,5 @@ export const commands: Command[] = [
   tempvcCommand,
   periodicCommand,
   ticketCommand,
+  eventCommand,
 ];
