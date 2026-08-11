@@ -154,6 +154,12 @@ export const transactionsTable = pgTable("transactions", {
   amount: integer("amount").notNull(),
   reason: text("reason").notNull(),
   relatedUserId: text("related_user_id"),
+  /**
+   * Opaque idempotency key used by automated payouts (e.g. VC salary).
+   * When set, the row is unique on this key so duplicate event firings cannot
+   * produce a second credit.  NULL for all manually-created transactions.
+   */
+  sessionKey: text("session_key").unique(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

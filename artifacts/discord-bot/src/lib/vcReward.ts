@@ -269,20 +269,48 @@ export async function payVcReward(
 
   const reason = `VC滞在報酬（${Math.floor(minutes)}分）`;
 
-  // Upsert wallet and credit balance atomically.
-  await db
-    .insert(walletsTable)
-    .values({ guildId, userId, balance: reward })
-    .onConflictDoUpdate({
-      target: [walletsTable.guildId, walletsTable.userId],
-      set: { balance: sql`${walletsTable.balance} + ${reward}` },
-    });
+  // Build a stable idempotency key for this session so that a duplicate leave
+  // event cannot produce a second transaction row or a second wallet credit.
+  const sessionKey = `vc:${guildId}:${userId}:${joinedAt.toISOString()}`;
 
-  await db
-    .insert(transactionsTable)
-    .values({ guildId, userId, amount: reward, reason });
+  // Wrap the transaction insert and wallet upsert in a single DB transaction so
+  // that a wallet-upsert failure rolls back the new ledger row.  Without this,
+  // a crash or DB error between the two statements would leave the session_key
+  // permanently consumed while the wallet was never credited — the user would
+  // never be paid because every subsequent retry would see the existing key and
+  // return 0 immediately.
+  //
+  // Inside the transaction:
+  //   1. Insert the ledger row with the session key (idempotency gate).
+  //      ON CONFLICT DO NOTHING → if the key already exists, the insert is
+  //      silently skipped and returning() comes back empty.
+  //   2. If no row was returned, this session has already been paid → return 0.
+  //   3. Otherwise upsert the wallet balance.  A failure here rolls back step 1
+  //      so the session key is freed for a later retry.
+  const paid = await db.transaction(async (tx) => {
+    const [txRow] = await tx
+      .insert(transactionsTable)
+      .values({ guildId, userId, amount: reward, reason, sessionKey })
+      .onConflictDoNothing()
+      .returning();
 
-  // Notify member via DM. Silently ignore 50007 (Cannot send messages to this user / DMs closed).
+    if (!txRow) return false; // already paid for this session
+
+    await tx
+      .insert(walletsTable)
+      .values({ guildId, userId, balance: reward })
+      .onConflictDoUpdate({
+        target: [walletsTable.guildId, walletsTable.userId],
+        set: { balance: sql`${walletsTable.balance} + ${reward}` },
+      });
+
+    return true;
+  });
+
+  if (!paid) return 0;
+
+  // Notify member via DM. Kept outside the DB transaction so a DM failure never
+  // rolls back the credit. Silently ignore 50007 (DMs closed).
   if (sendDm) {
     try {
       await sendDm(`VC滞在報酬として **${reward} ${currencyName}** を受け取りました！`);

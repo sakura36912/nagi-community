@@ -378,6 +378,10 @@ export const evalsheetCommand = {
 
       for (const sheet of targets) {
         try {
+          // sheet.messageId stores the forum thread ID (thread.id).
+          // In Discord forum posts, thread.id === starterMessage.id, so the
+          // same ID correctly addresses both the thread channel and its
+          // starter (embed) message.
           const thread = await interaction.client.channels
             .fetch(sheet.messageId!)
             .catch(() => null);

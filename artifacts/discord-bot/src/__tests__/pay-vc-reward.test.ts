@@ -8,10 +8,14 @@
  *   1. Reward is credited to the wallet and a DM is sent to the member.
  *   2. Reward is credited but the DM is silently ignored when the member has
  *      DMs closed (Discord error 50007) — this must NOT propagate to the caller.
- *   3. A DB error during wallet credit propagates normally (the reward failed,
- *      not just the DM).
+ *   3. A DB error during the transaction insert propagates normally.
  *   4. Rate = 0 → returns 0 immediately without touching the DB or sending a DM.
  *   5. Session below minMinutes → returns 0 without touching the DB or sending a DM.
+ *   6. Calling payVcReward twice with the same (guildId, userId, joinedAt) does
+ *      NOT produce a duplicate wallet credit or a duplicate transaction row —
+ *      the second call returns 0 immediately.
+ *   7. A wallet-upsert failure inside the DB transaction rolls back the ledger
+ *      row so that a subsequent retry for the same session can succeed.
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -37,41 +41,129 @@ function makeDiscordAPIError(code: number, message: string): DiscordAPIError {
 
 // ─── Hoist mocks ─────────────────────────────────────────────────────────────
 const mocks = vi.hoisted(() => {
-  /**
-   * Simple chainable stub that resolves when awaited.
-   * Supports: db.insert(t).values(v).onConflictDoUpdate({...}) and
-   *           db.insert(t).values(v)  (both are awaited directly by payVcReward).
-   */
-  let nextInsertError: Error | null = null;
+  /** Error injected into the NEXT transaction-table insert (fires once). */
+  let nextTxInsertError: Error | null = null;
+  /** Error injected into the NEXT wallet-table insert inside a transaction (fires once). */
+  let nextWalletError: Error | null = null;
 
-  function makeInsertChain() {
-    const chain = {
-      values(_v: unknown) { return chain; },
-      onConflictDoUpdate(_opts: unknown) { return chain; },
-      // Make the chain awaitable (drizzle query builders are thenables).
-      then(
-        resolve: (v: unknown) => void,
-        reject: (e: unknown) => void,
-      ) {
-        if (nextInsertError) {
-          const err = nextInsertError;
-          nextInsertError = null;
-          reject(err);
-        } else {
-          resolve([]);
-        }
+  /**
+   * Session keys that have already been committed to the DB.
+   * Simulates the unique constraint on transactions.session_key:
+   *   - A key is added when a transaction insert succeeds.
+   *   - A key is removed when the surrounding DB transaction is rolled back.
+   */
+  const seenSessionKeys = new Set<string>();
+
+  /** How many times the wallet upsert completed successfully. */
+  let walletCreditCalls = 0;
+
+  // ── Insert chain factories ──────────────────────────────────────────────────
+
+  /**
+   * Chain for transaction-table inserts:
+   *   insert(txTable).values({…sessionKey}).onConflictDoNothing().returning()
+   *
+   * Returns [] when the key already exists (conflict = already paid),
+   * or [{id:1}] when the insert succeeds.
+   */
+  function makeTxInsertChain(key: string | null, isConflict: boolean) {
+    return {
+      onConflictDoNothing() {
+        return {
+          returning(): Promise<unknown[]> {
+            if (nextTxInsertError) {
+              const err = nextTxInsertError;
+              nextTxInsertError = null;
+              return Promise.reject(err);
+            }
+            return Promise.resolve(isConflict ? [] : [{ id: 1 }]);
+          },
+        };
       },
     };
-    return chain;
   }
 
-  const db = {
-    insert(_table: unknown) { return makeInsertChain(); },
-  };
+  /**
+   * Chain for wallet-table inserts:
+   *   insert(walletTable).values({…balance}).onConflictDoUpdate({…})
+   */
+  function makeWalletInsertChain() {
+    return {
+      onConflictDoUpdate(_opts: unknown): Promise<unknown> {
+        if (nextWalletError) {
+          const err = nextWalletError;
+          nextWalletError = null;
+          return Promise.reject(err);
+        }
+        walletCreditCalls++;
+        return Promise.resolve([]);
+      },
+    };
+  }
+
+  /**
+   * Route insert calls to the correct chain based on the values object.
+   * Transaction inserts carry a `sessionKey` field; wallet inserts carry `balance`.
+   */
+  function makeInsert(_table: unknown) {
+    return {
+      values(v: Record<string, unknown>) {
+        if ("sessionKey" in v) {
+          const key = typeof v.sessionKey === "string" ? v.sessionKey : null;
+          const isConflict = key !== null && seenSessionKeys.has(key);
+          // Tentatively mark the key as "in flight"; the transaction wrapper
+          // will remove it again if a rollback occurs.
+          if (key !== null && !isConflict) seenSessionKeys.add(key);
+          return makeTxInsertChain(key, isConflict);
+        }
+        return makeWalletInsertChain();
+      },
+    };
+  }
+
+  // ── db.transaction simulation ───────────────────────────────────────────────
+  /**
+   * Simulate a DB transaction:
+   *   - Run the callback with a `tx` proxy that shares state with `db`.
+   *   - On success, committed changes persist.
+   *   - On failure, roll back: restore seenSessionKeys and walletCreditCalls to
+   *     their pre-transaction snapshot so a retry can proceed cleanly.
+   */
+  async function transaction<T>(
+    fn: (tx: { insert: typeof makeInsert }) => Promise<T>,
+  ): Promise<T> {
+    // Snapshot state before the transaction begins.
+    const keySnapshot = new Set(seenSessionKeys);
+    const walletSnapshot = walletCreditCalls;
+
+    try {
+      return await fn({ insert: makeInsert });
+    } catch (err) {
+      // Rollback: restore the pre-transaction state.
+      seenSessionKeys.clear();
+      for (const k of keySnapshot) seenSessionKeys.add(k);
+      walletCreditCalls = walletSnapshot;
+      throw err;
+    }
+  }
+
+  const db = { insert: makeInsert, transaction };
 
   return {
     db,
-    setNextInsertError(err: Error) { nextInsertError = err; },
+    /** Inject an error that fires on the next transaction-table insert. */
+    setNextTxInsertError(err: Error) { nextTxInsertError = err; },
+    /** Inject an error that fires on the next wallet insert (tests rollback recovery). */
+    setNextWalletError(err: Error) { nextWalletError = err; },
+    /** @deprecated kept for test backward-compat; same as setNextTxInsertError */
+    setNextInsertError(err: Error) { nextTxInsertError = err; },
+    getWalletCreditCalls() { return walletCreditCalls; },
+    resetState() {
+      seenSessionKeys.clear();
+      walletCreditCalls = 0;
+      nextTxInsertError = null;
+      nextWalletError = null;
+    },
   };
 });
 
@@ -79,7 +171,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("@workspace/db", () => ({
   db: mocks.db,
   walletsTable:      { guildId: {}, userId: {}, balance: {} },
-  transactionsTable: { guildId: {}, userId: {}, amount: {}, reason: {} },
+  transactionsTable: { guildId: {}, userId: {}, amount: {}, reason: {}, sessionKey: {} },
 }));
 
 // ─── Mock drizzle-orm (keep sql passthrough) ──────────────────────────────────
@@ -97,6 +189,10 @@ const SETTINGS = { ratePerHour: 100, minMinutes: 5 } as const;
 function makeJoinedAt(minutesAgo = 30): Date {
   return new Date(Date.now() - minutesAgo * 60_000);
 }
+
+beforeEach(() => {
+  mocks.resetState();
+});
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -185,6 +281,91 @@ describe("payVcReward — zero reward (no DB writes, no DM)", () => {
       { ratePerHour: 100, minMinutes: 5 }, sendDm,
     );
     expect(result).toBe(0);
+    expect(sendDm).not.toHaveBeenCalled();
+  });
+});
+
+describe("payVcReward — idempotency guard (duplicate leave event)", () => {
+  it("returns 0 on a second call with the same (guildId, userId, joinedAt)", async () => {
+    const joinedAt = makeJoinedAt(30);
+    const sendDm = vi.fn().mockResolvedValue(undefined);
+
+    const first = await payVcReward("guild-5", "user-8", joinedAt, "コイン", SETTINGS, sendDm);
+    expect(first).toBeGreaterThan(0);
+
+    const second = await payVcReward("guild-5", "user-8", joinedAt, "コイン", SETTINGS, sendDm);
+    expect(second).toBe(0);
+  });
+
+  it("does not credit the wallet a second time on a duplicate call", async () => {
+    const joinedAt = makeJoinedAt(30);
+    const sendDm = vi.fn().mockResolvedValue(undefined);
+
+    await payVcReward("guild-5", "user-9", joinedAt, "コイン", SETTINGS, sendDm);
+    const afterFirst = mocks.getWalletCreditCalls();
+
+    await payVcReward("guild-5", "user-9", joinedAt, "コイン", SETTINGS, sendDm);
+    const afterSecond = mocks.getWalletCreditCalls();
+
+    // Wallet must have been credited exactly once across both calls.
+    expect(afterFirst).toBe(1);
+    expect(afterSecond).toBe(1);
+  });
+
+  it("does not send a DM on the duplicate call", async () => {
+    const joinedAt = makeJoinedAt(30);
+    const sendDm = vi.fn().mockResolvedValue(undefined);
+
+    await payVcReward("guild-5", "user-10", joinedAt, "コイン", SETTINGS, sendDm);
+    expect(sendDm).toHaveBeenCalledTimes(1);
+
+    await payVcReward("guild-5", "user-10", joinedAt, "コイン", SETTINGS, sendDm);
+    // Still exactly once — the duplicate call exits before reaching the DM step.
+    expect(sendDm).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a different joinedAt as a distinct session (both calls pay)", async () => {
+    const sendDm = vi.fn().mockResolvedValue(undefined);
+    const joinedAt1 = new Date(Date.now() - 30 * 60_000);
+    const joinedAt2 = new Date(Date.now() - 60 * 60_000); // different timestamp
+
+    const first  = await payVcReward("guild-5", "user-11", joinedAt1, "コイン", SETTINGS, sendDm);
+    const second = await payVcReward("guild-5", "user-11", joinedAt2, "コイン", SETTINGS, sendDm);
+
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(0);
+    expect(mocks.getWalletCreditCalls()).toBe(2);
+  });
+});
+
+describe("payVcReward — DB transaction rollback on wallet failure", () => {
+  it("rolls back the session key so a retry for the same session can succeed", async () => {
+    const joinedAt = makeJoinedAt(30);
+    const sendDm = vi.fn().mockResolvedValue(undefined);
+
+    // First call: wallet upsert fails → the whole DB transaction rolls back.
+    // The session key must NOT be permanently consumed.
+    mocks.setNextWalletError(new Error("wallet DB error"));
+    await expect(
+      payVcReward("guild-6", "user-12", joinedAt, "コイン", SETTINGS, sendDm),
+    ).rejects.toThrow("wallet DB error");
+
+    // Retry with the same session: should succeed because the key was rolled back.
+    const retryReward = await payVcReward(
+      "guild-6", "user-12", joinedAt, "コイン", SETTINGS, sendDm,
+    );
+    expect(retryReward).toBeGreaterThan(0);
+    expect(mocks.getWalletCreditCalls()).toBe(1);
+    expect(sendDm).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send a DM when the wallet insert fails", async () => {
+    const joinedAt = makeJoinedAt(30);
+    const sendDm = vi.fn().mockResolvedValue(undefined);
+
+    mocks.setNextWalletError(new Error("wallet DB error"));
+    await payVcReward("guild-6", "user-13", joinedAt, "コイン", SETTINGS, sendDm).catch(() => {});
+
     expect(sendDm).not.toHaveBeenCalled();
   });
 });
