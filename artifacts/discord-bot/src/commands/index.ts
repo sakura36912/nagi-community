@@ -2235,7 +2235,8 @@ export async function handleVcPanelRenameBtn(interaction: ButtonInteraction): Pr
   const allVcItems = await listShopItems(interaction.guild.id, "vc");
   const renameItems = allVcItems.filter((i) => i.effectType === VC_RENAME_EFFECT);
   if (renameItems.length === 0) {
-    await interaction.reply({ content: "❌ このサーバーには名前変更券が設定されていません。", ephemeral: true });
+    // 名前変更券が未設定の場合は無料でリネーム（itemId=0 は無料の特殊ケース）
+    await interaction.showModal(buildRenameModal(channelId, ownerId, 0));
     return;
   }
   if (renameItems.length === 1) {
@@ -2277,10 +2278,17 @@ export async function handleVcPanelRenameModal(interaction: ModalSubmitInteracti
   const newName = interaction.fields.getTextInputValue(VC_PANEL_RENAME_INPUT_ID).trim();
   if (!newName) { await interaction.reply({ content: "❌ VC名を入力してください。", ephemeral: true }); return; }
   await interaction.deferReply({ ephemeral: true });
-  const settings = await getGuildSettings(interaction.guild.id);
-  const result = await buyItem(interaction.guild.id, interaction.user.id, itemId, settings.currencyName);
-  if (!result.ok) { await interaction.editReply(result.reason); return; }
   const renamedName = `🔒 ${newName}`.slice(0, 100);
+
+  // itemId=0 は名前変更券なし（無料リネーム）
+  const isFree = itemId === 0;
+  let purchaseResult: Awaited<ReturnType<typeof buyItem>> | null = null;
+  if (!isFree) {
+    const settings = await getGuildSettings(interaction.guild.id);
+    purchaseResult = await buyItem(interaction.guild.id, interaction.user.id, itemId, settings.currencyName);
+    if (!purchaseResult.ok) { await interaction.editReply(purchaseResult.reason); return; }
+  }
+
   try {
     const ch = interaction.guild.channels.cache.get(channelId)
       ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
@@ -2295,10 +2303,17 @@ export async function handleVcPanelRenameModal(interaction: ModalSubmitInteracti
     } catch (scheduleErr) {
       logger.error("[vc-panel] Failed to save schedule after rename", scheduleErr);
     }
-    await interaction.editReply(`✅ **${result.item.name}**を使用しました！VCを「${renamedName}」にリネームしました。`);
+    const successMsg = isFree
+      ? `✅ VCを「${renamedName}」にリネームしました。`
+      : `✅ **${purchaseResult!.item.name}**を使用しました！VCを「${renamedName}」にリネームしました。`;
+    await interaction.editReply(successMsg);
   } catch {
-    await refundPurchase(interaction.guild.id, interaction.user.id, result.item);
-    await interaction.editReply("❌ チャンネルのリネームに失敗しました。購入を取り消し、返金しました。");
+    if (!isFree && purchaseResult) {
+      await refundPurchase(interaction.guild.id, interaction.user.id, purchaseResult.item);
+      await interaction.editReply("❌ チャンネルのリネームに失敗しました。購入を取り消し、返金しました。");
+    } else {
+      await interaction.editReply("❌ チャンネルのリネームに失敗しました。");
+    }
   }
 }
 
