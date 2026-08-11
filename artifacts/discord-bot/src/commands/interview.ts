@@ -42,17 +42,16 @@ export const interviewCommand: Command = {
       return;
     }
 
-    // 実行者のロールチェック
-    const executor = interaction.member as GuildMember | null;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    // キャッシュが不完全な場合に備え、実行者を Discord から改めてフェッチする
+    const executor = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
     if (!executor || !executor.roles.cache.some((r) => ALLOWED_ROLE_NAMES.includes(r.name))) {
-      await interaction.reply({
+      await interaction.editReply({
         content: `❌ このコマンドは ${ALLOWED_ROLE_NAMES.join("・")} ロールを持つメンバーのみ使用できます。`,
-        flags: MessageFlags.Ephemeral,
       });
       return;
     }
-
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const target = interaction.options.getMember("メンバー") as GuildMember | null;
     if (!target) {
