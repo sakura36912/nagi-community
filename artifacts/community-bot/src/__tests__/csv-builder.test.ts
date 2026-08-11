@@ -101,6 +101,17 @@ describe("buildTempVcCsv", () => {
     ]);
   });
 
+  it("header row parses to exactly 7 fields via the RFC 4180-aware parser", () => {
+    // If a column name ever changes to include a comma the header must be
+    // quoted so parsers see 7 fields — not more.  This test uses the same
+    // RFC 4180-aware parser as the data-field tests so it will fail if the
+    // header is not properly quoted after such a rename.
+    const csv = buildTempVcCsv([]);
+    const [headerLine] = csv.split("\n");
+    const fields = parseCsvRow(headerLine!);
+    expect(fields).toHaveLength(7);
+  });
+
   // ── empty input ─────────────────────────────────────────────────────────────
 
   it("returns only the header row when the input array is empty", () => {
