@@ -14,7 +14,7 @@ interface Command {
 }
 
 /** ロール名で許可制御するロール（いずれかを持っていれば実行可） */
-const ALLOWED_ROLE_NAMES = ["守門卿", "門番", "門番見習い"];
+const ALLOWED_ROLE_NAMES = ["守門卿", "門番", "門番見習い", "見習い門番"];
 /** 面接通過時に外すロール名 */
 const REMOVE_ROLE_NAME = "入島待ち";
 /** 面接通過時に付与するロール名 */
