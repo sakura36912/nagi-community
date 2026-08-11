@@ -15,6 +15,12 @@ export async function saveSchedule(
   expiresAt: Date,
   userId?: string,
 ): Promise<VcSchedule> {
+  if (!guildId || guildId.trim() === "") {
+    throw new Error("guildId is required and cannot be empty");
+  }
+  if (!channelId || channelId.trim() === "") {
+    throw new Error("channelId is required and cannot be empty");
+  }
   if (!channelName || channelName.trim() === "") {
     throw new Error("channelName is required and cannot be empty");
   }

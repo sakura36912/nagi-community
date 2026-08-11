@@ -9,6 +9,38 @@
 import { describe, expect, it } from "vitest";
 import { saveSchedule } from "../lib/vc.js";
 
+describe("saveSchedule – guildId validation", () => {
+  const futureDate = new Date(Date.now() + 60 * 60 * 1000);
+
+  it("throws when guildId is an empty string", async () => {
+    await expect(
+      saveSchedule("", "channel-1", "my-channel", futureDate),
+    ).rejects.toThrow("guildId is required and cannot be empty");
+  });
+
+  it("throws when guildId is a whitespace-only string", async () => {
+    await expect(
+      saveSchedule("   ", "channel-1", "my-channel", futureDate),
+    ).rejects.toThrow("guildId is required and cannot be empty");
+  });
+});
+
+describe("saveSchedule – channelId validation", () => {
+  const futureDate = new Date(Date.now() + 60 * 60 * 1000);
+
+  it("throws when channelId is an empty string", async () => {
+    await expect(
+      saveSchedule("guild-1", "", "my-channel", futureDate),
+    ).rejects.toThrow("channelId is required and cannot be empty");
+  });
+
+  it("throws when channelId is a whitespace-only string", async () => {
+    await expect(
+      saveSchedule("guild-1", "   ", "my-channel", futureDate),
+    ).rejects.toThrow("channelId is required and cannot be empty");
+  });
+});
+
 describe("saveSchedule – channelName validation", () => {
   const futureDate = new Date(Date.now() + 60 * 60 * 1000);
 
