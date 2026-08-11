@@ -277,4 +277,108 @@ describe("buildTempVcCsv", () => {
     expect(fields).toHaveLength(7);
     expect(fields[2]).toBe('chan"quoted"');
   });
+
+  // ── newline in field values ────────────────────────────────────────────────
+
+  /**
+   * RFC 4180-compliant CSV parser that handles multi-line quoted fields.
+   * Unlike parseCsvRow (which operates on a single physical line), this
+   * parser works over the entire CSV string and can reconstruct a field
+   * whose content spans multiple physical lines because it contains an
+   * embedded newline inside double-quotes.
+   */
+  function parseAllCsvRecords(csv: string): string[][] {
+    const records: string[][] = [];
+    let i = 0;
+
+    while (i < csv.length) {
+      const fields: string[] = [];
+
+      // Parse fields until end-of-record (unquoted \n or end of string).
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (csv[i] === '"') {
+          // Quoted field — may contain embedded commas, double-quotes, or newlines.
+          let field = "";
+          i++; // skip opening quote
+          while (i < csv.length) {
+            if (csv[i] === '"' && csv[i + 1] === '"') {
+              field += '"';
+              i += 2;
+            } else if (csv[i] === '"') {
+              i++; // skip closing quote
+              break;
+            } else {
+              field += csv[i++]; // embedded newlines land here
+            }
+          }
+          fields.push(field);
+          if (csv[i] === ",") {
+            i++;
+          } else {
+            break; // end of record (\n or end of string)
+          }
+        } else {
+          // Unquoted field — ends at the next comma or unquoted newline.
+          let field = "";
+          while (i < csv.length && csv[i] !== "," && csv[i] !== "\n") {
+            field += csv[i++];
+          }
+          fields.push(field);
+          if (csv[i] === ",") {
+            i++;
+          } else {
+            break; // end of record
+          }
+        }
+      }
+
+      records.push(fields);
+      if (i < csv.length && csv[i] === "\n") i++; // skip record separator
+    }
+
+    return records;
+  }
+
+  it("opted_out is still in column position 7 when channelId contains a newline", () => {
+    // An unquoted newline in channelId would split the data row into two
+    // physical CSV lines, shifting all subsequent columns and making
+    // opted_out unreachable.  The RFC 4180 quoting fix must wrap the field
+    // in double-quotes so that the embedded newline is part of the field
+    // value, not a record separator.
+    const row = makeRow({ channelId: "chan\nfoo", optedOut: true });
+    const csv = buildTempVcCsv([row]);
+
+    // Use the multi-line-aware parser to count logical records.
+    const records = parseAllCsvRecords(csv);
+
+    // Header + exactly 1 data record — no row split occurred.
+    expect(records).toHaveLength(2);
+
+    const dataFields = records[1]!;
+    // All 7 columns must be present in the single logical data record.
+    expect(dataFields).toHaveLength(7);
+    // channelId (index 2) must be recovered verbatim, newline and all.
+    expect(dataFields[2]).toBe("chan\nfoo");
+    // opted_out must still be in position 7 (index 6) with the correct value.
+    expect(dataFields[6]).toBe("true");
+  });
+
+  it("opted_out is still in column position 7 when userId contains a newline", () => {
+    // Same injection guard as above but targeting the userId field (index 1).
+    const row = makeRow({ userId: "user\ninjected", optedOut: false });
+    const csv = buildTempVcCsv([row]);
+
+    const records = parseAllCsvRecords(csv);
+
+    // Header + exactly 1 data record — no row split occurred.
+    expect(records).toHaveLength(2);
+
+    const dataFields = records[1]!;
+    expect(dataFields).toHaveLength(7);
+    // userId (index 1) must be recovered verbatim.
+    expect(dataFields[1]).toBe("user\ninjected");
+    // opted_out must still be in position 7 (index 6).
+    expect(dataFields[6]).toBe("false");
+  });
 });
