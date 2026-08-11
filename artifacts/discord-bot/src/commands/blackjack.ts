@@ -468,6 +468,7 @@ export const blackjackCommand = {
   data: new SlashCommandBuilder()
     .setName("blackjack")
     .setDescription("ブラックジャック — 21を目指せ！BJ=1.5倍・通常勝利=1倍")
+    .setDefaultMemberPermissions(0)
     .addIntegerOption((opt) =>
       opt
         .setName("bet")

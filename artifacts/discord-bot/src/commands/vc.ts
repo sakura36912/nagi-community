@@ -199,6 +199,7 @@ export const vcCommand = {
   data: new SlashCommandBuilder()
     .setName("vc")
     .setDescription("VCを管理します")
+    .setDefaultMemberPermissions(0)
     // ── rename ────────────────────────────────────────────────────────────
     .addSubcommand((sub) =>
       sub

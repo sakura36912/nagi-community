@@ -17,6 +17,7 @@ export const stickyCommand = {
   data: new SlashCommandBuilder()
     .setName("sticky")
     .setDescription("チャンネルの最下部に常に表示されるメッセージを管理します（管理者）")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("set")

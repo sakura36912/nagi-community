@@ -458,6 +458,7 @@ export const shiftCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("shift")
     .setDescription("シフト管理")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("remove")

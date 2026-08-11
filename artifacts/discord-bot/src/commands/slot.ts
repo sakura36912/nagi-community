@@ -577,6 +577,7 @@ export const slotCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("slot")
     .setDescription("3×3スロット 🎰 ｜ 横3・斜め2の計5ライン")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("play")

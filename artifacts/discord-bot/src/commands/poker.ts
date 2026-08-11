@@ -412,6 +412,7 @@ export const pokerCommand = {
   data: new SlashCommandBuilder()
     .setName("poker")
     .setDescription("5カードドロー — ホールドしてドロー、役で最大250倍！")
+    .setDefaultMemberPermissions(0)
     .addIntegerOption((opt) =>
       opt
         .setName("bet")

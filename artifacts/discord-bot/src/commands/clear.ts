@@ -9,6 +9,7 @@ export const clearCommand = {
   data: new SlashCommandBuilder()
     .setName("clear")
     .setDescription("チャンネルのメッセージを一括削除します（管理者）")
+    .setDefaultMemberPermissions(0)
     .addIntegerOption((opt) =>
       opt
         .setName("count")

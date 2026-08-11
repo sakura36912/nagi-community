@@ -2371,6 +2371,7 @@ const chestCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("宝箱")
     .setDescription("宝箱パネルを設置します（管理者専用）")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("set")

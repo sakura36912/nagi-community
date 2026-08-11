@@ -368,6 +368,7 @@ export const rouletteCommand = {
   data: new SlashCommandBuilder()
     .setName("roulette")
     .setDescription("ヨーロピアンルーレット — ボタンで賭け方を選ぶ")
+    .setDefaultMemberPermissions(0)
     .addIntegerOption((o) =>
       o.setName("bet")
         .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)

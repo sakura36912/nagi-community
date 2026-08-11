@@ -206,6 +206,7 @@ export const vcsalaryCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("vcsalary")
     .setDescription("VC滞在時間に応じた報酬の設定")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("setup")

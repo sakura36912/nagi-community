@@ -53,6 +53,7 @@ export const vclogCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("vclog")
     .setDescription("VC滞在時間ログの設定")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub.setName("info").setDescription("現在の設定を確認する"),
     )
