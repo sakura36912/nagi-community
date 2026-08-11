@@ -529,13 +529,15 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
 
-    // コントロールパネルをVCテキストに投稿（best-effort）
-    newVc
-      .send(buildHubVcPanelMessage(newVc.id, member.id, true))
-      .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
-
     // 酒場ハブから生成されたチャンネルを永続ログに記録（過去データ検索に使用）
     const TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
+
+    // 酒場以外のハブにのみコントロールパネルを投稿
+    if (!TAVERN_NAMES.has(hub.nameTemplate)) {
+      newVc
+        .send(buildHubVcPanelMessage(newVc.id, member.id, true))
+        .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
+    }
     if (TAVERN_NAMES.has(hub.nameTemplate)) {
       await db.insert(communityTavernChannelsTable)
         .values({ guildId: guild.id, channelId: newVc.id, hubName: hub.nameTemplate })
