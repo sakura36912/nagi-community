@@ -345,6 +345,31 @@ describe("privacy status check after handlePrivacyOptin — stateful DB mock", (
     expect(bGuild).toBe(false);  // absent row → not opted out
   });
 
+  // ── Cross-guild isolation ──────────────────────────────────────────────────
+
+  it("opt-in in guild A does not change the opt-out status in guild B for the same user", async () => {
+    const userId  = "user-cross-guild";
+    const guildA  = "guild-A";
+    const guildB  = "guild-B";
+
+    // Seed both guild rows as opted-out
+    mocks.privacyStore.set(`${guildA}:${userId}`, true);
+    mocks.privacyStore.set(`${guildB}:${userId}`, true);
+
+    // Sanity-check initial state
+    expect(await isVcTrackingGuildLocalOptedOut(guildA, userId)).toBe(true);
+    expect(await isVcTrackingGuildLocalOptedOut(guildB, userId)).toBe(true);
+
+    // User opts back in — only for guild A
+    await handlePrivacyOptin(makeInteraction({ userId, guildId: guildA }) as never);
+
+    // Guild A must now be opted-in
+    expect(await isVcTrackingGuildLocalOptedOut(guildA, userId)).toBe(false);
+
+    // Guild B must remain opted-out (unchanged)
+    expect(await isVcTrackingGuildLocalOptedOut(guildB, userId)).toBe(true);
+  });
+
   it("a second opt-in for the same user is idempotent — status still shows active", async () => {
     const userId  = "user-idempotent";
     const guildId = "guild-idempotent";
