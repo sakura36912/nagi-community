@@ -16,11 +16,15 @@
  *     3. Duration suffix appears in leave notification.
  *     4. No suffix when no presence row exists.
  *
+ *   Straight leave – notify channel deleted:
+ *     5. send is never called (and no error propagates) when notifyChannelId
+ *        points to a channel that is no longer in guild.channels.cache.
+ *
  *   Move untracked → tracked:
- *     5. sendVcNotifyJoin fires with the new channel.
- *     6. recordVcLogLeave is NOT called.
- *     7. recordVcLogJoin is called with the new channel and its category.
- *     8. sendVcNotifyJoin is suppressed when notifyChannelId is null.
+ *     6. sendVcNotifyJoin fires with the new channel.
+ *     7. recordVcLogLeave is NOT called.
+ *     8. recordVcLogJoin is called with the new channel and its category.
+ *     9. sendVcNotifyJoin is suppressed when notifyChannelId is null.
  *
  *   Move tracked → tracked (different category):
  *     9.  Leave notification carries the duration suffix (read from getVcLogPresence).
@@ -214,6 +218,21 @@ describe("handleLeave – straight leave duration propagation", () => {
 
     expect(send).toHaveBeenCalledOnce();
     expect(send.mock.calls[0][0]).not.toMatch(/滞在/);
+  });
+
+  it("does not call send and does not throw when the notify channel has been deleted", async () => {
+    // notifyChannelId points to a channel that is NOT in guild.channels.cache
+    mocks.getVcLogSettings.mockResolvedValue({
+      notifyChannelId: "deleted-notify-ch",
+      categoryIds: ["cat-1"],
+    });
+    mocks.recordVcLogLeave.mockResolvedValue({ durationSeconds: 60 });
+    const send = vi.fn().mockResolvedValue(undefined);
+    // guild only has "ch-old" in cache — "deleted-notify-ch" is absent
+    const guild = makeGuild(send);
+
+    await expect(handleLeave(guild, "user-1", "ch-old")).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
   });
 });
 
