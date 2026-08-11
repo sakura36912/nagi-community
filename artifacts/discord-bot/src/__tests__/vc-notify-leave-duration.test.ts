@@ -414,4 +414,29 @@ describe("handleVcLogMove – tracked → tracked (different category)", () => {
     expect(sendJoin).toHaveBeenCalledOnce();
     expect(sendJoin).toHaveBeenCalledWith("user-1", "ch-new", "notify-ch");
   });
+
+  it("does not call send and does not throw when the notify channel has been deleted (join half)", async () => {
+    // notifyChannelId points to a channel that is NOT in guild.channels.cache
+    mocks.getVcLogSettings.mockResolvedValue({
+      notifyChannelId: "deleted-notify-ch",
+      categoryIds: ["cat-1", "cat-2"],
+    });
+    mocks.getVcLogPresence.mockResolvedValue({ joinedAt: new Date(Date.now() - 60 * 1000) });
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    // guild only has "ch-old" in cache — "deleted-notify-ch" is absent
+    const guild = makeGuild(send);
+
+    // Wire the real inline sendVcNotifyJoin (which checks cache) so the guard is exercised
+    const notifyWithRealJoin: VcLogMoveNotify = {
+      sendLeave: vi.fn().mockResolvedValue(undefined),
+      sendJoin: (uid, channelId, notifyChannelId) =>
+        sendVcNotifyJoin(guild, uid, channelId, notifyChannelId),
+    };
+
+    await expect(
+      handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notifyWithRealJoin),
+    ).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  });
 });
