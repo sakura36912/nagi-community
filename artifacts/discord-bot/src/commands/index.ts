@@ -1681,6 +1681,7 @@ export const VC_PANEL_BTN_KICK     = "vc:panel:kick:";
 export const VC_PANEL_BTN_EXTEND   = "vc:panel:extend:";
 export const VC_PANEL_BTN_EXPIRY   = "vc:panel:expiry:";
 export const VC_PANEL_BTN_RENAME   = "vc:panel:rename:";
+export const VC_PANEL_BTN_STREAM   = "vc:panel:stream:";
 export const VC_PANEL_BTN_TREASURE = "vc:panel:treasure:"; // 旧: 未使用
 /** 新入り宝箱ボタン ID */
 export const CHEST_OPEN_BTN_SHINNIRI  = "chest:open:shinniri";
@@ -1727,7 +1728,23 @@ function getVcAccessMemberIds(
     .map((ow) => ow.id);
 }
 
-export function buildVcPanelMessage(channelId: string, ownerId: string, expiresAt?: Date, memberIds?: string[]) {
+/**
+ * オーナーのチャンネル上書きで Stream が明示的に allow されていれば ON とみなす。
+ * ない場合は OFF（初期作成時はオーナー上書きに Stream が含まれないので OFF）。
+ */
+function isPrivateVcStreamEnabled(ch: import("discord.js").GuildChannel, ownerId: string): boolean {
+  if (!("permissionOverwrites" in ch)) return false;
+  const ow = ch.permissionOverwrites.cache.get(ownerId);
+  return ow?.allow.has(PermissionFlagsBits.Stream) ?? false;
+}
+
+export function buildVcPanelMessage(
+  channelId: string,
+  ownerId: string,
+  expiresAt?: Date,
+  memberIds?: string[],
+  streamEnabled?: boolean,
+) {
   const ts = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
   const expText = ts
     ? `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>）`
@@ -1740,7 +1757,7 @@ export function buildVcPanelMessage(channelId: string, ownerId: string, expiresA
     .setColor(0x5865f2)
     .setDescription(`<@${ownerId}> の非公開VCです。\n${expText}${memberLine}`)
     .setFooter({ text: "VCオーナーのみ操作できます" });
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(vcPanelId(VC_PANEL_BTN_ADD, channelId, ownerId))
       .setLabel("メンバーを追加")
@@ -1761,13 +1778,20 @@ export function buildVcPanelMessage(channelId: string, ownerId: string, expiresA
       .setLabel("期限確認")
       .setStyle(ButtonStyle.Secondary)
       .setEmoji("📅"),
+  );
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(vcPanelId(VC_PANEL_BTN_RENAME, channelId, ownerId))
       .setLabel("VC名変更")
       .setStyle(ButtonStyle.Secondary)
       .setEmoji("✏️"),
+    new ButtonBuilder()
+      .setCustomId(vcPanelId(VC_PANEL_BTN_STREAM, channelId, ownerId))
+      .setLabel(streamEnabled ? "画面共有: ON" : "画面共有: OFF")
+      .setStyle(streamEnabled ? ButtonStyle.Success : ButtonStyle.Secondary)
+      .setEmoji("📺"),
   );
-  return { embeds: [embed], components: [row] };
+  return { embeds: [embed], components: [row1, row2] };
 }
 
 /** ownerId をボタン custom ID から取り出してオーナー確認 */
@@ -2045,7 +2069,12 @@ export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction
   if (!ch || !("permissionOverwrites" in ch)) {
     await interaction.reply({ content: "❌ VCチャンネルが見つかりませんでした。", ephemeral: true }); return;
   }
-  await ch.permissionOverwrites.edit(targetId, { ViewChannel: true, Connect: true, Speak: true, Stream: true, SendMessages: true });
+  // 画面共有の現在状態を引き継いで追加メンバーにも適用
+  const streamEnabledOnAdd = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, ownerId);
+  await ch.permissionOverwrites.edit(targetId, {
+    ViewChannel: true, Connect: true, Speak: true,
+    Stream: streamEnabledOnAdd, SendMessages: true,
+  });
   await interaction.reply({ content: `✅ <@${targetId}> をVCに追加しました。`, ephemeral: true });
   // Refresh the panel so the new member appears in the access list (best-effort).
   try {
@@ -2058,7 +2087,7 @@ export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds));
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnAdd));
       }
     }
   } catch (err) {
@@ -2087,6 +2116,7 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
   // Refresh the panel so the removed member disappears from the access list (best-effort).
   try {
     const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
+    const streamEnabledOnKick = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, ownerId);
     if ("messages" in ch) {
       const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
       const panelMsg = msgs.find(
@@ -2095,7 +2125,7 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds));
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnKick));
       }
     }
   } catch (err) {
@@ -2145,7 +2175,8 @@ export async function handleVcPanelExtendSel(interaction: StringSelectMenuIntera
       );
       if (panelMsg) {
         const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt, memberIds));
+        const streamEnabledOnExtend = isPrivateVcStreamEnabled(textCh as import("discord.js").GuildChannel, ownerId);
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt, memberIds, streamEnabledOnExtend));
       }
     }
   } catch { /* best-effort */ }
@@ -2242,6 +2273,71 @@ export async function handleVcPanelRenameModal(interaction: ModalSubmitInteracti
     await refundPurchase(interaction.guild.id, interaction.user.id, result.item);
     await interaction.editReply("❌ チャンネルのリネームに失敗しました。購入を取り消し、返金しました。");
   }
+}
+
+/** 📺 画面共有トグル（非公開VC） */
+export async function handleVcPanelStreamBtn(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_STREAM, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+  await interaction.deferReply({ ephemeral: true });
+
+  const ch = interaction.guild.channels.cache.get(channelId)
+    ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
+  if (!ch || !("permissionOverwrites" in ch)) {
+    await interaction.editReply("❌ チャンネルが見つかりません。");
+    return;
+  }
+  const nowEnabled = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, ownerId);
+  const newState   = !nowEnabled;
+
+  // オーナーの上書きに Stream を追加 / 削除
+  await (ch as import("discord.js").GuildChannel).permissionOverwrites.edit(
+    ownerId,
+    newState ? { Stream: true } : { Stream: false },
+  );
+
+  // 招待済みメンバーにも同じ設定を反映
+  const memberIds = getVcAccessMemberIds(
+    ch as import("discord.js").GuildChannel,
+    ownerId,
+    interaction.client.user?.id,
+  );
+  for (const mid of memberIds) {
+    await (ch as import("discord.js").GuildChannel).permissionOverwrites.edit(
+      mid,
+      newState ? { Stream: true } : { Stream: false },
+    ).catch(() => {});
+  }
+
+  // パネル更新（best-effort）
+  try {
+    if ("messages" in ch) {
+      const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
+      const panelMsg = msgs.find(
+        (m) =>
+          m.author.id === interaction.client.user?.id &&
+          m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+      );
+      if (panelMsg) {
+        const session = await getPrivateVcSessionByChannelId(channelId).catch(() => null);
+        const refreshedMemberIds = getVcAccessMemberIds(
+          ch as import("discord.js").GuildChannel,
+          ownerId,
+          interaction.client.user?.id,
+        );
+        await panelMsg.edit(
+          buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, refreshedMemberIds, newState),
+        );
+      }
+    }
+  } catch (err) {
+    logger.error(`[vc-panel] Failed to update panel after stream toggle channel=${channelId}`, err);
+  }
+
+  await interaction.editReply(
+    `✅ 画面共有を **${newState ? "有効 ✅" : "無効 🚫"}** にしました。`,
+  );
 }
 
 const chestCommand: Command = {

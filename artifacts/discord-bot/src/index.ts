@@ -37,6 +37,7 @@ import {
   VC_PANEL_SEL_KICK,
   VC_PANEL_SEL_EXTEND,
   VC_PANEL_BTN_RENAME,
+  VC_PANEL_BTN_STREAM,
   CHEST_OPEN_BTN_ID,
   buildChestPanelMessage,
   VC_PANEL_SEL_RENAME,
@@ -46,6 +47,7 @@ import {
   handleVcPanelExtendBtn,
   handleVcPanelExpiryBtn,
   handleVcPanelRenameBtn,
+  handleVcPanelStreamBtn,
   handleChestOpenBtn,
   handleVcPanelAddSel,
   handleVcPanelKickSel,
@@ -1541,6 +1543,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_RENAME)) {
       await handleVcPanelRenameBtn(interaction); return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_STREAM)) {
+      await handleVcPanelStreamBtn(interaction); return;
     }
     if (interaction.isButton() && interaction.customId.startsWith("chest:open")) {
       await handleChestOpenBtn(interaction); return;
