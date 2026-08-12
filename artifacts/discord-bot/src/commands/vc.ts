@@ -537,9 +537,12 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
     });
 
-    // カテゴリの権限同期を保ちつつ、@everyone に画面共有を明示的に許可する
-    await newVc.permissionOverwrites.edit(guild.roles.everyone, { Stream: true })
-      .catch((err) => logger.warn("[vcHub] Failed to set Stream permission", err));
+    // カテゴリの権限同期を保ちつつ、@everyone に画面共有・インチャ投稿を明示的に許可する
+    await newVc.permissionOverwrites.edit(guild.roles.everyone, {
+      Stream: true,
+      SendMessages: true,
+      AttachFiles: true,
+    }).catch((err) => logger.warn("[vcHub] Failed to set channel permissions", err));
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
 
