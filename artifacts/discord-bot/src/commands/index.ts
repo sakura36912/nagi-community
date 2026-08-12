@@ -265,6 +265,7 @@ async function purchaseAndCreatePrivateVc(
       : null;
     logger.info(`[privateVC] category=${vcCategoryId ?? "none"} resolved=${parentCategory?.id ?? "null"}`);
 
+    const botId = guild.members.me?.id;
     const channel = await guild.channels.create({
       name: channelName.slice(0, 100),
       type: ChannelType.GuildVoice,
@@ -282,6 +283,15 @@ async function purchaseAndCreatePrivateVc(
             PermissionFlagsBits.AttachFiles,
           ],
         },
+        // Bot 自身が ViewChannel を持たないとパネルを送信できないため明示追加
+        ...(botId ? [{
+          id: botId,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.AttachFiles,
+          ],
+        }] : []),
       ],
     });
 
