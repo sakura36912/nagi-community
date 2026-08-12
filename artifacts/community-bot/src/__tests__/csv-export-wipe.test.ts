@@ -548,6 +548,29 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       const after = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
       expect(after).toHaveLength(0);
     });
+
+    it("trailing closeSession after global wipe cannot recreate an exportable row", async () => {
+      // Simulate the race: user is in VC, admin triggers a global wipe, then the
+      // Discord leave event fires and calls closeSession for the same user/guild.
+      // Because deleteAllUserVcSessions already hard-deleted the open session row,
+      // closeSession's UPDATE finds nothing to stamp — no completed row is created.
+
+      // Seed one open session (user is currently in VC).
+      store.seed([makeRow("wiped-user", "guild-A", { leftAt: null })]);
+
+      // Step 1: global wipe removes the open session row.
+      await deleteAllUserVcSessions("wiped-user");
+
+      // Step 2: trailing leave event — closeSession fires after the wipe.
+      await closeSession("guild-A", "wiped-user");
+
+      // No row was recreated — the session store must be empty.
+      expect(store.getSessions()).toHaveLength(0);
+
+      // The export must also return 0 rows — no completed row was written.
+      const rows = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
+      expect(rows).toHaveLength(0);
+    });
   });
 
   // ── Global wipe clears the global opt-out row (clean re-tracking) ───────
