@@ -1458,7 +1458,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // 島民・追放者ロール制限: 送金・残高確認のみ許可（スタッフロールは免除）
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
-        const EXEMPT_ROLES    = ["守門卿", "門番", "門番見習い", "航海士", "提督", "大提督"];
+        const EXEMPT_ROLES    = ["守門卿", "門番", "門番見習い", "見習い門番", "航海士", "提督", "大提督"];
         const RESTRICTED_ROLES = ["島民", "追放者"];
         const RESTRICTED_ALLOWED = new Set(["送金", "残高確認"]);
         const isExempt = EXEMPT_ROLES.some((name) =>
