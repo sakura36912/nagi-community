@@ -389,6 +389,7 @@ export const vcCommand = {
     if (sub === "hub-refresh-panels") {
       if (!interaction.guild) return;
       await interaction.deferReply({ ephemeral: true });
+      logger.info(`[vcHub] hub-refresh-panels started by ${interaction.user.id} in guild ${interaction.guildId}`);
       const sessions = await getHubSessionsByGuildId(interaction.guildId);
       if (sessions.length === 0) {
         await interaction.editReply("このサーバーにアクティブな Hub VCはありません。");
