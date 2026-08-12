@@ -682,6 +682,25 @@ client.once(Events.ClientReady, (readyClient) => {
     (guild) => makeChannelResolver(guild),
   ).catch((err) => logger.error("[startup] チャンネル検証に失敗しました", err));
 
+  // Re-register any members already sitting in a tavern VC when the bot
+  // restarts.  We cannot recover the exact join time, so we use the current
+  // time as a proxy — members who leave shortly after restart will still
+  // accumulate seconds from the moment the bot came back online.
+  let tavernSeedCount = 0;
+  for (const guild of readyClient.guilds.cache.values()) {
+    for (const voiceState of guild.voiceStates.cache.values()) {
+      const channelId = voiceState.channelId;
+      if (!channelId) continue;
+      if (!isTavernChannel(guild, channelId)) continue;
+      const userId = voiceState.id;
+      onTavernJoin(guild.id, userId);
+      tavernSeedCount++;
+    }
+  }
+  if (tavernSeedCount > 0) {
+    logger.info(`[chest] Seeded ${tavernSeedCount} tavern member(s) into tracker on startup`);
+  }
+
   // Tick every 60 s; actual payout only happens when an interval has elapsed.
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
