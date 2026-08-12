@@ -596,23 +596,14 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
     // 関わらず Bot がパネルを送信・閲覧できることを保証する。
     // client.user.id は常に利用可能（guild.members.me はキャッシュ未取得の場合がある）
     const botId = newState.client.user?.id ?? guild.members.me?.id;
+    // permissionOverwrites を指定しないことでカテゴリの権限が完全継承（同期）される。
+    // @everyone や Bot への上書きを加えると Discord が「非同期」状態にして
+    // カテゴリの他のロール設定（島民.ViewChannel: ALLOW など）が引き継がれなくなる。
     const newVc = await guild.channels.create({
       name: channelName,
       type: ChannelType.GuildVoice,
       parent: categoryId,
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
-      ...(botId ? {
-        permissionOverwrites: [
-          {
-            id: botId,
-            allow: [
-              PermissionFlagsBits.ViewChannel,
-              PermissionFlagsBits.SendMessages,
-              PermissionFlagsBits.AttachFiles,
-            ],
-          },
-        ],
-      } : {}),
     });
 
     // カテゴリの ViewChannel 権限を継承させるため @everyone への上書きは行わない。
