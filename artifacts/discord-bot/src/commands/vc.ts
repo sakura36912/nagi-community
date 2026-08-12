@@ -574,8 +574,10 @@ async function handleRename(interaction: ChatInputCommandInteraction): Promise<v
  */
 export async function handleHubJoin(newState: VoiceState): Promise<void> {
   if (!newState.channelId || !newState.member) return;
+  logger.info(`[vcHub] handleHubJoin called: channelId=${newState.channelId} member=${newState.member.id}`);
 
   const hub = await getHubByChannelId(newState.channelId);
+  logger.info(`[vcHub] getHubByChannelId result: ${hub ? `found template="${hub.nameTemplate}"` : "null (not a hub)"}`);
   if (!hub) return;
 
   const guild       = newState.guild;
