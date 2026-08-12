@@ -400,9 +400,9 @@ export const vcCommand = {
         try {
           const ch = interaction.guild.channels.cache.get(session.channelId)
             ?? await interaction.guild.channels.fetch(session.channelId).catch(() => null);
-          if (!ch || !("messages" in ch) || !("permissionOverwrites" in ch)) { skipped++; continue; }
+          if (!ch || !("messages" in ch) || !("permissionOverwrites" in ch) || !("send" in ch)) { skipped++; continue; }
           const gc = ch as import("discord.js").GuildChannel;
-          const tc = ch as import("discord.js").TextBasedChannel;
+          const tc = ch as import("discord.js").VoiceChannel;
           // 権限を最新化（Bot + @everyone）
           if (botId) {
             await gc.permissionOverwrites.edit(botId, {
