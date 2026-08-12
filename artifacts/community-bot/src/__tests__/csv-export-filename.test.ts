@@ -314,3 +314,145 @@ describe("tempvc export — attachment filename matches buildTempVcCsvFilename o
     expect(typeof replyArg === "string" || !(replyArg as { files?: unknown }).files).toBe(true);
   });
 });
+
+// ─── Part 3: tempvc export — attachment content reflects the filtered row set ─
+
+/**
+ * Two distinct row fixtures with different userIds so tests can confirm the
+ * CSV content was built from the correct set (not a stale or unfiltered result).
+ */
+const ROW_A = {
+  sessionId: 10,
+  guildId:   "guild-001",
+  userId:    "user-AAA",
+  channelId: "ch-001",
+  joinedAt:  new Date("2025-02-01T00:00:00Z"),
+  leftAt:    new Date("2025-02-01T01:00:00Z"),
+  optedOut:  false,
+};
+
+const ROW_B = {
+  sessionId: 20,
+  guildId:   "guild-001",
+  userId:    "user-BBB",
+  channelId: "ch-002",
+  joinedAt:  new Date("2025-05-01T00:00:00Z"),
+  leftAt:    new Date("2025-05-01T02:00:00Z"),
+  optedOut:  false,
+};
+
+/** CSV that buildTempVcCsv returns when given only ROW_A. */
+const CSV_A =
+  "sessionId,guildId,userId,channelId,joinedAt,leftAt,optedOut\n" +
+  "10,guild-001,user-AAA,ch-001,2025-02-01T00:00:00.000Z,2025-02-01T01:00:00.000Z,false\n";
+
+/** CSV that buildTempVcCsv returns when given only ROW_B. */
+const CSV_B =
+  "sessionId,guildId,userId,channelId,joinedAt,leftAt,optedOut\n" +
+  "20,guild-001,user-BBB,ch-002,2025-05-01T00:00:00.000Z,2025-05-01T02:00:00.000Z,false\n";
+
+/** CSV that buildTempVcCsv returns when given both rows. */
+const CSV_AB =
+  "sessionId,guildId,userId,channelId,joinedAt,leftAt,optedOut\n" +
+  "10,guild-001,user-AAA,ch-001,2025-02-01T00:00:00.000Z,2025-02-01T01:00:00.000Z,false\n" +
+  "20,guild-001,user-BBB,ch-002,2025-05-01T00:00:00.000Z,2025-05-01T02:00:00.000Z,false\n";
+
+describe("tempvc export — attachment content reflects the filtered row set", () => {
+  const tempvcCommand = commands.find((c) => c.data.name === "tempvc")!;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // buildTempVcCsv returns different CSV depending on which rows it receives,
+    // so the tests can detect if the wrong row set was passed to it.
+    communityFns.buildTempVcCsv.mockImplementation(
+      (rows: { userId: string }[]) => {
+        const hasA = rows.some((r) => r.userId === "user-AAA");
+        const hasB = rows.some((r) => r.userId === "user-BBB");
+        if (hasA && hasB) return CSV_AB;
+        if (hasA)         return CSV_A;
+        if (hasB)         return CSV_B;
+        return "";
+      },
+    );
+  });
+
+  it("Buffer decodes to the CSV built from the row set returned for the user-AAA filter", async () => {
+    // Seed: only ROW_A comes back from the DB when filtering by user-AAA.
+    communityFns.getAllTempVcDeletions.mockResolvedValue([ROW_A]);
+    const interaction = makeExportInteraction({ userId: "user-AAA" });
+    await tempvcCommand.execute(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [
+      [{ files: { attachment: Buffer }[] }],
+    ];
+    const decoded = replyArg.files[0]!.attachment.toString("utf-8");
+
+    // Content must match the CSV produced from ROW_A.
+    expect(decoded).toBe(CSV_A);
+    // Spot-check: the user-AAA userId is present and user-BBB is absent.
+    expect(decoded).toContain("user-AAA");
+    expect(decoded).not.toContain("user-BBB");
+  });
+
+  it("Buffer decodes to the CSV built from the row set returned for the user-BBB filter", async () => {
+    // Seed: only ROW_B comes back from the DB when filtering by user-BBB.
+    communityFns.getAllTempVcDeletions.mockResolvedValue([ROW_B]);
+    const interaction = makeExportInteraction({ userId: "user-BBB" });
+    await tempvcCommand.execute(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [
+      [{ files: { attachment: Buffer }[] }],
+    ];
+    const decoded = replyArg.files[0]!.attachment.toString("utf-8");
+
+    expect(decoded).toBe(CSV_B);
+    expect(decoded).toContain("user-BBB");
+    expect(decoded).not.toContain("user-AAA");
+  });
+
+  it("Buffer decodes to the combined CSV when no user filter is applied and both rows are returned", async () => {
+    // Seed: both rows come back when no filter is applied.
+    communityFns.getAllTempVcDeletions.mockResolvedValue([ROW_A, ROW_B]);
+    const interaction = makeExportInteraction();
+    await tempvcCommand.execute(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [
+      [{ files: { attachment: Buffer }[] }],
+    ];
+    const decoded = replyArg.files[0]!.attachment.toString("utf-8");
+
+    expect(decoded).toBe(CSV_AB);
+    expect(decoded).toContain("user-AAA");
+    expect(decoded).toContain("user-BBB");
+  });
+
+  it("buildTempVcCsv is called with the exact rows getAllTempVcDeletions returned", async () => {
+    // This is the core wiring check: if the handler were to pass a stale or
+    // re-queried row set to buildTempVcCsv the spy would catch the discrepancy.
+    communityFns.getAllTempVcDeletions.mockResolvedValue([ROW_A, ROW_B]);
+    const interaction = makeExportInteraction();
+    await tempvcCommand.execute(interaction as never);
+
+    expect(communityFns.buildTempVcCsv).toHaveBeenCalledTimes(1);
+    expect(communityFns.buildTempVcCsv).toHaveBeenCalledWith([ROW_A, ROW_B]);
+  });
+
+  it("Buffer content is UTF-8 encoded output of buildTempVcCsv (round-trip is lossless)", async () => {
+    const uniqueCsv = "header\nrow1,guild-001,user-AAA\n";
+    communityFns.getAllTempVcDeletions.mockResolvedValue([ROW_A]);
+    communityFns.buildTempVcCsv.mockReturnValue(uniqueCsv);
+
+    const interaction = makeExportInteraction({ userId: "user-AAA" });
+    await tempvcCommand.execute(interaction as never);
+
+    const [[replyArg]] = interaction.editReply.mock.calls as [
+      [{ files: { attachment: Buffer }[] }],
+    ];
+    const buf = replyArg.files[0]!.attachment;
+
+    // The Buffer must be a byte-for-byte UTF-8 encoding of the CSV string.
+    expect(buf.toString("utf-8")).toBe(uniqueCsv);
+    expect(buf).toEqual(Buffer.from(uniqueCsv, "utf-8"));
+  });
+});
