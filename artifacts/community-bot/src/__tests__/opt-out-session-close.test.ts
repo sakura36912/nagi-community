@@ -1669,7 +1669,7 @@ describe("deleteAllUserVcSessions – global wipe scoped to one user only", () =
 // so the final opt-out state is deterministic.  deleteAllUserVcSessions issues a
 // cross-guild DELETE for sessions and also clears the global opt-out row; then
 // setVcGlobalPrivacyOptOut re-sets the global opt-out to true.  We verify:
-//   - db.delete() is called twice (sessions + global opt-out row)
+//   - db.delete() is called three times (sessions + global opt-out row + per-guild opt-out rows)
 //   - The embed description shows the correct deleted-row count
 //   - db.insert() is called (for setVcGlobalPrivacyOptOut re-set)
 //   - components:[] clears the opt-out buttons
