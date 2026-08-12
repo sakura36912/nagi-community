@@ -532,7 +532,8 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
   try {
     // Bot 自身の user ID を overwrite に含めることで、カテゴリ側の権限設定に
     // 関わらず Bot がパネルを送信・閲覧できることを保証する。
-    const botId = guild.members.me?.id;
+    // client.user.id は常に利用可能（guild.members.me はキャッシュ未取得の場合がある）
+    const botId = newState.client.user?.id ?? guild.members.me?.id;
     const newVc = await guild.channels.create({
       name: channelName,
       type: ChannelType.GuildVoice,
@@ -552,8 +553,10 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       } : {}),
     });
 
-    // @everyone に画面共有・インチャ投稿を明示的に許可する（カテゴリの deny を上書き）
+    // @everyone にインチャ閲覧・画面共有・投稿を明示的に許可する
+    // （カテゴリが ViewChannel を DENY していてもインチャが表示されるよう上書き）
     await newVc.permissionOverwrites.edit(guild.roles.everyone, {
+      ViewChannel: true,
       Stream: true,
       SendMessages: true,
       AttachFiles: true,
@@ -565,10 +568,13 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
     const TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
 
     // 酒場以外のハブにのみコントロールパネルを投稿
-    if (!TAVERN_NAMES.has(hub.nameTemplate)) {
+    const isTavern = TAVERN_NAMES.has(hub.nameTemplate);
+    logger.info(`[vcHub] panel check: channel=${newVc.id} template="${hub.nameTemplate}" isTavern=${isTavern} botId=${botId ?? "none"}`);
+    if (!isTavern) {
       await newVc
         .send(buildHubVcPanelMessage(newVc.id, member.id, true))
         .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
+      logger.info(`[vcHub] panel sent to channel=${newVc.id}`);
     }
     if (TAVERN_NAMES.has(hub.nameTemplate)) {
       await db.insert(communityTavernChannelsTable)
