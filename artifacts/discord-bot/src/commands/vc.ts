@@ -404,15 +404,13 @@ export const vcCommand = {
           if (!ch || !("messages" in ch) || !("permissionOverwrites" in ch) || !("send" in ch)) { skipped++; continue; }
           const gc = ch as import("discord.js").GuildChannel;
           const tc = ch as import("discord.js").VoiceChannel;
-          // 権限を最新化（Bot + @everyone）
+          // Bot のみ ViewChannel/SendMessages/AttachFiles を明示的に許可
+          // （@everyone への ViewChannel 上書きは行わない — カテゴリ権限を継承させる）
           if (botId) {
             await gc.permissionOverwrites.edit(botId, {
               ViewChannel: true, SendMessages: true, AttachFiles: true,
             }).catch(() => {});
           }
-          await gc.permissionOverwrites.edit(interaction.guild.roles.everyone, {
-            ViewChannel: true, Stream: true, SendMessages: true, AttachFiles: true,
-          }).catch(() => {});
           // パネルがすでにあれば edit、なければ send
           const msgs = await tc.messages.fetch({ limit: 50 });
           const existing = msgs.find(
@@ -617,14 +615,8 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       } : {}),
     });
 
-    // @everyone にインチャ閲覧・画面共有・投稿を明示的に許可する
-    // （カテゴリが ViewChannel を DENY していてもインチャが表示されるよう上書き）
-    await newVc.permissionOverwrites.edit(guild.roles.everyone, {
-      ViewChannel: true,
-      Stream: true,
-      SendMessages: true,
-      AttachFiles: true,
-    }).catch((err) => logger.warn("[vcHub] Failed to set channel permissions", err));
+    // カテゴリの ViewChannel 権限を継承させるため @everyone への上書きは行わない。
+    // Stream/SendMessages/AttachFiles はパネルボタン操作時に個別設定する。
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
 
@@ -683,14 +675,7 @@ export async function handlePanelOnlyHubTransfer(
     ?? await guild.channels.fetch(newState.channelId).catch(() => null);
   if (!vc || vc.type !== ChannelType.GuildVoice) return;
 
-  // @everyone にインチャ表示を明示的に許可（カテゴリで DENY されていても見えるよう上書き）
-  await vc.permissionOverwrites.edit(guild.roles.everyone, {
-    ViewChannel:  true,
-    Stream:       true,
-    SendMessages: true,
-    AttachFiles:  true,
-  }).catch((err) => logger.warn("[vcHub] panel_only: Failed to set channel permissions", err));
-
+  // カテゴリの ViewChannel 権限を継承させるため @everyone への上書きは行わない。
   await vc
     .send(buildHubVcPanelMessage(vc.id, member.id, true))
     .catch((err) => logger.error("[vcHub] panel_only: Failed to send panel", err));
