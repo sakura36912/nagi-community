@@ -135,7 +135,9 @@ vi.mock("discord.js", async (importOriginal) => {
 // ─── Imports under test (resolved after mocks) ───────────────────────────────
 import {
   handleRetentionConfirm,
+  handleRetentionCancel,
   COMM_RETENTION_CONFIRM_PREFIX,
+  COMM_RETENTION_CANCEL_PREFIX,
   retentionConfirmExpiry,
 } from "../commands/index.js";
 import { EmbedBuilder } from "discord.js";
@@ -214,6 +216,49 @@ function registerAndMakeConfirmInteraction(opts: {
   const nonce = `test-nonce-${Math.random().toString(36).slice(2)}`;
   retentionConfirmExpiry.set(nonce, { guildId, days, expiry: Date.now() + ttlOffset });
   const interaction = makeConfirmInteraction({ nonce, guildId, isAdmin });
+  return { nonce, interaction };
+}
+
+/**
+ * Creates a minimal ButtonInteraction stub for the cancel button.
+ * Pass `nonce` to embed a specific nonce in the custom ID (e.g. after
+ * registering it in `retentionConfirmExpiry`).  When omitted the custom ID
+ * uses a literal string that will NOT be found in the registry.
+ */
+function makeCancelInteraction(opts: {
+  nonce?: string;
+  guildId?: string | null;
+  isAdmin?: boolean;
+}) {
+  const { nonce = "no-such-nonce", guildId = "guild-123", isAdmin = true } = opts;
+  return {
+    guildId,
+    customId: `${COMM_RETENTION_CANCEL_PREFIX}${nonce}`,
+    member: {
+      permissions: {
+        has: vi.fn().mockReturnValue(isAdmin),
+      },
+    },
+    reply: vi.fn().mockResolvedValue(undefined),
+    deferUpdate: vi.fn().mockResolvedValue(undefined),
+    editReply: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+/**
+ * Registers a valid server-side expiry entry in `retentionConfirmExpiry` and
+ * returns both the nonce and a matching cancel-button interaction stub.
+ */
+function registerAndMakeCancelInteraction(opts: {
+  days?: number;
+  guildId?: string;
+  isAdmin?: boolean;
+  ttlOffset?: number;
+}) {
+  const { days = 30, guildId = "guild-123", isAdmin = true, ttlOffset = 60_000 } = opts;
+  const nonce = `test-cancel-nonce-${Math.random().toString(36).slice(2)}`;
+  retentionConfirmExpiry.set(nonce, { guildId, days, expiry: Date.now() + ttlOffset });
+  const interaction = makeCancelInteraction({ nonce, guildId, isAdmin });
   return { nonce, interaction };
 }
 
@@ -824,5 +869,75 @@ describe("/ranking retention-days – dry-run count embedded in warning before c
     await rankingExecute(interaction as never);
 
     expect(communityMocks.countCompletedSessionsOlderThan).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Tests: handleRetentionCancel – permission guard + nonce consumption ───────
+
+describe("handleRetentionCancel – permission guard + nonce consumption", () => {
+  it("rejects a non-admin with a valid nonce and sends an ephemeral permission error", async () => {
+    const { nonce, interaction } = registerAndMakeCancelInteraction({ isAdmin: false });
+
+    await handleRetentionCancel(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    expect(replyArg.content).toMatch(/管理者/);
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+
+    // Nonce must NOT be consumed — it should still be present so the real admin can still act
+    expect(retentionConfirmExpiry.has(nonce)).toBe(true);
+  });
+
+  it("non-admin cannot cancel: the nonce is still usable by the real admin after the rejection", async () => {
+    // Register a nonce; non-admin tries to cancel
+    const { nonce, interaction: nonAdminInteraction } = registerAndMakeCancelInteraction({ isAdmin: false });
+    await handleRetentionCancel(nonAdminInteraction as never);
+
+    // The nonce must remain intact so the actual admin can still cancel
+    expect(retentionConfirmExpiry.has(nonce)).toBe(true);
+
+    // Now the real admin cancels with the same nonce — must succeed
+    const adminInteraction = makeCancelInteraction({ nonce, isAdmin: true });
+    await handleRetentionCancel(adminInteraction as never);
+
+    expect(adminInteraction.deferUpdate).toHaveBeenCalled();
+    expect(adminInteraction.editReply).toHaveBeenCalled();
+
+    // After admin cancel, nonce is consumed
+    expect(retentionConfirmExpiry.has(nonce)).toBe(false);
+  });
+
+  it("accepts a valid nonce from an admin, consumes the nonce, and calls deferUpdate + editReply", async () => {
+    const { nonce, interaction } = registerAndMakeCancelInteraction({ days: 60, isAdmin: true });
+
+    await handleRetentionCancel(interaction as never);
+
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalled();
+
+    // Nonce must be consumed (deleted) after a successful cancel
+    expect(retentionConfirmExpiry.has(nonce)).toBe(false);
+  });
+
+  it("admin cancel invalidates the nonce so a subsequent confirm click is rejected", async () => {
+    // Register a nonce then cancel it as an admin
+    const { nonce } = registerAndMakeCancelInteraction({ days: 30, isAdmin: true });
+    const cancelInteraction = makeCancelInteraction({ nonce, isAdmin: true });
+    await handleRetentionCancel(cancelInteraction as never);
+
+    // Now try to confirm with the same (now-consumed) nonce
+    const confirmInteraction = makeConfirmInteraction({ nonce, isAdmin: true });
+    await handleRetentionConfirm(confirmInteraction as never);
+
+    // Nonce is gone → confirm must be rejected
+    expect(confirmInteraction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(confirmInteraction.deferUpdate).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 });
