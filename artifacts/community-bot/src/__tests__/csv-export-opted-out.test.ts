@@ -352,6 +352,71 @@ describe("getAllTempVcDeletions – opted_out column in CSV export", () => {
     expect(existsMatches.length).toBeGreaterThanOrEqual(2);
   });
 
+  // ── OR semantics: removing one opt-out source must not clear the flag ─────
+  //
+  // This is the core invariant for task #257: the computed opted_out column uses
+  // OR, not AND, to combine the two EXISTS subqueries.  If the connector were AND,
+  // removing the per-guild opt-out row while the global one remains active would
+  // silently flip opted_out to false — a privacy bug that would misrepresent the
+  // user's actual opt-out status to the admin.
+  //
+  // The SQL-inspection test proves the OR is structurally present between the two
+  // EXISTS blocks so that removing one source alone cannot satisfy a hypothetical
+  // AND requirement.  The mapper test confirms that when the DB evaluates the
+  // global-active / per-guild-absent path (resolved to opted_out=true via the
+  // global EXISTS branch), the mapper faithfully surfaces optedOut:true.
+
+  it("SQL uses OR so the global EXISTS alone is sufficient to set opted_out without the per-guild clause", async () => {
+    // If OR is used, either EXISTS clause independently satisfies the condition.
+    // An AND would require BOTH to be true simultaneously — meaning removing the
+    // per-guild row while the global one remains would produce opted_out=false.
+    // We verify the OR appears between the two EXISTS blocks (not AND as the
+    // top-level connector), by inspecting the token immediately before the second
+    // EXISTS keyword rather than slicing through the first subquery body (which
+    // legitimately contains AND for its own WHERE conditions).
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getAllTempVcDeletions("guild-test");
+
+    const sqlArg = mocks.execute.mock.calls[0]?.[0] as { strings: string[] };
+    const text = sqlString(sqlArg);
+
+    // Locate both EXISTS keywords.
+    const firstExists  = text.indexOf("EXISTS");
+    const secondExists = text.indexOf("EXISTS", firstExists + 1);
+    expect(firstExists).toBeGreaterThanOrEqual(0);
+    expect(secondExists).toBeGreaterThan(firstExists);
+
+    // Look at the short window *before* the second EXISTS to find the top-level
+    // connector. The first subquery closes with ")" and then the connector
+    // follows before the next EXISTS keyword. Reading up to ~20 chars back is
+    // enough to capture "OR" or "AND" at this level without including the
+    // internals of the first subquery.
+    const preamble = text.slice(Math.max(0, secondExists - 20), secondExists);
+    // The connector must be OR, not AND.
+    expect(preamble).toMatch(/\bOR\b/);
+    expect(preamble).not.toMatch(/\bAND\b/);
+  });
+
+  it("mapper returns optedOut:true when global opt-out is active but per-guild opt-out row is absent", async () => {
+    // Simulates the path where a user removed their per-guild opt-out but their
+    // global opt-out remains.  The DB evaluates the OR of both EXISTS subqueries:
+    // the global EXISTS returns true (global row present with opted_out=true),
+    // so the computed column resolves to true even though the per-guild clause
+    // would return false.  The mapper must not suppress this.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [makeDbRow("global-opted-out-user", { opted_out: true })],
+    });
+
+    const result = await getAllTempVcDeletions("guild-test");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("global-opted-out-user");
+    // The global opt-out is still active; optedOut must stay true even though
+    // the per-guild row is absent (DB already resolved this via OR to true).
+    expect(result[0]?.optedOut).toBe(true);
+  });
+
   it("mapper returns optedOut:false when DB resolves the subquery to false (per-guild re-opt-in path)", async () => {
     // This confirms the mapper correctly passes through false from the DB-evaluated
     // subquery.  The SQL predicate tests above prove the subquery only returns false
