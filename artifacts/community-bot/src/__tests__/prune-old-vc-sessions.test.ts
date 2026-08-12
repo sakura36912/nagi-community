@@ -770,4 +770,52 @@ describe("pruneOrphanedVcSessions – predicate evaluation (active sessions in o
     expect(mocks.del).toHaveBeenCalledOnce();
     expect(count).toBe(0);
   });
+
+  /**
+   * Three-way intersection: even when a guild IS orphaned (notInArray is
+   * satisfied), a session that closed recently (within the retention window)
+   * must NOT be deleted because lt(leftAt, cutoff) is not satisfied.
+   *
+   * e.g. retention = 180 days, session closed 5 days ago:
+   *   leftAt (5 days ago) >= cutoff (180 days ago)  →  lt() is FALSE  →  row is kept
+   */
+  it("does NOT match a recently-closed session in an orphaned guild (lt cutoff protects it)", async () => {
+    mocks.returning.mockResolvedValueOnce([]);
+    // guild-orphaned is absent from the active list — it is orphaned.
+    await pruneOrphanedVcSessions(["guild-active"]);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [Pred];
+
+    // Simulate a session that closed just 5 days ago in the orphaned guild.
+    const recentlyClosedSessionInOrphanedGuild: Record<string, unknown> = {
+      guildId: "guild-orphaned",
+      leftAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+    };
+
+    // The lt(leftAt, cutoff) branch must reject this row even though the guild
+    // is orphaned — the retention window protects recently-closed sessions.
+    expect(evalPredicate(whereArg, recentlyClosedSessionInOrphanedGuild)).toBe(false);
+  });
+
+  /**
+   * When the orphaned guild's only closed sessions all fall within the retention
+   * window the WHERE clause matches zero rows, so the DB returns [] and the
+   * function returns 0 — nothing is deleted.
+   *
+   * This confirms the three-way AND (notInArray ∧ isNotNull ∧ lt) works as a
+   * unit: orphaned guild + closed session ≠ sufficient to trigger deletion when
+   * the session is still within the retention period.
+   */
+  it("returns 0 when the orphaned guild has only recently-closed sessions (all within retention window)", async () => {
+    // The DB correctly returns no rows because lt(leftAt, cutoff) is not satisfied
+    // for any recently-closed session — none are old enough to delete.
+    mocks.returning.mockResolvedValueOnce([]);
+
+    const count = await pruneOrphanedVcSessions(["guild-active"]);
+
+    // db.delete was still called (non-empty active list → no short-circuit).
+    expect(mocks.del).toHaveBeenCalledOnce();
+    // No rows matched → count must be 0.
+    expect(count).toBe(0);
+  });
 });

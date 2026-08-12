@@ -592,13 +592,12 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
   const categoryId = hub.categoryId ?? hubChannel?.parentId ?? undefined;
 
   try {
-    // Bot 自身の user ID を overwrite に含めることで、カテゴリ側の権限設定に
-    // 関わらず Bot がパネルを送信・閲覧できることを保証する。
     // client.user.id は常に利用可能（guild.members.me はキャッシュ未取得の場合がある）
     const botId = newState.client.user?.id ?? guild.members.me?.id;
-    // permissionOverwrites を指定しないことでカテゴリの権限が完全継承（同期）される。
-    // @everyone や Bot への上書きを加えると Discord が「非同期」状態にして
-    // カテゴリの他のロール設定（島民.ViewChannel: ALLOW など）が引き継がれなくなる。
+
+    // チャンネル作成時に permissionOverwrites を指定しないことでカテゴリの権限が
+    // 完全継承（同期）される。@everyone への上書きを含めると Discord が「非同期」状態に
+    // なり、カテゴリの他のロール設定（島民.ViewChannel: ALLOW など）が引き継がれなくなる。
     const newVc = await guild.channels.create({
       name: channelName,
       type: ChannelType.GuildVoice,
@@ -606,8 +605,16 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
     });
 
-    // カテゴリの ViewChannel 権限を継承させるため @everyone への上書きは行わない。
-    // Stream/SendMessages/AttachFiles はパネルボタン操作時に個別設定する。
+    // Bot 自身の ViewChannel/SendMessages/AttachFiles を明示的に許可する。
+    // 作成後に上書きを追加することでカテゴリ同期は維持しつつ、カテゴリ側の
+    // 権限設定に関わらず Bot がパネルを確実に送信・閲覧できることを保証する。
+    if (botId) {
+      await newVc.permissionOverwrites.edit(botId, {
+        ViewChannel: true,
+        SendMessages: true,
+        AttachFiles: true,
+      }).catch((err) => logger.warn("[vcHub] Failed to set bot permissions on new VC", err));
+    }
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
 
