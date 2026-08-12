@@ -98,7 +98,7 @@ import {
   getVcLogPresence,
   updateVcPresenceChannel,
 } from "./lib/vcReward";
-import { isTavernChannel, onTavernJoin, onTavernLeave } from "./lib/chestTracker";
+import { isTavernChannel, getTavernChannelNames, onTavernJoin, onTavernLeave } from "./lib/chestTracker";
 import {
   recordPointVcJoin,
   settlePointVcSession,
@@ -633,7 +633,7 @@ async function runVcDeleteScheduler(): Promise<void> {
   }
 }
 
-client.once(Events.ClientReady, (readyClient) => {
+client.once(Events.ClientReady, async (readyClient) => {
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
 
@@ -689,10 +689,14 @@ client.once(Events.ClientReady, (readyClient) => {
   // accumulate seconds from the moment the bot came back online.
   let tavernSeedCount = 0;
   for (const guild of readyClient.guilds.cache.values()) {
+    const tavernNames = await getTavernChannelNames(guild.id).catch(() => undefined);
     for (const voiceState of guild.voiceStates.cache.values()) {
       const channelId = voiceState.channelId;
       if (!channelId) continue;
-      if (!isTavernChannel(guild, channelId)) continue;
+      const ch = guild.channels.cache.get(channelId);
+      if (!ch) continue;
+      const names = tavernNames ?? (await getTavernChannelNames(guild.id).catch(() => new Set<string>()));
+      if (!names.has(ch.name)) continue;
       const userId = voiceState.id;
       onTavernJoin(guild.id, userId);
       tavernSeedCount++;
@@ -969,7 +973,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // ── Joined VC (from nothing or from AFK) ─────────────────────────────────
   if (isInVc && !isInAfk && (!wasInVc || wasInAfk)) {
     // 宝箱トラッカー：酒場に入室したら記録
-    if (isTavernChannel(guild, newState.channelId!)) {
+    if (await isTavernChannel(guild.id, guild, newState.channelId!)) {
       onTavernJoin(guild.id, userId);
     }
     await Promise.all([
@@ -1065,8 +1069,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // ── Moved between two non-AFK VCs ────────────────────────────────────────
   if (wasInVc && !wasInAfk && isInVc && !isInAfk && oldState.channelId !== newState.channelId) {
     // 宝箱トラッカー：酒場→別 or 別→酒場 の移動を処理
-    const wasTavern = isTavernChannel(guild, oldState.channelId!);
-    const nowTavern = isTavernChannel(guild, newState.channelId!);
+    const [wasTavern, nowTavern] = await Promise.all([
+      isTavernChannel(guild.id, guild, oldState.channelId!),
+      isTavernChannel(guild.id, guild, newState.channelId!),
+    ]);
     if (wasTavern && !nowTavern) {
       await onTavernLeave(guild.id, userId); // 酒場から出た → 秒数確定
     } else if (!wasTavern && nowTavern) {

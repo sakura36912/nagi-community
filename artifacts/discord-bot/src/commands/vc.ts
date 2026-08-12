@@ -38,6 +38,7 @@ import {
   getHubSessionsByGuildId,
 } from "@workspace/db";
 import { getGuildSettings, setVcWarnBeforeMinutes } from "../lib/economy";
+import { getTavernChannelNames } from "../lib/chestTracker";
 import { logger } from "../lib/logger";
 
 // ─── Hub VC panel constants ──────────────────────────────────────────────────
@@ -619,10 +620,11 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
 
     // 酒場ハブから生成されたチャンネルを永続ログに記録（過去データ検索に使用）
-    const TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
+    // 酒場チャンネル名は chestTracker.ts の getTavernChannelNames で一元管理（DB設定対応）
+    const tavernNames = await getTavernChannelNames(guild.id);
 
     // 酒場以外のハブにのみコントロールパネルを投稿
-    const isTavern = TAVERN_NAMES.has(hub.nameTemplate);
+    const isTavern = tavernNames.has(hub.nameTemplate);
     logger.info(`[vcHub] panel check: channel=${newVc.id} template="${hub.nameTemplate}" isTavern=${isTavern} botId=${botId ?? "none"}`);
     if (!isTavern) {
       await newVc
@@ -630,7 +632,7 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
         .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
       logger.info(`[vcHub] panel sent to channel=${newVc.id}`);
     }
-    if (TAVERN_NAMES.has(hub.nameTemplate)) {
+    if (isTavern) {
       await db.insert(communityTavernChannelsTable)
         .values({ guildId: guild.id, channelId: newVc.id, hubName: hub.nameTemplate })
         .onConflictDoNothing()

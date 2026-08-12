@@ -5,10 +5,15 @@
  */
 import type { Guild } from "discord.js";
 import { addChestVcSeconds } from "./vcReward";
+import { getGuildSettings } from "./economy";
 import { logger } from "./logger";
 
-/** 酒場チャンネルとして認識するチャンネル名（完全一致）。複数指定可。 */
-const TAVERN_CHANNEL_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
+/**
+ * 酒場チャンネルとして認識するデフォルトチャンネル名（完全一致）。
+ * guild_settings.chest_tavern_channel_names が未設定のときのフォールバック。
+ * チャンネル名を変更するには /宝箱 set-channels コマンドを使用すること。
+ */
+export const TAVERN_CHANNEL_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
 
 /** `${guildId}:${userId}` → 酒場への入室時刻 */
 const tavernJoinedAt = new Map<string, Date>();
@@ -17,10 +22,32 @@ function tavernKey(guildId: string, userId: string): string {
   return `${guildId}:${userId}`;
 }
 
-/** 指定チャンネルが酒場（大酒場🍺 / 小酒場🍺）かどうかを返す */
-export function isTavernChannel(guild: Guild, channelId: string): boolean {
+/**
+ * ギルド固有の酒場チャンネル名セットを返す。
+ * DB に設定値があればそれを使い、なければ TAVERN_CHANNEL_NAMES にフォールバックする。
+ */
+export async function getTavernChannelNames(guildId: string): Promise<Set<string>> {
+  try {
+    const settings = await getGuildSettings(guildId);
+    if (settings.chestTavernChannelNames) {
+      const names = settings.chestTavernChannelNames
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (names.length > 0) return new Set(names);
+    }
+  } catch (err) {
+    logger.warn(`[chest] getTavernChannelNames DB error for ${guildId}, using defaults`, err);
+  }
+  return TAVERN_CHANNEL_NAMES;
+}
+
+/** 指定チャンネルが酒場かどうかを返す（ギルド固有設定を参照）。 */
+export async function isTavernChannel(guildId: string, guild: Guild, channelId: string): Promise<boolean> {
   const ch = guild.channels.cache.get(channelId);
-  return ch != null && TAVERN_CHANNEL_NAMES.has(ch.name);
+  if (!ch) return false;
+  const names = await getTavernChannelNames(guildId);
+  return names.has(ch.name);
 }
 
 /** 酒場に入室したとき呼ぶ */

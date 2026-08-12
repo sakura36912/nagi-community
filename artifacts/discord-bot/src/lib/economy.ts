@@ -222,6 +222,19 @@ export async function setVcWarnBeforeMinutes(
   return upsertGuildSetting(guildId, { vcWarnBeforeMinutes });
 }
 
+/**
+ * 酒場チャンネル名リストを更新する。
+ * `names` が null のときはデフォルト（大酒場🍺 / 小酒場🍺）に戻す。
+ */
+export async function setChestTavernChannelNames(
+  guildId: string,
+  names: string[] | null,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, {
+    chestTavernChannelNames: names !== null ? names.join(",") : null,
+  });
+}
+
 export async function setLeaveLogChannelId(
   guildId: string,
   leaveLogChannelId: string | null,

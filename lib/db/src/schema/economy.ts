@@ -41,6 +41,10 @@ export const guildSettingsTable = pgTable("guild_settings", {
   // Defaults to 10 minutes (matches the original hardcoded value).
   vcWarnBeforeMinutes: integer("vc_warn_before_minutes").notNull().default(10),
 
+  // Comma-separated list of VC channel names treated as "tavern" for chest tracking.
+  // NULL means use the hardcoded default list (大酒場🍺, 小酒場🍺).
+  chestTavernChannelNames: text("chest_tavern_channel_names"),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

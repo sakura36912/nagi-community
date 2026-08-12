@@ -86,7 +86,8 @@ import {
   getGuildWalletUserIds,
 } from "../lib/economy";
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds } from "../lib/vcReward";
-import { getCurrentTavernSeconds } from "../lib/chestTracker";
+import { getCurrentTavernSeconds, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
+import { setChestTavernChannelNames } from "../lib/economy";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 
@@ -2470,6 +2471,17 @@ const chestCommand: Command = {
       sub
         .setName("rescue-yesterday")
         .setDescription("【救済】昨日(JST)酒場にいたメンバーを自動検出し、本日分の時間を付与します（管理者専用）"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("set-channels")
+        .setDescription("【管理者専用】酒場VCとして認識するチャンネル名を設定します（コード変更不要）")
+        .addStringOption((opt) =>
+          opt
+            .setName("names")
+            .setDescription("チャンネル名をカンマ区切りで指定。空欄でデフォルト（大酒場🍺, 小酒場🍺）に戻す")
+            .setRequired(false),
+        ),
     ) as SlashCommandBuilder,
   async execute(interaction) {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
@@ -2503,14 +2515,15 @@ const chestCommand: Command = {
       }
       await interaction.deferReply({ ephemeral: true });
 
-      // 酒場チャンネル（大酒場🍺 / 小酒場🍺）をサーバー内で名前検索
-      const TAVERN_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
+      // 酒場チャンネル名を取得（DB設定があればそれを、なければデフォルトを使用）
+      const tavernNames = await getTavernChannelNames(interaction.guildId);
       await interaction.guild.channels.fetch();
       const tavernChannels = interaction.guild.channels.cache.filter(
-        (ch) => TAVERN_NAMES.has(ch.name) && (ch.type === 2 /* GuildVoice */ || ch.type === 13 /* GuildStageVoice */),
+        (ch) => tavernNames.has(ch.name) && (ch.type === 2 /* GuildVoice */ || ch.type === 13 /* GuildStageVoice */),
       );
       if (tavernChannels.size === 0) {
-        await interaction.editReply("❌ 「大酒場🍺」「小酒場🍺」という名前のVCが見つかりませんでした。");
+        const nameList = [...tavernNames].map((n) => `「${n}」`).join("・");
+        await interaction.editReply(`❌ ${nameList} という名前のVCが見つかりませんでした。`);
         return;
       }
 
@@ -2539,8 +2552,9 @@ const chestCommand: Command = {
         .groupBy(vcSessionLogsTable.userId);
 
       if (rows.length === 0) {
+        const channelLabel = [...tavernNames].join("・");
         await interaction.editReply(
-          `⚠️ 昨日（JST）の 大酒場🍺・小酒場🍺 のセッションログが見つかりませんでした。\n` +
+          `⚠️ 昨日（JST）の ${channelLabel} のセッションログが見つかりませんでした。\n` +
           `（該当チャンネルがVCログカテゴリに設定されていない場合、セッションは記録されません。\`/宝箱 add-time\` で手動補填してください）`,
         );
         return;
@@ -2553,13 +2567,40 @@ const chestCommand: Command = {
         ),
       );
 
+      const channelLabel = [...tavernNames].join("・");
       const lines = rows.map(({ userId, totalSeconds }) => {
         const min = Math.floor((totalSeconds ?? 0) / 60);
         return `<@${userId}> — ${min}分`;
       });
       await interaction.editReply(
-        `✅ **${rows.length}名** に昨日の大酒場🍺・小酒場🍺のVC時間を本日分として付与しました。\n\n${lines.join("\n")}`,
+        `✅ **${rows.length}名** に昨日の${channelLabel}のVC時間を本日分として付与しました。\n\n${lines.join("\n")}`,
       );
+    } else if (sub === "set-channels") {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "❌ サーバー内でのみ使用できます。", ephemeral: true });
+        return;
+      }
+      const rawNames = interaction.options.getString("names", false);
+      if (!rawNames || rawNames.trim() === "") {
+        // リセット：DB値を null にしてデフォルトに戻す
+        await setChestTavernChannelNames(interaction.guildId, null);
+        const defaults = [...TAVERN_CHANNEL_NAMES].join("、");
+        await interaction.reply({
+          content: `✅ 酒場チャンネル名をデフォルト（${defaults}）にリセットしました。`,
+          ephemeral: true,
+        });
+      } else {
+        const names = rawNames.split(",").map((s) => s.trim()).filter(Boolean);
+        if (names.length === 0) {
+          await interaction.reply({ content: "❌ 有効なチャンネル名を1つ以上入力してください。", ephemeral: true });
+          return;
+        }
+        await setChestTavernChannelNames(interaction.guildId, names);
+        await interaction.reply({
+          content: `✅ 酒場チャンネル名を **${names.join("、")}** に更新しました。\nVCトラッカー・救済コマンドともに即時反映されます。`,
+          ephemeral: true,
+        });
+      }
     }
   },
 };
