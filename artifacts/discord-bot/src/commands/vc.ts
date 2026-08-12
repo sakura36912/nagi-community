@@ -530,14 +530,29 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
   const categoryId = hub.categoryId ?? hubChannel?.parentId ?? undefined;
 
   try {
+    // Bot 自身の user ID を overwrite に含めることで、カテゴリ側の権限設定に
+    // 関わらず Bot がパネルを送信・閲覧できることを保証する。
+    const botId = guild.members.me?.id;
     const newVc = await guild.channels.create({
       name: channelName,
       type: ChannelType.GuildVoice,
       parent: categoryId,
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
+      ...(botId ? {
+        permissionOverwrites: [
+          {
+            id: botId,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.AttachFiles,
+            ],
+          },
+        ],
+      } : {}),
     });
 
-    // カテゴリの権限同期を保ちつつ、@everyone に画面共有・インチャ投稿を明示的に許可する
+    // @everyone に画面共有・インチャ投稿を明示的に許可する（カテゴリの deny を上書き）
     await newVc.permissionOverwrites.edit(guild.roles.everyone, {
       Stream: true,
       SendMessages: true,
@@ -551,7 +566,7 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
 
     // 酒場以外のハブにのみコントロールパネルを投稿
     if (!TAVERN_NAMES.has(hub.nameTemplate)) {
-      newVc
+      await newVc
         .send(buildHubVcPanelMessage(newVc.id, member.id, true))
         .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
     }
