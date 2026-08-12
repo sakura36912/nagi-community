@@ -32,13 +32,14 @@ export async function addHubChannel(
   userLimit: number | null,
   salaryRatePerHour: number | null = null,
   salaryMinMinutes: number = 1,
+  panelOnly: boolean = false,
 ) {
   const rows = await db
     .insert(vcHubChannelsTable)
-    .values({ guildId, hubChannelId, categoryId, nameTemplate, userLimit, salaryRatePerHour, salaryMinMinutes })
+    .values({ guildId, hubChannelId, categoryId, nameTemplate, userLimit, salaryRatePerHour, salaryMinMinutes, panelOnly })
     .onConflictDoUpdate({
       target: vcHubChannelsTable.hubChannelId,
-      set: { categoryId, nameTemplate, userLimit, salaryRatePerHour, salaryMinMinutes },
+      set: { categoryId, nameTemplate, userLimit, salaryRatePerHour, salaryMinMinutes, panelOnly },
     })
     .returning();
   return rows[0]!;

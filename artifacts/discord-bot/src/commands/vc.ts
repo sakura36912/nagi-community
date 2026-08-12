@@ -577,8 +577,12 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
   logger.info(`[vcHub] handleHubJoin called: channelId=${newState.channelId} member=${newState.member.id}`);
 
   const hub = await getHubByChannelId(newState.channelId);
-  logger.info(`[vcHub] getHubByChannelId result: ${hub ? `found template="${hub.nameTemplate}"` : "null (not a hub)"}`);
+  logger.info(`[vcHub] getHubByChannelId result: ${hub ? `found template="${hub.nameTemplate}" panelOnly=${hub.panelOnly}` : "null (not a hub)"}`);
   if (!hub) return;
+
+  // パネルのみ Hub（別Botが転送を担当）は VC 作成しない。
+  // パネル送信は handlePanelOnlyHubTransfer が担当する。
+  if (hub.panelOnly) return;
 
   const guild       = newState.guild;
   const member      = newState.member;
@@ -655,6 +659,42 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       err,
     );
   }
+}
+
+/**
+ * パネルのみ Hub（panel_only=true）から別VCへ移動したとき:
+ *   別の Bot が作成した転送先 VC にパネルを送信する。
+ *   呼び出し元: index.ts の「Moved between VCs」セクション
+ */
+export async function handlePanelOnlyHubTransfer(
+  oldState: VoiceState,
+  newState: VoiceState,
+): Promise<void> {
+  if (!oldState.channelId || !newState.channelId) return;
+
+  const hub = await getHubByChannelId(oldState.channelId);
+  if (!hub?.panelOnly) return;
+
+  const guild  = newState.guild;
+  const member = newState.member;
+  if (!member) return;
+
+  const vc = guild.channels.cache.get(newState.channelId)
+    ?? await guild.channels.fetch(newState.channelId).catch(() => null);
+  if (!vc || vc.type !== ChannelType.GuildVoice) return;
+
+  // @everyone にインチャ表示を明示的に許可（カテゴリで DENY されていても見えるよう上書き）
+  await vc.permissionOverwrites.edit(guild.roles.everyone, {
+    ViewChannel:  true,
+    Stream:       true,
+    SendMessages: true,
+    AttachFiles:  true,
+  }).catch((err) => logger.warn("[vcHub] panel_only: Failed to set channel permissions", err));
+
+  await vc
+    .send(buildHubVcPanelMessage(vc.id, member.id, true))
+    .catch((err) => logger.error("[vcHub] panel_only: Failed to send panel", err));
+  logger.info(`[vcHub] panel_only: panel sent to channel=${vc.id} (from hub=${oldState.channelId})`);
 }
 
 /**

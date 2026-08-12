@@ -59,6 +59,7 @@ import {
 import {
   handleHubJoin,
   handleHubLeave,
+  handlePanelOnlyHubTransfer,
   HUB_PANEL_BTN_RENAME,
   HUB_PANEL_BTN_STREAM,
   HUB_PANEL_RENAME_MODAL,
@@ -1143,6 +1144,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       // Hub: Hub 生成VCから別VCに移動した場合 → 空なら自動削除
       handleHubLeave(oldState).catch((err) =>
         logger.error(`[vcHub] handleHubLeave (move) error for ${userId}`, err),
+      ),
+      // パネルのみ Hub（娯楽甲板など）から別Botが転送したVCへ移動 → パネル送信
+      handlePanelOnlyHubTransfer(oldState, newState).catch((err) =>
+        logger.error(`[vcHub] handlePanelOnlyHubTransfer error for ${userId}`, err),
       ),
     ]);
   }

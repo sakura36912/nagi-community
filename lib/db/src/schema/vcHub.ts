@@ -1,4 +1,4 @@
-import { integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { boolean, integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
 
 /** Hub VC 設定: 入ると自動で新VCを作成するトリガーチャンネル */
 export const vcHubChannelsTable = pgTable("vc_hub_channels", {
@@ -15,6 +15,11 @@ export const vcHubChannelsTable = pgTable("vc_hub_channels", {
   salaryRatePerHour: integer("salary_rate_per_hour"),
   /** 分給の最低滞在時間（分）。デフォルト1分 */
   salaryMinMinutes: integer("salary_min_minutes").notNull().default(1),
+  /**
+   * true の場合、このチャンネルへの入室では VC 作成・転送を行わず、
+   * 別の Bot が転送した先の VC にパネルのみ送信する（娯楽甲板など）。
+   */
+  panelOnly: boolean("panel_only").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
