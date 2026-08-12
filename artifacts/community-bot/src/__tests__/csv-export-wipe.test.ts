@@ -155,6 +155,50 @@ const store = vi.hoisted(() => {
     }),
   }));
 
+  // ── db.insert stateful implementation ────────────────────────────────────
+  // Supports the insert chain used by openSession:
+  //   db.insert(table).values(vals).returning()
+  // Appends a new row to the sessions store and returns a camelCase row shape
+  // matching what CommunityVcSession looks like (enough for the return value
+  // of openSession to be non-null and carry the right fields).
+  let _nextInsertId = 1000;
+
+  const insert = vi.fn((table: unknown) => ({
+    values: (vals: Record<string, unknown>) => ({
+      returning: (_shape?: unknown) => {
+        const t = table as Record<string, string>;
+        const tableName = (t["guildId"] ?? "").split(".")[0];
+        if (tableName === "sessions") {
+          const id = _nextInsertId++;
+          const joinedAt = vals["joinedAt"] as Date | undefined;
+          const newRow: SessionRow = {
+            id,
+            guild_id: vals["guildId"] as string,
+            user_id:  vals["userId"]  as string,
+            channel_id: vals["channelId"] as string,
+            joined_at: joinedAt ? joinedAt.toISOString() : new Date().toISOString(),
+            left_at:  null,
+            opted_out: false,
+          };
+          sessions.push(newRow);
+          return Promise.resolve([{
+            id:              newRow.id,
+            guildId:         newRow.guild_id,
+            userId:          newRow.user_id,
+            channelId:       newRow.channel_id,
+            joinedAt:        new Date(newRow.joined_at),
+            leftAt:          null,
+            isExile:         vals["isExile"] ?? false,
+            isPrivacyClosed: false,
+          }]);
+        }
+        // For other tables (e.g. upserts on privacy tables) — not exercised in
+        // this test file, so return an empty result.
+        return Promise.resolve([{}]);
+      },
+    }),
+  }));
+
   // ── db.delete stateful implementation ─────────────────────────────────────
   // Routes to the correct store based on the table proxy's guildId sentinel:
   //   sessions table → (table as Record)["guildId"] === "sessions.guildId"
@@ -232,12 +276,13 @@ const store = vi.hoisted(() => {
   }
 
   function reset(): void {
-    sessions    = [];
-    privacyRows = [];
-    globalRows  = [];
+    sessions        = [];
+    privacyRows     = [];
+    globalRows      = [];
+    _nextInsertId   = 1000;
   }
 
-  return { del, update, select, execute, seed, seedPrivacy, getPrivacyRows, seedGlobal, getGlobalRows, getSessions, reset };
+  return { del, insert, update, select, execute, seed, seedPrivacy, getPrivacyRows, seedGlobal, getGlobalRows, getSessions, reset };
 });
 
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
@@ -250,6 +295,7 @@ vi.mock("@workspace/db", () => {
   return {
     db: {
       delete:  store.del,
+      insert:  store.insert,
       update:  store.update,
       select:  store.select,
       execute: store.execute,
@@ -295,6 +341,7 @@ import {
   deleteUserVcSessions,
   closeSession,
   isVcTrackingOptedOut,
+  openSession,
 } from "../lib/community.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1008,6 +1055,88 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
       expect(a).toBe(false);
       expect(b).toBe(false);
       expect(c).toBe(false);
+    });
+  });
+
+  // ── Wipe → openSession: a new session row is inserted after a full wipe ──
+  //
+  // The wipe → re-track tests above only confirm that isVcTrackingOptedOut
+  // returns false after deleteAllUserVcSessions.  These tests go one step
+  // further and call openSession directly, confirming that a new row is
+  // physically inserted into the sessions store — ruling out regressions such
+  // as an early-return bug inside openSession itself.
+
+  describe("wipe → openSession: new session row is created after a full wipe", () => {
+    it("openSession returns a non-null session row after the global opt-out is cleared by the wipe", async () => {
+      // Seed a global opt-out so the user was opted out before the wipe.
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+
+      // Wipe clears the opt-out rows so tracking can resume.
+      await deleteAllUserVcSessions("wiped-user");
+
+      // Simulating a join event: openSession must detect no opt-out and insert.
+      const session = await openSession("guild-A", "wiped-user", "ch-1");
+
+      // Must return a non-null row — tracking is fully resumed.
+      expect(session).not.toBeNull();
+      expect(session?.userId).toBe("wiped-user");
+      expect(session?.guildId).toBe("guild-A");
+    });
+
+    it("db.insert is called once when openSession runs after the wipe", async () => {
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+      await openSession("guild-A", "wiped-user", "ch-1");
+
+      // db.insert must have been invoked — confirming a row was inserted, not
+      // just that the opt-out check passed.
+      expect(store.insert).toHaveBeenCalledTimes(1);
+    });
+
+    it("a new row appears in the store after openSession runs post-wipe", async () => {
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+
+      await deleteAllUserVcSessions("wiped-user");
+      await openSession("guild-A", "wiped-user", "ch-1");
+
+      const rows = store.getSessions().filter((r) => r.user_id === "wiped-user");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.guild_id).toBe("guild-A");
+      expect(rows[0]?.left_at).toBeNull(); // session is still open
+    });
+
+    it("openSession returns non-null after a wipe that also had per-guild opt-out rows", async () => {
+      store.seedGlobal([{ user_id: "wiped-user", opted_out: true }]);
+      store.seedPrivacy([
+        { user_id: "wiped-user", guild_id: "guild-A", opted_out: true },
+        { user_id: "wiped-user", guild_id: "guild-B", opted_out: true },
+      ]);
+
+      await deleteAllUserVcSessions("wiped-user");
+
+      const session = await openSession("guild-A", "wiped-user", "ch-1");
+
+      expect(session).not.toBeNull();
+      expect(session?.userId).toBe("wiped-user");
+    });
+
+    it("openSession for a second user is unaffected by the first user's wipe", async () => {
+      store.seedGlobal([
+        { user_id: "wiped-user", opted_out: true },
+        { user_id: "other-user", opted_out: true },
+      ]);
+
+      // Wipe only wiped-user.
+      await deleteAllUserVcSessions("wiped-user");
+
+      // wiped-user can open a session.
+      const session = await openSession("guild-A", "wiped-user", "ch-1");
+      expect(session).not.toBeNull();
+
+      // other-user is still globally opted out — openSession must return null.
+      const blockedSession = await openSession("guild-A", "other-user", "ch-1");
+      expect(blockedSession).toBeNull();
     });
   });
 
