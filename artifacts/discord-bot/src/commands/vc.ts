@@ -35,6 +35,7 @@ import {
   createHubSession,
   getHubSession,
   deleteHubSession,
+  getHubSessionsByGuildId,
 } from "@workspace/db";
 import { getGuildSettings, setVcWarnBeforeMinutes } from "../lib/economy";
 import { logger } from "../lib/logger";
@@ -302,6 +303,12 @@ export const vcCommand = {
         .setName("refresh-panels")
         .setDescription("既存の非公開VCパネルをすべて最新レイアウトに更新します（管理者）"),
     )
+    // ── hub-refresh-panels ────────────────────────────────────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName("hub-refresh-panels")
+        .setDescription("既存のHub生成VCにパネルを送信し、権限も修正します（管理者）"),
+    )
     // ── warn-time ─────────────────────────────────────────────────────────
     .addSubcommandGroup((group) =>
       group
@@ -376,6 +383,56 @@ export const vcCommand = {
         });
         return;
       }
+    }
+
+    // ── hub-refresh-panels ────────────────────────────────────────────────
+    if (sub === "hub-refresh-panels") {
+      if (!interaction.guild) return;
+      await interaction.deferReply({ ephemeral: true });
+      const sessions = await getHubSessionsByGuildId(interaction.guildId);
+      if (sessions.length === 0) {
+        await interaction.editReply("このサーバーにアクティブな Hub VCはありません。");
+        return;
+      }
+      let updated = 0; let skipped = 0;
+      const botId = interaction.client.user?.id;
+      for (const session of sessions) {
+        try {
+          const ch = interaction.guild.channels.cache.get(session.channelId)
+            ?? await interaction.guild.channels.fetch(session.channelId).catch(() => null);
+          if (!ch || !("messages" in ch) || !("permissionOverwrites" in ch)) { skipped++; continue; }
+          const gc = ch as import("discord.js").GuildChannel;
+          const tc = ch as import("discord.js").TextBasedChannel;
+          // 権限を最新化（Bot + @everyone）
+          if (botId) {
+            await gc.permissionOverwrites.edit(botId, {
+              ViewChannel: true, SendMessages: true, AttachFiles: true,
+            }).catch(() => {});
+          }
+          await gc.permissionOverwrites.edit(interaction.guild.roles.everyone, {
+            ViewChannel: true, Stream: true, SendMessages: true, AttachFiles: true,
+          }).catch(() => {});
+          // パネルがすでにあれば edit、なければ send
+          const msgs = await tc.messages.fetch({ limit: 50 });
+          const existing = msgs.find(
+            (m) => m.author.id === botId && m.embeds[0]?.title === "🚢 船室コントロールパネル",
+          );
+          const nowStream = isHubStreamEnabled(gc, interaction.guild.roles.everyone.id);
+          if (existing) {
+            await existing.edit(buildHubVcPanelMessage(session.channelId, session.ownerId, nowStream));
+          } else {
+            await tc.send(buildHubVcPanelMessage(session.channelId, session.ownerId, true));
+          }
+          updated++;
+        } catch (err) {
+          logger.warn(`[vcHub] refresh-panels: failed for channel ${session.channelId}`, err);
+          skipped++;
+        }
+      }
+      await interaction.editReply(
+        `✅ Hub VCパネルを更新しました。\n更新: ${updated} 件 / スキップ: ${skipped} 件（チャンネル消失・送信失敗）`,
+      );
+      return;
     }
 
     // ── hub-add ───────────────────────────────────────────────────────────

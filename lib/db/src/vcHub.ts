@@ -92,6 +92,14 @@ export async function getHubSession(channelId: string) {
   return rows[0] ?? null;
 }
 
+/** ギルドの全アクティブ Hub セッションを取得 */
+export async function getHubSessionsByGuildId(guildId: string) {
+  return db
+    .select()
+    .from(vcHubSessionsTable)
+    .where(eq(vcHubSessionsTable.guildId, guildId));
+}
+
 /** セッションを削除（VC を auto-delete する前に呼ぶ） */
 export async function deleteHubSession(channelId: string) {
   const rows = await db
