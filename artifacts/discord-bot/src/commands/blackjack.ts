@@ -24,6 +24,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, recordTransaction, getOrCreateWallet, setBjSuitEmoji } from "../lib/economy";
+import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages, setBjCardImage } from "../lib/bjCardImages";
 import { uploadImageFromUrl, downloadImageAsBuffer } from "../lib/gcsStorage";
 import type { GuildSettings } from "@workspace/db";
@@ -583,6 +584,19 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     getGuildSettings(guildId),
     getBjCardImages(guildId),
   ]);
+
+  const maxBet = settings.casinoMaxBet ?? CASINO_DEFAULT_MAX_BET;
+  if (bet > maxBet) {
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🃏 ブラックジャック")
+          .setDescription(`❌ 賭け金が上限（**${maxBet.toLocaleString()}** ${settings.currencyName}）を超えています。`)
+          .setColor(COLOR_LOSE),
+      ],
+    });
+    return;
+  }
 
   const suitEmojis = resolveSuitEmojis(settings);
   const cardPaths = rawCardImages;

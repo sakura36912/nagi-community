@@ -52,6 +52,9 @@ export const guildSettingsTable = pgTable("guild_settings", {
   bjSuitDiamond: text("bj_suit_diamond"),
   bjSuitClub:    text("bj_suit_club"),
 
+  // Per-guild casino max bet. NULL means use the hardcoded default (100,000).
+  casinoMaxBet: integer("casino_max_bet"),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

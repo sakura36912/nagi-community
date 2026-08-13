@@ -6,13 +6,17 @@
  */
 
 import {
-  EmbedBuilder,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { and, eq, or, sql } from "drizzle-orm";
 import { db, transactionsTable } from "@workspace/db";
-import { getGuildSettings } from "../lib/economy";
+import {
+  EmbedBuilder,
+  MessageFlags,
+  PermissionFlagsBits,
+} from "discord.js";
+import { getGuildSettings, setCasinoMaxBet } from "../lib/economy";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -147,6 +151,39 @@ function formatGameStats(s: GameStats, currencyName: string): string {
   ].join("\n");
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+export const CASINO_DEFAULT_MAX_BET = 100_000;
+
+// ─── /casino setup max_bet ────────────────────────────────────────────────────
+
+async function handleSetupMaxBet(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ 管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const amount = interaction.options.getInteger("amount", true);
+  await setCasinoMaxBet(guildId, amount);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🎲 カジノ設定")
+        .setColor(0x5865f2)
+        .addFields({
+          name: "賭け金上限",
+          value: `**${amount.toLocaleString()}** に設定しました\n（ブラックジャック・ポーカー・ルーレット共通）`,
+        })
+        .setFooter({ text: "次回ゲームから反映されます" }),
+    ],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
 // ─── /casino stats ────────────────────────────────────────────────────────────
 
 async function handleStats(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -226,9 +263,29 @@ export const casinoCommand = {
             .setDescription("確認したいユーザー（省略すると自分）")
             .setRequired(false),
         ),
+    )
+    .addSubcommandGroup((group) =>
+      group
+        .setName("setup")
+        .setDescription("【管理者】カジノの設定を変更する")
+        .addSubcommand((sub) =>
+          sub
+            .setName("max_bet")
+            .setDescription("ゲーム共通の賭け金上限を設定する")
+            .addIntegerOption((opt) =>
+              opt
+                .setName("amount")
+                .setDescription(`上限額（${CASINO_DEFAULT_MAX_BET.toLocaleString()} 以下）`)
+                .setMinValue(100)
+                .setMaxValue(CASINO_DEFAULT_MAX_BET)
+                .setRequired(true),
+            ),
+        ),
     ),
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-    if (sub === "stats") await handleStats(interaction);
+    const sub   = interaction.options.getSubcommand();
+    const group = interaction.options.getSubcommandGroup(false);
+    if (sub === "stats") { await handleStats(interaction); return; }
+    if (group === "setup" && sub === "max_bet") await handleSetupMaxBet(interaction);
   },
 };

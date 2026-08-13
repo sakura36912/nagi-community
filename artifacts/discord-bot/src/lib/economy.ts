@@ -239,6 +239,13 @@ export async function setChestTavernChannelNames(
  * ブラックジャックのスート絵文字を設定する。
  * `emoji` が null のときはデフォルト（Unicode 絵文字）に戻す。
  */
+export async function setCasinoMaxBet(
+  guildId: string,
+  maxBet: number | null,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, { casinoMaxBet: maxBet });
+}
+
 export async function setBjSuitEmoji(
   guildId: string,
   suit: "spade" | "heart" | "diamond" | "club",

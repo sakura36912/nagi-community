@@ -27,6 +27,7 @@ import { dirname, join } from "path";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
+import { CASINO_DEFAULT_MAX_BET } from "./casino";
 
 // 自作GIFを起動時に読み込む（毎スピン生成不要、即時添付可能）
 const __dir = dirname(fileURLToPath(import.meta.url));
@@ -350,10 +351,25 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const [, { currencyName }] = await Promise.all([
+  const [, settings] = await Promise.all([
     getOrCreateWallet(guildId, userId),
     getGuildSettings(guildId),
   ]);
+
+  const { currencyName } = settings;
+  const maxBet = settings.casinoMaxBet ?? CASINO_DEFAULT_MAX_BET;
+  if (bet > maxBet) {
+    await interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🏴‍☠️ 海賊ルーレット")
+          .setDescription(`❌ 賭け金が上限（**${maxBet.toLocaleString()}** ${currencyName}）を超えています。`)
+          .setColor(COLOR_LOSE),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
 
   const session: RouletteSession = { guildId, userId, bet, currencyName, expiresAt: Date.now() + SESSION_TTL };
   sessions.set(key, session);
