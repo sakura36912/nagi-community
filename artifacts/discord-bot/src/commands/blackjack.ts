@@ -100,31 +100,35 @@ function resolveSuitEmojis(settings: GuildSettings): SuitEmojis {
 
 // ─── Card image helpers ───────────────────────────────────────────────────────
 
-/**
- * 手札の中で画像が登録されている最後のカードの objectPath を返す。
- */
-function resolveLastCardPath(hand: Card[], cardPaths: Map<string, string>): string | undefined {
-  for (let i = hand.length - 1; i >= 0; i--) {
-    const key = `${hand[i]!.rank}:${SUIT_KEY[hand[i]!.suit]}`;
-    const path = cardPaths.get(key);
-    if (path) return path;
-  }
-  return undefined;
-}
+interface CardImage { attachment: AttachmentBuilder; filename: string }
 
-/**
- * Object Storage から画像をダウンロードして AttachmentBuilder を返す。
- * 失敗した場合は null を返す（画像なし表示にフォールバック）。
- */
-async function fetchCardAttachment(objectPath: string): Promise<AttachmentBuilder | null> {
+/** 1枚のカード画像を Object Storage から取得する（失敗時 null） */
+async function fetchOneCardImage(
+  card: Card,
+  cardPaths: Map<string, string>,
+  filenameBase: string,
+): Promise<CardImage | null> {
+  const key  = `${card.rank}:${SUIT_KEY[card.suit]}`;
+  const path = cardPaths.get(key);
+  if (!path) return null;
   try {
-    const buffer = await downloadImageAsBuffer(objectPath);
+    const buffer = await downloadImageAsBuffer(path);
     if (!buffer) return null;
-    const ext  = objectPath.split(".").pop() ?? "png";
-    return new AttachmentBuilder(buffer, { name: `card.${ext}` });
+    const ext      = path.split(".").pop() ?? "png";
+    const filename = `${filenameBase}.${ext}`;
+    return { attachment: new AttachmentBuilder(buffer, { name: filename }), filename };
   } catch {
     return null;
   }
+}
+
+/** 手札のカード画像を並行取得する */
+async function fetchHandImages(
+  hand: Card[],
+  cardPaths: Map<string, string>,
+  prefix: string,
+): Promise<(CardImage | null)[]> {
+  return Promise.all(hand.map((card, i) => fetchOneCardImage(card, cardPaths, `${prefix}_${i}`)));
 }
 
 // ─── Deck helpers ─────────────────────────────────────────────────────────────
@@ -192,23 +196,63 @@ async function creditAmount(guildId: string, userId: string, amount: number): Pr
 
 // ─── Embeds ───────────────────────────────────────────────────────────────────
 
-type EmbedWithFile = { embed: EmbedBuilder; attachment: AttachmentBuilder | null };
+type EmbedWithFiles = { embeds: EmbedBuilder[]; files: AttachmentBuilder[] };
 
-async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWithFile> {
+/** Discord の embed 上限（1メッセージあたり最大 10）を超えないようカード embed を追加する */
+function appendCardEmbeds(
+  embeds: EmbedBuilder[],
+  files: AttachmentBuilder[],
+  images: (CardImage | null)[],
+  maxEmbeds = 10,
+): void {
+  for (const img of images) {
+    if (!img) continue;
+    if (embeds.length >= maxEmbeds) break;
+    embeds.push(new EmbedBuilder().setImage(`attachment://${img.filename}`));
+    files.push(img.attachment);
+  }
+}
+
+/**
+ * ゲーム中の embed を生成する。
+ * 画像が登録されているカードは embed 画像として、未登録のカードはテキストで表示する。
+ */
+async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWithFiles> {
   const pTotal = total(game.playerHand);
+  const dTotal = total(game.dealerHand);
   const dKnown = total([game.dealerHand[0]!]);
   const e = game.suitEmojis;
 
-  const dealerValue = hideDealer
-    ? `${formatHand(game.dealerHand, e, true)}　（${dKnown}+?）`
-    : `${formatHand(game.dealerHand, e)}　**${total(game.dealerHand)}**`;
+  // カード画像を並行取得
+  const dealerVisible = hideDealer ? [game.dealerHand[0]!] : game.dealerHand;
+  const [playerImgs, dealerImgs] = await Promise.all([
+    fetchHandImages(game.playerHand, game.cardPaths, "p"),
+    fetchHandImages(dealerVisible, game.cardPaths, "d"),
+  ]);
 
-  const embed = new EmbedBuilder()
+  // 画像のないカードはテキストにフォールバック
+  const playerCardText = game.playerHand
+    .map((c, i) => playerImgs[i] ? null : formatCard(c, e))
+    .filter(Boolean)
+    .join(" ");
+  const dealerCardText = dealerVisible
+    .map((c, i) => dealerImgs[i] ? null : formatCard(c, e))
+    .filter(Boolean)
+    .join(" ");
+
+  const playerValue = playerCardText
+    ? `${playerCardText}　**${pTotal}**`
+    : `**${pTotal}**`;
+  const dealerValue = hideDealer
+    ? (dealerCardText ? `${dealerCardText} 🎴　（${dKnown}+?）` : `🎴　（${dKnown}+?）`)
+    : (dealerCardText ? `${dealerCardText}　**${dTotal}**` : `**${dTotal}**`);
+
+  const mainEmbed = new EmbedBuilder()
     .setTitle("🃏 ブラックジャック")
     .setColor(COLOR_NEUTRAL)
     .addFields(
-      { name: "あなたの手札", value: `${formatHand(game.playerHand, e)}　**${pTotal}**` },
-      { name: "ディーラーの手札", value: dealerValue },
+      { name: `あなたの手札`, value: playerValue },
+      { name: `ディーラーの手札`, value: dealerValue },
       {
         name: "賭け金",
         value: `**${game.bet.toLocaleString()}** ${game.currencyName}${game.doubled ? "（ダブルダウン）" : ""}`,
@@ -218,44 +262,59 @@ async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWit
     )
     .setFooter({ text: "BJ=1.5倍 / 通常勝利=1倍 / 引き分け=返金 | 5分でタイムアウト" });
 
-  const cardPath = resolveLastCardPath(game.playerHand, game.cardPaths);
-  if (!cardPath) return { embed, attachment: null };
+  const embeds: EmbedBuilder[] = [mainEmbed];
+  const files: AttachmentBuilder[] = [];
+  appendCardEmbeds(embeds, files, playerImgs);
+  appendCardEmbeds(embeds, files, dealerImgs);
 
-  const attachment = await fetchCardAttachment(cardPath);
-  if (attachment) embed.setImage(`attachment://card.${cardPath.split(".").pop() ?? "png"}`);
-  return { embed, attachment };
+  return { embeds, files };
 }
 
-async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWithFile> {
-  const title: Record<Outcome, string> = {
+/**
+ * 結果表示用の embed を生成する。
+ */
+async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWithFiles> {
+  const TITLE: Record<Outcome, string> = {
     blackjack: "🎉 ブラックジャック！",
     win:       "✅ 勝利！",
     push:      "🤝 引き分け（プッシュ）",
     lose:      "❌ 敗北",
   };
-  const color: Record<Outcome, number> = {
+  const COLOR: Record<Outcome, number> = {
     blackjack: COLOR_WIN, win: COLOR_WIN, push: COLOR_PUSH, lose: COLOR_LOSE,
   };
   const { netDelta } = resolveOutcome(game);
   const sign = netDelta > 0 ? "+" : "";
   const e = game.suitEmojis;
 
-  const embed = new EmbedBuilder()
-    .setTitle(`🃏 ブラックジャック — ${title[outcome]}`)
-    .setColor(color[outcome])
+  const [playerImgs, dealerImgs] = await Promise.all([
+    fetchHandImages(game.playerHand, game.cardPaths, "p"),
+    fetchHandImages(game.dealerHand, game.cardPaths, "d"),
+  ]);
+
+  const playerCardText = game.playerHand
+    .map((c, i) => playerImgs[i] ? null : formatCard(c, e))
+    .filter(Boolean).join(" ");
+  const dealerCardText = game.dealerHand
+    .map((c, i) => dealerImgs[i] ? null : formatCard(c, e))
+    .filter(Boolean).join(" ");
+
+  const mainEmbed = new EmbedBuilder()
+    .setTitle(`🃏 ブラックジャック — ${TITLE[outcome]}`)
+    .setColor(COLOR[outcome])
     .addFields(
-      { name: "あなたの手札", value: `${formatHand(game.playerHand, e)}　**${total(game.playerHand)}**` },
-      { name: "ディーラーの手札", value: `${formatHand(game.dealerHand, e)}　**${total(game.dealerHand)}**` },
+      { name: "あなたの手札", value: playerCardText ? `${playerCardText}　**${total(game.playerHand)}**` : `**${total(game.playerHand)}**` },
+      { name: "ディーラーの手札", value: dealerCardText ? `${dealerCardText}　**${total(game.dealerHand)}**` : `**${total(game.dealerHand)}**` },
       { name: "収支", value: `${sign}${netDelta.toLocaleString()} ${game.currencyName}`, inline: true },
     )
     .setTimestamp();
 
-  const cardPath = resolveLastCardPath(game.playerHand, game.cardPaths);
-  if (!cardPath) return { embed, attachment: null };
+  const embeds: EmbedBuilder[] = [mainEmbed];
+  const files: AttachmentBuilder[] = [];
+  appendCardEmbeds(embeds, files, playerImgs);
+  appendCardEmbeds(embeds, files, dealerImgs);
 
-  const attachment = await fetchCardAttachment(cardPath);
-  if (attachment) embed.setImage(`attachment://card.${cardPath.split(".").pop() ?? "png"}`);
-  return { embed, attachment };
+  return { embeds, files };
 }
 
 // ─── Buttons ──────────────────────────────────────────────────────────────────
@@ -315,12 +374,8 @@ async function finishGame(
   }
 
   activeGames.delete(gameKey(guildId, userId));
-  const { embed, attachment } = await buildResultEmbed(game, outcome);
-  await interaction.editReply({
-    embeds: [embed],
-    files: attachment ? [attachment] : [],
-    components: [],
-  });
+  const { embeds, files } = await buildResultEmbed(game, outcome);
+  await interaction.editReply({ embeds, files, components: [] });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -359,12 +414,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
       return;
     }
 
-    const { embed, attachment } = await buildGameEmbed(game, true);
-    await interaction.editReply({
-      embeds: [embed],
-      files: attachment ? [attachment] : [],
-      components: [buildButtons(false)],
-    });
+    const { embeds, files } = await buildGameEmbed(game, true);
+    await interaction.editReply({ embeds, files, components: [buildButtons(false)] });
 
   } else if (action === "stand") {
     await finishGame(interaction, dealerPlay(game));
@@ -436,12 +487,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   }
 
   activeGames.set(key, game);
-  const { embed, attachment } = await buildGameEmbed(game, true);
-  await interaction.editReply({
-    embeds: [embed],
-    files: attachment ? [attachment] : [],
-    components: [buildButtons(true)],
-  });
+  const { embeds, files } = await buildGameEmbed(game, true);
+  await interaction.editReply({ embeds, files, components: [buildButtons(true)] });
 }
 
 // ─── /blackjack config suit ───────────────────────────────────────────────────
