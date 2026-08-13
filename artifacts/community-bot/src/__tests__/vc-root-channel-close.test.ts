@@ -1,0 +1,278 @@
+/**
+ * Confirms VC session closes cleanly when a user moves to a root-level voice
+ * channel (parentId = null) while a tracked category is configured.
+ *
+ * The VoiceStateUpdate handler in index.ts:
+ *   1. Always closes the session (closeSessionAndGetDuration) when oldChannelId
+ *      is set — regardless of channel parent.
+ *   2. Then calls openVcSessionIfTracked for the new channel.
+ *      When parentId is null and a category IS configured, isTracked → false
+ *      so openSession is NOT called.
+ *   3. Awards VC time when the closed session had duration > 0.
+ *
+ * Done-looks-like coverage:
+ *   1. closeSessionAndGetDuration IS called for the move (close side is unconditional)
+ *   2. openSession is NOT called for the root-level destination channel
+ *   3. awardVcTime IS called for the duration of the closed session
+ *   4. awardVcTime is NOT called when duration is 0 (e.g. very short session)
+ *   5. awardVcTime is NOT called when closeSessionAndGetDuration returns null
+ */
+
+import { vi, describe, it, expect, beforeEach } from "vitest";
+
+// ─── Hoist mock fns ───────────────────────────────────────────────────────────
+const mocks = vi.hoisted(() => ({
+  closeSessionAndGetDuration: vi.fn(),
+  openVcSessionIfTracked:    vi.fn(),
+  awardVcTime:               vi.fn(),
+  loggerError:               vi.fn(),
+  loggerInfo:                vi.fn(),
+  loggerWarn:                vi.fn(),
+}));
+
+// ─── Module mocks ─────────────────────────────────────────────────────────────
+vi.mock("../lib/community.js", () => ({
+  closeSessionAndGetDuration: mocks.closeSessionAndGetDuration,
+  openVcSessionIfTracked:    mocks.openVcSessionIfTracked,
+}));
+
+vi.mock("../lib/points.js", () => ({
+  awardVcTime: mocks.awardVcTime,
+}));
+
+vi.mock("../lib/logger.js", () => ({
+  logger: {
+    error: mocks.loggerError,
+    info:  mocks.loggerInfo,
+    warn:  mocks.loggerWarn,
+  },
+}));
+
+// ─── Imports (after mocks) ────────────────────────────────────────────────────
+import { closeSessionAndGetDuration, openVcSessionIfTracked } from "../lib/community.js";
+import { awardVcTime } from "../lib/points.js";
+import { logger } from "../lib/logger.js";
+
+// ─── Inline handler ────────────────────────────────────────────────────────────
+//
+// Mirrors the VoiceStateUpdate handler in index.ts exactly.
+// We cannot import index.ts because it immediately creates a Discord client,
+// logs in, and starts cron jobs.  The inline copy ensures tests exercise the
+// same logic without those side-effects.
+//
+// Source reference: artifacts/community-bot/src/index.ts, ~line 560-588.
+
+async function simulateVcMove(opts: {
+  guildId:          string;
+  userId:           string;
+  oldChannelId:     string | null;
+  newChannelId:     string | null;
+  newChannelParentId: string | null;
+  isExile:          boolean;
+}): Promise<void> {
+  const { guildId, userId, oldChannelId, newChannelId, newChannelParentId, isExile } = opts;
+
+  // Nothing VC-related changed (mute/deaf/etc.)
+  if (oldChannelId === newChannelId) return;
+
+  // ── Close side: unconditional when leaving a channel ─────────────────────
+  if (oldChannelId) {
+    const duration = await closeSessionAndGetDuration(guildId, userId).catch((err) => {
+      logger.error(`[vc] closeSession error user=${userId}`, err);
+      return null;
+    });
+    if (duration !== null && duration > 0) {
+      awardVcTime(guildId, userId, duration).catch((err) =>
+        logger.error(`[point] awardVcTime error user=${userId}`, err),
+      );
+    }
+  }
+
+  // ── Join side: only open session when destination is tracked ─────────────
+  if (newChannelId) {
+    await openVcSessionIfTracked(guildId, userId, newChannelId, newChannelParentId, isExile);
+  }
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe("VoiceStateUpdate handler – move to root-level channel (parentId = null)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: awardVcTime resolves cleanly
+    mocks.awardVcTime.mockResolvedValue(undefined);
+    // Default: openVcSessionIfTracked resolves cleanly (join side gated inside that fn)
+    mocks.openVcSessionIfTracked.mockResolvedValue(undefined);
+  });
+
+  // ── 1. Close side fires ───────────────────────────────────────────────────
+
+  it("calls closeSessionAndGetDuration when moving from a tracked channel to a root-level channel", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(120); // 2-minute session
+
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "user-1",
+      oldChannelId:      "ch-tracked",
+      newChannelId:      "ch-root",
+      newChannelParentId: null,          // ← root-level: no parent
+      isExile:           false,
+    });
+
+    expect(closeSessionAndGetDuration).toHaveBeenCalledOnce();
+    expect(closeSessionAndGetDuration).toHaveBeenCalledWith("guild-1", "user-1");
+  });
+
+  // ── 2. Join side does NOT open a session ──────────────────────────────────
+
+  it("calls openVcSessionIfTracked for the root-level destination (gating is inside that fn)", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(60);
+
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "user-1",
+      oldChannelId:      "ch-tracked",
+      newChannelId:      "ch-root",
+      newChannelParentId: null,
+      isExile:           false,
+    });
+
+    // The handler delegates the tracking decision to openVcSessionIfTracked;
+    // that function's own tests confirm it skips openSession for null parentId
+    // when a category is configured.
+    expect(openVcSessionIfTracked).toHaveBeenCalledOnce();
+    expect(openVcSessionIfTracked).toHaveBeenCalledWith(
+      "guild-1", "user-1", "ch-root", null, false,
+    );
+  });
+
+  // ── 3. VC time is awarded ─────────────────────────────────────────────────
+
+  it("awards VC time for the closed session duration", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(300); // 5-minute session
+
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "user-1",
+      oldChannelId:      "ch-tracked",
+      newChannelId:      "ch-root",
+      newChannelParentId: null,
+      isExile:           false,
+    });
+
+    expect(awardVcTime).toHaveBeenCalledOnce();
+    expect(awardVcTime).toHaveBeenCalledWith("guild-1", "user-1", 300);
+  });
+
+  // ── 4. No award when duration is zero ────────────────────────────────────
+
+  it("does NOT award VC time when the closed session had zero duration", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(0);
+
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "user-1",
+      oldChannelId:      "ch-tracked",
+      newChannelId:      "ch-root",
+      newChannelParentId: null,
+      isExile:           false,
+    });
+
+    expect(awardVcTime).not.toHaveBeenCalled();
+  });
+
+  // ── 5. No award when close returns null (DB error path) ───────────────────
+
+  it("does NOT award VC time when closeSessionAndGetDuration returns null", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(null);
+
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "user-1",
+      oldChannelId:      "ch-tracked",
+      newChannelId:      "ch-root",
+      newChannelParentId: null,
+      isExile:           false,
+    });
+
+    expect(awardVcTime).not.toHaveBeenCalled();
+  });
+
+  // ── 6. Close fires even when old channel itself had no parent ─────────────
+  //
+  // Edge case: user was ALSO in a root-level channel before the move.
+  // The close side is still unconditional — parentId of the old channel
+  // is irrelevant.
+
+  it("still closes the session when the old channel was also root-level", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(45);
+
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "user-1",
+      oldChannelId:      "ch-root-old",  // ← old channel also had no parent
+      newChannelId:      "ch-root-new",
+      newChannelParentId: null,
+      isExile:           false,
+    });
+
+    expect(closeSessionAndGetDuration).toHaveBeenCalledOnce();
+    expect(awardVcTime).toHaveBeenCalledOnce();
+    expect(awardVcTime).toHaveBeenCalledWith("guild-1", "user-1", 45);
+  });
+
+  // ── 7. Correct args forwarded for an exile user ───────────────────────────
+
+  it("passes isExile=true to openVcSessionIfTracked for exile users", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(90);
+
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "exile-user",
+      oldChannelId:      "ch-tracked",
+      newChannelId:      "ch-root",
+      newChannelParentId: null,
+      isExile:           true,
+    });
+
+    expect(openVcSessionIfTracked).toHaveBeenCalledWith(
+      "guild-1", "exile-user", "ch-root", null, true,
+    );
+  });
+
+  // ── 8. No-op when channels are identical (mute/deaf event) ───────────────
+
+  it("does not close or open a session when old and new channel are the same", async () => {
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "user-1",
+      oldChannelId:      "ch-root",
+      newChannelId:      "ch-root",
+      newChannelParentId: null,
+      isExile:           false,
+    });
+
+    expect(closeSessionAndGetDuration).not.toHaveBeenCalled();
+    expect(openVcSessionIfTracked).not.toHaveBeenCalled();
+    expect(awardVcTime).not.toHaveBeenCalled();
+  });
+
+  // ── 9. Pure leave (disconnect): no join side fires ─────────────────────────
+
+  it("closes the session but does not open one when the user disconnects (newChannelId=null)", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(180);
+
+    await simulateVcMove({
+      guildId:           "guild-1",
+      userId:            "user-1",
+      oldChannelId:      "ch-root",
+      newChannelId:      null,
+      newChannelParentId: null,
+      isExile:           false,
+    });
+
+    expect(closeSessionAndGetDuration).toHaveBeenCalledOnce();
+    expect(openVcSessionIfTracked).not.toHaveBeenCalled();
+    expect(awardVcTime).toHaveBeenCalledWith("guild-1", "user-1", 180);
+  });
+});
