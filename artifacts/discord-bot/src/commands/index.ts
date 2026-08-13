@@ -550,14 +550,16 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
 
   // 個人ショップ開業券
   if (item.effectType === SHOP_LICENSE_EFFECT) {
-    const SHOP_LICENSE_ALLOWED_ROLES = ["本船員", "航海士", "提督", "大提督"];
+    const isAdminForLicense = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
     const memberForLicense = await interaction.guild!.members.fetch(interaction.user.id);
-    const hasAllowedRole = SHOP_LICENSE_ALLOWED_ROLES.some((name) =>
-      interaction.guild!.roles.cache.some((r) => r.name === name && memberForLicense.roles.cache.has(r.id)),
-    );
-    if (!hasAllowedRole) {
-      await interaction.editReply("❌ 個人ショップ開業券は本船員以上のロールを持つメンバーのみ購入できます。");
-      return;
+    if (!isAdminForLicense) {
+      const hasHonsennin = interaction.guild!.roles.cache.some(
+        (r) => r.name === "本船員" && memberForLicense.roles.cache.has(r.id),
+      );
+      if (!hasHonsennin) {
+        await interaction.editReply("❌ 個人ショップ開業券は本船員ロールを持つメンバーのみ購入できます。");
+        return;
+      }
     }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
     if (!result.ok) { await interaction.editReply(result.reason); return; }
@@ -783,14 +785,16 @@ async function applyShopPurchase(
   }
 
   if (item.effectType === SHOP_LICENSE_EFFECT) {
-    const SHOP_LICENSE_ALLOWED_ROLES = ["本船員", "航海士", "提督", "大提督"];
+    const isAdminForLicense = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    const hasAllowedRole = SHOP_LICENSE_ALLOWED_ROLES.some((name) =>
-      interaction.guild!.roles.cache.some((r) => r.name === name && member.roles.cache.has(r.id)),
-    );
-    if (!hasAllowedRole) {
-      await interaction.editReply("❌ 個人ショップ開業券は本船員以上のロールを持つメンバーのみ購入できます。");
-      return;
+    if (!isAdminForLicense) {
+      const hasHonsennin = interaction.guild!.roles.cache.some(
+        (r) => r.name === "本船員" && member.roles.cache.has(r.id),
+      );
+      if (!hasHonsennin) {
+        await interaction.editReply("❌ 個人ショップ開業券は本船員ロールを持つメンバーのみ購入できます。");
+        return;
+      }
     }
     const configs = await listShopLicenseConfigs(interaction.guildId);
     const config = configs.find((c) => member.roles.cache.has(c.squadRoleId));
