@@ -76,6 +76,26 @@ probe_file() {
   echo "[typecheck-guard] PASS ($TARGET): typecheck correctly exited $MUTANT_EXIT and reported the injected error."
 }
 
+# ── Step 2b: Self-test — probe_file must reject a non-existent target ────────
+# This ensures the existence-check exit path itself cannot be silently broken
+# by a future refactor.  Run in a subshell so exit 1 does not abort the guard.
+echo "[typecheck-guard] Self-test: probe_file with a non-existent path must exit 1 and say 'probe target not found'..."
+set +e
+SELFTEST_OUT=$(probe_file "/tmp/__nonexistent_probe_target_guard_selftest" 2>&1)
+SELFTEST_EXIT=$?
+set -e
+
+if [ "$SELFTEST_EXIT" -ne 1 ]; then
+  echo "[typecheck-guard] FAIL: self-test expected probe_file to exit 1 for a missing target, but got exit $SELFTEST_EXIT" >&2
+  exit 1
+fi
+if ! echo "$SELFTEST_OUT" | grep -qF "probe target not found"; then
+  echo "[typecheck-guard] FAIL: self-test did not find 'probe target not found' in probe_file output" >&2
+  echo "$SELFTEST_OUT" >&2
+  exit 1
+fi
+echo "[typecheck-guard] Self-test PASS: probe_file correctly rejected a non-existent target."
+
 # ── Step 3: Probe each library ──────────────────────────────────────────────
 probe_file "lib/api-zod/src/index.ts"
 probe_file "lib/api-spec/orval.config.ts"
