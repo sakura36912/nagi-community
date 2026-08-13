@@ -227,3 +227,61 @@ describe("handleRetentionConfirm – permission gate and nonce preservation", ()
     expect(retentionConfirmExpiry.has(NONCE)).toBe(true);
   });
 });
+
+// ─── Expired nonce tests ──────────────────────────────────────────────────────
+
+describe("handleRetentionConfirm – expired nonce", () => {
+  const NONCE = "test-nonce-expired";
+  const GUILD_ID = "guild-123";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Seed the registry with an already-expired entry (expiry 1 ms in the past).
+    retentionConfirmExpiry.set(NONCE, {
+      guildId: GUILD_ID,
+      days: 60,
+      expiry: Date.now() - 1,
+    });
+  });
+
+  it("replies with an ephemeral error when the nonce has expired, even for a valid admin", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+  });
+
+  it("timeout reply content contains the expiry notice (有効期限)", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    expect(replyArg.content).toMatch(/有効期限/);
+  });
+
+  it("removes the stale entry from the registry after an expired-nonce call", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    // The stale entry must be cleaned up so memory is not leaked.
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(false);
+  });
+
+  it("does NOT proceed to deferUpdate or editReply when the nonce has expired", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(interaction.editReply).not.toHaveBeenCalled();
+  });
+
+  it("does NOT write to the database when the nonce has expired", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.del).not.toHaveBeenCalled();
+  });
+});
