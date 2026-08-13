@@ -53,11 +53,14 @@ interface BJGame {
   balance: number;
   expiresAt: number;
   suitEmojis: SuitEmojis;
-  /**
-   * キー: "rank:suit"（例 "A:spade"）、値: Object Storage のオブジェクト名（path）。
-   * 未登録のカードはキーなし。
-   */
+  /** キー: "rank:suit"（例 "A:spade"）、値: Object Storage のオブジェクト名（path）。 */
   cardPaths: Map<string, string>;
+  /**
+   * カード画像のバッファキャッシュ。
+   * キー: "rank:suit"、値: ダウンロード済み Buffer。
+   * ヒットのたびに Storage を叩かず、ここから読む。
+   */
+  cardBuffers: Map<string, Buffer>;
 }
 
 type Outcome = "blackjack" | "win" | "push" | "lose";
@@ -157,23 +160,46 @@ async function mergeHorizontal(buffers: Buffer[]): Promise<Buffer> {
 }
 
 /**
- * 手札のカード画像を横一列に合成し、1枚の AttachmentBuilder を返す。
- * 画像が1枚も登録されていない場合は null を返す。
+ * カード1枚のバッファをキャッシュに追加する（未登録 or 取得失敗は無視）。
+ */
+async function cacheCardBuffer(
+  card: Card,
+  cardPaths: Map<string, string>,
+  cardBuffers: Map<string, Buffer>,
+): Promise<void> {
+  const key = `${card.rank}:${SUIT_KEY[card.suit]}`;
+  if (cardBuffers.has(key)) return; // 既にキャッシュ済み
+  const path = cardPaths.get(key);
+  if (!path) return;
+  try {
+    const buf = await downloadImageAsBuffer(path);
+    if (buf) cardBuffers.set(key, buf);
+  } catch { /* 失敗しても無視 */ }
+}
+
+/**
+ * 手札全カードのバッファをキャッシュに並行取得する。
+ */
+async function cacheHandBuffers(
+  hand: Card[],
+  cardPaths: Map<string, string>,
+  cardBuffers: Map<string, Buffer>,
+): Promise<void> {
+  await Promise.all(hand.map((card) => cacheCardBuffer(card, cardPaths, cardBuffers)));
+}
+
+/**
+ * キャッシュ済みバッファから手札画像を横一列に合成して返す。
+ * 画像が1枚も取得されていない場合は null を返す。
  */
 async function buildHandStrip(
   hand: Card[],
-  cardPaths: Map<string, string>,
+  cardBuffers: Map<string, Buffer>,
   filename: string,
 ): Promise<CardImage | null> {
-  const buffers = (
-    await Promise.all(
-      hand.map(async (card) => {
-        const key  = `${card.rank}:${SUIT_KEY[card.suit]}`;
-        const path = cardPaths.get(key);
-        return path ? downloadImageAsBuffer(path) : null;
-      }),
-    )
-  ).filter((b): b is Buffer => b !== null);
+  const buffers = hand
+    .map((card) => cardBuffers.get(`${card.rank}:${SUIT_KEY[card.suit]}`) ?? null)
+    .filter((b): b is Buffer => b !== null);
 
   if (buffers.length === 0) return null;
   try {
@@ -288,10 +314,10 @@ async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWit
 
   const dealerVisible = hideDealer ? [game.dealerHand[0]!] : game.dealerHand;
 
-  // プレイヤー・ディーラーの手札ストリップ画像を並行生成
+  // プレイヤー・ディーラーの手札ストリップ画像を並行生成（キャッシュ済みバッファを使用）
   const [playerStrip, dealerStrip] = await Promise.all([
-    buildHandStrip(game.playerHand, game.cardPaths, "player.png"),
-    buildHandStrip(dealerVisible,   game.cardPaths, "dealer.png"),
+    buildHandStrip(game.playerHand, game.cardBuffers, "player.png"),
+    buildHandStrip(dealerVisible,   game.cardBuffers, "dealer.png"),
   ]);
 
   const playerValue = playerStrip
@@ -352,8 +378,8 @@ async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWi
   const e    = game.suitEmojis;
 
   const [playerStrip, dealerStrip] = await Promise.all([
-    buildHandStrip(game.playerHand, game.cardPaths, "player.png"),
-    buildHandStrip(game.dealerHand, game.cardPaths, "dealer.png"),
+    buildHandStrip(game.playerHand, game.cardBuffers, "player.png"),
+    buildHandStrip(game.dealerHand, game.cardBuffers, "dealer.png"),
   ]);
 
   const playerValue = playerStrip
@@ -446,6 +472,8 @@ async function finishGame(
   }
 
   activeGames.delete(gameKey(guildId, userId));
+  // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
+  await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
   const { embeds, files } = await buildResultEmbed(game, outcome);
   await interaction.editReply({ embeds, files, components: [] });
 }
@@ -479,6 +507,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     const [card, newDeck] = draw(game.deck);
     game.playerHand = [...game.playerHand, card];
     game.deck = newDeck;
+    // 新しく引いたカード1枚のみ追加取得（既存カードはキャッシュ済み）
+    await cacheCardBuffer(card, game.cardPaths, game.cardBuffers);
     activeGames.set(key, game);
 
     if (isBust(game.playerHand) || total(game.playerHand) === 21) {
@@ -501,6 +531,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     game.bet *= 2; game.doubled = true; game.balance = extra.balance;
     const [card, newDeck] = draw(game.deck);
     game.playerHand = [...game.playerHand, card]; game.deck = newDeck;
+    await cacheCardBuffer(card, game.cardPaths, game.cardBuffers);
     await finishGame(interaction, dealerPlay(game));
   }
 }
@@ -546,11 +577,15 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   [card, deck] = draw(deck); playerHand = [...playerHand, card];
   [card, deck] = draw(deck); dealerHand = [...dealerHand, card];
 
+  // 初期4枚の画像をゲーム開始時にまとめてキャッシュ（以降 Storage を叩かない）
+  const cardBuffers = new Map<string, Buffer>();
+  await cacheHandBuffers([...playerHand, ...dealerHand], cardPaths, cardBuffers);
+
   const game: BJGame = {
     guildId, userId, bet, playerHand, dealerHand, deck,
     doubled: false, currencyName: settings.currencyName,
     balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
-    suitEmojis, cardPaths,
+    suitEmojis, cardPaths, cardBuffers,
   };
 
   if (isBlackjack(playerHand)) {
