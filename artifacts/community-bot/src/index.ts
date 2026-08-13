@@ -277,9 +277,21 @@ client.once(Events.ClientReady, async (readyClient) => {
   );
 
   // Re-open sessions for users currently in VCs.
+  // Mirrors the VoiceStateUpdate join handler: only open sessions for channels
+  // inside the guild's configured tracked category (if one is set).
   for (const guild of readyClient.guilds.cache.values()) {
+    let trackedCategoryId: string | null;
+    try {
+      trackedCategoryId = await getTrackedVcCategoryId(guild.id);
+    } catch (err) {
+      logger.error(`[vc] startup: getTrackedVcCategoryId error guildId=${guild.id}`, err);
+      continue; // fail closed — skip this guild rather than tracking every channel
+    }
     for (const channel of guild.channels.cache.values()) {
       if (channel.type !== ChannelType.GuildVoice) continue;
+      const channelParentId = channel.parentId ?? null;
+      // Skip channels that fall outside the configured tracked category.
+      if (trackedCategoryId !== null && channelParentId !== trackedCategoryId) continue;
       for (const [userId] of channel.members) {
         await openSession(guild.id, userId, channel.id).catch(() => {});
       }
