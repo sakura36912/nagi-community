@@ -376,6 +376,8 @@ export const evalsheetCommand = {
 
       const settings = await getEvalSheetSettings(interaction.guildId);
 
+      const components = buildNameboardComponents(settings?.nameboardUrl ?? null);
+
       for (const sheet of targets) {
         try {
           // sheet.messageId stores the forum thread ID (thread.id).
@@ -392,37 +394,8 @@ export const evalsheetCommand = {
             .catch(() => null);
           if (!message) { failed++; continue; }
 
-          const targetUser = await interaction.client.users
-            .fetch(sheet.userId)
-            .catch(() => null);
-          if (!targetUser) { failed++; continue; }
-
-          let displayName = targetUser.displayName;
-          let member: GuildMember | null = null;
-          try {
-            member = await interaction.guild!.members.fetch(sheet.userId).catch(() => null);
-            if (member) displayName = member.displayName;
-          } catch { /* fallback */ }
-
-          const [vcSeconds, selfIntro] = await Promise.all([
-            getSheetVcSeconds(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
-            findSelfIntro(interaction.guild!, sheet.userId, settings?.rosterCategoryId ?? null),
-          ]);
-
-          const embed = buildSheetEmbed({
-            targetUser,
-            member,
-            displayName,
-            startDate: sheet.startDate,
-            endDate: sheet.endDate,
-            vcSeconds,
-            nameboardUrl: settings?.nameboardUrl ?? null,
-            selfIntro,
-            createdByLabel: "アバター一括更新",
-            guildIconUrl: interaction.guild?.iconURL() ?? null,
-          });
-
-          await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl ?? null) });
+          // components だけ追加（embed の内容はそのまま維持）
+          await message.edit({ components });
           updated++;
         } catch {
           failed++;
