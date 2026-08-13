@@ -61,6 +61,8 @@ interface BJGame {
    * ヒットのたびに Storage を叩かず、ここから読む。
    */
   cardBuffers: Map<string, Buffer>;
+  /** true の間はボタン操作を受け付けない（ヒット処理中の二重押し防止） */
+  processing: boolean;
 }
 
 type Outcome = "blackjack" | "win" | "push" | "lose";
@@ -500,10 +502,20 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     return;
   }
 
+  // ヒット処理中の二重押しを無視
+  if (game.processing) {
+    await interaction.deferUpdate();
+    return;
+  }
+
   await interaction.deferUpdate();
   const action = interaction.customId.slice(BJ_PREFIX.length);
 
   if (action === "hit") {
+    // 処理中フラグを立てて即 Map に反映（二重押し防止）
+    game.processing = true;
+    activeGames.set(key, game);
+
     // 現在の手札画像を維持したまま「更新中」を表示
     const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
     await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
@@ -513,12 +525,14 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     game.deck = newDeck;
     // 新しく引いたカード1枚のみ追加取得（既存カードはキャッシュ済み）
     await cacheCardBuffer(card, game.cardPaths, game.cardBuffers);
-    activeGames.set(key, game);
 
     if (isBust(game.playerHand) || total(game.playerHand) === 21) {
       await finishGame(interaction, dealerPlay(game));
       return;
     }
+
+    game.processing = false;
+    activeGames.set(key, game);
 
     const { embeds, files } = await buildGameEmbed(game, true);
     await interaction.editReply({ content: "", embeds, files, components: [buildButtons(false)] });
@@ -589,7 +603,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     guildId, userId, bet, playerHand, dealerHand, deck,
     doubled: false, currencyName: settings.currencyName,
     balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
-    suitEmojis, cardPaths, cardBuffers,
+    suitEmojis, cardPaths, cardBuffers, processing: false,
   };
 
   if (isBlackjack(playerHand)) {
