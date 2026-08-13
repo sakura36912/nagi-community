@@ -33,6 +33,7 @@ import {
   getTrackedVcCategoryId,
 } from "./lib/community.js";
 import { resolveIsExile } from "./lib/vc-exile.js";
+import { handleVoiceStateUpdate } from "./lib/vc-session-handler.js";
 import { runPerGuildVcPrune, runOrphanVcPrune } from "./lib/vc-prune-scheduler.js";
 import { awardVcTime, awardEventParticipation, runRoleTenureBatch } from "./lib/points.js";
 import { getPreban } from "@workspace/db";
@@ -558,33 +559,14 @@ client.on(Events.GuildMemberRemove, async (member) => {
 // ─── VoiceStateUpdate ────────────────────────────────────────────────────────
 
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-  const guildId = newState.guild.id;
-  const userId = newState.id;
-
-  const oldChannelId = oldState.channelId;
-  const newChannelId = newState.channelId;
-
-  // Nothing VC-related changed (mute/deaf/etc.)
-  if (oldChannelId === newChannelId) return;
-
-  // ── VC Session tracking ───────────────────────────────────────────────────
-  if (oldChannelId) {
-    const duration = await closeSessionAndGetDuration(guildId, userId).catch((err) => {
-      logger.error(`[vc] closeSession error user=${userId}`, err);
-      return null;
-    });
-    if (duration !== null && duration > 0) {
-      awardVcTime(guildId, userId, duration).catch((err) =>
-        logger.error(`[point] awardVcTime error user=${userId}`, err),
-      );
-    }
-  }
-
-  if (newChannelId) {
-    const channelParentId = newState.channel?.parentId ?? null;
-    const isExile = resolveIsExile(newState.member);
-    await openVcSessionIfTracked(guildId, userId, newChannelId, channelParentId, isExile);
-  }
+  await handleVoiceStateUpdate({
+    guildId: newState.guild.id,
+    userId: newState.id,
+    oldChannelId: oldState.channelId,
+    newChannelId: newState.channelId,
+    channelParentId: newState.channel?.parentId ?? null,
+    member: newState.member,
+  });
 });
 
 // ─── Nameboard self-intro lookup ─────────────────────────────────────────────
