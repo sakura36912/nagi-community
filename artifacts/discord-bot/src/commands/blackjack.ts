@@ -445,11 +445,12 @@ function resolveOutcome(game: BJGame): { outcome: Outcome; netDelta: number } {
   const pBJ = isBlackjack(game.playerHand) && !game.doubled;
   const dBJ = isBlackjack(game.dealerHand);
 
-  if (pBJ && dBJ)                                         return { outcome: "push",      netDelta: 0 };
-  if (pBJ)                                                return { outcome: "blackjack",  netDelta: Math.floor(game.bet * 1.5) };
-  if (isBust(game.playerHand))                            return { outcome: "lose",       netDelta: -game.bet };
-  if (dBJ || isBust(game.dealerHand) || pTotal > dTotal) return { outcome: "win",        netDelta: game.bet };
-  if (pTotal === dTotal)                                  return { outcome: "push",       netDelta: 0 };
+  if (pBJ && dBJ)                                return { outcome: "push",      netDelta: 0 };
+  if (pBJ)                                       return { outcome: "blackjack",  netDelta: Math.floor(game.bet * 1.5) };
+  if (dBJ)                                       return { outcome: "lose",       netDelta: -game.bet };
+  if (isBust(game.playerHand))                   return { outcome: "lose",       netDelta: -game.bet };
+  if (isBust(game.dealerHand) || pTotal > dTotal) return { outcome: "win",       netDelta: game.bet };
+  if (pTotal === dTotal)                          return { outcome: "push",       netDelta: 0 };
   return { outcome: "lose", netDelta: -game.bet };
 }
 
