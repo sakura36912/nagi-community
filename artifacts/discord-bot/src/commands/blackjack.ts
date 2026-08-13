@@ -272,10 +272,12 @@ async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWit
     )
     .setFooter({ text: "BJ=1.5倍 / 通常勝利=1倍 / 引き分け=返金 | 5分でタイムアウト" });
 
-  const embeds: EmbedBuilder[] = [mainEmbed];
+  // カード画像をメイン embed の前（上部）に配置する
+  const embeds: EmbedBuilder[] = [];
   const files: AttachmentBuilder[] = [];
   appendCardEmbeds(embeds, files, playerImgs);
   appendCardEmbeds(embeds, files, dealerImgs);
+  embeds.push(mainEmbed);
 
   return { embeds, files };
 }
@@ -319,10 +321,12 @@ async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWi
     )
     .setTimestamp();
 
-  const embeds: EmbedBuilder[] = [mainEmbed];
+  // カード画像をメイン embed の前（上部）に配置する
+  const embeds: EmbedBuilder[] = [];
   const files: AttachmentBuilder[] = [];
   appendCardEmbeds(embeds, files, playerImgs);
   appendCardEmbeds(embeds, files, dealerImgs);
+  embeds.push(mainEmbed);
 
   return { embeds, files };
 }
