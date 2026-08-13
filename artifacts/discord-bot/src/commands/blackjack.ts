@@ -504,6 +504,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
   const action = interaction.customId.slice(BJ_PREFIX.length);
 
   if (action === "hit") {
+    await interaction.editReply({ content: "🔄 更新中...", embeds: [], files: [], components: [] });
+
     const [card, newDeck] = draw(game.deck);
     game.playerHand = [...game.playerHand, card];
     game.deck = newDeck;
@@ -517,7 +519,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     }
 
     const { embeds, files } = await buildGameEmbed(game, true);
-    await interaction.editReply({ embeds, files, components: [buildButtons(false)] });
+    await interaction.editReply({ content: "", embeds, files, components: [buildButtons(false)] });
 
   } else if (action === "stand") {
     await finishGame(interaction, dealerPlay(game));
