@@ -308,7 +308,7 @@ function buildResult(
     .setDescription(resultText)
     .setColor(color);
 
-  if (thumbnailUrl) embed.setThumbnail(thumbnailUrl);
+  if (thumbnailUrl) embed.setImage(thumbnailUrl);
   return { content, embed };
 }
 
