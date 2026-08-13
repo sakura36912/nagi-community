@@ -1,6 +1,7 @@
 import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayIntentBits, GuildMember, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
+import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
 import { handlePokerButton, POKER_PREFIX } from "./commands/poker";
 import { handleRouletteInteraction, ROULETTE_PREFIX } from "./commands/roulette";
 import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
@@ -1488,6 +1489,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(BJ_PREFIX)) {
       await handleBlackjackButton(interaction);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(HL_PREFIX)) {
+      await handleHighlowButton(interaction);
       return;
     }
 

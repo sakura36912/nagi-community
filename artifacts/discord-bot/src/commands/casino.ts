@@ -24,7 +24,7 @@ const COLOR_NEUTRAL = 0x5865f2;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type GameKey = "blackjack" | "poker" | "roulette" | "slot";
+type GameKey = "blackjack" | "poker" | "roulette" | "slot" | "highlow";
 
 interface GameStats {
   plays:        number;
@@ -74,6 +74,7 @@ async function fetchCasinoStats(
           sql`${transactionsTable.reason} LIKE 'ポーカー%'`,
           sql`${transactionsTable.reason} LIKE 'ルーレット%'`,
           sql`${transactionsTable.reason} LIKE 'スロット%'`,
+          sql`${transactionsTable.reason} LIKE 'ハイアンドロー%'`,
         ),
       ),
     );
@@ -87,6 +88,7 @@ async function fetchCasinoStats(
     poker:     empty(),
     roulette:  empty(),
     slot:      empty(),
+    highlow:   empty(),
   };
 
   for (const row of rows) {
@@ -95,10 +97,11 @@ async function fetchCasinoStats(
     const isWin  = amount > 0;
 
     let key: GameKey;
-    if      (row.reason.startsWith("BJ"))       key = "blackjack";
-    else if (row.reason.startsWith("ポーカー"))   key = "poker";
-    else if (row.reason.startsWith("ルーレット")) key = "roulette";
-    else if (row.reason.startsWith("スロット"))   key = "slot";
+    if      (row.reason.startsWith("BJ"))           key = "blackjack";
+    else if (row.reason.startsWith("ポーカー"))       key = "poker";
+    else if (row.reason.startsWith("ルーレット"))     key = "roulette";
+    else if (row.reason.startsWith("スロット"))       key = "slot";
+    else if (row.reason.startsWith("ハイアンドロー")) key = "highlow";
     else continue;
 
     // ゲームごとの ledger 仕様の差異を吸収する
@@ -215,6 +218,7 @@ async function handleStats(interaction: ChatInputCommandInteraction): Promise<vo
     poker:     "🎴 ポーカー",
     roulette:  "🎡 ルーレット",
     slot:      "🎰 スロット",
+    highlow:   "🃏 ハイアンドロー",
   };
 
   const embed = new EmbedBuilder()
