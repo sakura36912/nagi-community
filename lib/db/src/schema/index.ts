@@ -28,6 +28,7 @@ export * from "./triggers";
 export * from "./vcHub";
 export * from "./points";
 export * from "./guide";
+export * from "./blackjack";
 export * from "./sticky";
 export * from "./timedRoleGrants";
 
