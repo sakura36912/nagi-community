@@ -1253,9 +1253,13 @@ export async function openVcSessionIfTracked(
   }
   const isTracked = !trackedCategoryId || channelParentId === trackedCategoryId;
   if (isTracked) {
-    await deps.openSession(guildId, userId, channelId, isExile).catch((err) =>
-      logger.error(`[vc] openSession error user=${userId}`, err),
-    );
+    const session = await deps.openSession(guildId, userId, channelId, isExile).catch((err: unknown) => {
+      logger.error(`[vc] openSession error user=${userId}`, err);
+      return null;
+    });
+    if (session === null) {
+      logger.warn(`[vc] openSession returned null user=${userId} guildId=${guildId}; user may be opted out or DB unavailable`);
+    }
   }
 }
 
