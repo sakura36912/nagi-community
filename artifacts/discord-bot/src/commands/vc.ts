@@ -596,6 +596,10 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
     // client.user.id は常に利用可能（guild.members.me はキャッシュ未取得の場合がある）
     const botId = newState.client.user?.id ?? guild.members.me?.id;
 
+    // 酒場ハブかどうかを事前判定（権限上書きの要否・パネル送信の要否に使用）
+    const tavernNames = await getTavernChannelNames(guild.id);
+    const isTavern = tavernNames.has(hub.nameTemplate);
+
     // チャンネル作成時に permissionOverwrites を指定しないことでカテゴリの権限が
     // 完全継承（同期）される。@everyone への上書きを含めると Discord が「非同期」状態に
     // なり、カテゴリの他のロール設定（島民.ViewChannel: ALLOW など）が引き継がれなくなる。
@@ -606,10 +610,10 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
     });
 
-    // Bot 自身の ViewChannel/SendMessages/AttachFiles を明示的に許可する。
-    // 作成後に上書きを追加することでカテゴリ同期は維持しつつ、カテゴリ側の
-    // 権限設定に関わらず Bot がパネルを確実に送信・閲覧できることを保証する。
-    if (botId) {
+    // 酒場VC はパネルを送らないため bot の権限上書きも不要。
+    // 上書きを追加すると Discord がカテゴリと「非同期」と判定してしまうため、
+    // 非酒場VCのみ bot の ViewChannel/SendMessages/AttachFiles を明示的に付与する。
+    if (botId && !isTavern) {
       await newVc.permissionOverwrites.edit(botId, {
         ViewChannel: true,
         SendMessages: true,
@@ -619,12 +623,6 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
 
-    // 酒場ハブから生成されたチャンネルを永続ログに記録（過去データ検索に使用）
-    // 酒場チャンネル名は chestTracker.ts の getTavernChannelNames で一元管理（DB設定対応）
-    const tavernNames = await getTavernChannelNames(guild.id);
-
-    // 酒場以外のハブにのみコントロールパネルを投稿
-    const isTavern = tavernNames.has(hub.nameTemplate);
     logger.info(`[vcHub] panel check: channel=${newVc.id} template="${hub.nameTemplate}" isTavern=${isTavern} botId=${botId ?? "none"}`);
     if (!isTavern) {
       await newVc
@@ -632,6 +630,7 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
         .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
       logger.info(`[vcHub] panel sent to channel=${newVc.id}`);
     }
+    // 酒場ハブから生成されたチャンネルを永続ログに記録（過去データ検索に使用）
     if (isTavern) {
       await db.insert(communityTavernChannelsTable)
         .values({ guildId: guild.id, channelId: newVc.id, hubName: hub.nameTemplate })
