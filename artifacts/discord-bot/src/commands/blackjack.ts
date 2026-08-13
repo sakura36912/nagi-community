@@ -146,7 +146,7 @@ async function mergeHorizontal(buffers: Buffer[]): Promise<Buffer> {
   );
   const resized  = images.map((img) => {
     const ratio = targetH / img.bitmap.height;
-    return img.resize(Math.round(img.bitmap.width * ratio), targetH);
+    return img.resize(Math.round(img.bitmap.width * ratio), targetH, Jimp.RESIZE_BICUBIC);
   });
   const totalW = resized.reduce((sum, img) => sum + img.bitmap.width, 0);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
