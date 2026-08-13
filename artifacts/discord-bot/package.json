@@ -15,7 +15,8 @@
     "@replit/object-storage": "^1.0.0",
     "@workspace/db": "workspace:*",
     "discord.js": "^14.16.3",
-    "drizzle-orm": "catalog:"
+    "drizzle-orm": "catalog:",
+    "jimp": "0.22.12"
   },
   "devDependencies": {
     "@types/node": "catalog:",

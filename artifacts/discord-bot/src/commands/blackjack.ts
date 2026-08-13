@@ -8,6 +8,7 @@
  *   config card   : カード画像を登録する（管理者専用）
  */
 
+import Jimp from "jimp";
 import {
   ActionRowBuilder,
   AttachmentBuilder,
@@ -131,6 +132,52 @@ async function fetchHandImages(
   return Promise.all(hand.map((card, i) => fetchOneCardImage(card, cardPaths, `${prefix}_${i}`)));
 }
 
+/**
+ * 複数の画像バッファを縦横比を保ったまま同じ高さに揃え、横一列に合成する。
+ */
+async function mergeHorizontal(buffers: Buffer[]): Promise<Buffer> {
+  const images = await Promise.all(buffers.map((b) => Jimp.read(b)));
+  const targetH = Math.max(...images.map((img) => img.bitmap.height));
+  const resized  = images.map((img) => {
+    const ratio = targetH / img.bitmap.height;
+    return img.resize(Math.round(img.bitmap.width * ratio), targetH);
+  });
+  const totalW = resized.reduce((sum, img) => sum + img.bitmap.width, 0);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const canvas  = new (Jimp as any)(totalW, targetH, 0x00000000);
+  let x = 0;
+  for (const img of resized) { canvas.composite(img, x, 0); x += img.bitmap.width; }
+  return canvas.getBufferAsync(Jimp.MIME_PNG);
+}
+
+/**
+ * 手札のカード画像を横一列に合成し、1枚の AttachmentBuilder を返す。
+ * 画像が1枚も登録されていない場合は null を返す。
+ */
+async function buildHandStrip(
+  hand: Card[],
+  cardPaths: Map<string, string>,
+  filename: string,
+): Promise<CardImage | null> {
+  const buffers = (
+    await Promise.all(
+      hand.map(async (card) => {
+        const key  = `${card.rank}:${SUIT_KEY[card.suit]}`;
+        const path = cardPaths.get(key);
+        return path ? downloadImageAsBuffer(path) : null;
+      }),
+    )
+  ).filter((b): b is Buffer => b !== null);
+
+  if (buffers.length === 0) return null;
+  try {
+    const merged = await mergeHorizontal(buffers);
+    return { attachment: new AttachmentBuilder(merged, { name: filename }), filename };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Deck helpers ─────────────────────────────────────────────────────────────
 
 function buildShoe(decks = 6): Card[] {
@@ -225,44 +272,35 @@ function appendCardEmbeds(
 
 /**
  * ゲーム中の embed を生成する。
- * 画像が登録されているカードは embed 画像として、未登録のカードはテキストで表示する。
+ * 手札画像が登録されていれば横一列に合成して embed 上部に表示する。
+ * 未登録のカードはテキストにフォールバック。
  */
 async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWithFiles> {
   const pTotal = total(game.playerHand);
-  const dTotal = total(game.dealerHand);
   const dKnown = total([game.dealerHand[0]!]);
-  const e = game.suitEmojis;
+  const e      = game.suitEmojis;
 
-  // カード画像を並行取得
   const dealerVisible = hideDealer ? [game.dealerHand[0]!] : game.dealerHand;
-  const [playerImgs, dealerImgs] = await Promise.all([
-    fetchHandImages(game.playerHand, game.cardPaths, "p"),
-    fetchHandImages(dealerVisible, game.cardPaths, "d"),
+
+  // プレイヤー・ディーラーの手札ストリップ画像を並行生成
+  const [playerStrip, dealerStrip] = await Promise.all([
+    buildHandStrip(game.playerHand, game.cardPaths, "player.png"),
+    buildHandStrip(dealerVisible,   game.cardPaths, "dealer.png"),
   ]);
 
-  // 画像のないカードはテキストにフォールバック
-  const playerCardText = game.playerHand
-    .map((c, i) => playerImgs[i] ? null : formatCard(c, e))
-    .filter(Boolean)
-    .join(" ");
-  const dealerCardText = dealerVisible
-    .map((c, i) => dealerImgs[i] ? null : formatCard(c, e))
-    .filter(Boolean)
-    .join(" ");
-
-  const playerValue = playerCardText
-    ? `${playerCardText}　**${pTotal}**`
-    : `**${pTotal}**`;
+  const playerValue = playerStrip
+    ? `**${pTotal}**`
+    : `${formatHand(game.playerHand, e)}　**${pTotal}**`;
   const dealerValue = hideDealer
-    ? (dealerCardText ? `${dealerCardText} 🎴　（${dKnown}+?）` : `🎴　（${dKnown}+?）`)
-    : (dealerCardText ? `${dealerCardText}　**${dTotal}**` : `**${dTotal}**`);
+    ? (dealerStrip ? `🎴　（${dKnown}+?）` : `${formatHand(game.dealerHand, e, true)}　（${dKnown}+?）`)
+    : (dealerStrip ? `**${total(game.dealerHand)}**` : `${formatHand(game.dealerHand, e)}　**${total(game.dealerHand)}**`);
 
   const mainEmbed = new EmbedBuilder()
     .setTitle("🃏 ブラックジャック")
     .setColor(COLOR_NEUTRAL)
     .addFields(
-      { name: `あなたの手札`, value: playerValue },
-      { name: `ディーラーの手札`, value: dealerValue },
+      { name: "あなたの手札", value: playerValue },
+      { name: "ディーラーの手札", value: dealerValue },
       {
         name: "賭け金",
         value: `**${game.bet.toLocaleString()}** ${game.currencyName}${game.doubled ? "（ダブルダウン）" : ""}`,
@@ -272,11 +310,18 @@ async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWit
     )
     .setFooter({ text: "BJ=1.5倍 / 通常勝利=1倍 / 引き分け=返金 | 5分でタイムアウト" });
 
-  // カード画像をメイン embed の前（上部）に配置する
+  // カード画像（横一列合成）をメイン embed の前（上部）に配置
   const embeds: EmbedBuilder[] = [];
   const files: AttachmentBuilder[] = [];
-  appendCardEmbeds(embeds, files, playerImgs);
-  appendCardEmbeds(embeds, files, dealerImgs);
+
+  if (playerStrip) {
+    embeds.push(new EmbedBuilder().setURL(GALLERY_URL).setImage(`attachment://player.png`));
+    files.push(playerStrip.attachment);
+  }
+  if (dealerStrip) {
+    embeds.push(new EmbedBuilder().setURL(GALLERY_URL).setImage(`attachment://dealer.png`));
+    files.push(dealerStrip.attachment);
+  }
   embeds.push(mainEmbed);
 
   return { embeds, files };
@@ -297,35 +342,41 @@ async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWi
   };
   const { netDelta } = resolveOutcome(game);
   const sign = netDelta > 0 ? "+" : "";
-  const e = game.suitEmojis;
+  const e    = game.suitEmojis;
 
-  const [playerImgs, dealerImgs] = await Promise.all([
-    fetchHandImages(game.playerHand, game.cardPaths, "p"),
-    fetchHandImages(game.dealerHand, game.cardPaths, "d"),
+  const [playerStrip, dealerStrip] = await Promise.all([
+    buildHandStrip(game.playerHand, game.cardPaths, "player.png"),
+    buildHandStrip(game.dealerHand, game.cardPaths, "dealer.png"),
   ]);
 
-  const playerCardText = game.playerHand
-    .map((c, i) => playerImgs[i] ? null : formatCard(c, e))
-    .filter(Boolean).join(" ");
-  const dealerCardText = game.dealerHand
-    .map((c, i) => dealerImgs[i] ? null : formatCard(c, e))
-    .filter(Boolean).join(" ");
+  const playerValue = playerStrip
+    ? `**${total(game.playerHand)}**`
+    : `${formatHand(game.playerHand, e)}　**${total(game.playerHand)}**`;
+  const dealerValue = dealerStrip
+    ? `**${total(game.dealerHand)}**`
+    : `${formatHand(game.dealerHand, e)}　**${total(game.dealerHand)}**`;
 
   const mainEmbed = new EmbedBuilder()
     .setTitle(`🃏 ブラックジャック — ${TITLE[outcome]}`)
     .setColor(COLOR[outcome])
     .addFields(
-      { name: "あなたの手札", value: playerCardText ? `${playerCardText}　**${total(game.playerHand)}**` : `**${total(game.playerHand)}**` },
-      { name: "ディーラーの手札", value: dealerCardText ? `${dealerCardText}　**${total(game.dealerHand)}**` : `**${total(game.dealerHand)}**` },
+      { name: "あなたの手札",     value: playerValue },
+      { name: "ディーラーの手札", value: dealerValue },
       { name: "収支", value: `${sign}${netDelta.toLocaleString()} ${game.currencyName}`, inline: true },
     )
     .setTimestamp();
 
-  // カード画像をメイン embed の前（上部）に配置する
   const embeds: EmbedBuilder[] = [];
   const files: AttachmentBuilder[] = [];
-  appendCardEmbeds(embeds, files, playerImgs);
-  appendCardEmbeds(embeds, files, dealerImgs);
+
+  if (playerStrip) {
+    embeds.push(new EmbedBuilder().setURL(GALLERY_URL).setImage(`attachment://player.png`));
+    files.push(playerStrip.attachment);
+  }
+  if (dealerStrip) {
+    embeds.push(new EmbedBuilder().setURL(GALLERY_URL).setImage(`attachment://dealer.png`));
+    files.push(dealerStrip.attachment);
+  }
   embeds.push(mainEmbed);
 
   return { embeds, files };
