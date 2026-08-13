@@ -1,46 +1,54 @@
 /**
- * Replit Object Storage (GCS) への画像アップロードユーティリティ。
- * Discord の添付ファイル URL から画像をダウンロードして GCS に保存し、公開 URL を返す。
+ * Replit Object Storage への画像アップロード/ダウンロードユーティリティ。
+ * @replit/object-storage SDK を使用（BOT プロセスで認証なしに動作）。
  */
-import { Storage } from "@google-cloud/storage";
+import { Client } from "@replit/object-storage";
 
-const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
-if (!bucketId) throw new Error("DEFAULT_OBJECT_STORAGE_BUCKET_ID is not set");
-
-// Replit sidecar 認証で自動的に認証される
-const storage = new Storage();
-const bucket = storage.bucket(bucketId);
+// 遅延初期化 — モジュール読み込み時ではなく最初の使用時に生成
+let _client: Client | null = null;
+function getClient(): Client {
+  if (!_client) {
+    const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
+    if (!bucketId) throw new Error("DEFAULT_OBJECT_STORAGE_BUCKET_ID が設定されていません");
+    _client = new Client({ bucketId });
+  }
+  return _client;
+}
 
 /**
- * URL から画像をダウンロードして GCS にアップロードし、公開 URL を返す。
- * @param sourceUrl  ダウンロード元 URL（Discord CDN など）
- * @param gcsPath    GCS 内のオブジェクトパス（例: "bj-cards/guild/spade/A.png"）
- * @param contentType MIME タイプ（例: "image/png"）
+ * URL から画像をダウンロードして Object Storage にアップロードする。
+ * @returns 保存したオブジェクト名（path）
  */
 export async function uploadImageFromUrl(
   sourceUrl: string,
-  gcsPath: string,
-  contentType: string,
+  objectName: string,
+  _contentType?: string,
 ): Promise<string> {
   const response = await fetch(sourceUrl);
   if (!response.ok) {
     throw new Error(`画像のダウンロードに失敗しました: HTTP ${response.status}`);
   }
   const buffer = Buffer.from(await response.arrayBuffer());
-  const file = bucket.file(gcsPath);
-  await file.save(buffer, { contentType, resumable: false });
-  await file.makePublic();
-  return `https://storage.googleapis.com/${bucketId}/${gcsPath}`;
+  const result = await getClient().uploadFromBytes(objectName, buffer);
+  if (!result.ok) {
+    throw new Error(`アップロードに失敗しました: ${result.error.message}`);
+  }
+  return objectName;
 }
 
 /**
- * GCS のオブジェクトを削除する（画像の上書き前のクリーンアップ用）。
- * 存在しない場合はエラーを無視する。
+ * Object Storage から画像を Buffer としてダウンロードする。
+ * 存在しない場合は null を返す。
  */
-export async function deleteGcsObject(gcsPath: string): Promise<void> {
-  try {
-    await bucket.file(gcsPath).delete();
-  } catch {
-    // 存在しない場合は無視
-  }
+export async function downloadImageAsBuffer(objectName: string): Promise<Buffer | null> {
+  const result = await getClient().downloadAsBytes(objectName);
+  if (!result.ok) return null;
+  return result.value[0] ?? null;
+}
+
+/**
+ * Object Storage のオブジェクトを削除する（存在しない場合は無視）。
+ */
+export async function deleteGcsObject(objectName: string): Promise<void> {
+  await getClient().delete(objectName, { ignoreNotFound: true });
 }
