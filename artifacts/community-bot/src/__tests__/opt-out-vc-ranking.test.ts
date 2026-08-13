@@ -90,7 +90,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
-import { getVcRanking, openSession, setVcPrivacyOptOut, setVcGlobalPrivacyOptOut } from "../lib/community.js";
+import { getVcRanking, openSession, setVcPrivacyOptOut, setVcGlobalPrivacyOptOut, isVcTrackingOptedOut } from "../lib/community.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const GUILD = "guild-001";
@@ -886,5 +886,142 @@ describe("openSession – returns null when privacy table query rejects", () => 
     await openSession(GUILD, "user-db-error", "channel-001");
 
     expect(insertSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ─── isVcTrackingOptedOut – parallelism invariant ─────────────────────────────
+
+describe("isVcTrackingOptedOut – both DB queries are issued in parallel", () => {
+  /**
+   * isVcTrackingOptedOut uses Promise.all to launch the global and per-guild
+   * privacy queries concurrently.  If a future refactor accidentally serialises
+   * them (await query1; await query2) the second db.select() call would not
+   * happen until the first promise resolves.
+   *
+   * Strategy: each mock db.select() returns a promise that does NOT resolve
+   * until we explicitly trigger it.  After starting isVcTrackingOptedOut (but
+   * before resolving either promise) we assert that db.select() has already
+   * been called twice — proving both queries were launched before either
+   * result arrived.  We also record the call count inside each resolution
+   * callback as a belt-and-suspenders check.
+   */
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Restore default select so unrelated describe blocks are unaffected.
+    mocks.select.mockImplementation(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([])),
+      })),
+    }));
+  });
+
+  it("issues both db.select() calls before either promise resolves", async () => {
+    // Deferred promises — neither resolves until we call the resolver below.
+    let resolveGlobal!: (rows: unknown[]) => void;
+    let resolveGuild!: (rows: unknown[]) => void;
+    const globalPromise = new Promise<unknown[]>((res) => {
+      resolveGlobal = res;
+    });
+    const guildPromise = new Promise<unknown[]>((res) => {
+      resolveGuild = res;
+    });
+
+    // Record how many db.select() calls had been made at the moment each
+    // individual promise resolves — both must see a count of 2.
+    let selectCountAtGlobalResolve = 0;
+    let selectCountAtGuildResolve = 0;
+
+    // First db.select() → global privacy table
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() =>
+          globalPromise.then((rows) => {
+            selectCountAtGlobalResolve = mocks.select.mock.calls.length;
+            return rows;
+          }),
+        ),
+      })),
+    }));
+    // Second db.select() → per-guild privacy table
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() =>
+          guildPromise.then((rows) => {
+            selectCountAtGuildResolve = mocks.select.mock.calls.length;
+            return rows;
+          }),
+        ),
+      })),
+    }));
+
+    // Start the function but do NOT await yet — the deferred promises keep it
+    // suspended inside Promise.all.
+    const resultPromise = isVcTrackingOptedOut(GUILD, "user-parallel");
+
+    // Flush the microtask queue so Promise.all has time to issue both selects.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // ── Core assertion ──────────────────────────────────────────────────────
+    // Both db.select() calls must already be in-flight before either resolves.
+    // A serial implementation would show count === 1 here because the second
+    // select is not started until the first await returns.
+    expect(mocks.select).toHaveBeenCalledTimes(2);
+
+    // Unblock both deferred promises and let the function finish.
+    resolveGlobal([]);
+    resolveGuild([]);
+    await resultPromise;
+
+    // Belt-and-suspenders: at the moment each promise resolved, both selects
+    // had already been called — confirming true parallelism not just fast serial.
+    expect(selectCountAtGlobalResolve).toBe(2);
+    expect(selectCountAtGuildResolve).toBe(2);
+  });
+
+  it("returns false when both privacy rows are absent (no opt-out)", async () => {
+    // Default mock returns [] for both selects → neither row has optedOut: true.
+    const result = await isVcTrackingOptedOut(GUILD, "user-not-opted-out");
+
+    expect(result).toBe(false);
+  });
+
+  it("returns true when the global row has optedOut: true", async () => {
+    // First select (global table) returns an opted-out row.
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([{ optedOut: true }])),
+      })),
+    }));
+    // Second select (guild table) returns nothing — global flag is enough.
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([])),
+      })),
+    }));
+
+    const result = await isVcTrackingOptedOut(GUILD, "user-global-opted-out");
+
+    expect(result).toBe(true);
+  });
+
+  it("returns true when only the per-guild row has optedOut: true", async () => {
+    // First select (global table) returns nothing.
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([])),
+      })),
+    }));
+    // Second select (guild table) returns an opted-out row.
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([{ optedOut: true }])),
+      })),
+    }));
+
+    const result = await isVcTrackingOptedOut(GUILD, "user-guild-opted-out");
+
+    expect(result).toBe(true);
   });
 });
