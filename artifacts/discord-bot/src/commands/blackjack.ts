@@ -491,9 +491,12 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   if (!game || game.expiresAt < Date.now()) {
     activeGames.delete(key);
-    await interaction.reply({
-      content: "ゲームが見つかりません（タイムアウトの可能性あり）。`/blackjack play` で新しいゲームを始めてください。",
-      flags: MessageFlags.Ephemeral,
+    // ボタンを消してタイムアウトを明示（ephemeral だとボタンが残ったままになるため update を使用）
+    await interaction.update({
+      content: "⏱️ ゲームがタイムアウトまたはリセットされました。`/blackjack play` で新しいゲームを始めてください。",
+      embeds: [],
+      files: [],
+      components: [],
     });
     return;
   }
