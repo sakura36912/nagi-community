@@ -210,6 +210,17 @@ describe("setVcSessionRetentionDays", () => {
     expect(conflictArg.set).not.toHaveProperty("period");
   });
 
+  it("when called with null, conflict set has vcSessionRetentionDays=null and omits channelId and period", async () => {
+    await setVcSessionRetentionDays("guild-1", null);
+
+    const [conflictArg] = mocks.onConflictDoUpdate.mock.calls[0] as unknown as [
+      { target: unknown; set: Record<string, unknown> }
+    ];
+    expect(conflictArg.set.vcSessionRetentionDays).toBeNull();
+    expect(conflictArg.set).not.toHaveProperty("channelId");
+    expect(conflictArg.set).not.toHaveProperty("period");
+  });
+
   // (a) Round-trip: after set(90), a subsequent get reads back 90 (not 180)
   it("round-trip: getVcSessionRetentionDays returns the value that was set, not the 180-day default", async () => {
     // First wire insert chain for the set call
