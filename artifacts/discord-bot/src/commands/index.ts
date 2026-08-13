@@ -1948,7 +1948,7 @@ function rollChest(): ChestResult {
   return "role_limited";                  // 👑  0.5%
 }
 
-const CHEST_ROLE_LIMITED = "プレオープン限定";
+const CHEST_ROLE_LIMITED = "永久ロール";
 
 /** 指定名のロールをメンバーに付与する。ロールが存在しない場合は false を返す。 */
 async function grantRoleByName(guild: Guild, userId: string, roleName: string): Promise<boolean> {
@@ -2083,7 +2083,7 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   // ── ロール賞品 ─────────────────────────────────────────────────────────────
   const rolePrizes: Partial<Record<ChestResult, { roleName: string; label: string; emoji: string }>> = {
-    role_limited: { roleName: CHEST_ROLE_LIMITED, label: "👑 限定ロール", emoji: "👑" },
+    role_limited: { roleName: CHEST_ROLE_LIMITED, label: "👑 永久ロール", emoji: "👑" },
   };
 
   const rolePrize = rolePrizes[result];
