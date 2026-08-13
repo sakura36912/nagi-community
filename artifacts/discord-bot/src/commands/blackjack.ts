@@ -477,7 +477,7 @@ async function finishGame(
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
   await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
   const { embeds, files } = await buildResultEmbed(game, outcome);
-  await interaction.editReply({ embeds, files, components: [] });
+  await interaction.editReply({ content: "", embeds, files, components: [] });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
