@@ -198,7 +198,13 @@ async function creditAmount(guildId: string, userId: string, amount: number): Pr
 
 type EmbedWithFiles = { embeds: EmbedBuilder[]; files: AttachmentBuilder[] };
 
-/** Discord の embed 上限（1メッセージあたり最大 10）を超えないようカード embed を追加する */
+/**
+ * Discord の embed 上限（1メッセージあたり最大 10）を超えないようカード embed を追加する。
+ * 同じ url を持つ embed は Discord がギャラリー形式（格子）でグループ化するため、
+ * 画像を小さく横並びで表示できる。
+ */
+const GALLERY_URL = "https://discord.com";
+
 function appendCardEmbeds(
   embeds: EmbedBuilder[],
   files: AttachmentBuilder[],
@@ -208,7 +214,11 @@ function appendCardEmbeds(
   for (const img of images) {
     if (!img) continue;
     if (embeds.length >= maxEmbeds) break;
-    embeds.push(new EmbedBuilder().setImage(`attachment://${img.filename}`));
+    embeds.push(
+      new EmbedBuilder()
+        .setURL(GALLERY_URL)
+        .setImage(`attachment://${img.filename}`),
+    );
     files.push(img.attachment);
   }
 }
