@@ -77,18 +77,53 @@ export function buildSheetEmbed(opts: {
 }
 
 /**
- * 名簿URLがある場合にリンクボタンを含む ActionRow を返す。
- * ない場合は空配列を返す（components に展開して使う）。
+ * 名簿ボタン群を返す。
+ * - rosterCategoryId があれば、そのカテゴリー内の各テキストチャンネルへのリンクボタン（最大25個）を生成。
+ * - カテゴリーが未設定またはチャンネルが見つからない場合は nameboardUrl のボタンにフォールバック。
+ * - どちらも未設定なら空配列を返す。
  */
 export function buildNameboardComponents(
   nameboardUrl: string | null | undefined,
+  guild?: import("discord.js").Guild | null,
+  rosterCategoryId?: string | null,
 ): ActionRowBuilder<ButtonBuilder>[] {
-  if (!nameboardUrl) return [];
-  const button = new ButtonBuilder()
-    .setLabel("📋 名簿を見る")
-    .setStyle(ButtonStyle.Link)
-    .setURL(nameboardUrl);
-  return [new ActionRowBuilder<ButtonBuilder>().addComponents(button)];
+  const buttons: ButtonBuilder[] = [];
+
+  if (rosterCategoryId && guild) {
+    const channels = [...guild.channels.cache.values()]
+      .filter((c): c is import("discord.js").TextChannel =>
+        c.isTextBased() && "parentId" in c && c.parentId === rosterCategoryId,
+      )
+      .sort((a, b) => a.position - b.position)
+      .slice(0, 25);
+
+    for (const ch of channels) {
+      buttons.push(
+        new ButtonBuilder()
+          .setLabel(`#${ch.name}`)
+          .setStyle(ButtonStyle.Link)
+          .setURL(`https://discord.com/channels/${guild.id}/${ch.id}`),
+      );
+    }
+  }
+
+  if (buttons.length === 0 && nameboardUrl) {
+    buttons.push(
+      new ButtonBuilder()
+        .setLabel("📋 名簿を見る")
+        .setStyle(ButtonStyle.Link)
+        .setURL(nameboardUrl),
+    );
+  }
+
+  if (buttons.length === 0) return [];
+
+  // ActionRow 1つに最大 5 ボタン
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  for (let i = 0; i < buttons.length; i += 5) {
+    rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + 5)));
+  }
+  return rows;
 }
 
 /**
@@ -189,7 +224,7 @@ export async function applySheetEmbedUpdate(
       guildIconUrl: guild?.iconURL() ?? null,
     });
 
-    await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl) });
+    await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl, guild, settings?.rosterCategoryId) });
     logger.info(`[sheet] ✅ embed updated for user=${userId}`);
   } catch (err) {
     logger.error(`[sheet] Failed to refresh embed for user=${userId}`, err);
@@ -255,7 +290,7 @@ export async function refreshSheetEmbedForUser(
       guildIconUrl: guildForIcon?.iconURL() ?? null,
     });
 
-    await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl) });
+    await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl, guildForIcon, settings?.rosterCategoryId) });
     logger.info(`[sheet] ✅ embed refreshed for user=${userId} newName=${newDisplayName}`);
   } catch (err) {
     logger.error(`[sheet] refreshSheetEmbedForUser failed for user=${userId}`, err);

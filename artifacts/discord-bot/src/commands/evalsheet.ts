@@ -376,7 +376,7 @@ export const evalsheetCommand = {
 
       const settings = await getEvalSheetSettings(interaction.guildId);
 
-      const components = buildNameboardComponents(settings?.nameboardUrl ?? null);
+      const components = buildNameboardComponents(settings?.nameboardUrl ?? null, interaction.guild, settings?.rosterCategoryId ?? null);
 
       for (const sheet of targets) {
         try {
