@@ -504,7 +504,9 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
   const action = interaction.customId.slice(BJ_PREFIX.length);
 
   if (action === "hit") {
-    await interaction.editReply({ content: "🔄 更新中...", embeds: [], files: [], components: [] });
+    // 現在の手札画像を維持したまま「更新中」を表示
+    const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
+    await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
 
     const [card, newDeck] = draw(game.deck);
     game.playerHand = [...game.playerHand, card];
