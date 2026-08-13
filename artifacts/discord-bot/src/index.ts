@@ -133,7 +133,7 @@ import {
   countPastJoins,
   findWallet,
 } from "./lib/economy";
-import { getEvalSheetConfigsForRoles, getExpiredTimedRoleGrants, deleteTimedRoleGrant } from "@workspace/db";
+import { getEvalSheetConfigsForRoles, getExpiredTimedRoleGrants, deleteTimedRoleGrant, pool, checkSchemaDrift } from "@workspace/db";
 
 import { appendFileSync } from "fs";
 const DEBUG_LOG = "/tmp/bot-debug.log";
@@ -1629,6 +1629,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
   }
+});
+
+// Check for schema drift at startup. A missing column (e.g. after a merge
+// where drizzle-kit push was never run) causes cryptic runtime errors on every
+// query that touches the affected table. Logging a clear warning here makes the
+// root cause immediately visible in bot logs.
+checkSchemaDrift(pool, (msg) => logger.warn(msg)).then((result) => {
+  if (!result.ok) {
+    logger.warn(
+      "[schema-check] ⚠ The bot will continue, but queries against affected tables will fail. " +
+        "Fix: run `pnpm --filter @workspace/db run push-force` then restart the bot.",
+    );
+  }
+}).catch(() => {
+  // Never let a schema check failure block startup.
 });
 
 dlog("calling client.login()");

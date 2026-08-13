@@ -36,7 +36,7 @@ import { resolveIsExile } from "./lib/vc-exile.js";
 import { handleVoiceStateUpdate } from "./lib/vc-session-handler.js";
 import { runPerGuildVcPrune, runOrphanVcPrune } from "./lib/vc-prune-scheduler.js";
 import { awardVcTime, awardEventParticipation, runRoleTenureBatch } from "./lib/points.js";
-import { getPreban } from "@workspace/db";
+import { getPreban, pool, checkSchemaDrift } from "@workspace/db";
 import {
   buildEventEmbed,
   buildRankingEmbed,
@@ -686,6 +686,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
 //   ManageChannels — create/delete temp VCs and ticket channels
 //   MoveMembers    — move users to temp VC after creation
 //   GuildMembers privileged intent must be enabled in Discord Developer Portal.
+
+// Check for schema drift at startup. A missing column (e.g. after a merge
+// where drizzle-kit push was never run) causes cryptic runtime errors on every
+// query that touches the affected table. Logging a clear warning here makes the
+// root cause immediately visible in bot logs.
+checkSchemaDrift(pool, (msg) => logger.warn(msg)).then((result) => {
+  if (!result.ok) {
+    logger.warn(
+      "[schema-check] ⚠ The bot will continue, but queries against affected tables will fail. " +
+        "Fix: run `pnpm --filter @workspace/db run push-force` then restart the bot.",
+    );
+  }
+}).catch(() => {
+  // Never let a schema check failure block startup.
+});
 
 client.login(token).catch((err) => {
   logger.error("Failed to log in to Discord", err);
