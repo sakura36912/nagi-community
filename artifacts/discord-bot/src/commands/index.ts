@@ -1908,30 +1908,18 @@ type ChestResult =
 
 /**
  * 新入り宝箱の確率テーブル:
- *   💨 ハズレ        50.0%
+ *   💨 ハズレ        79.4%
+ *   🎁  10,000$      20.0%
+ *   🎊  50,000$       0.5%
  *   💎 100,000$       0.1%
- *   💎  90,000$       0.1%
- *   🌟  80,000$       0.5%
- *   🌟  70,000$       0.5%
- *   🎊  60,000$      10.0%
- *   🎊  50,000$      10.0%
- *   🎊  40,000$      10.0%
- *   🎁 10k〜30k  各 ≈6.267%（3段階均等・合計 18.8%）
  * 戻り値: 当選コイン数、0 = ハズレ
  */
 function rollShinniriChest(): number {
   const r = Math.random();
-  if (r < 0.5000) return 0;        // ハズレ 50.0%
-  if (r < 0.5010) return 100_000;  // 💎 0.1%
-  if (r < 0.5020) return 90_000;   // 💎 0.1%
-  if (r < 0.5070) return 80_000;   // 🌟 0.5%
-  if (r < 0.5120) return 70_000;   // 🌟 0.5%
-  if (r < 0.6120) return 60_000;   // 🎊 10%
-  if (r < 0.7120) return 50_000;   // 🎊 10%
-  if (r < 0.8120) return 40_000;   // 🎊 10%
-  // 残り 18.8% を 10k〜30k の 3段階で均等配分（各 ≈6.267%）
-  const idx = Math.floor((r - 0.8120) / (0.188 / 3));
-  return [30_000, 20_000, 10_000][Math.min(idx, 2)]!;
+  if (r < 0.7940) return 0;        // ハズレ 79.4%
+  if (r < 0.9940) return 10_000;   // 🎁 20.0%
+  if (r < 0.9990) return 50_000;   // 🎊  0.5%
+  return 100_000;                   // 💎  0.1%
 }
 
 /** 本船員宝箱の確率テーブル */
@@ -2047,7 +2035,7 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
       await interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。");
     } else {
       await giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest");
-      const emoji = amount >= 90_000 ? "💎" : amount >= 60_000 ? "🌟" : amount >= 40_000 ? "🎊" : "🎁";
+      const emoji = amount >= 100_000 ? "💎" : amount >= 50_000 ? "🎊" : "🎁";
       await interaction.editReply(
         `📦 宝箱を開けた！\n\n${emoji} **${amount.toLocaleString()}${cn}** を獲得しました！`,
       );
