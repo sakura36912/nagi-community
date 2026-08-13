@@ -285,3 +285,63 @@ describe("handleRetentionConfirm – expired nonce", () => {
     expect(mocks.del).not.toHaveBeenCalled();
   });
 });
+
+// ─── Cross-guild replay tests ─────────────────────────────────────────────────
+
+describe("handleRetentionConfirm – cross-guild nonce isolation", () => {
+  const NONCE    = "test-nonce-cross-guild";
+  const GUILD_A  = "guild-aaa";
+  const GUILD_B  = "guild-bbb";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Seed a valid, non-expired nonce that belongs to guild A.
+    retentionConfirmExpiry.set(NONCE, {
+      guildId: GUILD_A,
+      days: 90,
+      expiry: Date.now() + 60_000,
+    });
+  });
+
+  it("replies with an ephemeral error when guild B presents guild A's nonce", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+  });
+
+  it("ephemeral error content mentions the expiry notice (有効期限) for the cross-guild case", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionConfirm(interaction as never);
+
+    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    expect(replyArg.content).toMatch(/有効期限/);
+  });
+
+  it("removes the nonce entry from the registry after a cross-guild attempt", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionConfirm(interaction as never);
+
+    // The stale-entry cleanup branch fires even for the guild-mismatch path,
+    // so the nonce must be gone after the cross-guild replay.
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(false);
+  });
+
+  it("does NOT proceed to deferUpdate or editReply on a cross-guild replay", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(interaction.editReply).not.toHaveBeenCalled();
+  });
+
+  it("does NOT write to the database on a cross-guild replay", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.del).not.toHaveBeenCalled();
+  });
+});
