@@ -3201,3 +3201,52 @@ describe("setVcGlobalPrivacyOptOut – multi-guild session close", () => {
     expect(tableArg["userId"]).toBe("sessions.userId");
   });
 });
+
+// ─── setVcGlobalPrivacyOptOut – DB failure during upsert ─────────────────────
+//
+// setVcGlobalPrivacyOptOut first upserts the global opt-out flag, then calls
+// closeOpenSessionsForUser. If the upsert throws, the function must propagate
+// the error rather than silently swallowing it and continuing to the
+// session-close step. Swallowing the error would produce a misleading return
+// value of 0 and leave the user in a partially opted-out state (opt-out row
+// not written, but caller assumes success).
+
+describe("setVcGlobalPrivacyOptOut – DB failure during upsert propagates correctly", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects when the upsert throws (error is not swallowed)", async () => {
+    const dbError = new Error("DB connection lost");
+    // Make the onConflictDoUpdate step (the final awaited call in the insert
+    // chain) reject to simulate a DB failure during the upsert.
+    mocks.onConflictDoUpdate.mockRejectedValueOnce(dbError);
+
+    await expect(setVcGlobalPrivacyOptOut("user-fail-1", true)).rejects.toThrow(
+      "DB connection lost",
+    );
+  });
+
+  it("does NOT call db.update() (closeOpenSessionsForUser) after the upsert fails", async () => {
+    const dbError = new Error("upsert failed");
+    mocks.onConflictDoUpdate.mockRejectedValueOnce(dbError);
+
+    // Swallow the rejection so the assertion below can run
+    await setVcGlobalPrivacyOptOut("user-fail-2", true).catch(() => undefined);
+
+    // db.update() is only invoked by closeOpenSessionsForUser; it must never
+    // be reached when the preceding upsert has already thrown.
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("the error thrown is exactly the DB error (not wrapped or replaced)", async () => {
+    const originalError = new Error("unique constraint violated");
+    mocks.onConflictDoUpdate.mockRejectedValueOnce(originalError);
+
+    const caught = await setVcGlobalPrivacyOptOut("user-fail-3", true).catch(
+      (e: unknown) => e,
+    );
+
+    expect(caught).toBe(originalError);
+  });
+});
