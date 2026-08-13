@@ -297,8 +297,8 @@ function buildResult(
     const wonNames = paylines.filter((p) => p.won).map((p) => p.name);
     const profit = Math.abs(netDelta);
     resultText =
-      `🎊 **${wins}ライン当選！ +${profit.toLocaleString()} ${currencyName}**\n` +
-      wonNames.map((n) => `　✨ ${n}`).join("\n");
+      `**${wins}ライン当選！ +${profit.toLocaleString()} ${currencyName}**\n` +
+      wonNames.map((n) => `　${n}`).join("\n");
     title = wins >= 3 ? "🎰 スロット 3×3 — 大当たり！" : "🎰 スロット 3×3 — 当たり！";
     color = wins >= 3 ? 0xf1c40f : 0x57f287;
   }
