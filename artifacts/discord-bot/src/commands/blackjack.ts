@@ -446,7 +446,7 @@ function resolveOutcome(game: BJGame): { outcome: Outcome; netDelta: number } {
   const dBJ = isBlackjack(game.dealerHand);
 
   if (pBJ && dBJ)                                         return { outcome: "push",      netDelta: 0 };
-  if (pBJ)                                                return { outcome: "blackjack",  netDelta: game.bet * 2 };
+  if (pBJ)                                                return { outcome: "blackjack",  netDelta: game.bet };
   if (isBust(game.playerHand))                            return { outcome: "lose",       netDelta: -game.bet };
   if (dBJ || isBust(game.dealerHand) || pTotal > dTotal) return { outcome: "win",        netDelta: game.bet };
   if (pTotal === dTotal)                                  return { outcome: "push",       netDelta: 0 };
