@@ -132,12 +132,18 @@ async function fetchHandImages(
   return Promise.all(hand.map((card, i) => fetchOneCardImage(card, cardPaths, `${prefix}_${i}`)));
 }
 
+/** カードストリップの表示高さ（px） */
+const CARD_STRIP_HEIGHT = 150;
+
 /**
  * 複数の画像バッファを縦横比を保ったまま同じ高さに揃え、横一列に合成する。
  */
 async function mergeHorizontal(buffers: Buffer[]): Promise<Buffer> {
   const images = await Promise.all(buffers.map((b) => Jimp.read(b)));
-  const targetH = Math.max(...images.map((img) => img.bitmap.height));
+  const targetH = Math.min(
+    Math.max(...images.map((img) => img.bitmap.height)),
+    CARD_STRIP_HEIGHT,
+  );
   const resized  = images.map((img) => {
     const ratio = targetH / img.bitmap.height;
     return img.resize(Math.round(img.bitmap.width * ratio), targetH);
