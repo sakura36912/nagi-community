@@ -553,11 +553,12 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     const isAdminForLicense = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
     const memberForLicense = await interaction.guild!.members.fetch(interaction.user.id);
     if (!isAdminForLicense) {
-      const hasHonsennin = interaction.guild!.roles.cache.some(
-        (r) => r.name === "本船員" && memberForLicense.roles.cache.has(r.id),
+      const allowedRoles = ["本船員", "航海士", "提督", "大提督"];
+      const hasAllowedRole = interaction.guild!.roles.cache.some(
+        (r) => allowedRoles.includes(r.name) && memberForLicense.roles.cache.has(r.id),
       );
-      if (!hasHonsennin) {
-        await interaction.editReply("❌ 個人ショップ開業券は本船員ロールを持つメンバーのみ購入できます。");
+      if (!hasAllowedRole) {
+        await interaction.editReply("❌ 個人ショップ開業券は本船員以上のロールを持つメンバーのみ購入できます。");
         return;
       }
     }
@@ -788,11 +789,12 @@ async function applyShopPurchase(
     const isAdminForLicense = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
     const member = await interaction.guild.members.fetch(interaction.user.id);
     if (!isAdminForLicense) {
-      const hasHonsennin = interaction.guild!.roles.cache.some(
-        (r) => r.name === "本船員" && member.roles.cache.has(r.id),
+      const allowedRoles = ["本船員", "航海士", "提督", "大提督"];
+      const hasAllowedRole = interaction.guild!.roles.cache.some(
+        (r) => allowedRoles.includes(r.name) && member.roles.cache.has(r.id),
       );
-      if (!hasHonsennin) {
-        await interaction.editReply("❌ 個人ショップ開業券は本船員ロールを持つメンバーのみ購入できます。");
+      if (!hasAllowedRole) {
+        await interaction.editReply("❌ 個人ショップ開業券は本船員以上のロールを持つメンバーのみ購入できます。");
         return;
       }
     }

@@ -92,6 +92,7 @@ vi.mock("discord.js", async (importOriginal) => {
       setTitle: vi.fn().mockReturnThis(),
       setColor: vi.fn().mockReturnThis(),
       setDescription: vi.fn().mockReturnThis(),
+      addFields: vi.fn().mockReturnThis(),
       setFooter: vi.fn().mockReturnThis(),
       setTimestamp: vi.fn().mockReturnThis(),
       data: {},
@@ -109,6 +110,7 @@ vi.mock("discord.js", async (importOriginal) => {
 });
 
 // ─── Imports under test ───────────────────────────────────────────────────────
+import { EmbedBuilder } from "discord.js";
 import { wipeGuildVcSessions } from "../lib/community.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -303,6 +305,53 @@ describe("/ranking reset – audit log embed", () => {
     expect(sendMock).not.toHaveBeenCalled();
     // The admin still gets a success reply
     expect(interaction.editReply).toHaveBeenCalled();
+  });
+
+  it("embed addFields contains the deleted-row count and admin mention in the correct fields", async () => {
+    if (!rankingExecute) return;
+
+    const sendMock = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = makeAuditChannel({ send: sendMock });
+
+    const guild = {
+      name: "Test Guild",
+      channels: {
+        cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        fetch: vi.fn().mockResolvedValue(null),
+      },
+    };
+
+    // Simulate 3 deleted rows
+    mocks.returning.mockResolvedValueOnce([{}, {}, {}]);
+    // getAuditLogChannel returns a channel ID
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-123" }]);
+
+    const interaction = makeResetInteraction({ confirm: true, guild });
+    await rankingExecute(interaction as never);
+
+    // EmbedBuilder should have been instantiated once (the audit embed)
+    const embedMockResults = (EmbedBuilder as unknown as ReturnType<typeof vi.fn>).mock.results;
+    expect(embedMockResults.length).toBeGreaterThanOrEqual(1);
+
+    // Find the instance whose addFields was called (the audit embed)
+    const auditEmbedInstance = embedMockResults
+      .map((r) => r.value as { addFields: ReturnType<typeof vi.fn> })
+      .find((inst) => inst.addFields.mock.calls.length > 0);
+
+    expect(auditEmbedInstance).toBeDefined();
+
+    // addFields is called once with all three field objects spread as arguments
+    const addFieldsCalls = auditEmbedInstance!.addFields.mock.calls;
+    // Flatten all arguments across all addFields calls into a single list of fields
+    const allFields = addFieldsCalls.flat() as { name: string; value: string }[];
+
+    const deletedField = allFields.find((f) => f.name === "削除件数");
+    expect(deletedField).toBeDefined();
+    expect(deletedField!.value).toBe("3件");
+
+    const operatorField = allFields.find((f) => f.name === "操作者");
+    expect(operatorField).toBeDefined();
+    expect(operatorField!.value).toContain("<@admin-user>");
   });
 
   it("does not propagate a send error to the admin when the audit channel send fails", async () => {
