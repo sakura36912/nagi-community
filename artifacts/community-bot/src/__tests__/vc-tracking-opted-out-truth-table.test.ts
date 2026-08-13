@@ -213,4 +213,11 @@ describe("isVcTrackingOptedOut: all four global × per-guild flag combinations",
 
     expect(result).toBe(true);
   });
+
+  it("no rows at all → returns false (brand-new user, never touched any privacy setting)", async () => {
+    // Neither store is seeded — both selects return [] and row?.optedOut is undefined
+    const result = await isVcTrackingOptedOut(GUILD, USER);
+
+    expect(result).toBe(false);
+  });
 });
