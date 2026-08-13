@@ -317,15 +317,16 @@ async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWit
     .setFooter({ text: "BJ=1.5倍 / 通常勝利=1倍 / 引き分け=返金 | 5分でタイムアウト" });
 
   // カード画像（横一列合成）をメイン embed の前（上部）に配置
+  // setTitle でラベルを画像上部に表示する
   const embeds: EmbedBuilder[] = [];
   const files: AttachmentBuilder[] = [];
 
   if (playerStrip) {
-    embeds.push(new EmbedBuilder().setURL(GALLERY_URL).setImage(`attachment://player.png`));
+    embeds.push(new EmbedBuilder().setTitle("自分").setImage(`attachment://player.png`));
     files.push(playerStrip.attachment);
   }
   if (dealerStrip) {
-    embeds.push(new EmbedBuilder().setURL(GALLERY_URL).setImage(`attachment://dealer.png`));
+    embeds.push(new EmbedBuilder().setTitle("ディーラー").setImage(`attachment://dealer.png`));
     files.push(dealerStrip.attachment);
   }
   embeds.push(mainEmbed);
@@ -376,11 +377,11 @@ async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWi
   const files: AttachmentBuilder[] = [];
 
   if (playerStrip) {
-    embeds.push(new EmbedBuilder().setURL(GALLERY_URL).setImage(`attachment://player.png`));
+    embeds.push(new EmbedBuilder().setTitle("自分").setImage(`attachment://player.png`));
     files.push(playerStrip.attachment);
   }
   if (dealerStrip) {
-    embeds.push(new EmbedBuilder().setURL(GALLERY_URL).setImage(`attachment://dealer.png`));
+    embeds.push(new EmbedBuilder().setTitle("ディーラー").setImage(`attachment://dealer.png`));
     files.push(dealerStrip.attachment);
   }
   embeds.push(mainEmbed);
