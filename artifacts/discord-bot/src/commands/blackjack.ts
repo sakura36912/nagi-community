@@ -396,6 +396,9 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
+  // DB 処理が 3 秒を超える可能性があるため、先に defer して Discord タイムアウトを防ぐ
+  await interaction.deferReply();
+
   const [, settings, rawCardImages] = await Promise.all([
     getOrCreateWallet(guildId, userId),
     getGuildSettings(guildId),
@@ -403,14 +406,12 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   ]);
 
   const suitEmojis = resolveSuitEmojis(settings);
-  // bjCardImages は { imageUrl: objectName } として保存されている
   const cardPaths = rawCardImages;
 
   const afterDeduct = await deductBet(guildId, userId, bet);
   if (!afterDeduct) {
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [new EmbedBuilder().setTitle("🃏 ブラックジャック").setDescription("❌ 残高が不足しています。").setColor(COLOR_LOSE)],
-      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -430,14 +431,13 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   };
 
   if (isBlackjack(playerHand)) {
-    await interaction.deferReply();
     await finishGame(interaction, dealerPlay(game));
     return;
   }
 
   activeGames.set(key, game);
   const { embed, attachment } = await buildGameEmbed(game, true);
-  await interaction.reply({
+  await interaction.editReply({
     embeds: [embed],
     files: attachment ? [attachment] : [],
     components: [buildButtons(true)],
