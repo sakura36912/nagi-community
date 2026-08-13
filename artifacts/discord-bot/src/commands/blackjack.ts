@@ -469,9 +469,8 @@ async function finishGame(
     blackjack: `BJ（賭け: ${bet}）`, win: `BJ勝利（賭け: ${bet}）`,
     push: `BJ引き分け（賭け: ${bet}）`, lose: `BJ敗北（賭け: ${bet}）`,
   };
-  if (netDelta !== 0) {
-    await recordTransaction(guildId, userId, netDelta, logReason[outcome]).catch(() => {});
-  }
+  // push (netDelta === 0) も記録することで /casino stats のプレイ回数・賭け金集計に含める
+  await recordTransaction(guildId, userId, netDelta, logReason[outcome]).catch(() => {});
 
   activeGames.delete(gameKey(guildId, userId));
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
