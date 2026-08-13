@@ -76,7 +76,7 @@ import {
   pruneOrphanedVcSchedules,
   NOTIFY_BEFORE_MS,
 } from "./lib/vc";
-import { buildNameboardComponents, buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
+import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
 import { getStickyMessage, updateStickyLastMessageId } from "./lib/sticky";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 import { handleChannelDelete } from "./lib/handleChannelDelete";
@@ -409,14 +409,12 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
         startDate: sheet.startDate,
         endDate: sheet.endDate,
         vcSeconds,
-        nameboardUrl: settings?.nameboardUrl,
-        rosterCategoryId: settings?.rosterCategoryId,
         selfIntro,
         createdByLabel: "自動更新（定期集計）",
         guildIconUrl: sheetGuild?.iconURL() ?? null,
       });
 
-      await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl, sheetGuild, settings?.rosterCategoryId) });
+      await message.edit({ embeds: [embed] });
       logger.info(`[sheet-vc] Updated sheet ${sheet.id} for user ${sheet.userId}: ${vcSeconds}s`);
     } catch (err) {
       logger.error(`[sheet-vc] Failed to refresh sheet ${sheet.id}`, err);
@@ -1233,8 +1231,6 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       startDate,
       endDate,
       vcSeconds,
-      nameboardUrl: globalSettings?.nameboardUrl ?? null,
-      rosterCategoryId: globalSettings?.rosterCategoryId ?? null,
       selfIntro,
       createdByLabel: `ロール付与により自動生成（${roleName}）`,
       guildIconUrl: newMember.guild.iconURL() ?? null,
@@ -1243,7 +1239,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     try {
       const thread = await forum.threads.create({
         name: buildSheetThreadName(displayName, endDate),
-        message: { embeds: [embed], components: buildNameboardComponents(globalSettings?.nameboardUrl, newMember.guild, globalSettings?.rosterCategoryId) },
+        message: { embeds: [embed] },
       });
       await createEvalSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);
       logger.info(`[sheet] ✅ Created thread ${thread.id} for user ${newMember.id} role=${roleName} forum=${cfg.forumChannelId}`);

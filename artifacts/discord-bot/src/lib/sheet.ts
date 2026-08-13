@@ -1,4 +1,4 @@
-import { type Client, type GuildMember, type User, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from "discord.js";
+import { type Client, type GuildMember, type User, EmbedBuilder } from "discord.js";
 import {
   getEvalSheetSettings,
   getLatestEvalSheet,
@@ -32,24 +32,14 @@ export function buildSheetEmbed(opts: {
   startDate: Date;
   endDate: Date;
   vcSeconds: number;
-  nameboardUrl: string | null | undefined;
-  /** 名簿カテゴリーID — 設定時は <#ID> メンションとして表示 */
-  rosterCategoryId?: string | null;
   selfIntro: string | null | undefined;
   createdByLabel: string;
   /** サーバーアイコンURL */
   guildIconUrl?: string | null;
 }): EmbedBuilder {
-  const { targetUser, member, displayName, startDate, endDate, vcSeconds, nameboardUrl, rosterCategoryId, selfIntro, createdByLabel, guildIconUrl } = opts;
+  const { targetUser, member, displayName, startDate, endDate, vcSeconds, selfIntro, createdByLabel, guildIconUrl } = opts;
   const startTs = Math.floor(startDate.getTime() / 1000);
   const endTs = Math.floor(endDate.getTime() / 1000);
-
-  // 名簿フィールドの値：カテゴリーメンション > URL ボタン案内 > 未設定
-  const nameboardValue = rosterCategoryId
-    ? `<#${rosterCategoryId}>`
-    : nameboardUrl
-      ? "設定済み（下のボタンから確認）"
-      : "未設定";
 
   const embed = new EmbedBuilder()
     .setTitle(`📋 評価シート — ${displayName}`)
@@ -57,7 +47,6 @@ export function buildSheetEmbed(opts: {
     .setThumbnail(member?.displayAvatarURL() ?? targetUser.displayAvatarURL())
     .addFields(
       { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
-      { name: "📋 名簿", value: nameboardValue, inline: false },
     );
 
   if (selfIntro) {
@@ -74,56 +63,6 @@ export function buildSheetEmbed(opts: {
     .setTimestamp();
 
   return embed;
-}
-
-/**
- * 名簿ボタン群を返す。
- * - rosterCategoryId があれば、そのカテゴリー内の各テキストチャンネルへのリンクボタン（最大25個）を生成。
- * - カテゴリーが未設定またはチャンネルが見つからない場合は nameboardUrl のボタンにフォールバック。
- * - どちらも未設定なら空配列を返す。
- */
-export function buildNameboardComponents(
-  nameboardUrl: string | null | undefined,
-  guild?: import("discord.js").Guild | null,
-  rosterCategoryId?: string | null,
-): ActionRowBuilder<ButtonBuilder>[] {
-  const buttons: ButtonBuilder[] = [];
-
-  if (rosterCategoryId && guild) {
-    const channels = [...guild.channels.cache.values()]
-      .filter((c): c is import("discord.js").TextChannel =>
-        c.isTextBased() && "parentId" in c && c.parentId === rosterCategoryId,
-      )
-      .sort((a, b) => a.position - b.position)
-      .slice(0, 25);
-
-    for (const ch of channels) {
-      buttons.push(
-        new ButtonBuilder()
-          .setLabel(`#${ch.name}`)
-          .setStyle(ButtonStyle.Link)
-          .setURL(`https://discord.com/channels/${guild.id}/${ch.id}`),
-      );
-    }
-  }
-
-  if (buttons.length === 0 && nameboardUrl) {
-    buttons.push(
-      new ButtonBuilder()
-        .setLabel("📋 名簿を見る")
-        .setStyle(ButtonStyle.Link)
-        .setURL(nameboardUrl),
-    );
-  }
-
-  if (buttons.length === 0) return [];
-
-  // ActionRow 1つに最大 5 ボタン
-  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
-  for (let i = 0; i < buttons.length; i += 5) {
-    rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + 5)));
-  }
-  return rows;
 }
 
 /**
@@ -217,14 +156,12 @@ export async function applySheetEmbedUpdate(
       startDate,
       endDate: newEndDate,
       vcSeconds,
-      nameboardUrl: settings?.nameboardUrl,
-      rosterCategoryId: settings?.rosterCategoryId,
       selfIntro,
       createdByLabel: "評価期間延長券により更新",
       guildIconUrl: guild?.iconURL() ?? null,
     });
 
-    await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl, guild, settings?.rosterCategoryId) });
+    await message.edit({ embeds: [embed] });
     logger.info(`[sheet] ✅ embed updated for user=${userId}`);
   } catch (err) {
     logger.error(`[sheet] Failed to refresh embed for user=${userId}`, err);
@@ -283,14 +220,12 @@ export async function refreshSheetEmbedForUser(
       startDate: sheet.startDate,
       endDate: sheet.endDate,
       vcSeconds,
-      nameboardUrl: settings?.nameboardUrl,
-      rosterCategoryId: settings?.rosterCategoryId,
       selfIntro,
       createdByLabel: "ニックネーム変更により更新",
       guildIconUrl: guildForIcon?.iconURL() ?? null,
     });
 
-    await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl, guildForIcon, settings?.rosterCategoryId) });
+    await message.edit({ embeds: [embed] });
     logger.info(`[sheet] ✅ embed refreshed for user=${userId} newName=${newDisplayName}`);
   } catch (err) {
     logger.error(`[sheet] refreshSheetEmbedForUser failed for user=${userId}`, err);

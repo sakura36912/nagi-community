@@ -4,7 +4,6 @@
  *   setup           : ロール → フォーラムの紐付けを追加・更新（繰り返し呼ぶことで複数登録可）
  *   remove          : 指定ロールの紐付けを解除
  *   roster-category : 自己紹介検索カテゴリを設定（省略で解除）
- *   nameboard       : 名簿URLを設定（省略で解除）
  *   info            : 現在の全紐付けと共通設定を表示
  */
 
@@ -23,14 +22,13 @@ import {
 } from "@workspace/db";
 import {
   getEvalSheetSettings,
-  setEvalNameboardUrl,
   setRosterCategoryId,
   setEvalDeadlineNotify,
   setEvalReminderDaysBefore,
   listEvalSheets,
   getSheetVcSeconds,
 } from "../lib/economy";
-import { buildNameboardComponents, buildSheetEmbed, findSelfIntro } from "../lib/sheet";
+import { buildSheetEmbed, findSelfIntro } from "../lib/sheet";
 
 export const evalsheetCommand = {
   data: new SlashCommandBuilder()
@@ -93,20 +91,6 @@ export const evalsheetCommand = {
             .setName("category")
             .setDescription("自己紹介チャンネルが置かれているカテゴリ")
             .addChannelTypes(ChannelType.GuildCategory)
-            .setRequired(false),
-        ),
-    )
-
-    // ── nameboard ───────────────────────────────────────────────────────────
-    .addSubcommand((sub) =>
-      sub
-        .setName("nameboard")
-        .setDescription("名簿URLを設定します（省略すると設定を解除）")
-        .addStringOption((opt) =>
-          opt
-            .setName("url")
-            .setDescription("名簿へのURL")
-            .setMaxLength(512)
             .setRequired(false),
         ),
     )
@@ -240,19 +224,6 @@ export const evalsheetCommand = {
       return;
     }
 
-    // ── nameboard ─────────────────────────────────────────────────────────
-    if (sub === "nameboard") {
-      const url = interaction.options.getString("url")?.trim() || null;
-      await setEvalNameboardUrl(interaction.guildId, url);
-      await interaction.reply({
-        content: url
-          ? `✅ 名簿URLを設定しました: ${url}`
-          : "✅ 名簿URLの設定を解除しました。",
-        ephemeral: true,
-      });
-      return;
-    }
-
     // ── reminder-timing ───────────────────────────────────────────────────
     if (sub === "reminder-timing") {
       const days = interaction.options.getInteger("days", true);
@@ -327,13 +298,6 @@ export const evalsheetCommand = {
           inline: true,
         },
         {
-          name: "名簿URL",
-          value: globalSettings?.nameboardUrl
-            ? `[リンク](${globalSettings.nameboardUrl})`
-            : "未設定",
-          inline: true,
-        },
-        {
           name: "フォーラムリマインダー",
           value: globalSettings?.reminderDaysBefore
             ? `期日の ${globalSettings.reminderDaysBefore} 日前`
@@ -376,8 +340,6 @@ export const evalsheetCommand = {
 
       const settings = await getEvalSheetSettings(interaction.guildId);
 
-      const components = buildNameboardComponents(settings?.nameboardUrl ?? null, interaction.guild, settings?.rosterCategoryId ?? null);
-
       for (const sheet of targets) {
         try {
           // sheet.messageId stores the forum thread ID (thread.id).
@@ -394,8 +356,7 @@ export const evalsheetCommand = {
             .catch(() => null);
           if (!message) { failed++; continue; }
 
-          // components だけ追加（embed の内容はそのまま維持）
-          await message.edit({ components });
+          await message.edit({ components: [] });
           updated++;
         } catch {
           failed++;
