@@ -30,7 +30,7 @@ import {
   listEvalSheets,
   getSheetVcSeconds,
 } from "../lib/economy";
-import { buildSheetEmbed, findSelfIntro } from "../lib/sheet";
+import { buildNameboardComponents, buildSheetEmbed, findSelfIntro } from "../lib/sheet";
 
 export const evalsheetCommand = {
   data: new SlashCommandBuilder()
@@ -422,7 +422,7 @@ export const evalsheetCommand = {
             guildIconUrl: interaction.guild?.iconURL() ?? null,
           });
 
-          await message.edit({ embeds: [embed] });
+          await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl ?? null) });
           updated++;
         } catch {
           failed++;

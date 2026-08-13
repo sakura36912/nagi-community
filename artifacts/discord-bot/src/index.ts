@@ -76,7 +76,7 @@ import {
   pruneOrphanedVcSchedules,
   NOTIFY_BEFORE_MS,
 } from "./lib/vc";
-import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
+import { buildNameboardComponents, buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
 import { getStickyMessage, updateStickyLastMessageId } from "./lib/sticky";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 import { handleChannelDelete } from "./lib/handleChannelDelete";
@@ -415,7 +415,7 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
         guildIconUrl: sheetGuild?.iconURL() ?? null,
       });
 
-      await message.edit({ embeds: [embed] });
+      await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl) });
       logger.info(`[sheet-vc] Updated sheet ${sheet.id} for user ${sheet.userId}: ${vcSeconds}s`);
     } catch (err) {
       logger.error(`[sheet-vc] Failed to refresh sheet ${sheet.id}`, err);
@@ -1241,7 +1241,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     try {
       const thread = await forum.threads.create({
         name: buildSheetThreadName(displayName, endDate),
-        message: { embeds: [embed] },
+        message: { embeds: [embed], components: buildNameboardComponents(globalSettings?.nameboardUrl) },
       });
       await createEvalSheet(guildId, newMember.id, startDate, endDate, forum.id, thread.id);
       logger.info(`[sheet] ✅ Created thread ${thread.id} for user ${newMember.id} role=${roleName} forum=${cfg.forumChannelId}`);

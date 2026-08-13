@@ -1,4 +1,4 @@
-import { type Client, type GuildMember, type User, EmbedBuilder } from "discord.js";
+import { type Client, type GuildMember, type User, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from "discord.js";
 import {
   getEvalSheetSettings,
   getLatestEvalSheet,
@@ -41,15 +41,13 @@ export function buildSheetEmbed(opts: {
   const { targetUser, member, displayName, startDate, endDate, vcSeconds, nameboardUrl, selfIntro, createdByLabel, guildIconUrl } = opts;
   const startTs = Math.floor(startDate.getTime() / 1000);
   const endTs = Math.floor(endDate.getTime() / 1000);
-  const nameboardValue = nameboardUrl ? `[名簿を見る](${nameboardUrl})` : "未設定";
-
   const embed = new EmbedBuilder()
     .setTitle(`📋 評価シート — ${displayName}`)
     .setColor(0x2ecc71)
     .setThumbnail(member?.displayAvatarURL() ?? targetUser.displayAvatarURL())
     .addFields(
       { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
-      { name: "📋 名簿", value: nameboardValue, inline: false },
+      { name: "📋 名簿", value: nameboardUrl ? "設定済み（下のボタンから確認）" : "未設定", inline: false },
     );
 
   if (selfIntro) {
@@ -66,6 +64,21 @@ export function buildSheetEmbed(opts: {
     .setTimestamp();
 
   return embed;
+}
+
+/**
+ * 名簿URLがある場合にリンクボタンを含む ActionRow を返す。
+ * ない場合は空配列を返す（components に展開して使う）。
+ */
+export function buildNameboardComponents(
+  nameboardUrl: string | null | undefined,
+): ActionRowBuilder<ButtonBuilder>[] {
+  if (!nameboardUrl) return [];
+  const button = new ButtonBuilder()
+    .setLabel("📋 名簿を見る")
+    .setStyle(ButtonStyle.Link)
+    .setURL(nameboardUrl);
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(button)];
 }
 
 /**
@@ -165,7 +178,7 @@ export async function applySheetEmbedUpdate(
       guildIconUrl: guild?.iconURL() ?? null,
     });
 
-    await message.edit({ embeds: [embed] });
+    await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl) });
     logger.info(`[sheet] ✅ embed updated for user=${userId}`);
   } catch (err) {
     logger.error(`[sheet] Failed to refresh embed for user=${userId}`, err);
@@ -230,7 +243,7 @@ export async function refreshSheetEmbedForUser(
       guildIconUrl: guildForIcon?.iconURL() ?? null,
     });
 
-    await message.edit({ embeds: [embed] });
+    await message.edit({ embeds: [embed], components: buildNameboardComponents(settings?.nameboardUrl) });
     logger.info(`[sheet] ✅ embed refreshed for user=${userId} newName=${newDisplayName}`);
   } catch (err) {
     logger.error(`[sheet] refreshSheetEmbedForUser failed for user=${userId}`, err);
