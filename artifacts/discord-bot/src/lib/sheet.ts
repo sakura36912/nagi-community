@@ -33,21 +33,31 @@ export function buildSheetEmbed(opts: {
   endDate: Date;
   vcSeconds: number;
   nameboardUrl: string | null | undefined;
+  /** 名簿カテゴリーID — 設定時は <#ID> メンションとして表示 */
+  rosterCategoryId?: string | null;
   selfIntro: string | null | undefined;
   createdByLabel: string;
   /** サーバーアイコンURL */
   guildIconUrl?: string | null;
 }): EmbedBuilder {
-  const { targetUser, member, displayName, startDate, endDate, vcSeconds, nameboardUrl, selfIntro, createdByLabel, guildIconUrl } = opts;
+  const { targetUser, member, displayName, startDate, endDate, vcSeconds, nameboardUrl, rosterCategoryId, selfIntro, createdByLabel, guildIconUrl } = opts;
   const startTs = Math.floor(startDate.getTime() / 1000);
   const endTs = Math.floor(endDate.getTime() / 1000);
+
+  // 名簿フィールドの値：カテゴリーメンション > URL ボタン案内 > 未設定
+  const nameboardValue = rosterCategoryId
+    ? `<#${rosterCategoryId}>`
+    : nameboardUrl
+      ? "設定済み（下のボタンから確認）"
+      : "未設定";
+
   const embed = new EmbedBuilder()
     .setTitle(`📋 評価シート — ${displayName}`)
     .setColor(0x2ecc71)
     .setThumbnail(member?.displayAvatarURL() ?? targetUser.displayAvatarURL())
     .addFields(
       { name: "👤 メンバー", value: `${displayName}（<@${targetUser.id}>）`, inline: false },
-      { name: "📋 名簿", value: nameboardUrl ? "設定済み（下のボタンから確認）" : "未設定", inline: false },
+      { name: "📋 名簿", value: nameboardValue, inline: false },
     );
 
   if (selfIntro) {
@@ -173,6 +183,7 @@ export async function applySheetEmbedUpdate(
       endDate: newEndDate,
       vcSeconds,
       nameboardUrl: settings?.nameboardUrl,
+      rosterCategoryId: settings?.rosterCategoryId,
       selfIntro,
       createdByLabel: "評価期間延長券により更新",
       guildIconUrl: guild?.iconURL() ?? null,
@@ -238,6 +249,7 @@ export async function refreshSheetEmbedForUser(
       endDate: sheet.endDate,
       vcSeconds,
       nameboardUrl: settings?.nameboardUrl,
+      rosterCategoryId: settings?.rosterCategoryId,
       selfIntro,
       createdByLabel: "ニックネーム変更により更新",
       guildIconUrl: guildForIcon?.iconURL() ?? null,
