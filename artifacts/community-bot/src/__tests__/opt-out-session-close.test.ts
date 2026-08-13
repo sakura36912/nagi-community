@@ -2855,6 +2855,88 @@ describe("isVcTrackingOptedOut – parallel query execution", () => {
     // Two selects: one for communityVcPrivacyGlobalTable, one for communityVcPrivacyTable
     expect(mocks.select).toHaveBeenCalledTimes(2);
   });
+
+  // ── Rejection propagation (error isolation) ────────────────────────────────
+  //
+  // Promise.all fast-fails: if either branch rejects the entire returned promise
+  // rejects.  These tests use the same deferred-promise technique as the
+  // parallelism tests above so they also assert that BOTH selects are initiated
+  // before any rejection propagates.  A serialised implementation (sequential
+  // awaits) would never initiate the second query when the first rejects and
+  // would therefore fail the "initiated" assertions below.
+
+  it("rejects when the global-table select rejects and still initiates both selects before the rejection propagates", async () => {
+    const initiated: string[] = [];
+
+    // Deferred handles: global rejects, guild is held so we can check it was
+    // started before Promise.all settles.
+    let rejectGlobal!: (err: Error) => void;
+    let resolveGuild!: (rows: unknown[]) => void;
+    const globalPending = new Promise<unknown[]>((_, rej) => { rejectGlobal = rej; });
+    const guildPending  = new Promise<unknown[]>((res) => { resolveGuild  = res; });
+
+    mocks.selectWhere
+      .mockImplementationOnce(() => { initiated.push("global"); return globalPending; })
+      .mockImplementationOnce(() => { initiated.push("guild");  return guildPending;  });
+
+    const pending = isVcTrackingOptedOut("guild-par-rej-1", "user-par-rej-1");
+
+    // After one microtask tick both selects must already be in-flight.
+    // A serialised implementation would never reach the guild select when the
+    // global one is still pending, so "guild" would be absent here.
+    await Promise.resolve();
+    expect(initiated).toContain("global");
+    expect(initiated).toContain("guild");
+
+    // Trigger the global rejection and settle the guild promise so no
+    // unhandled-rejection escapes from this test.
+    rejectGlobal(new Error("DB connection lost"));
+    resolveGuild([]);
+
+    await expect(pending).rejects.toThrow("DB connection lost");
+  });
+
+  it("rejects when the per-guild-table select rejects and still initiates both selects before the rejection propagates", async () => {
+    const initiated: string[] = [];
+
+    let resolveGlobal!: (rows: unknown[]) => void;
+    let rejectGuild!: (err: Error) => void;
+    const globalPending = new Promise<unknown[]>((res) => { resolveGlobal = res; });
+    const guildPending  = new Promise<unknown[]>((_, rej) => { rejectGuild  = rej; });
+
+    mocks.selectWhere
+      .mockImplementationOnce(() => { initiated.push("global"); return globalPending; })
+      .mockImplementationOnce(() => { initiated.push("guild");  return guildPending;  });
+
+    const pending = isVcTrackingOptedOut("guild-par-rej-2", "user-par-rej-2");
+
+    // Both selects must be in-flight after one tick — a serialised
+    // implementation would await the global first and never reach the guild.
+    await Promise.resolve();
+    expect(initiated).toContain("global");
+    expect(initiated).toContain("guild");
+
+    // Trigger the guild rejection and settle the global promise cleanly.
+    resolveGlobal([]);
+    rejectGuild(new Error("query timeout"));
+
+    await expect(pending).rejects.toThrow("query timeout");
+  });
+
+  it("openSession returns null (not an unhandled rejection) when the inner select rejects", async () => {
+    // isVcTrackingOptedOut's global-table query rejects — openSession must
+    // catch it (fail-closed) and return null instead of letting the rejection
+    // escape to the VoiceStateUpdate handler.
+    mocks.selectWhere.mockRejectedValueOnce(new Error("network error"));
+
+    // resolves to null, never rejects
+    await expect(
+      openSession("guild-par-rej-3", "user-par-rej-3", "channel-par-rej-3"),
+    ).resolves.toBeNull();
+
+    // No session row must be created
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
 });
 
 // ─── openSession – privacy check DB failure (fail-closed) ────────────────────
