@@ -3092,3 +3092,112 @@ describe("setVcGlobalPrivacyOptOut – cold-start opt-out path (optedOut=true)",
     expect(conflictArg.set.optedOut).toBe(true);
   });
 });
+
+// ─── setVcGlobalPrivacyOptOut – multi-guild session close ─────────────────────
+//
+// setVcGlobalPrivacyOptOut is a cross-guild operation: closeOpenSessionsForUser
+// closes ALL open sessions for a user regardless of which guild they belong to.
+// The single db.update() call filters only by userId (+ leftAt IS NULL), so
+// sessions from guild-A, guild-B, and guild-C are all stamped in one statement —
+// not three separate per-guild statements.
+//
+// Tests verify:
+//   - The returned count equals the total sessions across all guilds
+//   - db.update() is called exactly once (not once per guild)
+//   - The WHERE clause does NOT include a guildId filter (cross-guild scope)
+//   - The set() payload carries a leftAt Date (sessions are stamped, not deleted)
+
+describe("setVcGlobalPrivacyOptOut – multi-guild session close", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the total count of sessions closed across all guilds", async () => {
+    // Simulate 3 open sessions belonging to 3 different guilds
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global opt-out upsert
+    mocks.returning.mockResolvedValueOnce([
+      { id: 1 }, // guild-A session
+      { id: 2 }, // guild-B session
+      { id: 3 }, // guild-C session
+    ]);
+
+    const count = await setVcGlobalPrivacyOptOut("user-mg-1", true);
+
+    expect(count).toBe(3);
+  });
+
+  it("calls db.update() exactly once regardless of how many guilds had open sessions", async () => {
+    // 4 sessions across 4 different guilds — still only one UPDATE statement
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([
+      { id: 10 }, // guild-A
+      { id: 11 }, // guild-B
+      { id: 12 }, // guild-C
+      { id: 13 }, // guild-D
+    ]);
+
+    await setVcGlobalPrivacyOptOut("user-mg-2", true);
+
+    // closeOpenSessionsForUser issues a single bulk UPDATE — not one per guild
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("WHERE clause filters only by userId (no guildId filter — cross-guild scope)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([{ id: 20 }, { id: 21 }]);
+
+    await setVcGlobalPrivacyOptOut("user-mg-3", true);
+
+    const [whereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: unknown; val: unknown }[] }
+    ];
+    // Top-level operator must be AND
+    expect(whereArg.op).toBe("and");
+
+    // Must include an eq for userId
+    const eqArgs = whereArg.args.filter((a) => a.op === "eq");
+    expect(eqArgs.length).toBe(1); // only one eq (userId), NOT two (no guildId eq)
+    expect(eqArgs[0]!.val).toBe("user-mg-3");
+
+    // Must include isNull for leftAt (only open sessions are closed)
+    expect(whereArg.args.some((a) => a.op === "isNull")).toBe(true);
+  });
+
+  it("stamps leftAt on all sessions (sessions are closed, not deleted)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([{ id: 30 }, { id: 31 }, { id: 32 }]);
+
+    const before = Date.now();
+    await setVcGlobalPrivacyOptOut("user-mg-4", true);
+    const after = Date.now();
+
+    // The set() payload must carry a leftAt Date — rows are stamped, not wiped
+    const [setPayload] = mocks.set.mock.calls[0] as unknown as [{ leftAt: Date }];
+    expect(setPayload.leftAt).toBeInstanceOf(Date);
+    expect(setPayload.leftAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(setPayload.leftAt.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it("returns 0 when the user has no open sessions in any guild", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([]); // no open sessions in any guild
+
+    const count = await setVcGlobalPrivacyOptOut("user-mg-5", true);
+
+    expect(count).toBe(0);
+    // db.update() is still called once (the WHERE just matches zero rows)
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("the single update targets the vc sessions table (not a per-guild table)", async () => {
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockResolvedValueOnce([{ id: 40 }, { id: 41 }]);
+
+    await setVcGlobalPrivacyOptOut("user-mg-6", true);
+
+    // db.update() must receive the vc sessions table stub
+    // (the proxy returns "sessions.<prop>" for communityVcSessionsTable properties)
+    const [tableArg] = mocks.update.mock.calls[0] as unknown as [Record<string, string>];
+    expect(tableArg["userId"]).toBe("sessions.userId");
+  });
+});
