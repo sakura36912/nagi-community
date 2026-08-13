@@ -322,6 +322,45 @@ describe('handlePrivacyGlobalOptoutKeep – "keep data" global opt-out path', ()
     // Another user's id must not appear in the WHERE clause
     expect(eqVals).not.toContain("user-original-global");
   });
+
+  // ── Embed accuracy: session-closed note reflects the replayer's session state ─
+
+  it("embed does NOT contain the session-closed note when the replaying user had no open session", async () => {
+    // closeOpenSessionsForUser returns 0 rows → closed === 0 → no note in embed
+    mocks.returning.mockResolvedValueOnce([]);         // closeOpenSessionsForUser: 0 closed
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global opt-out upsert
+
+    // The replayer (a different user from any hypothetical original requester)
+    const replayerUserId = "replayer-no-session";
+    const interaction = makeInteraction(replayerUserId);
+    await handlePrivacyGlobalOptoutKeep(interaction as never);
+
+    expect(interaction.editReply).toHaveBeenCalledTimes(1);
+    const callArg = (interaction.editReply.mock.calls[0] as [{ embeds: { data: { description?: string } }[] }])[0];
+    const description = callArg.embeds[0].data.description ?? "";
+    // The session-closed note must be absent — the replayer had no open session
+    expect(description).not.toContain("進行中のVCセッション");
+    expect(description).not.toContain("を自動的に終了しました");
+  });
+
+  it("embed DOES contain the session-closed note when the replaying user had an open session", async () => {
+    // closeOpenSessionsForUser returns 1 row → closed === 1 → note appears in embed
+    mocks.returning.mockResolvedValueOnce([{ id: 99 }]); // closeOpenSessionsForUser: 1 closed
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);   // global opt-out upsert
+
+    // The replayer is a different user; the test makes no assumption about any
+    // "original" requester's session state — only the replayer's state matters.
+    const replayerUserId = "replayer-with-session";
+    const interaction = makeInteraction(replayerUserId);
+    await handlePrivacyGlobalOptoutKeep(interaction as never);
+
+    expect(interaction.editReply).toHaveBeenCalledTimes(1);
+    const callArg = (interaction.editReply.mock.calls[0] as [{ embeds: { data: { description?: string } }[] }])[0];
+    const description = callArg.embeds[0].data.description ?? "";
+    // The session-closed note must be present — the replayer had an open session
+    expect(description).toContain("進行中のVCセッション");
+    expect(description).toContain("を自動的に終了しました");
+  });
 });
 
 // ─── handlePrivacyGlobalOptoutKeep – replay safety as global delete-flow cancel button ─
