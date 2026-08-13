@@ -293,8 +293,9 @@ client.once(Events.ClientReady, async (readyClient) => {
       const channelParentId = channel.parentId ?? null;
       // Skip channels that fall outside the configured tracked category.
       if (trackedCategoryId !== null && channelParentId !== trackedCategoryId) continue;
-      for (const [userId] of channel.members) {
-        await openSession(guild.id, userId, channel.id).catch(() => {});
+      for (const [userId, member] of channel.members) {
+        const isExile = resolveIsExile(member);
+        await openSession(guild.id, userId, channel.id, isExile).catch(() => {});
       }
     }
   }

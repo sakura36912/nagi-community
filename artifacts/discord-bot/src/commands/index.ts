@@ -1017,8 +1017,7 @@ const payCommand: Command = {
     const amount = interaction.options.getInteger("金額", true);
     const memo   = interaction.options.getString("メモ");
 
-    const isSelf = target.id === interaction.client.user?.id;
-    if (target.bot && !isSelf) {
+    if (target.bot) {
       await interaction.reply({ content: "Botには送金できません。", ephemeral: true });
       return;
     }

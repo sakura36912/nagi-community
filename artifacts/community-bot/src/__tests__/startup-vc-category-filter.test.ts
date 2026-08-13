@@ -46,20 +46,30 @@ vi.mock("../lib/logger.js", () => ({
 // so the tests exercise the same code path that runs on bot startup.
 
 import { openSession, getTrackedVcCategoryId } from "../lib/community.js";
+import { resolveIsExile } from "../lib/vc-exile.js";
 import { logger } from "../lib/logger.js";
 
 const GUILD_VOICE = "GUILD_VOICE" as const;
+
+interface FakeMember {
+  roles: { cache: { some(predicate: (role: { name: string }) => boolean): boolean } };
+}
 
 interface FakeChannel {
   type: typeof GUILD_VOICE;
   id: string;
   parentId: string | null;
-  members: Map<string, unknown>;
+  members: Map<string, FakeMember>;
 }
 
 interface FakeGuild {
   id: string;
   channels: { cache: Map<string, FakeChannel> };
+}
+
+/** Build a regular (non-exile) member stub. */
+function makeRegularMember(): FakeMember {
+  return { roles: { cache: { some: () => false } } };
 }
 
 async function simulateStartupSweep(guilds: FakeGuild[]): Promise<void> {
@@ -75,8 +85,9 @@ async function simulateStartupSweep(guilds: FakeGuild[]): Promise<void> {
       if (channel.type !== GUILD_VOICE) continue;
       const channelParentId = channel.parentId ?? null;
       if (trackedCategoryId !== null && channelParentId !== trackedCategoryId) continue;
-      for (const [userId] of channel.members) {
-        await openSession(guild.id, userId, channel.id).catch(() => {});
+      for (const [userId, member] of channel.members) {
+        const isExile = resolveIsExile(member);
+        await openSession(guild.id, userId, channel.id, isExile).catch(() => {});
       }
     }
   }
@@ -95,11 +106,11 @@ describe("ClientReady startup sweep – tracked-category filter", () => {
     await simulateStartupSweep([{
       id: "guild-1",
       channels: { cache: new Map([
-        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", {}]]) }],
+        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
       ]) },
     }]);
 
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-1");
+    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-1", false);
   });
 
   it("does NOT call openSession for a channel outside the tracked category", async () => {
@@ -108,7 +119,7 @@ describe("ClientReady startup sweep – tracked-category filter", () => {
     await simulateStartupSweep([{
       id: "guild-1",
       channels: { cache: new Map([
-        ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-B", members: new Map([["user-2", {}]]) }],
+        ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-B", members: new Map([["user-2", makeRegularMember()]]) }],
       ]) },
     }]);
 
@@ -121,14 +132,14 @@ describe("ClientReady startup sweep – tracked-category filter", () => {
     await simulateStartupSweep([{
       id: "guild-1",
       channels: { cache: new Map([
-        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", {}]]) }],
-        ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-B", members: new Map([["user-2", {}]]) }],
+        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
+        ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-B", members: new Map([["user-2", makeRegularMember()]]) }],
       ]) },
     }]);
 
     expect(mocks.openSession).toHaveBeenCalledTimes(2);
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-1");
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-2", "ch-2");
+    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-1", false);
+    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-2", "ch-2", false);
   });
 
   it("does NOT call openSession when getTrackedVcCategoryId throws (fail closed)", async () => {
@@ -137,7 +148,7 @@ describe("ClientReady startup sweep – tracked-category filter", () => {
     await simulateStartupSweep([{
       id: "guild-1",
       channels: { cache: new Map([
-        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", {}]]) }],
+        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
       ]) },
     }]);
 
@@ -151,7 +162,7 @@ describe("ClientReady startup sweep – tracked-category filter", () => {
     await simulateStartupSweep([{
       id: "guild-1",
       channels: { cache: new Map([
-        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", {}]]) }],
+        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
       ]) },
     }]);
 
@@ -170,19 +181,19 @@ describe("ClientReady startup sweep – tracked-category filter", () => {
       {
         id: "guild-1",
         channels: { cache: new Map([
-          ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", {}]]) }],
+          ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
         ]) },
       },
       {
         id: "guild-2",
         channels: { cache: new Map([
-          ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-A", members: new Map([["user-2", {}]]) }],
+          ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-A", members: new Map([["user-2", makeRegularMember()]]) }],
         ]) },
       },
     ]);
 
     expect(mocks.openSession).toHaveBeenCalledTimes(1);
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-2", "user-2", "ch-2");
+    expect(mocks.openSession).toHaveBeenCalledWith("guild-2", "user-2", "ch-2", false);
   });
 
   it("only opens sessions for the tracked channel when one channel is inside and one outside", async () => {
@@ -191,13 +202,13 @@ describe("ClientReady startup sweep – tracked-category filter", () => {
     await simulateStartupSweep([{
       id: "guild-1",
       channels: { cache: new Map([
-        ["ch-in",  { type: GUILD_VOICE, id: "ch-in",  parentId: "cat-A", members: new Map([["user-1", {}]]) }],
-        ["ch-out", { type: GUILD_VOICE, id: "ch-out", parentId: "cat-B", members: new Map([["user-2", {}]]) }],
+        ["ch-in",  { type: GUILD_VOICE, id: "ch-in",  parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
+        ["ch-out", { type: GUILD_VOICE, id: "ch-out", parentId: "cat-B", members: new Map([["user-2", makeRegularMember()]]) }],
       ]) },
     }]);
 
     expect(mocks.openSession).toHaveBeenCalledTimes(1);
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-in");
-    expect(mocks.openSession).not.toHaveBeenCalledWith("guild-1", "user-2", "ch-out");
+    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-in", false);
+    expect(mocks.openSession).not.toHaveBeenCalledWith("guild-1", "user-2", "ch-out", false);
   });
 });
