@@ -273,7 +273,8 @@ function buildResult(
   );
   const diagWins = paylines.filter((p) => p.won && p.name.startsWith("斜め"));
   const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("  ");
-  const content = gridLines.join("\n") + (diagLine ? "\n" + diagLine : "");
+  // 末尾のゼロ幅スペースで Discord のジャンボ絵文字表示を抑制（常に同じサイズにする）
+  const content = gridLines.join("\n") + (diagLine ? "\n" + diagLine : "") + "\u200B";
 
   let resultText: string;
   let title: string;
