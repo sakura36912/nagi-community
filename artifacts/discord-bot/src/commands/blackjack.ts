@@ -537,6 +537,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     await interaction.editReply({ content: "", embeds, files, components: [buildButtons(false)] });
 
   } else if (action === "stand") {
+    const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
+    await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
     await finishGame(interaction, dealerPlay(game));
 
   } else if (action === "double") {
@@ -545,6 +547,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
       await interaction.followUp({ content: "残高が不足しているためダブルダウンできません。", flags: MessageFlags.Ephemeral });
       return;
     }
+    const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
+    await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
     game.bet *= 2; game.doubled = true; game.balance = extra.balance;
     const [card, newDeck] = draw(game.deck);
     game.playerHand = [...game.playerHand, card]; game.deck = newDeck;
