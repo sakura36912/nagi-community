@@ -45,6 +45,13 @@ export const guildSettingsTable = pgTable("guild_settings", {
   // NULL means use the hardcoded default list (大酒場🍺, 小酒場🍺).
   chestTavernChannelNames: text("chest_tavern_channel_names"),
 
+  // Blackjack suit custom emojis (Discord emoji strings, e.g. "<:spade:123>").
+  // NULL means use the default Unicode emoji (♠️ ♥️ ♦️ ♣️).
+  bjSuitSpade:   text("bj_suit_spade"),
+  bjSuitHeart:   text("bj_suit_heart"),
+  bjSuitDiamond: text("bj_suit_diamond"),
+  bjSuitClub:    text("bj_suit_club"),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

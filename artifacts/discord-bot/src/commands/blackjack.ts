@@ -1,6 +1,10 @@
 /**
  * /blackjack — ブラックジャック
  * ヒット・スタンド・ダブルダウン対応。6デッキシュー。
+ *
+ * サブコマンド:
+ *   play   : ゲームを開始する
+ *   config : スート絵文字を登録する（管理者専用）
  */
 
 import {
@@ -9,13 +13,15 @@ import {
   ButtonStyle,
   EmbedBuilder,
   MessageFlags,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
-import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
+import { getGuildSettings, recordTransaction, getOrCreateWallet, setBjSuitEmoji } from "../lib/economy";
+import type { GuildSettings } from "@workspace/db";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -24,6 +30,8 @@ const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
 type Suit = (typeof SUITS)[number];
 type Rank = (typeof RANKS)[number];
 interface Card { rank: Rank; suit: Suit }
+
+type SuitEmojis = Record<Suit, string>;
 
 interface BJGame {
   guildId: string;
@@ -37,6 +45,8 @@ interface BJGame {
   /** balance after initial bet deduction */
   balance: number;
   expiresAt: number;
+  /** カスタムスート絵文字（ゲーム開始時にDBから取得） */
+  suitEmojis: SuitEmojis;
 }
 
 type Outcome = "blackjack" | "win" | "push" | "lose";
@@ -70,6 +80,18 @@ setInterval(() => {
   }
 }, 60_000);
 
+// ─── Suit emoji helpers ───────────────────────────────────────────────────────
+
+/** DBの guild_settings からスート絵文字マップを構築する。未設定はUnicode絵文字にフォールバック。 */
+function resolveSuitEmojis(settings: GuildSettings): SuitEmojis {
+  return {
+    "♠": settings.bjSuitSpade   ?? "♠️",
+    "♥": settings.bjSuitHeart   ?? "♥️",
+    "♦": settings.bjSuitDiamond ?? "♦️",
+    "♣": settings.bjSuitClub    ?? "♣️",
+  };
+}
+
 // ─── Deck helpers ─────────────────────────────────────────────────────────────
 
 function buildShoe(decks = 6): Card[] {
@@ -84,13 +106,13 @@ function buildShoe(decks = 6): Card[] {
   // Fisher–Yates shuffle
   for (let i = shoe.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
+    [shoe[i], shoe[j]] = [shoe[j]!, shoe[i]!];
   }
   return shoe;
 }
 
 function draw(deck: Card[]): [Card, Card[]] {
-  return [deck[0], deck.slice(1)];
+  return [deck[0]!, deck.slice(1)];
 }
 
 function cardPoints(rank: Rank): number {
@@ -109,17 +131,12 @@ function total(hand: Card[]): number {
 const isBust       = (hand: Card[]) => total(hand) > 21;
 const isBlackjack  = (hand: Card[]) => hand.length === 2 && total(hand) === 21;
 
-// スーツ絵文字（♠️♥️♦️♣️）+ ランク文字。どの環境でも確実に表示される。
-const SUIT_EMOJI: Record<Suit, string> = {
-  "♠": "♠️", "♥": "♥️", "♦": "♦️", "♣": "♣️",
-};
-
-function formatCard(c: Card): string {
-  return `${c.rank}${SUIT_EMOJI[c.suit]}`;
+function formatCard(c: Card, emojis: SuitEmojis): string {
+  return `${c.rank}${emojis[c.suit]}`;
 }
 
-function formatHand(hand: Card[], hideSecond = false): string {
-  return hand.map((c, i) => (hideSecond && i === 1 ? "🎴" : formatCard(c))).join(" ");
+function formatHand(hand: Card[], emojis: SuitEmojis, hideSecond = false): string {
+  return hand.map((c, i) => (hideSecond && i === 1 ? "🎴" : formatCard(c, emojis))).join(" ");
 }
 
 // ─── Balance helpers ──────────────────────────────────────────────────────────
@@ -154,11 +171,12 @@ async function creditAmount(
 
 function buildGameEmbed(game: BJGame, hideDealer = true): EmbedBuilder {
   const pTotal = total(game.playerHand);
-  const dKnown = total([game.dealerHand[0]]);
+  const dKnown = total([game.dealerHand[0]!]);
+  const e = game.suitEmojis;
 
   const dealerValue = hideDealer
-    ? `${formatHand(game.dealerHand, true)}　（${dKnown}+?）`
-    : `${formatHand(game.dealerHand)}　**${total(game.dealerHand)}**`;
+    ? `${formatHand(game.dealerHand, e, true)}　（${dKnown}+?）`
+    : `${formatHand(game.dealerHand, e)}　**${total(game.dealerHand)}**`;
 
   return new EmbedBuilder()
     .setTitle("🃏 ブラックジャック")
@@ -166,7 +184,7 @@ function buildGameEmbed(game: BJGame, hideDealer = true): EmbedBuilder {
     .addFields(
       {
         name: "あなたの手札",
-        value: `${formatHand(game.playerHand)}　**${pTotal}**`,
+        value: `${formatHand(game.playerHand, e)}　**${pTotal}**`,
       },
       { name: "ディーラーの手札", value: dealerValue },
       {
@@ -201,6 +219,7 @@ function buildResultEmbed(
     lose:      COLOR_LOSE,
   };
   const sign = netDelta > 0 ? "+" : "";
+  const e = game.suitEmojis;
 
   return new EmbedBuilder()
     .setTitle(`🃏 ブラックジャック — ${title[outcome]}`)
@@ -208,11 +227,11 @@ function buildResultEmbed(
     .addFields(
       {
         name: "あなたの手札",
-        value: `${formatHand(game.playerHand)}　**${total(game.playerHand)}**`,
+        value: `${formatHand(game.playerHand, e)}　**${total(game.playerHand)}**`,
       },
       {
         name: "ディーラーの手札",
-        value: `${formatHand(game.dealerHand)}　**${total(game.dealerHand)}**`,
+        value: `${formatHand(game.dealerHand, e)}　**${total(game.dealerHand)}**`,
       },
       {
         name: "収支",
@@ -261,11 +280,11 @@ function dealerPlay(game: BJGame): BJGame {
 function resolveOutcome(game: BJGame): { outcome: Outcome; netDelta: number } {
   const pTotal = total(game.playerHand);
   const dTotal = total(game.dealerHand);
-  const pBJ = isBlackjack(game.playerHand) && !game.doubled; // double-downはBJ扱いしない
+  const pBJ = isBlackjack(game.playerHand) && !game.doubled;
   const dBJ = isBlackjack(game.dealerHand);
 
   if (pBJ && dBJ) return { outcome: "push", netDelta: 0 };
-  if (pBJ) return { outcome: "blackjack", netDelta: Math.floor(game.bet * 0.5) }; // 1.5倍（追加0.5分）
+  if (pBJ) return { outcome: "blackjack", netDelta: Math.floor(game.bet * 0.5) };
   if (isBust(game.playerHand)) return { outcome: "lose", netDelta: -game.bet };
   if (dBJ || isBust(game.dealerHand) || pTotal > dTotal) return { outcome: "win", netDelta: game.bet };
   if (pTotal === dTotal) return { outcome: "push", netDelta: 0 };
@@ -282,16 +301,12 @@ async function finishGame(
   let finalBalance = game.balance;
 
   if (outcome === "push") {
-    // 賭け金を返却
     finalBalance = await creditAmount(guildId, userId, bet);
   } else if (outcome === "blackjack") {
-    // ベット返却 + ブラックジャックボーナス（0.5倍 = netDelta）
     finalBalance = await creditAmount(guildId, userId, bet + netDelta);
   } else if (outcome === "win") {
-    // ベット返却 + 利益（1倍 = netDelta）
     finalBalance = await creditAmount(guildId, userId, bet + netDelta);
   }
-  // lose: ベット済みなのでそのまま
 
   const logReason: Record<Outcome, string> = {
     blackjack: `ブラックジャック（賭け: ${bet}）`,
@@ -338,7 +353,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   await interaction.deferUpdate();
 
-  const action = interaction.customId.slice(BJ_PREFIX.length); // "hit" | "stand" | "double"
+  const action = interaction.customId.slice(BJ_PREFIX.length);
 
   if (action === "hit") {
     const [card, newDeck] = draw(game.deck);
@@ -355,7 +370,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
     await interaction.editReply({
       embeds: [buildGameEmbed(game, true)],
-      components: [buildButtons(false)], // ヒット後はダブル不可
+      components: [buildButtons(false)],
     });
 
   } else if (action === "stand") {
@@ -403,10 +418,12 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const [, { currencyName }] = await Promise.all([
+  const [, settings] = await Promise.all([
     getOrCreateWallet(guildId, userId),
     getGuildSettings(guildId),
   ]);
+
+  const suitEmojis = resolveSuitEmojis(settings);
 
   const afterDeduct = await deductBet(guildId, userId, bet);
   if (!afterDeduct) {
@@ -427,7 +444,6 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   let dealerHand: Card[] = [];
   let card: Card;
 
-  // 交互に2枚ずつ配る
   [card, deck] = draw(deck); playerHand = [...playerHand, card];
   [card, deck] = draw(deck); dealerHand = [...dealerHand, card];
   [card, deck] = draw(deck); playerHand = [...playerHand, card];
@@ -441,12 +457,12 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     dealerHand,
     deck,
     doubled: false,
-    currencyName,
+    currencyName: settings.currencyName,
     balance: afterDeduct.balance,
     expiresAt: Date.now() + GAME_TTL_MS,
+    suitEmojis,
   };
 
-  // 初期配牌でブラックジャックの場合は即決着
   if (isBlackjack(playerHand)) {
     const finished = dealerPlay(game);
     await interaction.deferReply();
@@ -462,22 +478,91 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   });
 }
 
+// ─── /blackjack config ────────────────────────────────────────────────────────
+
+const SUIT_LABEL: Record<string, string> = {
+  spade: "♠️ スペード",
+  heart: "♥️ ハート",
+  diamond: "♦️ ダイヤ",
+  club: "♣️ クラブ",
+};
+
+async function handleConfig(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ このコマンドは管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const suit  = interaction.options.getString("suit", true) as "spade" | "heart" | "diamond" | "club";
+  const emoji = interaction.options.getString("emoji")?.trim() || null;
+
+  await setBjSuitEmoji(guildId, suit, emoji);
+
+  const label = SUIT_LABEL[suit] ?? suit;
+  const display = emoji ?? "デフォルト（Unicode絵文字）";
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🃏 ブラックジャック — スート絵文字設定")
+        .setColor(COLOR_NEUTRAL)
+        .addFields({ name: label, value: `→ ${display}`, inline: false })
+        .setFooter({ text: emoji ? "次回ゲームから反映されます" : "デフォルトにリセットしました" }),
+    ],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
 // ─── Command export ───────────────────────────────────────────────────────────
 
 export const blackjackCommand = {
   data: new SlashCommandBuilder()
     .setName("blackjack")
-    .setDescription("ブラックジャック — 21を目指せ！BJ=1.5倍・通常勝利=1倍")
-    .setDefaultMemberPermissions(0)
-    .addIntegerOption((opt) =>
-      opt
-        .setName("bet")
-        .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
-        .setMinValue(MIN_BET)
-        .setMaxValue(MAX_BET)
-        .setRequired(true),
+    .setDescription("ブラックジャック")
+    .addSubcommand((sub) =>
+      sub
+        .setName("play")
+        .setDescription("ブラックジャック — 21を目指せ！BJ=1.5倍・通常勝利=1倍")
+        .addIntegerOption((opt) =>
+          opt
+            .setName("bet")
+            .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
+            .setMinValue(MIN_BET)
+            .setMaxValue(MAX_BET)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("config")
+        .setDescription("【管理者】トランプのスート絵文字を登録する")
+        .addStringOption((opt) =>
+          opt
+            .setName("suit")
+            .setDescription("設定するスート")
+            .setRequired(true)
+            .addChoices(
+              { name: "♠️ スペード", value: "spade" },
+              { name: "♥️ ハート",   value: "heart" },
+              { name: "♦️ ダイヤ",   value: "diamond" },
+              { name: "♣️ クラブ",   value: "club" },
+            ),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("emoji")
+            .setDescription("使用する絵文字（例: <:spade:1234567890>）。省略するとデフォルトにリセット")
+            .setRequired(false),
+        ),
     ),
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await handlePlay(interaction);
+    const sub = interaction.options.getSubcommand();
+    if (sub === "play") {
+      await handlePlay(interaction);
+    } else if (sub === "config") {
+      await handleConfig(interaction);
+    }
   },
 };

@@ -235,6 +235,24 @@ export async function setChestTavernChannelNames(
   });
 }
 
+/**
+ * ブラックジャックのスート絵文字を設定する。
+ * `emoji` が null のときはデフォルト（Unicode 絵文字）に戻す。
+ */
+export async function setBjSuitEmoji(
+  guildId: string,
+  suit: "spade" | "heart" | "diamond" | "club",
+  emoji: string | null,
+): Promise<GuildSettings> {
+  const key = {
+    spade:   "bjSuitSpade",
+    heart:   "bjSuitHeart",
+    diamond: "bjSuitDiamond",
+    club:    "bjSuitClub",
+  }[suit] as "bjSuitSpade" | "bjSuitHeart" | "bjSuitDiamond" | "bjSuitClub";
+  return upsertGuildSetting(guildId, { [key]: emoji });
+}
+
 export async function setLeaveLogChannelId(
   guildId: string,
   leaveLogChannelId: string | null,
