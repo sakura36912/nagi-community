@@ -354,6 +354,36 @@ describe("/ranking reset – audit log embed", () => {
     expect(operatorField!.value).toContain("<@admin-user>");
   });
 
+  it("posts the audit embed via fetch when the channel is not in the cache", async () => {
+    if (!rankingExecute) return;
+
+    const sendMock = vi.fn().mockResolvedValue(undefined);
+    const fetchedChannel = makeAuditChannel({ send: sendMock });
+
+    const guild = {
+      name: "Test Guild",
+      channels: {
+        // Cache miss: get() returns undefined
+        cache: { get: vi.fn().mockReturnValue(undefined) },
+        // Fetch resolves with the channel
+        fetch: vi.fn().mockResolvedValue(fetchedChannel),
+      },
+    };
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-456" }]);
+
+    const interaction = makeResetInteraction({ confirm: true, guild });
+    await rankingExecute(interaction as never);
+
+    // fetch must have been called with the channel id
+    expect(guild.channels.fetch).toHaveBeenCalledWith("audit-ch-456");
+    // send must have been called on the fetched channel
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const [sendArg] = sendMock.mock.calls[0] as [{ embeds: unknown[] }];
+    expect(sendArg).toHaveProperty("embeds");
+    expect(sendArg.embeds).toHaveLength(1);
+  });
+
   it("does not propagate a send error to the admin when the audit channel send fails", async () => {
     if (!rankingExecute) return;
 
