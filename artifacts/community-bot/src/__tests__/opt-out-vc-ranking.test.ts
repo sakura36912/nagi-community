@@ -791,3 +791,100 @@ describe("openSession / getVcRanking – guild opt-in does not override active g
     expect(result).toBeNull();
   });
 });
+
+// ─── openSession fail-closed: DB error in privacy check ──────────────────────
+
+describe("openSession – returns null when privacy table query rejects", () => {
+  /**
+   * Scenario: isVcTrackingOptedOut runs two db.select queries in parallel.
+   * If either (or both) queries reject — e.g. due to a DB connection drop —
+   * openSession must catch the rejection and return null (fail-closed) instead
+   * of re-throwing the error to the caller.
+   *
+   * Without this behaviour a DB blip during the privacy check would produce an
+   * unhandled rejection in the VoiceStateUpdate handler and potentially allow
+   * a session row to be written for a user who had opted out before the outage.
+   */
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Restore a working default select so unrelated assertions are unaffected.
+    mocks.select.mockImplementation(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([])),
+      })),
+    }));
+  });
+
+  it("returns null (does not throw) when db.select rejects for both privacy queries", async () => {
+    // Both Promise.all branches reject — simulates a total DB outage.
+    const dbError = new Error("DB connection refused");
+    mocks.select.mockImplementation(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.reject(dbError)),
+      })),
+    }));
+
+    const result = await openSession(GUILD, "user-db-error", "channel-001");
+
+    // Fail-closed: null is returned, the error is not propagated.
+    expect(result).toBeNull();
+  });
+
+  it("returns null (does not throw) when only the global privacy query rejects", async () => {
+    // First db.select() call (global table) rejects; second (guild table) succeeds.
+    const dbError = new Error("Global table unreachable");
+    mocks.select
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => Promise.reject(dbError)),
+        })),
+      }))
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => Promise.resolve([])),
+        })),
+      }));
+
+    const result = await openSession(GUILD, "user-db-error", "channel-001");
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null (does not throw) when only the guild privacy query rejects", async () => {
+    // First db.select() call (global table) succeeds; second (guild table) rejects.
+    const dbError = new Error("Guild table unreachable");
+    mocks.select
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => Promise.resolve([])),
+        })),
+      }))
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => Promise.reject(dbError)),
+        })),
+      }));
+
+    const result = await openSession(GUILD, "user-db-error", "channel-001");
+
+    expect(result).toBeNull();
+  });
+
+  it("does not call db.insert when the privacy check rejects", async () => {
+    // No session row must be written when the privacy check fails.
+    const dbError = new Error("DB connection refused");
+    mocks.select.mockImplementation(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.reject(dbError)),
+      })),
+    }));
+
+    const { db } = await import("@workspace/db");
+    const insertSpy = vi.mocked(db.insert);
+
+    await openSession(GUILD, "user-db-error", "channel-001");
+
+    expect(insertSpy).not.toHaveBeenCalled();
+  });
+});
