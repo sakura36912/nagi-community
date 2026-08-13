@@ -250,3 +250,119 @@ describe("getUserVcRank – exile session exclusion", () => {
     expect(notInMatches.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+// ─── getVcRanking – channelIds filter + exile exclusion ───────────────────────
+
+describe("getVcRanking – exile exclusion holds when channelIds filter is supplied", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns empty array when the only matching session belongs to an exile user (channelIds supplied)", async () => {
+    // The DB applies both the channel filter and is_exile = false, returning nothing.
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await getVcRanking(GUILD, undefined, ["chan-1"]);
+
+    expect(result).toEqual([]);
+  });
+
+  it("SQL query contains is_exile = false when channelIds is supplied", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD, undefined, ["chan-1"]);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("is_exile = false");
+  });
+
+  it("SQL query contains is_exile = false when both periodStart and channelIds are supplied", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD, new Date("2024-01-01T00:00:00Z"), ["chan-1", "chan-2"]);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("is_exile = false");
+  });
+
+  it("does not include an exile user even when their channel is in the channelIds filter", async () => {
+    // The DB applies is_exile = false first; exile user never appears in the result set.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-normal", total_seconds: "5400", is_live: false }],
+    });
+
+    const result = await getVcRanking(GUILD, undefined, ["chan-1"]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-normal");
+    expect(result.some((r) => r.userId === "user-exile")).toBe(false);
+  });
+
+  it("SQL contains community_vc_privacy NOT IN filters alongside is_exile = false when channelIds supplied", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getVcRanking(GUILD, undefined, ["chan-1"]);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("is_exile = false");
+    expect(query).toContain("community_vc_privacy");
+    expect(query).toContain("community_vc_privacy_global");
+    const notInMatches = query.match(/NOT IN/g) ?? [];
+    expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ─── getUserVcRank – channelIds filter + exile exclusion ──────────────────────
+
+describe("getUserVcRank – exile exclusion holds when channelIds filter is supplied", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns null when the exile user's session matches the channel filter (DB returns no rank row)", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    const rank = await getUserVcRank(GUILD, "user-exile-only", undefined, ["chan-1"]);
+
+    expect(rank).toBeNull();
+  });
+
+  it("SQL query contains is_exile = false when channelIds is supplied", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-exile-only", undefined, ["chan-1"]);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("is_exile = false");
+  });
+
+  it("SQL query contains is_exile = false when both periodStart and channelIds are supplied", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-exile-only", new Date("2024-06-01T00:00:00Z"), ["chan-1"]);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("is_exile = false");
+  });
+
+  it("returns numeric rank for non-exile user when channelIds filter is also active", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [{ rank: "2" }] });
+
+    const rank = await getUserVcRank(GUILD, "user-normal", undefined, ["chan-1"]);
+
+    expect(rank).toBe(2);
+  });
+
+  it("SQL contains community_vc_privacy NOT IN filters alongside is_exile = false when channelIds supplied", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-exile-only", undefined, ["chan-1"]);
+
+    const query = sqlText(mocks.execute);
+    expect(query).toContain("is_exile = false");
+    expect(query).toContain("community_vc_privacy");
+    expect(query).toContain("community_vc_privacy_global");
+    const notInMatches = query.match(/NOT IN/g) ?? [];
+    expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+});
