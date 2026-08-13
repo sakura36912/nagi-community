@@ -405,13 +405,6 @@ export const vcCommand = {
           if (!ch || !("messages" in ch) || !("permissionOverwrites" in ch) || !("send" in ch)) { skipped++; continue; }
           const gc = ch as import("discord.js").GuildChannel;
           const tc = ch as import("discord.js").VoiceChannel;
-          // Bot のみ ViewChannel/SendMessages/AttachFiles を明示的に許可
-          // （@everyone への ViewChannel 上書きは行わない — カテゴリ権限を継承させる）
-          if (botId) {
-            await gc.permissionOverwrites.edit(botId, {
-              ViewChannel: true, SendMessages: true, AttachFiles: true,
-            }).catch(() => {});
-          }
           // パネルがすでにあれば edit、なければ send
           const msgs = await tc.messages.fetch({ limit: 50 });
           const existing = msgs.find(
@@ -609,17 +602,6 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       parent: categoryId,
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
     });
-
-    // 酒場VC はパネルを送らないため bot の権限上書きも不要。
-    // 上書きを追加すると Discord がカテゴリと「非同期」と判定してしまうため、
-    // 非酒場VCのみ bot の ViewChannel/SendMessages/AttachFiles を明示的に付与する。
-    if (botId && !isTavern) {
-      await newVc.permissionOverwrites.edit(botId, {
-        ViewChannel: true,
-        SendMessages: true,
-        AttachFiles: true,
-      }).catch((err) => logger.warn("[vcHub] Failed to set bot permissions on new VC", err));
-    }
 
     await createHubSession(guild.id, newVc.id, member.id, hub.id);
 
