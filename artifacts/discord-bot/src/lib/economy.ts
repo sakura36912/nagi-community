@@ -303,6 +303,13 @@ export async function setBanLogChannelId(
   return upsertGuildSetting(guildId, { banLogChannelId });
 }
 
+export async function setChestLogChannelId(
+  guildId: string,
+  chestLogChannelId: string | null,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, { chestLogChannelId });
+}
+
 export async function createOrUpdateCurrency(
   guildId: string,
   currencyName: string,

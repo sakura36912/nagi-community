@@ -87,7 +87,7 @@ import {
 } from "../lib/economy";
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds } from "../lib/vcReward";
 import { getCurrentTavernSeconds, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
-import { setChestTavernChannelNames } from "../lib/economy";
+import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 
@@ -2032,17 +2032,50 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   const settings = await getGuildSettings(interaction.guild.id);
   const cn = settings.currencyName;
 
+  /** ログを専用チャンネルに投稿するヘルパー */
+  async function postChestLog(opts: {
+    chestLabel: string;
+    resultLabel: string;
+    resultEmoji: string;
+    amount: number | null;
+    hit: boolean;
+  }): Promise<void> {
+    const logChannelId = settings.chestLogChannelId;
+    if (!logChannelId) return;
+    try {
+      const logChannel = await interaction.guild!.channels.fetch(logChannelId).catch(() => null);
+      if (!logChannel || !logChannel.isTextBased()) return;
+      const embed = new EmbedBuilder()
+        .setTitle(`${opts.hit ? "🎁" : "📦"} 宝箱開封ログ`)
+        .setColor(opts.hit ? 0xf5c518 : 0x888888)
+        .addFields(
+          { name: "ユーザー", value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
+          { name: "種類", value: opts.chestLabel, inline: true },
+          { name: "結果", value: `${opts.resultEmoji} ${opts.resultLabel}${opts.amount !== null ? `  **${opts.amount.toLocaleString()}${cn}**` : ""}`, inline: false },
+        )
+        .setTimestamp();
+      await logChannel.send({ embeds: [embed] });
+    } catch (e) {
+      logger.warn("宝箱ログ投稿失敗", e);
+    }
+  }
+
   // ── 新入り宝箱: 10,000〜100,000$ を均等10%で抽選 ─────────────────────────
   if (chestType === "shinniri") {
     const amount = rollShinniriChest();
     if (amount === 0) {
-      await interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。");
+      await Promise.all([
+        interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。"),
+        postChestLog({ chestLabel: "新入り宝箱", resultLabel: "ハズレ", resultEmoji: "💨", amount: null, hit: false }),
+      ]);
     } else {
-      await giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest");
       const emoji = amount >= 100_000 ? "💎" : amount >= 50_000 ? "🎊" : "🎁";
-      await interaction.editReply(
-        `📦 宝箱を開けた！\n\n${emoji} **${amount.toLocaleString()}${cn}** を獲得しました！`,
-      );
+      await Promise.all([
+        giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest").then(() =>
+          interaction.editReply(`📦 宝箱を開けた！\n\n${emoji} **${amount.toLocaleString()}${cn}** を獲得しました！`)
+        ),
+        postChestLog({ chestLabel: "新入り宝箱", resultLabel: "当たり", resultEmoji: emoji, amount, hit: true }),
+      ]);
     }
     return;
   }
@@ -2060,15 +2093,20 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
   const coin = coinPrizes[result];
   if (coin) {
-    await giveCurrency(interaction.guild.id, interaction.user.id, coin.amount, "treasure-chest");
-    await interaction.editReply(
-      `📦 宝箱を開けた！\n\n**${coin.label}** ${coin.emoji} **${coin.amount.toLocaleString()}${cn}** を獲得しました！`,
-    );
+    await Promise.all([
+      giveCurrency(interaction.guild.id, interaction.user.id, coin.amount, "treasure-chest").then(() =>
+        interaction.editReply(`📦 宝箱を開けた！\n\n**${coin.label}** ${coin.emoji} **${coin.amount.toLocaleString()}${cn}** を獲得しました！`)
+      ),
+      postChestLog({ chestLabel: "本船員宝箱", resultLabel: coin.label, resultEmoji: coin.emoji, amount: coin.amount, hit: true }),
+    ]);
     return;
   }
 
   // miss
-  await interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。");
+  await Promise.all([
+    interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。"),
+    postChestLog({ chestLabel: "本船員宝箱", resultLabel: "ハズレ", resultEmoji: "💨", amount: null, hit: false }),
+  ]);
 }
 
 export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction): Promise<void> {
@@ -2454,6 +2492,17 @@ const chestCommand: Command = {
             .setDescription("チャンネル名をカンマ区切りで指定。空欄でデフォルト（大酒場🍺, 小酒場🍺）に戻す")
             .setRequired(false),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("set-log")
+        .setDescription("【管理者専用】宝箱開封ログを投稿するチャンネルを設定します")
+        .addChannelOption((opt) =>
+          opt
+            .setName("channel")
+            .setDescription("ログ投稿先チャンネル（省略するとログ無効化）")
+            .setRequired(false),
+        ),
     ) as SlashCommandBuilder,
   async execute(interaction) {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
@@ -2547,6 +2596,18 @@ const chestCommand: Command = {
       await interaction.editReply(
         `✅ **${rows.length}名** に昨日の${channelLabel}のVC時間を本日分として付与しました。\n\n${lines.join("\n")}`,
       );
+    } else if (sub === "set-log") {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "❌ サーバー内でのみ使用できます。", ephemeral: true });
+        return;
+      }
+      const ch = interaction.options.getChannel("channel", false);
+      await setChestLogChannelId(interaction.guildId, ch?.id ?? null);
+      if (ch) {
+        await interaction.reply({ content: `✅ 宝箱ログチャンネルを <#${ch.id}> に設定しました。`, ephemeral: true });
+      } else {
+        await interaction.reply({ content: "✅ 宝箱ログを無効化しました。", ephemeral: true });
+      }
     } else if (sub === "set-channels") {
       if (!interaction.guildId) {
         await interaction.reply({ content: "❌ サーバー内でのみ使用できます。", ephemeral: true });

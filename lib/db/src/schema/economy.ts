@@ -45,6 +45,10 @@ export const guildSettingsTable = pgTable("guild_settings", {
   // NULL means use the hardcoded default list (大酒場🍺, 小酒場🍺).
   chestTavernChannelNames: text("chest_tavern_channel_names"),
 
+  // Discord text channel ID where chest open results are logged.
+  // NULL means no logging.
+  chestLogChannelId: text("chest_log_channel_id"),
+
   // Blackjack suit custom emojis (Discord emoji strings, e.g. "<:spade:123>").
   // NULL means use the default Unicode emoji (♠️ ♥️ ♦️ ♣️).
   bjSuitSpade:   text("bj_suit_spade"),
