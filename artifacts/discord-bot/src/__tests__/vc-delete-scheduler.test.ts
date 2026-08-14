@@ -919,6 +919,80 @@ describe("runVcDeleteScheduler – extended expiry DM timestamp accuracy", () =>
     expect(notifiedDate.getTime()).toBeGreaterThanOrEqual(before);
     expect(notifiedDate.getTime()).toBeLessThanOrEqual(after);
   });
+
+  it("double-extension after the tick: second tick sends exactly one more DM for the final deadline and markScheduleNotified totals two calls across both ticks", async () => {
+    // ── Scenario ────────────────────────────────────────────────────────────────
+    // Tick 1 fires a warning for the original schedule and stamps notifiedAt.
+    // AFTER tick 1 has already stamped notifiedAt (i.e. after the tick already
+    // fired), the user purchases two VC extensions in rapid succession:
+    //
+    //   Extension 1: extendSchedule(channelId, firstExtendedExpiresAt)
+    //                → writes firstExtendedExpiresAt, resets notifiedAt = null
+    //   Extension 2: extendSchedule(channelId, secondExtendedExpiresAt)
+    //                → overwrites first, resets notifiedAt = null again (final)
+    //
+    // Both extensions arrive before tick 2 fires.  The DB now holds ONE row:
+    // expiresAt = secondExtendedExpiresAt, notifiedAt = null.
+    //
+    // Tick 2 must:
+    //   • find the re-armed row (notifiedAt = null gate passes)
+    //   • send exactly one DM using the final (second-extension) deadline
+    //   • call markScheduleNotified exactly once more
+    //
+    // Mocks are NOT cleared between ticks so cumulative call counts reflect the
+    // full two-tick sequence and cannot be gamed by per-tick resets.
+    const now = Date.now();
+    const originalExpiresAt       = new Date(now + 5 * 60 * 1000); // 5 min — inside 10-min window
+    const firstExtendedExpiresAt  = new Date(now + 7 * 60 * 1000); // 7 min — intermediate state
+    const secondExtendedExpiresAt = new Date(now + 9 * 60 * 1000); // 9 min — final state after both extensions
+    const finalTs = Math.floor(secondExtendedExpiresAt.getTime() / 1000);
+    const firstTs = Math.floor(firstExtendedExpiresAt.getTime()  / 1000);
+
+    const client = makeClient();
+
+    // ── Tick 1: original schedule fires its warning ───────────────────────────
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: originalExpiresAt, notifiedAt: null }),
+    ]);
+
+    await runVcDeleteScheduler(client);
+
+    // After tick 1: one DM sent, notifiedAt stamped once.
+    expect(client._userSend).toHaveBeenCalledTimes(1);
+    expect(mocks.markScheduleNotified).toHaveBeenCalledTimes(1);
+
+    // ── Extensions arrive (after tick 1 has already stamped notifiedAt) ───────
+    // Extension 1 wrote firstExtendedExpiresAt and cleared notifiedAt.
+    // Extension 2 then overwrote with secondExtendedExpiresAt and cleared
+    // notifiedAt again.  Tick 2 will see the final merged state.
+
+    // ── Tick 2: sees re-armed row with the final extended deadline ────────────
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([
+      makeSchedule({ expiresAt: secondExtendedExpiresAt, notifiedAt: null }),
+    ]);
+
+    const beforeTick2 = Date.now();
+    await runVcDeleteScheduler(client);
+    const afterTick2 = Date.now();
+
+    // Two DMs total across both ticks — exactly one fired on tick 2.
+    expect(client._userSend).toHaveBeenCalledTimes(2);
+    // The tick-2 DM (second call) must embed the final extended timestamp.
+    const dmText2: string = client._userSend.mock.calls[1][0];
+    expect(dmText2).toContain(`<t:${finalTs}:R>`);
+    expect(dmText2).toContain(`<t:${finalTs}:T>`);
+    // The intermediate first-extension timestamp must NOT appear in tick 2's DM.
+    expect(dmText2).not.toContain(`<t:${firstTs}:R>`);
+
+    // markScheduleNotified called twice total — once per tick, never zero, never three.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledTimes(2);
+    const [schedId2, notifiedDate2] = mocks.markScheduleNotified.mock.calls[1] as [number, Date];
+    expect(schedId2).toBe(1);
+    expect(notifiedDate2).toBeInstanceOf(Date);
+    // The tick-2 notified timestamp must be the current-tick wall clock.
+    expect(notifiedDate2.getTime()).toBeGreaterThanOrEqual(beforeTick2);
+    expect(notifiedDate2.getTime()).toBeLessThanOrEqual(afterTick2);
+  });
 });
 
 // ─── Unit tests for the DB query helpers (no Discord client needed) ───────────
