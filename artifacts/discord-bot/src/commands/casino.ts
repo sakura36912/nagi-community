@@ -24,7 +24,7 @@ const COLOR_NEUTRAL = 0x5865f2;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type GameKey = "blackjack" | "poker" | "roulette" | "slot" | "highlow";
+type GameKey = "blackjack" | "poker" | "roulette" | "slot" | "highlow" | "baccarat";
 
 interface GameStats {
   plays:        number;
@@ -75,6 +75,7 @@ async function fetchCasinoStats(
           sql`${transactionsTable.reason} LIKE 'ルーレット%'`,
           sql`${transactionsTable.reason} LIKE 'スロット%'`,
           sql`${transactionsTable.reason} LIKE 'ハイアンドロー%'`,
+          sql`${transactionsTable.reason} LIKE 'バカラ%'`,
         ),
       ),
     );
@@ -89,6 +90,7 @@ async function fetchCasinoStats(
     roulette:  empty(),
     slot:      empty(),
     highlow:   empty(),
+    baccarat:  empty(),
   };
 
   for (const row of rows) {
@@ -102,6 +104,7 @@ async function fetchCasinoStats(
     else if (row.reason.startsWith("ルーレット"))     key = "roulette";
     else if (row.reason.startsWith("スロット"))       key = "slot";
     else if (row.reason.startsWith("ハイアンドロー")) key = "highlow";
+    else if (row.reason.startsWith("バカラ"))         key = "baccarat";
     else continue;
 
     // ゲームごとの ledger 仕様の差異を吸収する
@@ -219,6 +222,7 @@ async function handleStats(interaction: ChatInputCommandInteraction): Promise<vo
     roulette:  "🎡 ルーレット",
     slot:      "🎰 スロット",
     highlow:   "🃏 ハイアンドロー",
+    baccarat:  "🎴 バカラ",
   };
 
   const embed = new EmbedBuilder()
