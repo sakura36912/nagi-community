@@ -294,7 +294,15 @@ export function buildShiftEmbeds(
       const dow = WEEKDAY_JA[d.getUTCDay()]!;
       const [, dm, dd] = date.split("-").map(Number);
       const label = `${dm}/${dd}`;
-      const dayShifts = byDate.get(date) ?? [];
+      const rawShifts = byDate.get(date) ?? [];
+      // 同じユーザー＋開始時刻の重複を除去
+      const seen = new Set<string>();
+      const dayShifts = rawShifts.filter((s) => {
+        const key = `${s.userId}:${s.startTime}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
       if (dayShifts.length === 0) {
         return `**${dow} ${label}**　─`;
       }
@@ -335,7 +343,15 @@ export function buildShiftEmbeds(
   }
 
   const fields: { name: string; value: string }[] = [];
-  for (const [date, dayShifts] of [...byDate.entries()].sort()) {
+  for (const [date, rawShifts] of [...byDate.entries()].sort()) {
+    // 同じユーザー＋開始時刻の重複を除去
+    const seen = new Set<string>();
+    const dayShifts = rawShifts.filter((s) => {
+      const key = `${s.userId}:${s.startTime}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     const lines = dayShifts.map((s) => {
       const note = s.note ? ` — ${s.note}` : "";
       return `• <@${s.userId}> ${s.startTime}${note}`;
