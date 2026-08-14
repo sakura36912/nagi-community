@@ -514,12 +514,69 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
   const { guildId, user } = interaction;
   if (!guildId) return;
 
-  const key  = gameKey(guildId, user.id);
+  const key    = gameKey(guildId, user.id);
+  const action = interaction.customId.slice(BJ_PREFIX.length);
+
+  // ─── replay / quit は activeGames にゲームがない状態で呼ばれる ───────────────
+  if (action === "replay") {
+    const pr = pendingReplay.get(key);
+    pendingReplay.delete(key);
+
+    if (!pr || pr.expiresAt < Date.now()) {
+      await interaction.update({ components: [] });
+      return;
+    }
+
+    const afterDeduct = await deductBet(guildId, user.id, pr.bet);
+    if (!afterDeduct) {
+      await interaction.update({ components: [] });
+      await interaction.followUp({
+        content: `❌ 残高が不足しているためリプレイできません（賭け金: **${pr.bet.toLocaleString()}** ${pr.currencyName}）。`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    let deck = buildShoe();
+    let playerHand: Card[] = [], dealerHand: Card[] = [], card: Card;
+    [card, deck] = draw(deck); playerHand = [...playerHand, card];
+    [card, deck] = draw(deck); dealerHand = [...dealerHand, card];
+    [card, deck] = draw(deck); playerHand = [...playerHand, card];
+    [card, deck] = draw(deck); dealerHand = [...dealerHand, card];
+
+    const cardBuffers = new Map<string, Buffer>();
+    await cacheHandBuffers([...playerHand, ...dealerHand], pr.cardPaths, cardBuffers);
+
+    const newGame: BJGame = {
+      guildId, userId: user.id, bet: pr.bet, playerHand, dealerHand, deck,
+      doubled: false, currencyName: pr.currencyName,
+      balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
+      suitEmojis: pr.suitEmojis, cardPaths: pr.cardPaths, cardBuffers, processing: false,
+    };
+
+    if (isBlackjack(playerHand)) {
+      await interaction.deferUpdate();
+      await finishGame(interaction, dealerPlay(newGame));
+      return;
+    }
+
+    activeGames.set(key, newGame);
+    const { embeds, files } = await buildGameEmbed(newGame, true);
+    await interaction.update({ content: "", embeds, files, components: [buildButtons(true)] });
+    return;
+  }
+
+  if (action === "quit") {
+    pendingReplay.delete(key);
+    await interaction.update({ components: [] });
+    return;
+  }
+
+  // ─── hit / stand / double は activeGames にゲームが必要 ─────────────────────
   const game = activeGames.get(key);
 
   if (!game || game.expiresAt < Date.now()) {
     activeGames.delete(key);
-    // ボタンを消してタイムアウトを明示（ephemeral だとボタンが残ったままになるため update を使用）
     await interaction.update({
       content: "⏱️ ゲームがタイムアウトまたはリセットされました。`/blackjack play` で新しいゲームを始めてください。",
       embeds: [],
@@ -540,7 +597,6 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
   }
 
   await interaction.deferUpdate();
-  const action = interaction.customId.slice(BJ_PREFIX.length);
 
   if (action === "hit") {
     // 処理中フラグを立てて即 Map に反映（二重押し防止）
