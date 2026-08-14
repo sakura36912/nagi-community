@@ -102,9 +102,11 @@ function parseTime(input: string): string | null {
 
 /** "YYYY-MM-DD" → "M/D（曜）" label. */
 function formatDateLabel(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00+09:00`);
-  const dow = WEEKDAY_JA[d.getDay()];
-  return `${d.getMonth() + 1}/${d.getDate()}（${dow}）`;
+  // "YYYY-MM-DD" を直接パース。Date オブジェクト経由だと UTC サーバーで日付・曜日が1日ズレる。
+  const [, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(`${dateStr}T00:00:00Z`); // UTC 真夜中 = 同じ暦日
+  const dow = WEEKDAY_JA[dt.getUTCDay()];
+  return `${m}/${d}（${dow}）`;
 }
 
 /** Returns the Saturday and Friday of the week containing dateStr (JST). */
