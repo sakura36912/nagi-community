@@ -1485,3 +1485,95 @@ describe("runVcDeleteScheduler – race: extend near expiry vs scheduler tick", 
     expect(mocks.loggerError).not.toHaveBeenCalled();
   });
 });
+
+// ─── Multi-schedule tick ──────────────────────────────────────────────────────
+
+describe("runVcDeleteScheduler – multi-schedule tick", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
+    mocks.markScheduleNotified.mockResolvedValue(undefined);
+    mocks.getExpiredSchedules.mockResolvedValue([]);
+  });
+
+  it("sends exactly one DM per user and calls markScheduleNotified twice when two re-armed schedules fall in the same tick", async () => {
+    // Two different users each extended their own VC; both re-armed schedule rows
+    // appear together in a single getSchedulesExpiringSoon result.
+    const expiresAt1 = new Date("2026-08-01T12:00:00.000Z");
+    const expiresAt2 = new Date("2026-08-01T12:05:00.000Z");
+    const ts1 = Math.floor(expiresAt1.getTime() / 1000);
+    const ts2 = Math.floor(expiresAt2.getTime() / 1000);
+
+    const schedule1 = makeSchedule({
+      id: 1,
+      channelId: "channel-1",
+      channelName: "VC-Alpha",
+      userId: "user-1",
+      expiresAt: expiresAt1,
+      notifiedAt: null,
+    });
+    const schedule2 = makeSchedule({
+      id: 2,
+      channelId: "channel-2",
+      channelName: "VC-Beta",
+      userId: "user-2",
+      expiresAt: expiresAt2,
+      notifiedAt: null,
+    });
+
+    // Both schedules land in the same tick for guild-1.
+    mocks.getSchedulesExpiringSoon.mockResolvedValueOnce([schedule1, schedule2]);
+
+    const userSend1 = vi.fn().mockResolvedValue(undefined);
+    const userSend2 = vi.fn().mockResolvedValue(undefined);
+
+    // Build a client with both channels present in guild-1's cache.
+    const client = {
+      users: {
+        fetch: vi.fn().mockImplementation((userId: string) => {
+          if (userId === "user-1") return Promise.resolve({ send: userSend1 });
+          if (userId === "user-2") return Promise.resolve({ send: userSend2 });
+          return Promise.resolve(null);
+        }),
+      },
+      guilds: {
+        cache: new Map([
+          [
+            "guild-1",
+            {
+              channels: {
+                cache: new Map([
+                  ["channel-1", { delete: vi.fn().mockResolvedValue(undefined) }],
+                  ["channel-2", { delete: vi.fn().mockResolvedValue(undefined) }],
+                ]),
+                fetch: vi.fn().mockResolvedValue(null),
+              },
+            },
+          ],
+        ]),
+      },
+    };
+
+    await runVcDeleteScheduler(client);
+
+    // Each user receives exactly one DM — no cross-contamination, no doubles.
+    expect(userSend1).toHaveBeenCalledOnce();
+    expect(userSend2).toHaveBeenCalledOnce();
+
+    // DM content contains the correct channel name and Unix timestamp for each user.
+    const dm1: string = userSend1.mock.calls[0][0];
+    expect(dm1).toContain("VC-Alpha");
+    expect(dm1).toContain(`<t:${ts1}:R>`);
+    expect(dm1).toContain(`<t:${ts1}:T>`);
+
+    const dm2: string = userSend2.mock.calls[0][0];
+    expect(dm2).toContain("VC-Beta");
+    expect(dm2).toContain(`<t:${ts2}:R>`);
+    expect(dm2).toContain(`<t:${ts2}:T>`);
+
+    // markScheduleNotified must be called exactly twice — once per schedule.
+    expect(mocks.markScheduleNotified).toHaveBeenCalledTimes(2);
+    expect(mocks.markScheduleNotified).toHaveBeenCalledWith(1, expect.any(Date));
+    expect(mocks.markScheduleNotified).toHaveBeenCalledWith(2, expect.any(Date));
+  });
+});
