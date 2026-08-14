@@ -1912,18 +1912,24 @@ type ChestResult =
 
 /**
  * 新入り宝箱の確率テーブル:
- *   💨 ハズレ        79.4%
- *   🎁  10,000$      20.0%
- *   🎊  50,000$       0.5%
- *   💎 100,000$       0.1%
- * 戻り値: 当選コイン数、0 = ハズレ
+ *   💨 ハズレ          50.0%
+ *   🎫 アドバイス券     1.0%
+ *   💎  50,000$         1.5%
+ *   🎊  30,000$         2.5%
+ *   🎁  10,000$        10.0%
+ *   🌟   5,000$        15.0%
+ *   🪙   1,000$        20.0%
+ * 戻り値: 当選コイン数（0 = ハズレ）または "advice_ticket"
  */
-function rollShinniriChest(): number {
+function rollShinniriChest(): number | "advice_ticket" {
   const r = Math.random();
-  if (r < 0.7940) return 0;        // ハズレ 79.4%
-  if (r < 0.9940) return 10_000;   // 🎁 20.0%
-  if (r < 0.9990) return 50_000;   // 🎊  0.5%
-  return 100_000;                   // 💎  0.1%
+  if (r < 0.500) return 0;               // 💨 ハズレ    50.0%
+  if (r < 0.700) return 1_000;           // 🪙 1,000$    20.0%
+  if (r < 0.850) return 5_000;           // 🌟 5,000$    15.0%
+  if (r < 0.950) return 10_000;          // 🎁 10,000$   10.0%
+  if (r < 0.975) return 30_000;          // 🎊 30,000$    2.5%
+  if (r < 0.990) return 50_000;          // 💎 50,000$    1.5%
+  return "advice_ticket";                // 🎫 アドバイス券 1.0%
 }
 
 /** 本船員宝箱の確率テーブル */
@@ -2060,21 +2066,38 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
     }
   }
 
-  // ── 新入り宝箱: 10,000〜100,000$ を均等10%で抽選 ─────────────────────────
+  // ── 新入り宝箱 ────────────────────────────────────────────────────────────
   if (chestType === "shinniri") {
-    const amount = rollShinniriChest();
-    if (amount === 0) {
+    const roll = rollShinniriChest();
+
+    // アドバイス券
+    if (roll === "advice_ticket") {
+      const ADVICE_ROLE = "評価員アドバイス券";
+      const granted = await grantRoleByName(interaction.guild, interaction.user.id, ADVICE_ROLE);
+      await Promise.all([
+        interaction.editReply(
+          granted
+            ? `📦 宝箱を開けた！\n\n🎫 **アドバイス券** を獲得しました！`
+            : `📦 宝箱を開けた！\n\n🎫 **アドバイス券** が当たりましたが、ロールが見つかりませんでした（管理者に連絡してください）。`,
+        ),
+        postChestLog({ chestLabel: "新入り宝箱", resultLabel: "アドバイス券", resultEmoji: "🎫", amount: null, hit: true }),
+      ]);
+      return;
+    }
+
+    // 通貨 or ハズレ
+    if (roll === 0) {
       await Promise.all([
         interaction.editReply("📦 宝箱を開けた…\n\n**ハズレ** 💨 何も入っていませんでした。"),
         postChestLog({ chestLabel: "新入り宝箱", resultLabel: "ハズレ", resultEmoji: "💨", amount: null, hit: false }),
       ]);
     } else {
-      const emoji = amount >= 100_000 ? "💎" : amount >= 50_000 ? "🎊" : "🎁";
+      const emoji = roll >= 50_000 ? "💎" : roll >= 30_000 ? "🎊" : roll >= 10_000 ? "🎁" : roll >= 5_000 ? "🌟" : "🪙";
       await Promise.all([
-        giveCurrency(interaction.guild.id, interaction.user.id, amount, "treasure-chest").then(() =>
-          interaction.editReply(`📦 宝箱を開けた！\n\n${emoji} **${amount.toLocaleString()}${cn}** を獲得しました！`)
+        giveCurrency(interaction.guild.id, interaction.user.id, roll, "treasure-chest").then(() =>
+          interaction.editReply(`📦 宝箱を開けた！\n\n${emoji} **${roll.toLocaleString()}${cn}** を獲得しました！`)
         ),
-        postChestLog({ chestLabel: "新入り宝箱", resultLabel: "当たり", resultEmoji: emoji, amount, hit: true }),
+        postChestLog({ chestLabel: "新入り宝箱", resultLabel: `${roll.toLocaleString()}${cn}`, resultEmoji: emoji, amount: roll, hit: true }),
       ]);
     }
     return;
