@@ -74,6 +74,8 @@ export async function findSelfIntro(
   rosterCategoryId: string | null | undefined,
 ): Promise<string | null> {
   if (!rosterCategoryId) return null;
+  // キャッシュが不完全な場合に備えて API から取得する
+  await guild.channels.fetch().catch(() => null);
   const candidates = [...guild.channels.cache.values()].filter(
     (c) => c.isTextBased() && "parentId" in c && c.parentId === rosterCategoryId,
   );
