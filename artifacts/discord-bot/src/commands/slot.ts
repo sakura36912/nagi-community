@@ -266,15 +266,10 @@ function buildResult(
   const rowLabels = ["横 上段", "横 中段", "横 下段"];
 
   // グリッドを content に（絵文字のみ → Discord がジャンボ表示）
-  const gridLines = grid.map(
-    (row, i) =>
-      row.map((s) => displaySym(s, meta)).join(" ") +
-      (rowWins.has(rowLabels[i]!) ? " ✨" : ""),
-  );
+  const gridLines = grid.map((row) => row.map((s) => displaySym(s, meta)).join(" "));
+  const content = gridLines.join("\n");
+
   const diagWins = paylines.filter((p) => p.won && p.name.startsWith("斜め"));
-  const diagLine = diagWins.map((p) => `✨ ${p.name}`).join("  ");
-  // 末尾のゼロ幅スペースで Discord のジャンボ絵文字表示を抑制（常に同じサイズにする）
-  const content = gridLines.join("\n") + (diagLine ? "\n" + diagLine : "") + "\u200B";
 
   let resultText: string;
   let title: string;
@@ -287,9 +282,15 @@ function buildResult(
   } else {
     const wonNames = paylines.filter((p) => p.won).map((p) => p.name);
     const profit = Math.abs(netDelta);
+    // 当選ライン（横・斜め）を embed に表示
+    const rowWinLines = wonNames.filter((n) => n.startsWith("横")).map((n) => {
+      const i = rowLabels.indexOf(n);
+      return i >= 0 ? `${n}（${["上", "中", "下"][i]}段）` : n;
+    });
+    const diagWinLines = diagWins.map((p) => p.name);
+    const winLines = [...rowWinLines, ...diagWinLines].map((n) => `　✨ ${n}`).join("\n");
     resultText =
-      `**${wins}ライン当選！ +${profit.toLocaleString()} ${currencyName}**\n` +
-      wonNames.map((n) => `　${n}`).join("\n");
+      `**${wins}ライン当選！ +${profit.toLocaleString()} ${currencyName}**\n` + winLines;
     title = wins >= 3 ? "🎰 スロット 3×3 — 大当たり！" : "🎰 スロット 3×3 — 当たり！";
     color = wins >= 3 ? 0xf1c40f : 0x57f287;
   }
