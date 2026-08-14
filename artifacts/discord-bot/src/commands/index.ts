@@ -1250,10 +1250,10 @@ const COMBINED_EFFECT_CHOICES: EffectChoice[] = [
   { name: "永久ロール付与",              value: PERM_ROLE_EFFECT         },
   { name: "評価落ち浮上券",             value: EVAL_RESURFACE_EFFECT    },
   { name: "個人ショップ開業券",          value: SHOP_LICENSE_EFFECT      },
-  { name: "高級船室/裏部屋（1日）",     value: PRIVATE_VC_1D_EFFECT     },
+  { name: "高級船室（1日）",            value: PRIVATE_VC_1D_EFFECT     },
   { name: "高級船室（3日）",            value: PRIVATE_VC_3D_EFFECT     },
-  { name: "高級船室/裏部屋（1週間）",  value: PRIVATE_VC_1W_EFFECT     },
-  { name: "高級船室/裏部屋（1ヶ月）",  value: PRIVATE_VC_1M_EFFECT     },
+  { name: "高級船室（1週間）",          value: PRIVATE_VC_1W_EFFECT     },
+  { name: "高級船室（1ヶ月）",          value: PRIVATE_VC_1M_EFFECT     },
   { name: "VCリネーム",                  value: VC_RENAME_EFFECT         },
   { name: "高級船室延長（1日）",        value: VC_EXTEND_1D_EFFECT      },
 ];
