@@ -85,7 +85,7 @@ import {
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
-import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds } from "../lib/vcReward";
+import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount } from "../lib/vcReward";
 import { getCurrentTavernSeconds, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
 import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
@@ -2007,11 +2007,11 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   }
 
   if (!isAdmin) {
-    // 累積VC時間チェック（DB保存分 + 現在のセッション中の時間）
+    // 累積VC時間チェック（全期間合計DB分 + 現在のセッション中の時間）
     const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
     const [pastSeconds, opensCount] = await Promise.all([
-      getTodayChestVcSeconds(interaction.guild.id, interaction.user.id),
-      getTodayChestOpensCount(interaction.guild.id, interaction.user.id),
+      getTotalChestVcSeconds(interaction.guild.id, interaction.user.id),
+      getTotalChestOpensCount(interaction.guild.id, interaction.user.id),
     ]);
     const totalSeconds = pastSeconds + currentSeconds;
     const maxOpens = Math.floor(totalSeconds / CHEST_INTERVAL_SEC);
@@ -2019,14 +2019,14 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
     if (maxOpens === 0) {
       const remaining = Math.ceil((CHEST_INTERVAL_SEC - totalSeconds) / 60);
       await interaction.editReply(
-        `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です（本日: ${Math.floor(totalSeconds / 60)}分）。`,
+        `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です（累積: ${Math.floor(totalSeconds / 60)}分）。`,
       );
       return;
     }
     if (opensCount >= maxOpens) {
       const nextAt = Math.ceil(((opensCount + 1) * CHEST_INTERVAL_SEC - totalSeconds) / 60);
       await interaction.editReply(
-        `📦 次の宝箱まであと **${nextAt}分** の酒場VC接続が必要です（本日${opensCount}回開封済み）。`,
+        `📦 次の宝箱まであと **${nextAt}分** の酒場VC接続が必要です（累積${opensCount}回開封済み）。`,
       );
       return;
     }

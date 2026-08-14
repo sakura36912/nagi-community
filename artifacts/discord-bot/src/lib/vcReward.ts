@@ -197,6 +197,39 @@ export async function getTodayChestVcSeconds(
   return row?.accumulatedSeconds ?? 0;
 }
 
+/**
+ * 累積合計の VC 秒数を取得する（全日付の合計）。
+ */
+export async function getTotalChestVcSeconds(
+  guildId: string,
+  userId: string,
+): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${chestVcAccumTable.accumulatedSeconds}), 0)::int` })
+    .from(chestVcAccumTable)
+    .where(
+      and(
+        eq(chestVcAccumTable.guildId, guildId),
+        eq(chestVcAccumTable.userId, userId),
+      ),
+    );
+  return row?.total ?? 0;
+}
+
+/** 累積合計の宝箱開封回数を取得する（全日付の合計）。 */
+export async function getTotalChestOpensCount(guildId: string, userId: string): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${chestVcAccumTable.chestOpensCount}), 0)::int` })
+    .from(chestVcAccumTable)
+    .where(
+      and(
+        eq(chestVcAccumTable.guildId, guildId),
+        eq(chestVcAccumTable.userId, userId),
+      ),
+    );
+  return row?.total ?? 0;
+}
+
 /** 本日の宝箱開封回数を取得する。 */
 export async function getTodayChestOpensCount(guildId: string, userId: string): Promise<number> {
   const date = jstDateString();
