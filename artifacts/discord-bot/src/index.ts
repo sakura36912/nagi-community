@@ -369,6 +369,10 @@ async function runVcExpiryScheduler(): Promise<void> {
 let lastSheetVcRefresh = 0;
 const SHEET_VC_REFRESH_INTERVAL_MS = 60 * 1000; // 1 minute
 
+// GuildMemberUpdate の oldMember が partial のときに使うロール事前スナップショット。
+// キー: `${guildId}:${userId}`  値: そのメンバーが直前に持っていたロール ID の Set
+const memberRoleSnapshots = new Map<string, Set<string>>();
+
 async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
   const now = Date.now();
   if (now - lastSheetVcRefresh < SHEET_VC_REFRESH_INTERVAL_MS) return;
@@ -1094,14 +1098,34 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const guildId = newMember.guild.id;
+  const snapshotKey = `${guildId}:${newMember.id}`;
 
-  const addedRoleIds = oldMember.partial
-    ? [...newMember.roles.cache.keys()]
-    : [...newMember.roles.cache.keys()].filter((id) => !oldMember.roles.cache.has(id));
+  // oldMember が partial（キャッシュ未保持）のとき、Discord の REST fetch は
+  // 更新後の状態を返すため差分計算には使えない。代わりにイベントごとに管理する
+  // ロールスナップショットを参照する。スナップショットが存在しない場合は差分不明
+  // として eval sheet 処理をスキップし、今回の状態を記録して次回以降に備える。
+  let oldRoles: Set<string>;
+  if (oldMember.partial) {
+    const snapshot = memberRoleSnapshots.get(snapshotKey);
+    if (!snapshot) {
+      logger.warn(
+        `[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} — oldMember is partial and no role snapshot exists; skipping to avoid spurious sheet creation`,
+      );
+      // 次回のイベントで正確な差分が取れるよう現在のロールを記録しておく
+      memberRoleSnapshots.set(snapshotKey, new Set(newMember.roles.cache.keys()));
+      return;
+    }
+    logger.info(`[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} — oldMember is partial; using cached role snapshot`);
+    oldRoles = snapshot;
+  } else {
+    oldRoles = new Set(oldMember.roles.cache.keys());
+  }
 
-  const removedRoleIds = oldMember.partial
-    ? []
-    : [...oldMember.roles.cache.keys()].filter((id) => !newMember.roles.cache.has(id));
+  // 次回のイベントのために最新ロールを保存（差分計算より前に更新しても安全）
+  memberRoleSnapshots.set(snapshotKey, new Set(newMember.roles.cache.keys()));
+
+  const addedRoleIds = [...newMember.roles.cache.keys()].filter((id) => !oldRoles.has(id));
+  const removedRoleIds = [...oldRoles.keys()].filter((id) => !newMember.roles.cache.has(id));
 
   // ── サーバーブースト開始検知 → ポイント付与 ──────────────────────────────
   const justBoosted = !oldMember.partial && !oldMember.premiumSince && !!newMember.premiumSince;
@@ -1195,6 +1219,10 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
 client.on(Events.GuildMemberRemove, async (member) => {
   const guildId = member.guild.id;
+
+  // ロールスナップショットを削除する。削除しないと再参加後の partial GuildMemberUpdate で
+  // 退出前のロールが「既存」と誤判定され、eval sheet が作成されなくなる。
+  memberRoleSnapshots.delete(`${guildId}:${member.id}`);
 
   // 参加記録を退出済みにする
   recordMemberLeave(guildId, member.id).catch((err) =>
