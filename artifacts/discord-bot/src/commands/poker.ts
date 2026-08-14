@@ -5,10 +5,14 @@
  *   1. /poker play <bet> → 5枚配る (deal フェーズ)
  *   2. カードボタンをクリックでホールド/アンホールド切り替え
  *   3. "ドロー" ボタンでアンホールド牌を交換 → 役判定 → 結果表示
+ *
+ * カード画像はブラックジャックと同じ Object Storage 画像を使用。
  */
 
+import Jimp from "jimp";
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
@@ -21,6 +25,9 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
+import { getBjCardImages } from "../lib/bjCardImages";
+import { downloadImageAsBuffer } from "../lib/gcsStorage";
+import type { GuildSettings } from "@workspace/db";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +36,11 @@ const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
 type Suit = (typeof SUITS)[number];
 type Rank = (typeof RANKS)[number];
 interface Card { rank: Rank; suit: Suit }
+type SuitEmojis = Record<Suit, string>;
+
+const SUIT_KEY: Record<Suit, string> = {
+  "♠": "spade", "♥": "heart", "♦": "diamond", "♣": "club",
+};
 
 interface PokerGame {
   guildId: string;
@@ -40,6 +52,11 @@ interface PokerGame {
   phase: "deal" | "done";
   currencyName: string;
   expiresAt: number;
+  suitEmojis: SuitEmojis;
+  /** キー: "rank:suit"（例 "A:spade"）、値: Object Storage のオブジェクト名（path）。 */
+  cardPaths: Map<string, string>;
+  /** カード画像のバッファキャッシュ。キー: "rank:suit"、値: Buffer。 */
+  cardBuffers: Map<string, Buffer>;
 }
 
 type HandRank =
@@ -65,6 +82,8 @@ const COLOR_WIN     = 0x57f287;
 const COLOR_LOSE    = 0xed4245;
 
 export const POKER_PREFIX = "poker:";
+
+const CARD_STRIP_HEIGHT = 90;
 
 // 払い戻し倍率（ベット × 倍率 が純利益）
 const PAYOUT: Record<HandRank, number> = {
@@ -111,18 +130,89 @@ function buildDeck(): Card[] {
   for (const suit of SUITS) for (const rank of RANKS) deck.push({ rank, suit });
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
+    [deck[i], deck[j]] = [deck[j]!, deck[i]!];
   }
   return deck;
 }
 
-function draw(deck: Card[]): [Card, Card[]] { return [deck[0], deck.slice(1)]; }
+function draw(deck: Card[]): [Card, Card[]] { return [deck[0]!, deck.slice(1)]; }
 
-// ─── Card display ─────────────────────────────────────────────────────────────
+// ─── Card display helpers ─────────────────────────────────────────────────────
 
-const SUIT_EMOJI: Record<Suit, string> = { "♠": "♠️", "♥": "♥️", "♦": "♦️", "♣": "♣️" };
+function resolveSuitEmojis(settings: GuildSettings): SuitEmojis {
+  return {
+    "♠": settings.bjSuitSpade   ?? "♠️",
+    "♥": settings.bjSuitHeart   ?? "♥️",
+    "♦": settings.bjSuitDiamond ?? "♦️",
+    "♣": settings.bjSuitClub    ?? "♣️",
+  };
+}
 
-function fmtCard(c: Card): string { return `${c.rank}${SUIT_EMOJI[c.suit]}`; }
+function fmtCard(c: Card, emojis: SuitEmojis): string {
+  return `${c.rank}${emojis[c.suit]}`;
+}
+
+// ─── Card image helpers ───────────────────────────────────────────────────────
+
+interface CardImage { attachment: AttachmentBuilder; filename: string }
+
+async function cacheCardBuffer(
+  card: Card,
+  cardPaths: Map<string, string>,
+  cardBuffers: Map<string, Buffer>,
+): Promise<void> {
+  const key = `${card.rank}:${SUIT_KEY[card.suit]}`;
+  if (cardBuffers.has(key)) return;
+  const path = cardPaths.get(key);
+  if (!path) return;
+  try {
+    const buf = await downloadImageAsBuffer(path);
+    if (buf) cardBuffers.set(key, buf);
+  } catch { /* 失敗しても無視 */ }
+}
+
+async function cacheHandBuffers(
+  hand: Card[],
+  cardPaths: Map<string, string>,
+  cardBuffers: Map<string, Buffer>,
+): Promise<void> {
+  await Promise.all(hand.map((card) => cacheCardBuffer(card, cardPaths, cardBuffers)));
+}
+
+async function mergeHorizontal(buffers: Buffer[]): Promise<Buffer> {
+  const images = await Promise.all(buffers.map((b) => Jimp.read(b)));
+  const targetH = Math.min(
+    Math.max(...images.map((img) => img.bitmap.height)),
+    CARD_STRIP_HEIGHT,
+  );
+  const resized = images.map((img) => {
+    const ratio = targetH / img.bitmap.height;
+    return img.resize(Math.round(img.bitmap.width * ratio), targetH, Jimp.RESIZE_BICUBIC);
+  });
+  const totalW = resized.reduce((sum, img) => sum + img.bitmap.width, 0);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const canvas = new (Jimp as any)(totalW, targetH, 0x00000000);
+  let x = 0;
+  for (const img of resized) { canvas.composite(img, x, 0); x += img.bitmap.width; }
+  return canvas.getBufferAsync(Jimp.MIME_PNG);
+}
+
+async function buildHandStrip(
+  hand: Card[],
+  cardBuffers: Map<string, Buffer>,
+  filename: string,
+): Promise<CardImage | null> {
+  const buffers = hand
+    .map((card) => cardBuffers.get(`${card.rank}:${SUIT_KEY[card.suit]}`) ?? null)
+    .filter((b): b is Buffer => b !== null);
+  if (buffers.length === 0) return null;
+  try {
+    const merged = await mergeHorizontal(buffers);
+    return { attachment: new AttachmentBuilder(merged, { name: filename }), filename };
+  } catch {
+    return null;
+  }
+}
 
 // ─── Hand evaluation ──────────────────────────────────────────────────────────
 
@@ -135,10 +225,8 @@ function evaluate(hand: Card[]): HandRank {
   const vals = hand.map((c) => RANK_ORDER[c.rank]).sort((a, b) => a - b);
   const suits = hand.map((c) => c.suit);
   const isFlush = suits.every((s) => s === suits[0]);
-
-  // ストレート判定（A-2-3-4-5 含む）
   const isStraight =
-    vals[4] - vals[0] === 4 && new Set(vals).size === 5
+    (vals[4]! - vals[0]! === 4 && new Set(vals).size === 5)
     || (vals.join(",") === "2,3,4,5,14"); // A ロー
 
   const rankCounts = new Map<number, number>();
@@ -146,7 +234,7 @@ function evaluate(hand: Card[]): HandRank {
   const counts = [...rankCounts.values()].sort((a, b) => b - a);
 
   if (isFlush && isStraight && vals[0] === 10) return "royal_flush";
-  if (isFlush && isStraight)                   return "straight_flush";
+  if (isFlush && isStraight)                    return "straight_flush";
   if (counts[0] === 4)                          return "four_of_a_kind";
   if (counts[0] === 3 && counts[1] === 2)       return "full_house";
   if (isFlush)                                  return "flush";
@@ -154,7 +242,6 @@ function evaluate(hand: Card[]): HandRank {
   if (counts[0] === 3)                          return "three_of_a_kind";
   if (counts[0] === 2 && counts[1] === 2)       return "two_pair";
   if (counts[0] === 2) {
-    // ペアが J/Q/K/A かどうか
     const pairVal = [...rankCounts.entries()].find(([, n]) => n === 2)?.[0] ?? 0;
     if (pairVal >= 11) return "jacks_or_better";
   }
@@ -187,17 +274,15 @@ async function creditAmount(guildId: string, userId: string, amount: number) {
 
 // ─── UI builders ─────────────────────────────────────────────────────────────
 
-function buildCardRows(hand: Card[], held: boolean[]): ActionRowBuilder<ButtonBuilder>[] {
-  // Row 1: 5 card toggle buttons
+function buildCardRows(hand: Card[], held: boolean[], emojis: SuitEmojis): ActionRowBuilder<ButtonBuilder>[] {
   const cardRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     hand.map((c, i) =>
       new ButtonBuilder()
         .setCustomId(`poker:hold:${i}`)
-        .setLabel(held[i] ? `🔒 ${fmtCard(c)}` : fmtCard(c))
+        .setLabel(held[i] ? `🔒 ${fmtCard(c, emojis)}` : fmtCard(c, emojis))
         .setStyle(held[i] ? ButtonStyle.Success : ButtonStyle.Secondary),
     ),
   );
-  // Row 2: Draw button
   const drawRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("poker:draw")
@@ -208,49 +293,54 @@ function buildCardRows(hand: Card[], held: boolean[]): ActionRowBuilder<ButtonBu
   return [cardRow, drawRow];
 }
 
-function buildDealEmbed(game: PokerGame): EmbedBuilder {
+async function buildDealContent(game: PokerGame): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] }> {
   const heldCount = game.held.filter(Boolean).length;
   const holdDesc = heldCount === 0
     ? "カードをクリックしてホールド、「ドロー」で残りを交換"
     : `${heldCount}枚ホールド中`;
 
-  return new EmbedBuilder()
+  const cardImage = await buildHandStrip(game.hand, game.cardBuffers, "hand.png");
+
+  const embed = new EmbedBuilder()
     .setTitle("🃏 ポーカー — カードを選んでドロー")
     .setColor(COLOR_NEUTRAL)
     .addFields(
-      {
-        name: "手札",
-        value: game.hand.map((c, i) => (game.held[i] ? `__${fmtCard(c)}__` : fmtCard(c))).join("  "),
-      },
       { name: "賭け金", value: `**${game.bet.toLocaleString()}** ${game.currencyName}`, inline: true },
-      { name: "状態", value: holdDesc, inline: true },
+      { name: "状態",   value: holdDesc, inline: true },
     )
     .setFooter({ text: "役・配当: J以上ペア×1 | 2ペア×2 | スリー×3 | ストレート×4 | フラッシュ×6 | フルハウス×9 | フォーカ×25 | SF×50 | RF×250 | 5分でタイムアウト" });
+
+  if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
+
+  return {
+    embeds: [embed],
+    files: cardImage ? [cardImage.attachment] : [],
+    components: buildCardRows(game.hand, game.held, game.suitEmojis),
+  };
 }
 
-function buildResultEmbed(game: PokerGame, handRank: HandRank, netDelta: number): EmbedBuilder {
+async function buildResultContent(game: PokerGame, handRank: HandRank, netDelta: number): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[] }> {
   const multiplier = PAYOUT[handRank];
   const isWin = multiplier > 0;
   const sign = netDelta > 0 ? "+" : "";
 
-  return new EmbedBuilder()
+  const cardImage = await buildHandStrip(game.hand, game.cardBuffers, "result.png");
+
+  const embed = new EmbedBuilder()
     .setTitle(`🃏 ポーカー — ${HAND_LABEL[handRank]}`)
     .setColor(isWin ? COLOR_WIN : COLOR_LOSE)
     .addFields(
-      {
-        name: "最終手札",
-        value: game.hand.map(fmtCard).join("  "),
-      },
-      {
-        name: "収支",
-        value: `${sign}${netDelta.toLocaleString()} ${game.currencyName}`,
-        inline: true,
-      },
-      ...(multiplier > 0
-        ? [{ name: "倍率", value: `${multiplier}x`, inline: true }]
-        : []),
+      { name: "収支",   value: `${sign}${netDelta.toLocaleString()} ${game.currencyName}`, inline: true },
+      ...(multiplier > 0 ? [{ name: "倍率", value: `${multiplier}x`, inline: true }] : []),
     )
     .setTimestamp();
+
+  if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
+
+  return {
+    embeds: [embed],
+    files: cardImage ? [cardImage.attachment] : [],
+  };
 }
 
 // ─── Finish game ──────────────────────────────────────────────────────────────
@@ -263,12 +353,15 @@ async function finishGame(
   const multiplier = PAYOUT[handRank];
   const { guildId, userId, bet } = game;
 
+  // ドロー後のカードをキャッシュに追加
+  await cacheHandBuffers(game.hand, game.cardPaths, game.cardBuffers);
+
   let netDelta: number;
   if (multiplier === 0) {
     netDelta = -bet;
   } else {
     const winnings = bet * multiplier;
-    await creditAmount(guildId, userId, bet + winnings); // 元本返却 + 払い戻し
+    await creditAmount(guildId, userId, bet + winnings);
     netDelta = winnings;
   }
 
@@ -278,10 +371,9 @@ async function finishGame(
   }
 
   activeGames.delete(gameKey(guildId, userId));
-  await interaction.editReply({
-    embeds: [buildResultEmbed(game, handRank, netDelta)],
-    components: [],
-  });
+
+  const { embeds, files } = await buildResultContent(game, handRank, netDelta);
+  await interaction.editReply({ embeds, files, components: [] });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -307,32 +399,34 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
     return;
   }
 
-  if (game.phase === "done") return;
+  if (game.phase === "done") {
+    await interaction.deferUpdate();
+    return;
+  }
 
   await interaction.deferUpdate();
 
-  const action = interaction.customId.slice(POKER_PREFIX.length); // "hold:0"〜"hold:4" or "draw"
+  const action = interaction.customId.slice(POKER_PREFIX.length);
 
   if (action.startsWith("hold:")) {
     const idx = parseInt(action.slice(5), 10);
     if (idx >= 0 && idx < 5) {
       game.held[idx] = !game.held[idx];
       activeGames.set(key, game);
-      await interaction.editReply({
-        embeds: [buildDealEmbed(game)],
-        components: buildCardRows(game.hand, game.held),
-      });
+      const { embeds, files, components } = await buildDealContent(game);
+      await interaction.editReply({ embeds, files, components });
     }
     return;
   }
 
   if (action === "draw") {
-    // アンホールドのカードを交換
     let { deck } = game;
+    const newCards: Card[] = [];
     for (let i = 0; i < 5; i++) {
       if (!game.held[i]) {
         const [card, rest] = draw(deck);
         game.hand[i] = card;
+        newCards.push(card);
         deck = rest;
       }
     }
@@ -360,39 +454,43 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const [, settings] = await Promise.all([
+  await interaction.deferReply();
+
+  const [, settings, cardPathsRaw] = await Promise.all([
     getOrCreateWallet(guildId, userId),
     getGuildSettings(guildId),
+    getBjCardImages(guildId),
   ]);
 
   const { currencyName } = settings;
   const maxBet = settings.casinoMaxBet ?? CASINO_DEFAULT_MAX_BET;
   if (bet > maxBet) {
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [
         new EmbedBuilder()
           .setTitle("🃏 ポーカー")
           .setDescription(`❌ 賭け金が上限（**${maxBet.toLocaleString()}** ${currencyName}）を超えています。`)
           .setColor(COLOR_LOSE),
       ],
-      flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   const afterDeduct = await deductBet(guildId, userId, bet);
   if (!afterDeduct) {
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [
         new EmbedBuilder()
           .setTitle("🃏 ポーカー")
           .setDescription("❌ 残高が不足しています。")
           .setColor(COLOR_LOSE),
       ],
-      flags: MessageFlags.Ephemeral,
     });
     return;
   }
+
+  const cardPaths = cardPathsRaw;
+  const suitEmojis = resolveSuitEmojis(settings);
 
   let deck = buildDeck();
   const hand: Card[] = [];
@@ -401,6 +499,9 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     hand.push(card);
     deck = rest;
   }
+
+  const cardBuffers = new Map<string, Buffer>();
+  await cacheHandBuffers(hand, cardPaths, cardBuffers);
 
   const game: PokerGame = {
     guildId,
@@ -412,14 +513,15 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     phase: "deal",
     currencyName,
     expiresAt: Date.now() + GAME_TTL_MS,
+    suitEmojis,
+    cardPaths,
+    cardBuffers,
   };
 
   activeGames.set(key, game);
 
-  await interaction.reply({
-    embeds: [buildDealEmbed(game)],
-    components: buildCardRows(game.hand, game.held),
-  });
+  const { embeds, files, components } = await buildDealContent(game);
+  await interaction.editReply({ embeds, files, components });
 }
 
 // ─── Command export ───────────────────────────────────────────────────────────
