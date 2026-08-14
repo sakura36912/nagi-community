@@ -105,11 +105,50 @@ function makeSvgFrame(wheelRot: number, ballAngle: number, sz = 300): string {
 const DELAYS = [4, 4, 4, 4, 4, 4, 4, 4, 5, 6, 8, 10, 13, 18, 24, 32, 45, 65, 100, 200];
 const FRAMES = DELAYS.length; // 20
 
+// ─── GIFキャッシュ ────────────────────────────────────────────────────────────
+
+/** 事前生成済みGIFのキャッシュ（数字 → Buffer）*/
+const gifCache = new Map<number, Buffer>();
+
 /**
- * ルーレットGIFを生成してBufferで返す。
+ * ボット起動時に0〜36の全GIFをバックグラウンドで生成してキャッシュに格納する。
+ * ready イベント後に呼び出すこと（awaitしなくてよい）。
+ */
+export async function initRouletteGifCache(
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  const total = 37; // 0〜36
+  let done = 0;
+  for (let n = 0; n < total; n++) {
+    try {
+      const buf = await generateRouletteGifRaw(n);
+      gifCache.set(n, buf);
+      done++;
+      onProgress?.(done, total);
+    } catch (err) {
+      // 個別失敗は無視 — フォールバックでその場生成される
+      console.error(`[roulette-cache] Failed to pre-generate GIF for ${n}:`, err);
+    }
+  }
+}
+
+/**
+ * ルーレットGIFを返す。
+ * キャッシュ済みであればキャッシュから、未完了ならその場で生成する。
  * @param landedNumber 0〜36 のどこで止まるか
  */
 export async function generateRouletteGif(landedNumber: number): Promise<Buffer> {
+  const cached = gifCache.get(landedNumber);
+  if (cached) return cached;
+  // キャッシュ未完了 — フォールバック生成
+  return generateRouletteGifRaw(landedNumber);
+}
+
+/**
+ * ルーレットGIFを生成してBufferで返す（内部実装）。
+ * @param landedNumber 0〜36 のどこで止まるか
+ */
+async function generateRouletteGifRaw(landedNumber: number): Promise<Buffer> {
   const landedIdx = WHEEL_ORDER.indexOf(landedNumber);
   const tw = 360 / 37;
   const finalRot  = -((landedIdx + 0.5) * tw);  // 止まったときのホイール回転量

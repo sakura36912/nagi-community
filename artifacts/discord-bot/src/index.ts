@@ -1,4 +1,5 @@
 import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayIntentBits, GuildMember, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
+import { initRouletteGifCache } from "./lib/rouletteWheel";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
 import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
@@ -636,6 +637,14 @@ async function runVcDeleteScheduler(): Promise<void> {
 client.once(Events.ClientReady, async (readyClient) => {
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
+
+  // ルーレットGIFを全番号分バックグラウンドで事前生成してキャッシュする。
+  // コマンド応答を即時化するため、ready 直後に起動して完了を待たない。
+  initRouletteGifCache((done, total) => {
+    if (done === total) {
+      logger.info(`[roulette-cache] All ${total} GIFs pre-generated and cached`);
+    }
+  }).catch((err) => logger.error("[roulette-cache] Failed to initialize GIF cache", err));
 
   // Clear stale vc_presence rows left over from a previous bot session.
   // We cannot recover exact join times after a restart, so we simply discard

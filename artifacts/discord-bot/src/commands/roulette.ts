@@ -21,17 +21,11 @@ import {
   type ChatInputCommandInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
+import { generateRouletteGif } from "../lib/rouletteWheel";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
-
-// 自作GIFを起動時に読み込む（毎スピン生成不要、即時添付可能）
-const __dir = dirname(fileURLToPath(import.meta.url));
-const ROULETTE_GIF = readFileSync(join(__dir, "../../assets/roulette.gif"));
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -255,7 +249,8 @@ async function runSpin(
 
   const sign  = netDelta > 0 ? "+" : "";
   const lc    = numColor(landed);
-  const att   = new AttachmentBuilder(ROULETTE_GIF, { name: "roulette.gif" });
+  const gifBuf = await generateRouletteGif(landed);
+  const att   = new AttachmentBuilder(gifBuf, { name: "roulette.gif" });
 
   const embed = new EmbedBuilder()
     .setTitle(`🏴‍☠️ 海賊ルーレット — ${result.win ? "✅ 勝利！" : "❌ 敗北"}`)
