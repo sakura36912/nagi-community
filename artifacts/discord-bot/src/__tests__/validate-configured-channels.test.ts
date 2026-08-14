@@ -446,6 +446,24 @@ describe("validateGuildConfiguredChannels – isolation and combined cases", () 
     expect(mocks.setLeaveLogChannelId).toHaveBeenCalledWith("guild-both", null);
   });
 
+  // 33 — all three IDs cleared in a single pass
+  it("clears all three stale channel IDs (notifyChannelId, banLogChannelId, leaveLogChannelId) in one pass when all are gone", async () => {
+    mocks.getVcLogSettings.mockResolvedValue({ notifyChannelId: "ch-notify-stale" });
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-ban-stale",
+      leaveLogChannelId: "ch-leave-stale",
+    });
+
+    await validateGuildConfiguredChannels("guild-all-stale", channelGone);
+
+    expect(mocks.setVcLogNotifyChannel).toHaveBeenCalledOnce();
+    expect(mocks.setVcLogNotifyChannel).toHaveBeenCalledWith("guild-all-stale", null);
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledWith("guild-all-stale", null);
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setLeaveLogChannelId).toHaveBeenCalledWith("guild-all-stale", null);
+  });
+
   // 25 (guildId forwarding for guild settings)
   it("passes the correct guildId to getGuildSettings", async () => {
     mocks.getGuildSettings.mockResolvedValue({ banLogChannelId: null, leaveLogChannelId: null });
