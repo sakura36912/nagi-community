@@ -1140,6 +1140,131 @@ describe('handlePrivacyDeleteConfirm – two-step delete confirm path', () => {
   });
 });
 
+// ─── handlePrivacyDeleteConfirm – replay safety ───────────────────────────────
+//
+// The two-step delete confirm button (COMM_PRIVACY_DELETE_CONFIRM) has a plain
+// constant customId with no nonce or userId encoded. Any user who obtains the
+// interaction token could click it.
+//
+// The handler must always scope both the DELETE WHERE clause and the opt-out
+// upsert to interaction.user.id — the clicking user — regardless of who
+// originally triggered the embed. These tests mirror the pattern established
+// in the "handlePrivacyOptoutDelete – replay safety" suite above.
+
+describe("handlePrivacyDeleteConfirm – replay safety", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Stage mock results for one successful invocation.
+  // deleteUserVcSessions  → db.delete().where().returning()  → `deletedRows` (sessions)
+  //                       → db.delete().where().returning()  → []            (privacy row)
+  // setVcPrivacyOptOut    → db.insert().values().onConflictDoUpdate() (upsert)
+  //                       → db.update().set().where().returning() → [] (closeSession inside setVcPrivacyOptOut)
+  function setupMocks(deletedRows: { id: number }[]) {
+    mocks.deleteReturning.mockResolvedValueOnce(deletedRows); // sessions delete
+    mocks.deleteReturning.mockResolvedValueOnce([]);          // privacy row delete
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);       // setVcPrivacyOptOut upsert
+    mocks.returning.mockResolvedValueOnce([]);                // closeSession (update) inside setVcPrivacyOptOut
+  }
+
+  it("replayed interaction: delete WHERE targets the button-clicker's userId, not the original user's id", async () => {
+    // Scenario: user A clicked the first "delete" button and an embed was posted
+    // with the COMM_PRIVACY_DELETE_CONFIRM button. User B obtains the interaction
+    // token and clicks the confirm button. Discord resolves interaction.user.id
+    // as B's id. The handler must scope the DELETE to B, not A.
+    const originalUserId = "user-original-dc-r1";   // user A – triggered the embed
+    const replayerUserId = "user-replayer-dc-r1";   // user B – replays the confirm
+    const guildId = "guild-replay-dc-r1";
+    setupMocks([]);
+
+    // Simulate A having triggered the first step (builds the embed with confirm button)
+    const _interactionA = makeInteraction(originalUserId, guildId); // never passed to handler
+    // User B replays by clicking the confirm button — only B's interaction reaches the handler
+    const interactionB = makeInteraction(replayerUserId, guildId);
+    await handlePrivacyDeleteConfirm(interactionB as never);
+
+    // db.delete() must have been called twice (sessions + privacy row)
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
+
+    // The WHERE clause of the first delete (sessions) must carry the replayer's userId
+    const [whereArg] = mocks.deleteWhere.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    expect(whereArg.op).toBe("and");
+    const eqVals = whereArg.args.filter((a) => a.op === "eq").map((a) => a.val);
+    expect(eqVals).toContain(replayerUserId);
+    // The original user's id must not appear in the WHERE clause
+    expect(eqVals).not.toContain(originalUserId);
+  });
+
+  it("replayed interaction: opt-out upsert targets only the button-clicker's userId", async () => {
+    // Scenario: A posted the first embed; B replays the confirm. The INSERT
+    // (setVcPrivacyOptOut) must reference B's userId, not A's.
+    const originalUserId = "user-original-dc-r2";
+    const replayerUserId = "user-replayer-dc-r2";
+    const guildId = "guild-replay-dc-r2";
+    setupMocks([]);
+
+    const _interactionA = makeInteraction(originalUserId, guildId); // never passed to handler
+    const interactionB = makeInteraction(replayerUserId, guildId);
+    await handlePrivacyDeleteConfirm(interactionB as never);
+
+    // db.insert() must have been called once (setVcPrivacyOptOut)
+    expect(mocks.insert).toHaveBeenCalledTimes(1);
+
+    // The values() payload must reference the replayer's id, NOT the original user's id
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [
+      { guildId: string; userId: string; optedOut: boolean }
+    ];
+    expect(valuesArg.userId).toBe(replayerUserId);
+    expect(valuesArg.userId).not.toBe(originalUserId);
+    expect(valuesArg.optedOut).toBe(true);
+  });
+
+  it("replayed interaction: the original user's id does not appear in any DB write (DELETE, INSERT, or UPDATE)", async () => {
+    // Scenario: A posted the first embed; B replays the confirm. Every DB write
+    // — the session DELETE, the privacy-row DELETE, the opt-out INSERT, and the
+    // closeSession UPDATE — must target only B's userId. A's id must be absent.
+    const originalUserId = "user-original-dc-r3";
+    const replayerUserId = "user-replayer-dc-r3";
+    const guildId = "guild-replay-dc-r3";
+    setupMocks([{ id: 42 }]);
+
+    const _interactionA = makeInteraction(originalUserId, guildId); // never passed to handler
+    const interactionB = makeInteraction(replayerUserId, guildId);
+    await handlePrivacyDeleteConfirm(interactionB as never);
+
+    // 1. DELETE WHERE eq values (sessions delete + privacy row delete)
+    const deleteEqVals = (mocks.deleteWhere.mock.calls as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ][]).flatMap(([whereArg]) =>
+      whereArg.args.filter((a) => a.op === "eq").map((a) => a.val),
+    );
+
+    // 2. INSERT values() payload userId (setVcPrivacyOptOut upsert)
+    const [valuesArg] = mocks.values.mock.calls[0] as unknown as [{ userId: string }];
+
+    // 3. UPDATE WHERE eq values (closeSession inside setVcPrivacyOptOut)
+    const [updateWhereArg] = mocks.where.mock.calls[0] as unknown as [
+      { op: string; args: { op: string; col: string; val: string }[] }
+    ];
+    const updateEqVals = updateWhereArg.args
+      .filter((a) => a.op === "eq")
+      .map((a) => a.val);
+
+    // The replayer's id must appear in all write paths
+    expect(deleteEqVals).toContain(replayerUserId);
+    expect(valuesArg.userId).toBe(replayerUserId);
+    expect(updateEqVals).toContain(replayerUserId);
+
+    // The original user's id must not appear in any write
+    expect(deleteEqVals).not.toContain(originalUserId);
+    expect(valuesArg.userId).not.toBe(originalUserId);
+    expect(updateEqVals).not.toContain(originalUserId);
+  });
+});
+
 // ─── Global opt-out + per-guild opt-in interaction ────────────────────────────
 //
 // Full stateful call chains: each test runs setters → openSession in one
