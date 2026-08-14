@@ -110,7 +110,7 @@ function formatCard(c: Card, emojis: SuitEmojis) { return `${c.rank}${emojis[c.s
 
 interface CardImage { attachment: AttachmentBuilder; filename: string }
 
-const CARD_HEIGHT = 150;
+const CARD_HEIGHT = 120;
 
 async function mergeHorizontal(buffers: Buffer[]): Promise<Buffer> {
   const images  = await Promise.all(buffers.map((b) => Jimp.read(b)));
