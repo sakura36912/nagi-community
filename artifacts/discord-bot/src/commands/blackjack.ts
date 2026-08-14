@@ -519,17 +519,18 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   // ─── replay / quit は activeGames にゲームがない状態で呼ばれる ───────────────
   if (action === "replay") {
+    await interaction.deferUpdate();
     const pr = pendingReplay.get(key);
     pendingReplay.delete(key);
 
     if (!pr || pr.expiresAt < Date.now()) {
-      await interaction.update({ components: [] });
+      await interaction.editReply({ components: [] });
       return;
     }
 
     const afterDeduct = await deductBet(guildId, user.id, pr.bet);
     if (!afterDeduct) {
-      await interaction.update({ components: [] });
+      await interaction.editReply({ components: [] });
       await interaction.followUp({
         content: `❌ 残高が不足しているためリプレイできません（賭け金: **${pr.bet.toLocaleString()}** ${pr.currencyName}）。`,
         flags: MessageFlags.Ephemeral,
@@ -555,14 +556,13 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     };
 
     if (isBlackjack(playerHand)) {
-      await interaction.deferUpdate();
       await finishGame(interaction, dealerPlay(newGame));
       return;
     }
 
     activeGames.set(key, newGame);
     const { embeds, files } = await buildGameEmbed(newGame, true);
-    await interaction.update({ content: "", embeds, files, components: [buildButtons(true)] });
+    await interaction.editReply({ content: "", embeds, files, components: [buildButtons(true)] });
     return;
   }
 
@@ -642,53 +642,6 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     game.playerHand = [...game.playerHand, card]; game.deck = newDeck;
     await cacheCardBuffer(card, game.cardPaths, game.cardBuffers);
     await finishGame(interaction, dealerPlay(game));
-
-  } else if (action === "replay") {
-    const pr = pendingReplay.get(key);
-    pendingReplay.delete(key);
-
-    if (!pr || pr.expiresAt < Date.now()) {
-      await interaction.update({ components: [] });
-      return;
-    }
-
-    const afterDeduct = await deductBet(guildId, user.id, pr.bet);
-    if (!afterDeduct) {
-      await interaction.update({ components: [] });
-      await interaction.followUp({
-        content: `❌ 残高が不足しているためリプレイできません（賭け金: **${pr.bet.toLocaleString()}** ${pr.currencyName}）。`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    // 新しいゲームをセットアップ
-    let deck = buildShoe();
-    let playerHand: Card[] = [], dealerHand: Card[] = [], card: Card;
-    [card, deck] = draw(deck); playerHand = [...playerHand, card];
-    [card, deck] = draw(deck); dealerHand = [...dealerHand, card];
-    [card, deck] = draw(deck); playerHand = [...playerHand, card];
-    [card, deck] = draw(deck); dealerHand = [...dealerHand, card];
-
-    const cardBuffers = new Map<string, Buffer>();
-    await cacheHandBuffers([...playerHand, ...dealerHand], pr.cardPaths, cardBuffers);
-
-    const newGame: BJGame = {
-      guildId, userId: user.id, bet: pr.bet, playerHand, dealerHand, deck,
-      doubled: false, currencyName: pr.currencyName,
-      balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
-      suitEmojis: pr.suitEmojis, cardPaths: pr.cardPaths, cardBuffers, processing: false,
-    };
-
-    if (isBlackjack(playerHand)) {
-      await interaction.deferUpdate();
-      await finishGame(interaction, dealerPlay(newGame));
-      return;
-    }
-
-    activeGames.set(key, newGame);
-    const { embeds, files } = await buildGameEmbed(newGame, true);
-    await interaction.update({ content: "", embeds, files, components: [buildButtons(true)] });
 
   } else if (action === "quit") {
     pendingReplay.delete(key);
