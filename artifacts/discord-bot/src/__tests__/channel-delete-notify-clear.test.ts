@@ -455,6 +455,29 @@ describe("handleChannelDelete – leaveLogChannelId auto-clear", () => {
     );
   });
 
+  // ── Reverse isolation: a setLeaveLogChannelId failure must not affect the already-completed setBanLogChannelId ──
+
+  it("still records setBanLogChannelId as called and logs the leaveLog error when setLeaveLogChannelId rejects (each setter has its own try-catch)", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-shared",
+      leaveLogChannelId: "ch-shared",
+    });
+    const leaveWriteError = new Error("leave-log write failed");
+    mocks.setLeaveLogChannelId.mockRejectedValue(leaveWriteError);
+
+    await handleChannelDelete(makeGuildChannel("ch-shared", "guild-both"));
+
+    // setBanLogChannelId runs first and must have been called (and succeeded).
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledWith("guild-both", null);
+
+    // The leaveLog write failure must produce its own error log entry.
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("[economy] ChannelDelete"),
+      leaveWriteError,
+    );
+  });
+
   // ── Isolation: a setBanLogChannelId failure must not skip setLeaveLogChannelId ──
 
   it("still calls setLeaveLogChannelId even when setBanLogChannelId rejects (each setter has its own try-catch)", async () => {
