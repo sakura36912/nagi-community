@@ -85,6 +85,8 @@ import { handleChannelDelete } from "./lib/handleChannelDelete";
 import { runStartupChannelValidation, validateGuildConfiguredChannels } from "./lib/validateConfiguredChannels";
 import { makeChannelResolver } from "./lib/makeChannelResolver";
 import { handleVcLogMove } from "./lib/vcLogMove";
+import { sendVcNotifyJoin, sendVcNotifyLeave } from "./lib/vcNotify";
+import { handleVcLogJoin } from "./lib/vcLogJoin";
 
 import { logger } from "./lib/logger";
 import {
@@ -96,7 +98,6 @@ import {
   payHubSalary,
   getVcLogSettings,
   setVcLogNotifyChannel,
-  recordVcLogJoin,
   recordVcLogLeave,
   getVcLogPresence,
   updateVcPresenceChannel,
@@ -789,64 +790,6 @@ function getMemberDisplayName(guild: VoiceState["guild"], userId: string): strin
 }
 
 /** チャンネル名を取得。キャッシュになければチャンネルIDをフォールバックとして使用 */
-function getVcChannelName(guild: VoiceState["guild"], channelId: string): string {
-  return guild.channels.cache.get(channelId)?.name ?? `チャンネル(${channelId})`;
-}
-
-/** 秒数を「X時間Y分Z秒」形式に変換 */
-function formatDuration(totalSecs: number): string {
-  const h = Math.floor(totalSecs / 3600);
-  const m = Math.floor((totalSecs % 3600) / 60);
-  const s = totalSecs % 60;
-  if (h > 0) return `${h}時間${m}分${s}秒`;
-  if (m > 0) return `${m}分${s}秒`;
-  return `${s}秒`;
-}
-
-async function sendVcNotifyJoin(guild: VoiceState["guild"], userId: string, channelId: string, notifyChannelId: string): Promise<void> {
-  try {
-    const ch = guild.channels.cache.get(notifyChannelId);
-    if (!ch || !("send" in ch)) return;
-    const member      = guild.members.cache.get(userId);
-    const memberName  = member?.displayName ?? `ユーザー(${userId})`;
-    const memberIconUrl = member?.displayAvatarURL() ?? undefined;
-    const channelName = getVcChannelName(guild, channelId);
-    const embed = new EmbedBuilder()
-      .setColor(0x57f287)
-      .setAuthor({ name: memberName, iconURL: memberIconUrl })
-      .setDescription(`🔊 **${channelName}** に参加しました`)
-      .setTimestamp();
-    if (memberIconUrl) embed.setThumbnail(memberIconUrl);
-    await (ch as TextChannel).send({ embeds: [embed], allowedMentions: { parse: [] } });
-  } catch {
-    // 通知失敗は無視
-  }
-}
-
-async function sendVcNotifyLeave(guild: VoiceState["guild"], userId: string, channelId: string, notifyChannelId: string, joinedAt?: Date): Promise<void> {
-  try {
-    const ch = guild.channels.cache.get(notifyChannelId);
-    if (!ch || !("send" in ch)) return;
-    const member      = guild.members.cache.get(userId);
-    const memberName  = member?.displayName ?? `ユーザー(${userId})`;
-    const memberIconUrl = member?.displayAvatarURL() ?? undefined;
-    const channelName = getVcChannelName(guild, channelId);
-    const embed = new EmbedBuilder()
-      .setColor(0xed4245)
-      .setAuthor({ name: memberName, iconURL: memberIconUrl })
-      .setDescription(`🔇 **${channelName}** から退出しました`)
-      .setTimestamp();
-    if (memberIconUrl) embed.setThumbnail(memberIconUrl);
-    if (joinedAt) {
-      const secs = Math.floor((Date.now() - joinedAt.getTime()) / 1000);
-      embed.addFields({ name: "⏱ 滞在時間", value: formatDuration(secs), inline: true });
-    }
-    await (ch as TextChannel).send({ embeds: [embed], allowedMentions: { parse: [] } });
-  } catch {
-    // 通知失敗は無視
-  }
-}
-
 // ─── VC-time reward handler ───────────────────────────────────────────────────
 
 /**
@@ -932,14 +875,6 @@ async function handleVcLeave(
 
 }
 
-/** Returns the category ID if the channel is in the log category list, else null. */
-function getLogCategoryId(channelId: string, categoryIds: string[], guild: VoiceState["guild"]): string | null {
-  if (categoryIds.length === 0) return null; // empty = disabled
-  const channel = guild.channels.cache.get(channelId);
-  if (!channel || !channel.parentId) return null;
-  return categoryIds.includes(channel.parentId) ? channel.parentId : null;
-}
-
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   // Ignore bots.
   const userId = newState.member?.id ?? oldState.member?.id;
@@ -995,18 +930,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         }
       })(),
       // Session log tracking + join notification
-      (async () => {
-        try {
-          const logSettings = await getVcLogSettings(guild.id);
-          const catId = getLogCategoryId(newState.channelId!, logSettings.categoryIds, guild);
-          if (catId) await recordVcLogJoin(guild.id, userId, newState.channelId!, catId);
-          if (logSettings.notifyChannelId) {
-            await sendVcNotifyJoin(guild, userId, newState.channelId!, logSettings.notifyChannelId);
-          }
-        } catch (err) {
-          logger.error(`[vclog] recordVcLogJoin error for ${userId}`, err);
-        }
-      })(),
+      handleVcLogJoin(guild, userId, newState.channelId!).catch((err) =>
+        logger.error(`[vclog] handleVcLogJoin error for ${userId}`, err),
+      ),
       // Hub: メンバーが Hub チャンネルに参加した場合は新VCを作成して転送
       handleHubJoin(newState).catch((err) =>
         logger.error(`[vcHub] handleHubJoin error for ${userId}`, err),
