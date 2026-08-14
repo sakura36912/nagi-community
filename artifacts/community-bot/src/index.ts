@@ -35,6 +35,7 @@ import {
 import { resolveIsExile } from "./lib/vc-exile.js";
 import { handleVoiceStateUpdate } from "./lib/vc-session-handler.js";
 import { runPerGuildVcPrune, runOrphanVcPrune } from "./lib/vc-prune-scheduler.js";
+import { runPeriodicMessages } from "./lib/periodic-message-scheduler.js";
 import { awardVcTime, awardEventParticipation, runRoleTenureBatch } from "./lib/points.js";
 import { getPreban, pool, checkSchemaDrift } from "@workspace/db";
 import {
@@ -436,47 +437,30 @@ client.once(Events.ClientReady, async (readyClient) => {
   // ── Periodic messages ─────────────────────────────────────────────────────
   // Checks every 10 minutes whether any enabled periodic messages are due,
   // posts them, and updates last_posted_at.
-  async function runPeriodicMessages(): Promise<void> {
-    const { getDuePeriodicMessages, markPeriodicMessagePosted } = await import("./lib/periodicMessages.js");
-    const due = await getDuePeriodicMessages().catch((err) => {
-      logger.error("[periodic] Failed to fetch due messages", err);
-      return [] as Awaited<ReturnType<typeof getDuePeriodicMessages>>;
-    });
-    for (const msg of due) {
-      // Optimistic update: mark posted BEFORE sending so a bot crash between
-      // send and DB write cannot cause a duplicate post on the next startup.
-      // If the DB write itself fails we skip the send entirely rather than
-      // risk the message being seen as due again on the next tick.
-      try {
-        await markPeriodicMessagePosted(msg.id);
-      } catch (err) {
-        logger.error(`[periodic] Failed to mark message id=${msg.id} as posted — skipping send`, err);
-        continue;
-      }
-      try {
-        const guild = readyClient.guilds.cache.get(msg.guildId)
-          ?? await readyClient.guilds.fetch(msg.guildId).catch(() => null);
+  const { getDuePeriodicMessages, markPeriodicMessagePosted } = await import("./lib/periodicMessages.js");
+
+  function makePeriodicDeps() {
+    return {
+      getDuePeriodicMessages,
+      markPeriodicMessagePosted,
+      resolveTextChannel: async (guildId: string, channelId: string) => {
+        const guild = readyClient.guilds.cache.get(guildId)
+          ?? await readyClient.guilds.fetch(guildId).catch(() => null);
         if (!guild) {
-          logger.warn(`[periodic] Guild ${msg.guildId} not found — skipping message id=${msg.id}`);
-          continue;
+          logger.warn(`[periodic] Guild ${guildId} not found`);
+          return null;
         }
-        const channel = guild.channels.cache.get(msg.channelId)
-          ?? await guild.channels.fetch(msg.channelId).catch(() => null);
-        if (!channel?.isTextBased()) {
-          logger.warn(`[periodic] Channel ${msg.channelId} not found or not text-based — skipping message id=${msg.id}`);
-          continue;
-        }
-        await channel.send(msg.message);
-        logger.info(`[periodic] Posted message id=${msg.id} to channel ${msg.channelId} in guild ${msg.guildId}`);
-      } catch (err) {
-        logger.error(`[periodic] Failed to post message id=${msg.id}`, err);
-      }
-    }
+        const channel = guild.channels.cache.get(channelId)
+          ?? await guild.channels.fetch(channelId).catch(() => null);
+        if (!channel?.isTextBased()) return null;
+        return channel;
+      },
+    };
   }
 
-  runPeriodicMessages().catch((err) => logger.error("[periodic] Initial run error", err));
+  runPeriodicMessages(makePeriodicDeps()).catch((err) => logger.error("[periodic] Initial run error", err));
   setInterval(() => {
-    runPeriodicMessages().catch((err) => logger.error("[periodic] Scheduler error", err));
+    runPeriodicMessages(makePeriodicDeps()).catch((err) => logger.error("[periodic] Scheduler error", err));
   }, 10 * 60 * 1000);
 
   async function runEventParticipationAward(): Promise<void> {
