@@ -920,6 +920,31 @@ describe("runVcExpiryScheduler – cross-session isolation (50013 on one session
     const calledChannelIds = mocks.deleteSchedule.mock.calls.map(([id]: [string]) => id);
     expect(calledChannelIds).toContain("channel-B");
   });
+
+  it("logs session B's DB error even when session A also threw 50013", async () => {
+    const sessionA = makeSession({ id: 10, channelId: "channel-A" });
+    const sessionB = makeSession({ id: 20, channelId: "channel-B" });
+
+    const permError = makeDiscordAPIError(50013, "Missing Permissions");
+    const deleteA = vi.fn().mockRejectedValue(permError);
+    const deleteB = vi.fn().mockResolvedValue(undefined);
+
+    // Session A throws 50013; session B's channel.delete() succeeds but its
+    // deletePrivateVcSession rejects with a DB error.
+    const dbError = new Error("DB connection lost");
+    mocks.deletePrivateVcSession.mockRejectedValueOnce(dbError); // for session B
+
+    mocks.getExpiredPrivateVcSessions.mockResolvedValueOnce([sessionA, sessionB]);
+
+    await runVcExpiryScheduler(makeTwoSessionClient({ channelADelete: deleteA, channelBDelete: deleteB }));
+
+    // The DB error for session B must be logged even though session A also errored
+    // (50013), so on-call engineers have visibility into the DB failure.
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("20"),
+      dbError,
+    );
+  });
 });
 
 // ─── DB cleanup failure ───────────────────────────────────────────────────────
