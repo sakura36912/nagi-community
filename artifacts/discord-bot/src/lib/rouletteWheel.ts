@@ -58,7 +58,13 @@ function arcPath(
 
 // ─── フレーム生成 ─────────────────────────────────────────────────────────────
 
-function makeSvgFrame(wheelRot: number, ballAngle: number, sz = 300): string {
+/**
+ * @param wheelRot   ホイールの回転角度
+ * @param ballAngle  ボールの角度
+ * @param sz         SVGサイズ(px)
+ * @param highlightIdx  当選セクターのインデックス(最終フレームのみ指定)
+ */
+function makeSvgFrame(wheelRot: number, ballAngle: number, sz = 300, highlightIdx?: number): string {
   const cx = sz / 2;
   const cy = sz / 2;
   const R  = 140;  // 外周半径
@@ -67,6 +73,8 @@ function makeSvgFrame(wheelRot: number, ballAngle: number, sz = 300): string {
   const tw = 360 / 37; // 1セクター角度
 
   const parts: string[] = [];
+  let highlightOverlay = "";
+  let arrowIndicator   = "";
 
   for (let i = 0; i < WHEEL_ORDER.length; i++) {
     const n  = WHEEL_ORDER[i];
@@ -74,15 +82,37 @@ function makeSvgFrame(wheelRot: number, ballAngle: number, sz = 300): string {
     const a2 = (i + 1) * tw + wheelRot;
     const mid = (a1 + a2) / 2;
     const [bx, by] = polar(cx, cy, nr, mid);
-    const fs = n >= 10 ? 7 : 9;
+    const isWinner = highlightIdx !== undefined && i === highlightIdx;
+
+    // セクターの数字フォントサイズ。当選セクターはひと回り大きく
+    const fs = isWinner
+      ? (n >= 10 ? 9 : 11)
+      : (n >= 10 ? 7 : 9);
+    const textFill = isWinner ? "#FFD700" : "white";
 
     parts.push(
       `<path d="${arcPath(cx, cy, R, ri, a1, a2)}" fill="${sectorColor(n)}" stroke="#8B7355" stroke-width="0.8"/>`,
       `<text x="${bx.toFixed(1)}" y="${by.toFixed(1)}" ` +
       `text-anchor="middle" dominant-baseline="middle" ` +
-      `fill="white" font-size="${fs}" font-weight="bold" font-family="Arial" ` +
+      `fill="${textFill}" font-size="${fs}" font-weight="bold" font-family="Arial" ` +
       `transform="rotate(${mid.toFixed(1)},${bx.toFixed(1)},${by.toFixed(1)})">${n}</text>`,
     );
+
+    if (isWinner) {
+      // ゴールドの半透明ハイライト枠を当選セクターに重ねる
+      highlightOverlay =
+        `<path d="${arcPath(cx, cy, R, ri, a1, a2)}" ` +
+        `fill="rgba(255,215,0,0.25)" stroke="#FFD700" stroke-width="2.5"/>`;
+
+      // 外周リングの内側（半径 R-4）に▼矢印を配置
+      const arrowR = R - 4;
+      const [ax, ay] = polar(cx, cy, arrowR, mid);
+      arrowIndicator =
+        `<text x="${ax.toFixed(1)}" y="${ay.toFixed(1)}" ` +
+        `text-anchor="middle" dominant-baseline="middle" ` +
+        `fill="#FFD700" font-size="10" font-weight="bold" font-family="Arial" ` +
+        `transform="rotate(${mid.toFixed(1)},${ax.toFixed(1)},${ay.toFixed(1)})">▼</text>`;
+    }
   }
 
   const [blx, bly] = polar(cx, cy, R - 8, ballAngle);
@@ -92,6 +122,8 @@ function makeSvgFrame(wheelRot: number, ballAngle: number, sz = 300): string {
     `<circle cx="${cx}" cy="${cy}" r="${sz / 2}" fill="#0d0d1a"/>` +
     `<circle cx="${cx}" cy="${cy}" r="${R + 6}" fill="#5C4827"/>` +
     parts.join("") +
+    highlightOverlay +
+    arrowIndicator +
     `<circle cx="${cx}" cy="${cy}" r="${ri}" fill="#1a1a2e"/>` +
     `<circle cx="${cx}" cy="${cy}" r="18" fill="#5C4827"/>` +
     `<circle cx="${blx.toFixed(1)}" cy="${bly.toFixed(1)}" r="7" fill="white" stroke="#ccc" stroke-width="1"/>` +
@@ -172,7 +204,9 @@ async function generateRouletteGifRaw(landedNumber: number): Promise<Buffer> {
 
         const svgPath = join(tmpdir(), `rw_${id}_${i.toString().padStart(2, "0")}.svg`);
         svgs.push(svgPath);
-        await writeFile(svgPath, makeSvgFrame(wheelRot, ballAngle));
+        // 最終フレームのみ当選セクターをハイライト
+        const highlight = i === FRAMES - 1 ? landedIdx : undefined;
+        await writeFile(svgPath, makeSvgFrame(wheelRot, ballAngle, 300, highlight));
       }),
     );
 
