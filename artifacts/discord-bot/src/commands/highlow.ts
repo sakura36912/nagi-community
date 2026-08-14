@@ -215,7 +215,6 @@ async function buildGameEmbed(game: HLGame): Promise<EmbedWithFiles> {
       { name: "現在のカード", value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
       { name: "賭け金",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
       { name: "連続正解",     value: `**${game.streak}** 回`, inline: true },
-      { name: "残高",         value: `**${game.balance.toLocaleString()}** ${game.currencyName}`, inline: true },
       { name: "受け取り予定", value: `**${game.currentWin.toLocaleString()}** ${game.currencyName}`, inline: true },
     )
     .setFooter({ text: "HIGH: 次が高い（A<2<…<10<J<Q<K）  LOW: 次が低い | 5分でタイムアウト" });
@@ -426,7 +425,6 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         { name: "連続正解",   value: `**${game.streak}** 回`, inline: true },
         { name: "払い出し",   value: `**${game.currentWin.toLocaleString()}** ${game.currencyName}`, inline: true },
         { name: "収支",       value: `${sign}**${netDelta.toLocaleString()}** ${game.currencyName}`, inline: true },
-        { name: "残高",       value: `**${finalBalance.toLocaleString()}** ${game.currencyName}`, inline: true },
       );
 
     await interaction.update({ content: "", embeds: [embed], files: [], components: [] });
