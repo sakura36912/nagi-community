@@ -107,19 +107,19 @@ function formatDateLabel(dateStr: string): string {
   return `${d.getMonth() + 1}/${d.getDate()}（${dow}）`;
 }
 
-/** Returns the Monday and Sunday of the week containing dateStr (JST). */
+/** Returns the Saturday and Friday of the week containing dateStr (JST). */
 function getWeekRange(dateStr?: string): { from: string; to: string } {
   const ref = dateStr
     ? new Date(`${dateStr}T00:00:00+09:00`)
     : new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const dow = ref.getUTCDay(); // 0=Sun
-  const mondayOffset = dow === 0 ? -6 : 1 - dow;
-  const monday = new Date(ref);
-  monday.setUTCDate(ref.getUTCDate() + mondayOffset);
-  const from = monday.toISOString().slice(0, 10);
-  const sunday = new Date(monday);
-  sunday.setUTCDate(monday.getUTCDate() + 6);
-  const to = sunday.toISOString().slice(0, 10);
+  const dow = ref.getUTCDay(); // 0=Sun, 6=Sat
+  const saturdayOffset = dow === 6 ? 0 : -(dow + 1);
+  const saturday = new Date(ref);
+  saturday.setUTCDate(ref.getUTCDate() + saturdayOffset);
+  const from = saturday.toISOString().slice(0, 10);
+  const friday = new Date(saturday);
+  friday.setUTCDate(saturday.getUTCDate() + 6);
+  const to = friday.toISOString().slice(0, 10);
   return { from, to };
 }
 
@@ -150,17 +150,17 @@ function getMonthRange(monthStr?: string): { from: string; to: string; label: st
   return { from, to, label: `${year}年${month + 1}月` };
 }
 
-/** Returns Mon–Sun "YYYY-MM-DD" strings for the week `weekOffset` weeks from now (JST). */
+/** Returns Sat–Fri "YYYY-MM-DD" strings for the week `weekOffset` weeks from now (JST). */
 function getWeekDates(weekOffset = 0): string[] {
   const jstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const dow = jstNow.getUTCDay(); // 0=Sun
-  const mondayOffset = dow === 0 ? -6 : 1 - dow;
-  const monday = new Date(jstNow);
-  monday.setUTCDate(jstNow.getUTCDate() + mondayOffset + weekOffset * 7);
+  const dow = jstNow.getUTCDay(); // 0=Sun, 6=Sat
+  const saturdayOffset = dow === 6 ? 0 : -(dow + 1);
+  const saturday = new Date(jstNow);
+  saturday.setUTCDate(jstNow.getUTCDate() + saturdayOffset + weekOffset * 7);
 
   return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday);
-    d.setUTCDate(monday.getUTCDate() + i);
+    const d = new Date(saturday);
+    d.setUTCDate(saturday.getUTCDate() + i);
     return d.toISOString().slice(0, 10);
   });
 }
