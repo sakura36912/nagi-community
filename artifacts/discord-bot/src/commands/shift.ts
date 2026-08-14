@@ -301,7 +301,7 @@ export function buildShiftEmbeds(
       // Sort by start time
       dayShifts.sort((a, b) => a.startTime.localeCompare(b.startTime));
       const entries = dayShifts.map((s) => {
-        const time = s.endTime ? `${s.startTime}〜${s.endTime}` : s.startTime;
+        const time = s.startTime;
         const note = s.note ? ` _[${s.note}]_` : "";
         return `　└ <@${s.userId}> \`${time}\`${note}`;
       }).join("\n");
