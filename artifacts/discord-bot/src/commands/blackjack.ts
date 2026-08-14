@@ -93,6 +93,8 @@ interface PendingReplay {
   expiresAt: number;
 }
 const pendingReplay = new Map<string, PendingReplay>();
+/** replay ボタンの二重押し防止用 */
+const processingReplay = new Set<string>();
 
 function gameKey(guildId: string, userId: string) { return `${guildId}:${userId}`; }
 
@@ -519,17 +521,25 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   // ─── replay / quit は activeGames にゲームがない状態で呼ばれる ───────────────
   if (action === "replay") {
+    // 二重押し防止: すでに処理中なら無視
+    if (processingReplay.has(key)) {
+      await interaction.deferUpdate();
+      return;
+    }
+    processingReplay.add(key);
     await interaction.deferUpdate();
     const pr = pendingReplay.get(key);
     pendingReplay.delete(key);
 
     if (!pr || pr.expiresAt < Date.now()) {
+      processingReplay.delete(key);
       await interaction.editReply({ components: [] });
       return;
     }
 
     const afterDeduct = await deductBet(guildId, user.id, pr.bet);
     if (!afterDeduct) {
+      processingReplay.delete(key);
       await interaction.editReply({ components: [] });
       await interaction.followUp({
         content: `❌ 残高が不足しているためリプレイできません（賭け金: **${pr.bet.toLocaleString()}** ${pr.currencyName}）。`,
@@ -556,11 +566,13 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     };
 
     if (isBlackjack(playerHand)) {
+      processingReplay.delete(key);
       await finishGame(interaction, dealerPlay(newGame));
       return;
     }
 
     activeGames.set(key, newGame);
+    processingReplay.delete(key);
     const { embeds, files } = await buildGameEmbed(newGame, true);
     await interaction.editReply({ content: "", embeds, files, components: [buildButtons(true)] });
     return;
