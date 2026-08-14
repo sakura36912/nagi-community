@@ -521,6 +521,36 @@ describe("privacy status check after handlePrivacyOptin — stateful DB mock", (
     expect(trackingField!.value).toMatch(/🟢/);
   });
 
+  // ── Global + both guild rows opted-out; opt-in for guild A only ───────────
+
+  it("opt-in for guild A clears the global opt-out row while guild B's per-guild row remains opted-out", async () => {
+    const userId = "user-global-and-both-guilds";
+    const guildA = "guild-global-A";
+    const guildB = "guild-global-B";
+
+    // Seed: global opt-out AND per-guild opt-out for both guilds
+    mocks.globalStore.set(userId, true);
+    mocks.privacyStore.set(`${guildA}:${userId}`, true);
+    mocks.privacyStore.set(`${guildB}:${userId}`, true);
+
+    // Sanity-check initial state
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(true);
+    expect(await isVcTrackingGuildLocalOptedOut(guildA, userId)).toBe(true);
+    expect(await isVcTrackingGuildLocalOptedOut(guildB, userId)).toBe(true);
+
+    // User opts back in — only for guild A
+    await handlePrivacyOptin(makeInteraction({ userId, guildId: guildA }) as never);
+
+    // Global row must be cleared
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(false);
+
+    // Guild A's per-guild row must also be cleared
+    expect(await isVcTrackingGuildLocalOptedOut(guildA, userId)).toBe(false);
+
+    // Guild B's per-guild row must remain opted-out (untouched by the guild-A opt-in)
+    expect(await isVcTrackingGuildLocalOptedOut(guildB, userId)).toBe(true);
+  });
+
   // ── Opt-out → opt-in round-trip ────────────────────────────────────────────
 
   it("status is active after opt-in that follows an earlier opt-out write", async () => {
