@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   getActivePrivateVcSession:  vi.fn(),
   buyItem:                    vi.fn(),
   extendPrivateVcSession:     vi.fn(),
+  refundPurchase:             vi.fn(),
   extendOrRepairVcSchedule:   vi.fn(),
   loggerInfo:                 vi.fn(),
   loggerWarn:                 vi.fn(),
@@ -74,7 +75,7 @@ vi.mock("../lib/economy.js", () => ({
   listRoleRewards:           vi.fn(),
   listShopItems:             vi.fn(),
   listSquadTreasuries:       vi.fn(),
-  refundPurchase:            vi.fn(),
+  refundPurchase:            mocks.refundPurchase,
   removeRoleReward:          vi.fn(),
   removeShopItem:            vi.fn(),
   setRewardDayOfMonth:       vi.fn(),
@@ -232,6 +233,91 @@ function makeShopSelectMenuInteraction() {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+// ─── Refund-on-extend-failure tests ──────────────────────────────────────────
+
+describe("handleShopBuyButton — VC extend, extendPrivateVcSession rejects → refund", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.extendOrRepairVcSchedule.mockResolvedValue(null);
+    mocks.refundPurchase.mockResolvedValue(undefined);
+  });
+
+  it("calls refundPurchase once with the purchased item and sends the failure reply", async () => {
+    const interaction = makeShopBuyBtnInteraction();
+    const item = makeExtendItem();
+
+    mocks.getShopItem.mockResolvedValue(item);
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+    mocks.getActivePrivateVcSession.mockResolvedValue(makeSession());
+    mocks.buyItem.mockResolvedValue({ ok: true, item });
+    // The DB extension step fails
+    mocks.extendPrivateVcSession.mockRejectedValue(new Error("DB connection lost"));
+
+    // Handler must not throw
+    await expect(handleShopBuyButton(interaction as never)).resolves.toBeUndefined();
+
+    // deferReply was called first
+    expect(interaction.deferReply).toHaveBeenCalledOnce();
+
+    // buyItem was charged before the failure
+    expect(mocks.buyItem).toHaveBeenCalledOnce();
+    expect(mocks.buyItem).toHaveBeenCalledWith(GUILD_ID, USER_ID, ITEM_ID, "ベリー");
+
+    // extendPrivateVcSession was attempted
+    expect(mocks.extendPrivateVcSession).toHaveBeenCalledOnce();
+    expect(mocks.extendPrivateVcSession).toHaveBeenCalledWith(SESSION_ID, ONE_DAY_MS);
+
+    // refundPurchase must be called exactly once with the item that was charged
+    expect(mocks.refundPurchase).toHaveBeenCalledOnce();
+    expect(mocks.refundPurchase).toHaveBeenCalledWith(GUILD_ID, USER_ID, item);
+
+    // Failure reply must contain the expected message
+    expect(interaction.editReply).toHaveBeenCalledOnce();
+    const reply = interaction.editReply.mock.calls[0][0] as string;
+    expect(reply).toContain("延長に失敗したため");
+
+    // No success-path work should have run (schedule repair must NOT be called)
+    expect(mocks.extendOrRepairVcSchedule).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleShopSelectMenu (applyShopPurchase) — VC extend, extendPrivateVcSession rejects → refund", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.extendOrRepairVcSchedule.mockResolvedValue(null);
+    mocks.refundPurchase.mockResolvedValue(undefined);
+  });
+
+  it("calls refundPurchase once with the purchased item and sends the failure reply", async () => {
+    const interaction = makeShopSelectMenuInteraction();
+    const item = makeExtendItem();
+
+    mocks.getShopItem.mockResolvedValue(item);
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+    mocks.getActivePrivateVcSession.mockResolvedValue(makeSession());
+    mocks.buyItem.mockResolvedValue({ ok: true, item });
+    mocks.extendPrivateVcSession.mockRejectedValue(new Error("timeout"));
+
+    await expect(handleShopSelectMenu(interaction as never)).resolves.toBeUndefined();
+
+    expect(interaction.deferReply).toHaveBeenCalledOnce();
+    expect(mocks.buyItem).toHaveBeenCalledOnce();
+    expect(mocks.extendPrivateVcSession).toHaveBeenCalledOnce();
+
+    // refundPurchase fires once with the correct item
+    expect(mocks.refundPurchase).toHaveBeenCalledOnce();
+    expect(mocks.refundPurchase).toHaveBeenCalledWith(GUILD_ID, USER_ID, item);
+
+    // Failure reply sent
+    expect(interaction.editReply).toHaveBeenCalledOnce();
+    const reply = interaction.editReply.mock.calls[0][0] as string;
+    expect(reply).toContain("延長に失敗したため");
+
+    // No schedule repair on the failure path
+    expect(mocks.extendOrRepairVcSchedule).not.toHaveBeenCalled();
+  });
+});
 
 describe("handleShopBuyButton — VC extend, channel absent", () => {
   beforeEach(() => {
