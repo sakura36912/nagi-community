@@ -450,6 +450,77 @@ describe("privacy status check after handlePrivacyOptin — stateful DB mock", (
     expect(trackingField!.value).toMatch(/🟢/);
   });
 
+  // ── Global opt-out only (per-guild row absent) → opt-in ──────────────────
+
+  it("isVcTrackingGloballyOptedOut returns false after opt-in when only the global opt-out was set (per-guild row absent)", async () => {
+    const userId  = "user-global-only-001";
+    const guildId = "guild-global-only-001";
+
+    // Seed global opt-out; per-guild store remains empty
+    mocks.globalStore.set(userId, true);
+
+    // Sanity-check: global is opted out, per-guild is absent (not opted out)
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(true);
+    expect(await isVcTrackingGuildLocalOptedOut(guildId, userId)).toBe(false);
+
+    // User runs /privacy optin
+    await handlePrivacyOptin(makeInteraction({ userId, guildId }) as never);
+
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(false);
+  });
+
+  it("isVcTrackingGuildLocalOptedOut returns false after opt-in when only the global opt-out was set (per-guild row absent)", async () => {
+    const userId  = "user-global-only-002";
+    const guildId = "guild-global-only-002";
+
+    // Seed global opt-out; per-guild store remains empty
+    mocks.globalStore.set(userId, true);
+
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(true);
+    expect(await isVcTrackingGuildLocalOptedOut(guildId, userId)).toBe(false);
+
+    await handlePrivacyOptin(makeInteraction({ userId, guildId }) as never);
+
+    // The opt-in writes optedOut=false into both tables, so the per-guild row
+    // now exists with optedOut=false — must still return false.
+    expect(await isVcTrackingGuildLocalOptedOut(guildId, userId)).toBe(false);
+  });
+
+  it("privacyCommand.execute status sends 🟢 embed (color 0x57f287) after opt-in when only the global opt-out was set (per-guild row absent)", async () => {
+    const userId  = "user-global-only-embed";
+    const guildId = "guild-global-only-embed";
+
+    // Global opted out, per-guild row absent — the symmetric case to Task 227
+    mocks.globalStore.set(userId, true);
+
+    // Confirm initial state: global opted out, per-guild absent (not opted out)
+    expect(await isVcTrackingGloballyOptedOut(userId)).toBe(true);
+    expect(await isVcTrackingGuildLocalOptedOut(guildId, userId)).toBe(false);
+
+    // User opts back in
+    await handlePrivacyOptin(makeInteraction({ userId, guildId }) as never);
+
+    // Now run the real /privacy status execute path
+    const privacyCommand = commands.find((c) => c.data.name === "privacy");
+    if (!privacyCommand) throw new Error("privacy command not found in commands array");
+
+    const statusInteraction = makeStatusInteraction({ userId, guildId });
+    await privacyCommand.execute(statusInteraction as never);
+
+    // editReply must have been called with an embed
+    expect(statusInteraction.editReply).toHaveBeenCalledOnce();
+    const call = statusInteraction.editReply.mock.calls[0][0] as { embeds: { _color: number; _fields: { name: string; value: string }[] }[] };
+    const embed = call.embeds[0];
+
+    // Color must be green — effectivelyOptedOut must be false
+    expect(embed._color).toBe(0x57f287);
+
+    // VCトラッキング field value must contain 🟢
+    const trackingField = embed._fields.find((f) => f.name === "VCトラッキング");
+    expect(trackingField).toBeDefined();
+    expect(trackingField!.value).toMatch(/🟢/);
+  });
+
   // ── Opt-out → opt-in round-trip ────────────────────────────────────────────
 
   it("status is active after opt-in that follows an earlier opt-out write", async () => {
