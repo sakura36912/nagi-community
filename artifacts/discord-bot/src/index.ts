@@ -83,6 +83,7 @@ import { getStickyMessage, updateStickyLastMessageId } from "./lib/sticky";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 import { handleChannelDelete } from "./lib/handleChannelDelete";
 import { runStartupChannelValidation, validateGuildConfiguredChannels } from "./lib/validateConfiguredChannels";
+import { makeChannelResolver } from "./lib/makeChannelResolver";
 import { handleVcLogMove } from "./lib/vcLogMove";
 
 import { logger } from "./lib/logger";
@@ -771,24 +772,6 @@ client.once(Events.ClientReady, async (readyClient) => {
  *               validateGuildConfiguredChannels treats the channel as "still
  *               exists" rather than clearing it spuriously.
  */
-function makeChannelResolver(
-  guild: { channels: { cache: { has: (id: string) => boolean }; fetch: (id: string) => Promise<unknown> } },
-): (channelId: string) => Promise<boolean> {
-  return async function resolveChannel(channelId: string): Promise<boolean> {
-    if (guild.channels.cache.has(channelId)) return true;
-    try {
-      const fetched = await guild.channels.fetch(channelId);
-      return fetched !== null;
-    } catch (err) {
-      if (err instanceof DiscordAPIError && err.code === 10003) {
-        // Unknown Channel — channel is definitely gone
-        return false;
-      }
-      // Any other error is transient — re-throw so the caller keeps the setting
-      throw err;
-    }
-  };
-}
 
 // Runtime recovery: fired when a guild transitions from unavailable → available
 // during an active session.  Not fired for guilds present at initial READY.

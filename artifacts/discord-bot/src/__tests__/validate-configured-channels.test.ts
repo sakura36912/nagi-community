@@ -42,9 +42,17 @@
  *  27.  An error in one guild does not prevent subsequent guilds from being validated.
  *  28.  resolverFactory is called with each guild object.
  *  29.  Empty iterable completes without error and makes no DB calls.
+ *
+ * makeChannelResolver integration (end-to-end with real resolver from index.ts)
+ *  30.  fetch() throws DiscordAPIError 50013 (Missing Access) → resolver re-throws
+ *       → validateGuildConfiguredChannels treats channel as existing → ID NOT cleared.
+ *  31.  fetch() throws DiscordAPIError 10003 (Unknown Channel) → resolver returns false
+ *       → validateGuildConfiguredChannels clears the ID.
+ *  32.  Channel found in cache (has() returns true) → fetch is never called → ID NOT cleared.
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
+import { DiscordAPIError } from "discord.js";
 
 // ─── Hoist mocks ─────────────────────────────────────────────────────────────
 
@@ -81,6 +89,7 @@ vi.mock("../lib/logger.js", () => ({
 // ─── Import the real functions ────────────────────────────────────────────────
 
 import { validateGuildConfiguredChannels, runStartupChannelValidation } from "../lib/validateConfiguredChannels.js";
+import { makeChannelResolver } from "../lib/makeChannelResolver.js";
 
 // ─── Default resolver helpers ─────────────────────────────────────────────────
 
@@ -526,5 +535,102 @@ describe("runStartupChannelValidation – startup iteration", () => {
     expect(resolverFactory).not.toHaveBeenCalled();
     expect(mocks.getVcLogSettings).not.toHaveBeenCalled();
     expect(mocks.getGuildSettings).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// makeChannelResolver integration tests
+//
+// These tests wire the real makeChannelResolver closure (extracted from
+// index.ts) with a fake guild object, then pass the resulting resolver to
+// validateGuildConfiguredChannels so the entire path is exercised end-to-end.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a minimal DiscordAPIError instance without invoking its real
+ * constructor (which requires a full RawError payload).  The resolver only
+ * checks `err instanceof DiscordAPIError` and `err.code`, so this is enough.
+ */
+function makeDiscordAPIError(code: number, message: string): DiscordAPIError {
+  const err = Object.create(DiscordAPIError.prototype) as DiscordAPIError;
+  Object.defineProperty(err, "code", { value: code, writable: false });
+  err.message = message;
+  return err;
+}
+
+describe("makeChannelResolver integration – end-to-end with validateGuildConfiguredChannels", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.setVcLogNotifyChannel.mockResolvedValue(undefined);
+    mocks.setBanLogChannelId.mockResolvedValue(undefined);
+    mocks.setLeaveLogChannelId.mockResolvedValue(undefined);
+    mocks.getVcLogSettings.mockResolvedValue({ notifyChannelId: null });
+  });
+
+  // 30 — fetch() throws DiscordAPIError 50013 (Missing Access) → ID NOT cleared
+  it("does NOT clear banLogChannelId when guild.channels.fetch rejects with DiscordAPIError 50013 (Missing Access)", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-banlog",
+      leaveLogChannelId: null,
+    });
+
+    const missingAccessError = makeDiscordAPIError(50013, "Missing Access");
+    const fakeGuild = {
+      channels: {
+        cache: { has: (_id: string) => false },
+        fetch: vi.fn().mockRejectedValue(missingAccessError),
+      },
+    };
+
+    const resolver = makeChannelResolver(fakeGuild);
+    await validateGuildConfiguredChannels("guild-transient", resolver);
+
+    // Transient error — must NOT clear the configured ID
+    expect(mocks.setBanLogChannelId).not.toHaveBeenCalled();
+  });
+
+  // 31 — fetch() throws DiscordAPIError 10003 (Unknown Channel) → ID IS cleared
+  it("clears banLogChannelId when guild.channels.fetch rejects with DiscordAPIError 10003 (Unknown Channel)", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-banlog",
+      leaveLogChannelId: null,
+    });
+
+    const unknownChannelError = makeDiscordAPIError(10003, "Unknown Channel");
+    const fakeGuild = {
+      channels: {
+        cache: { has: (_id: string) => false },
+        fetch: vi.fn().mockRejectedValue(unknownChannelError),
+      },
+    };
+
+    const resolver = makeChannelResolver(fakeGuild);
+    await validateGuildConfiguredChannels("guild-gone", resolver);
+
+    // Unknown Channel is confirmed-gone — must clear the configured ID
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledOnce();
+    expect(mocks.setBanLogChannelId).toHaveBeenCalledWith("guild-gone", null);
+  });
+
+  // 32 — channel found in cache → fetch is never called → ID NOT cleared
+  it("does NOT call fetch and does NOT clear banLogChannelId when the channel is in the guild cache", async () => {
+    mocks.getGuildSettings.mockResolvedValue({
+      banLogChannelId: "ch-cached",
+      leaveLogChannelId: null,
+    });
+
+    const fetchSpy = vi.fn();
+    const fakeGuild = {
+      channels: {
+        cache: { has: (id: string) => id === "ch-cached" },
+        fetch: fetchSpy,
+      },
+    };
+
+    const resolver = makeChannelResolver(fakeGuild);
+    await validateGuildConfiguredChannels("guild-cached", resolver);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mocks.setBanLogChannelId).not.toHaveBeenCalled();
   });
 });
