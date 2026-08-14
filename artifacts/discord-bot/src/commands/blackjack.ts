@@ -139,7 +139,7 @@ async function fetchHandImages(
 }
 
 /** カードストリップの表示高さ（px） */
-const CARD_STRIP_HEIGHT = 120;
+const CARD_STRIP_HEIGHT = 90;
 
 /**
  * 複数の画像バッファを縦横比を保ったまま同じ高さに揃え、横一列に合成する。
