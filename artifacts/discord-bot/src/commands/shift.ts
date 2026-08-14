@@ -709,18 +709,28 @@ export const shiftCommand: Command = {
         await interaction.reply({ content: "このチャンネルにはメッセージを送信できません。", ephemeral: true });
         return;
       }
+      const panelWeekLabel = (offset: number): string => {
+        const dates = getWeekDates(offset);
+        const from = dates[0]!;
+        const to   = dates[6]!;
+        const fd = new Date(`${from}T00:00:00+09:00`);
+        const td = new Date(`${to}T00:00:00+09:00`);
+        const range = `${fd.getMonth() + 1}/${fd.getDate()}〜${td.getMonth() + 1}/${td.getDate()}`;
+        const name = offset === 0 ? "今週" : offset === 1 ? "来週" : "再来週";
+        return `${name} (${range})`;
+      };
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}0`)
-          .setLabel("今週")
+          .setLabel(panelWeekLabel(0))
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}1`)
-          .setLabel("来週")
+          .setLabel(panelWeekLabel(1))
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}2`)
-          .setLabel("再来週")
+          .setLabel(panelWeekLabel(2))
           .setStyle(ButtonStyle.Secondary),
       );
       await ch.send({ embeds: [embed], components: [row] });
