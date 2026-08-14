@@ -85,13 +85,21 @@ export const BJ_PREFIX = "bj:";
 
 const activeGames = new Map<string, BJGame>();
 
+interface PendingReplay {
+  bet: number;
+  cardPaths: Map<string, string>;
+  currencyName: string;
+  suitEmojis: SuitEmojis;
+  expiresAt: number;
+}
+const pendingReplay = new Map<string, PendingReplay>();
+
 function gameKey(guildId: string, userId: string) { return `${guildId}:${userId}`; }
 
 setInterval(() => {
   const now = Date.now();
-  for (const [key, game] of activeGames) {
-    if (game.expiresAt < now) activeGames.delete(key);
-  }
+  for (const [key, game] of activeGames)    { if (game.expiresAt < now) activeGames.delete(key); }
+  for (const [key, pr]   of pendingReplay)  { if (pr.expiresAt   < now) pendingReplay.delete(key); }
 }, 60_000);
 
 // ─── Suit emoji helpers ───────────────────────────────────────────────────────
@@ -429,6 +437,13 @@ function buildButtons(canDouble: boolean): ActionRowBuilder<ButtonBuilder> {
   );
 }
 
+function buildResultButtons(): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("bj:replay").setLabel("もう一度").setEmoji("🔄").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("bj:quit").setLabel("終了").setEmoji("✋").setStyle(ButtonStyle.Secondary),
+  );
+}
+
 // ─── Game logic ───────────────────────────────────────────────────────────────
 
 function dealerPlay(game: BJGame): BJGame {
@@ -474,11 +489,23 @@ async function finishGame(
   // push (netDelta === 0) も記録することで /casino stats のプレイ回数・賭け金集計に含める
   await recordTransaction(guildId, userId, netDelta, logReason[outcome]).catch(() => {});
 
-  activeGames.delete(gameKey(guildId, userId));
+  const key = gameKey(guildId, userId);
+  activeGames.delete(key);
+
+  // リプレイ用の情報を保存（ダブルダウン済みなら元の賭け金に戻す）
+  const replayBet = game.doubled ? game.bet / 2 : game.bet;
+  pendingReplay.set(key, {
+    bet: replayBet,
+    cardPaths: game.cardPaths,
+    currencyName: game.currencyName,
+    suitEmojis: game.suitEmojis,
+    expiresAt: Date.now() + GAME_TTL_MS,
+  });
+
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
   await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
   const { embeds, files } = await buildResultEmbed(game, outcome);
-  await interaction.editReply({ content: "", embeds, files, components: [] });
+  await interaction.editReply({ content: "", embeds, files, components: [buildResultButtons()] });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -559,6 +586,57 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     game.playerHand = [...game.playerHand, card]; game.deck = newDeck;
     await cacheCardBuffer(card, game.cardPaths, game.cardBuffers);
     await finishGame(interaction, dealerPlay(game));
+
+  } else if (action === "replay") {
+    const pr = pendingReplay.get(key);
+    pendingReplay.delete(key);
+
+    if (!pr || pr.expiresAt < Date.now()) {
+      await interaction.update({ components: [] });
+      return;
+    }
+
+    const afterDeduct = await deductBet(guildId, user.id, pr.bet);
+    if (!afterDeduct) {
+      await interaction.update({ components: [] });
+      await interaction.followUp({
+        content: `❌ 残高が不足しているためリプレイできません（賭け金: **${pr.bet.toLocaleString()}** ${pr.currencyName}）。`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // 新しいゲームをセットアップ
+    let deck = buildShoe();
+    let playerHand: Card[] = [], dealerHand: Card[] = [], card: Card;
+    [card, deck] = draw(deck); playerHand = [...playerHand, card];
+    [card, deck] = draw(deck); dealerHand = [...dealerHand, card];
+    [card, deck] = draw(deck); playerHand = [...playerHand, card];
+    [card, deck] = draw(deck); dealerHand = [...dealerHand, card];
+
+    const cardBuffers = new Map<string, Buffer>();
+    await cacheHandBuffers([...playerHand, ...dealerHand], pr.cardPaths, cardBuffers);
+
+    const newGame: BJGame = {
+      guildId, userId: user.id, bet: pr.bet, playerHand, dealerHand, deck,
+      doubled: false, currencyName: pr.currencyName,
+      balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
+      suitEmojis: pr.suitEmojis, cardPaths: pr.cardPaths, cardBuffers, processing: false,
+    };
+
+    if (isBlackjack(playerHand)) {
+      await interaction.deferUpdate();
+      await finishGame(interaction, dealerPlay(newGame));
+      return;
+    }
+
+    activeGames.set(key, newGame);
+    const { embeds, files } = await buildGameEmbed(newGame, true);
+    await interaction.update({ content: "", embeds, files, components: [buildButtons(true)] });
+
+  } else if (action === "quit") {
+    pendingReplay.delete(key);
+    await interaction.update({ components: [] });
   }
 }
 
