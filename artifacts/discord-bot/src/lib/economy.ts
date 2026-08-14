@@ -58,7 +58,7 @@ export const TIMED_VC_DURATIONS: Record<string, number> = {
   [PRIVATE_VC_1M_EFFECT]: 30 * 24 * 60 * 60 * 1000,
 };
 
-/** 非公開VC（categoryが"vc"）延長専用。既存セッションがある場合のみ延長（新規作成なし）。 */
+/** 高級船室（categoryが"vc"）延長専用。既存セッションがある場合のみ延長（新規作成なし）。 */
 export const VC_EXTEND_DURATIONS: Record<string, number> = {
   [VC_EXTEND_1D_EFFECT]: 24 * 60 * 60 * 1000,
 };
@@ -106,29 +106,29 @@ export async function seedDefaultShopItems(guildId: string): Promise<void> {
 export async function seedDefaultVcShopItems(guildId: string): Promise<void> {
   const defaults: Array<{ name: string; description: string; price: number; effectType: string; sortOrder: number }> = [
     {
-      name: "非公開VC（1日）",
+      name: "高級船室（1日）",
       description: "自分だけが見える専用VCを1日間作成します。期間終了後に自動削除されます。",
       price: 1000,
       effectType: PRIVATE_VC_1D_EFFECT,
       sortOrder: 1,
     },
     {
-      name: "非公開VC（1週間）",
+      name: "高級船室（1週間）",
       description: "自分だけが見える専用VCを1週間作成します。期間終了後に自動削除されます。",
       price: 5000,
       effectType: PRIVATE_VC_1W_EFFECT,
       sortOrder: 2,
     },
     {
-      name: "非公開VC（1ヶ月）",
+      name: "高級船室（1ヶ月）",
       description: "自分だけが見える専用VCを1ヶ月間作成します。期間終了後に自動削除されます。",
       price: 15000,
       effectType: PRIVATE_VC_1M_EFFECT,
       sortOrder: 3,
     },
     {
-      name: "非公開VC延長（1日）",
-      description: "既存の非公開VCの期限を1日延長します。部屋がない場合は使用できません。",
+      name: "高級船室延長（1日）",
+      description: "既存の高級船室の期限を1日延長します。部屋がない場合は使用できません。",
       price: 800,
       effectType: VC_EXTEND_1D_EFFECT,
       sortOrder: 4,

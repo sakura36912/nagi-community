@@ -402,7 +402,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
-      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
+      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の高級船室: <#${result.channelId}>${expiry}`);
     } else {
       await interaction.editReply(result.reason);
     }
@@ -493,12 +493,12 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     return;
   }
 
-  // 非公開VC延長（category="vc"）
+  // 高級船室延長（category="vc"）
   const vcExtendDuration = VC_EXTEND_DURATIONS[item.effectType ?? ""];
   if (vcExtendDuration !== undefined) {
     const session = await getActivePrivateVcSession(interaction.guildId, interaction.user.id, "vc");
     if (!session) {
-      await interaction.editReply("❌ 有効な非公開VCがありません。先に購入してください。");
+      await interaction.editReply("❌ 有効な高級船室がありません。先に購入してください。");
       return;
     }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
@@ -529,7 +529,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
           const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
           const panelMsg = msgs.find(
             (m) => m.author.id === interaction.client.user?.id
-              && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
           );
           if (panelMsg) {
             const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
@@ -540,7 +540,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
         logger.error(`[vc-extend] Failed to update panel message for channel ${session.channelId}`, panelErr);
       }
       const ts = Math.floor(updated.expiresAt.getTime() / 1000);
-      await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n高級船室の期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
     } catch {
       await refundPurchase(interaction.guildId, interaction.user.id, result.item);
       await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
@@ -652,7 +652,7 @@ async function applyShopPurchase(
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
-      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の非公開VC: <#${result.channelId}>${expiry}`);
+      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の高級船室: <#${result.channelId}>${expiry}`);
     } else {
       await interaction.editReply(result.reason);
     }
@@ -730,12 +730,12 @@ async function applyShopPurchase(
     return;
   }
 
-  // 非公開VC延長（category="vc"）
+  // 高級船室延長（category="vc"）
   const vcExtendDuration = VC_EXTEND_DURATIONS[item.effectType ?? ""];
   if (vcExtendDuration !== undefined) {
     const session = await getActivePrivateVcSession(interaction.guildId, interaction.user.id, "vc");
     if (!session) {
-      await interaction.editReply("❌ 有効な非公開VCがありません。先に購入してください。");
+      await interaction.editReply("❌ 有効な高級船室がありません。先に購入してください。");
       return;
     }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
@@ -766,7 +766,7 @@ async function applyShopPurchase(
           const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
           const panelMsg = msgs.find(
             (m) => m.author.id === interaction.client.user?.id
-              && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
           );
           if (panelMsg) {
             const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
@@ -777,7 +777,7 @@ async function applyShopPurchase(
         logger.error(`[vc-extend] Failed to update panel message for channel ${session.channelId}`, panelErr);
       }
       const ts = Math.floor(updated.expiresAt.getTime() / 1000);
-      await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n非公開VCの期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！\n高級船室の期限を <t:${ts}:F>（<t:${ts}:R>）まで延長しました。`);
     } catch {
       await refundPurchase(interaction.guildId, interaction.user.id, result.item);
       await interaction.editReply("❌ 延長に失敗したため、購入を取り消し、返金しました。");
@@ -887,7 +887,7 @@ export async function handleVcRenameModalSubmit(interaction: ModalSubmitInteract
   );
 
   if (!privateVc) {
-    await interaction.editReply("❌ あなたの非公開VCが見つかりません。先にVCを作成してください。");
+    await interaction.editReply("❌ あなたの高級船室が見つかりません。先にVCを作成してください。");
     return;
   }
 
@@ -1246,22 +1246,22 @@ type EffectChoice = { name: string; value: string };
 
 const COMBINED_EFFECT_CHOICES: EffectChoice[] = [
   { name: "ニックネーム変更権",        value: NICKNAME_CHANGE_EFFECT   },
-  { name: "非公開VC作成(無期限)",        value: PRIVATE_VC_EFFECT        },
+  { name: "高級船室作成(無期限)",        value: PRIVATE_VC_EFFECT        },
   { name: "永久ロール付与",              value: PERM_ROLE_EFFECT         },
   { name: "評価落ち浮上券",             value: EVAL_RESURFACE_EFFECT    },
   { name: "個人ショップ開業券",          value: SHOP_LICENSE_EFFECT      },
-  { name: "非公開VC/裏部屋（1日）",     value: PRIVATE_VC_1D_EFFECT     },
-  { name: "非公開VC（3日）",            value: PRIVATE_VC_3D_EFFECT     },
-  { name: "非公開VC/裏部屋（1週間）",  value: PRIVATE_VC_1W_EFFECT     },
-  { name: "非公開VC/裏部屋（1ヶ月）",  value: PRIVATE_VC_1M_EFFECT     },
+  { name: "高級船室/裏部屋（1日）",     value: PRIVATE_VC_1D_EFFECT     },
+  { name: "高級船室（3日）",            value: PRIVATE_VC_3D_EFFECT     },
+  { name: "高級船室/裏部屋（1週間）",  value: PRIVATE_VC_1W_EFFECT     },
+  { name: "高級船室/裏部屋（1ヶ月）",  value: PRIVATE_VC_1M_EFFECT     },
   { name: "VCリネーム",                  value: VC_RENAME_EFFECT         },
-  { name: "非公開VC延長（1日）",        value: VC_EXTEND_1D_EFFECT      },
+  { name: "高級船室延長（1日）",        value: VC_EXTEND_1D_EFFECT      },
 ];
 
 const CATEGORY_CHOICES = [
   { name: "🛒 ショップ",               value: "general" },
   { name: "⚔️ 隊別ショップ",          value: "group"   },
-  { name: "🔒 非公開VCショップ",       value: "vc"      },
+  { name: "🔒 高級船室ショップ",       value: "vc"      },
 ];
 
 interface ShopGroupConfig {
@@ -1274,7 +1274,7 @@ interface ShopGroupConfig {
 const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
   general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623 },
   group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c },
-  vc:      { displayName: "非公開VCショップ",       emoji: "🔒", category: "vc",      color: 0x3498db },
+  vc:      { displayName: "高級船室ショップ",       emoji: "🔒", category: "vc",      color: 0x3498db },
 };
 
 const shopCommand: Command = {
@@ -1313,17 +1313,17 @@ const shopCommand: Command = {
         .addIntegerOption((opt) => opt.setName("item_id").setDescription("アイテムID").setRequired(true)),
     )
     .addSubcommand((sub) =>
-      sub.setName("vc-category").setDescription("非公開VCを作成するカテゴリを設定します（管理者）")
+      sub.setName("vc-category").setDescription("高級船室を作成するカテゴリを設定します（管理者）")
         .addChannelOption((opt) =>
           opt.setName("channel").setDescription("カテゴリチャンネルを選択").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
         ),
     )
     .addSubcommand((sub) =>
-      sub.setName("invite").setDescription("非公開VCに別のメンバーを招待します")
+      sub.setName("invite").setDescription("高級船室に別のメンバーを招待します")
         .addUserOption((opt) => opt.setName("member").setDescription("招待するメンバー").setRequired(true)),
     )
     .addSubcommand((sub) =>
-      sub.setName("kick").setDescription("非公開VCからメンバーのアクセスを取り消します")
+      sub.setName("kick").setDescription("高級船室からメンバーのアクセスを取り消します")
         .addUserOption((opt) => opt.setName("member").setDescription("取り消すメンバー").setRequired(true)),
     )
     .addSubcommand((sub) =>
@@ -1429,7 +1429,7 @@ const shopCommand: Command = {
       logger.info(`[vc-category] guild=${guildId} channelId=${channelId}`);
       await setVcCategoryId(guildId, channelId);
       logger.info(`[vc-category] saved ok`);
-      await interaction.reply(`✅ 非公開VCの作成先カテゴリを <#${channelId}> に設定しました。`);
+      await interaction.reply(`✅ 高級船室の作成先カテゴリを <#${channelId}> に設定しました。`);
       return;
     }
 
@@ -1437,7 +1437,7 @@ const shopCommand: Command = {
       await interaction.deferReply({ ephemeral: true });
       const session = await getActivePrivateVcSession(guildId, interaction.user.id, "vc");
       if (!session) {
-        await interaction.editReply("❌ 有効な非公開VCが見つかりません。先に購入してください。");
+        await interaction.editReply("❌ 有効な高級船室が見つかりません。先に購入してください。");
         return;
       }
       const targetUser = interaction.options.getUser("member", true);
@@ -1454,7 +1454,7 @@ const shopCommand: Command = {
       await ch.permissionOverwrites.edit(targetUser.id, {
         ViewChannel: true, Connect: true, Speak: true, Stream: true, SendMessages: true,
       });
-      await interaction.editReply(`✅ <@${targetUser.id}> を非公開VCに招待しました。`);
+      await interaction.editReply(`✅ <@${targetUser.id}> を高級船室に招待しました。`);
       return;
     }
 
@@ -1462,7 +1462,7 @@ const shopCommand: Command = {
       await interaction.deferReply({ ephemeral: true });
       const session = await getActivePrivateVcSession(guildId, interaction.user.id, "vc");
       if (!session) {
-        await interaction.editReply("❌ 有効な非公開VCが見つかりません。");
+        await interaction.editReply("❌ 有効な高級船室が見つかりません。");
         return;
       }
       const targetUser = interaction.options.getUser("member", true);
@@ -1778,9 +1778,9 @@ export function buildVcPanelMessage(
     ? `\n👥 アクセス中のメンバー: ${memberIds.length > 0 ? memberIds.map((id) => `<@${id}>`).join("、") : "メンバーなし"}`
     : "";
   const embed = new EmbedBuilder()
-    .setTitle("🔒 非公開VC コントロールパネル")
+    .setTitle("🔒 高級船室 コントロールパネル")
     .setColor(0x5865f2)
-    .setDescription(`<@${ownerId}> の非公開VCです。\n${expText}${memberLine}`)
+    .setDescription(`<@${ownerId}> の高級船室です。\n${expText}${memberLine}`)
     .setFooter({ text: "VCオーナーのみ操作できます" });
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -2097,7 +2097,7 @@ export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction
       const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
       const panelMsg = msgs.find(
         (m) => m.author.id === interaction.client.user?.id
-          && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+          && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId);
@@ -2135,7 +2135,7 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
       const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
       const panelMsg = msgs.find(
         (m) => m.author.id === interaction.client.user?.id
-          && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+          && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId);
@@ -2185,7 +2185,7 @@ export async function handleVcPanelExtendSel(interaction: StringSelectMenuIntera
       const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
       const panelMsg = msgs.find(
         (m) => m.author.id === interaction.client.user?.id
-          && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+          && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
       );
       if (panelMsg) {
         const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
@@ -2304,14 +2304,14 @@ export async function handleVcPanelRenameModal(interaction: ModalSubmitInteracti
   }
 }
 
-/** 🔄 既存の非公開VCパネルを一括更新（/vc refresh-panels） */
+/** 🔄 既存の高級船室パネルを一括更新（/vc refresh-panels） */
 export async function handleVcRefreshPanels(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!interaction.guild || !interaction.guildId) return;
   await interaction.deferReply({ ephemeral: true });
 
   const sessions = await getActivePrivateVcSessionsByGuild(interaction.guildId);
   if (sessions.length === 0) {
-    await interaction.editReply("このサーバーにアクティブな非公開VCはありません。");
+    await interaction.editReply("このサーバーにアクティブな高級船室はありません。");
     return;
   }
 
@@ -2326,7 +2326,7 @@ export async function handleVcRefreshPanels(interaction: ChatInputCommandInterac
       const msgs = await textCh.messages.fetch({ limit: 50 });
       const panelMsg = msgs.find(
         (m) => m.author.id === interaction.client.user?.id
-          && m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+          && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
       );
       if (!panelMsg) { skipped++; continue; }
       const memberIds = getVcAccessMemberIds(textCh, session.userId, interaction.client.user?.id);
@@ -2340,11 +2340,11 @@ export async function handleVcRefreshPanels(interaction: ChatInputCommandInterac
   }
 
   await interaction.editReply(
-    `✅ 非公開VCパネルを更新しました。\n更新: ${updated} 件 / スキップ: ${skipped} 件（チャンネル消失・パネルなし）`,
+    `✅ 高級船室パネルを更新しました。\n更新: ${updated} 件 / スキップ: ${skipped} 件（チャンネル消失・パネルなし）`,
   );
 }
 
-/** 📺 画面共有トグル（非公開VC） */
+/** 📺 画面共有トグル（高級船室） */
 export async function handleVcPanelStreamBtn(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guild) return;
   const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_STREAM, interaction.customId);
@@ -2386,7 +2386,7 @@ export async function handleVcPanelStreamBtn(interaction: ButtonInteraction): Pr
       const panelMsg = msgs.find(
         (m) =>
           m.author.id === interaction.client.user?.id &&
-          m.embeds[0]?.title === "🔒 非公開VC コントロールパネル",
+          m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId).catch(() => null);

@@ -302,7 +302,7 @@ export const vcCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("refresh-panels")
-        .setDescription("既存の非公開VCパネルをすべて最新レイアウトに更新します（管理者）"),
+        .setDescription("既存の高級船室パネルをすべて最新レイアウトに更新します（管理者）"),
     )
     // ── hub-refresh-panels ────────────────────────────────────────────────
     .addSubcommand((sub) =>
