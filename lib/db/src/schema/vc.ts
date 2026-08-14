@@ -19,6 +19,10 @@ export const vcSchedulesTable = pgTable("vc_schedules", {
 
 export const insertVcScheduleSchema = createInsertSchema(vcSchedulesTable)
   .omit({ id: true, createdAt: true })
-  .extend({ channelName: z.string().trim().min(1) });
+  .extend({
+    guildId: z.string().trim().min(1),
+    channelId: z.string().trim().min(1),
+    channelName: z.string().trim().min(1),
+  });
 export type InsertVcSchedule = z.infer<typeof insertVcScheduleSchema>;
 export type VcSchedule = typeof vcSchedulesTable.$inferSelect;
