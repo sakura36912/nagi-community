@@ -227,13 +227,13 @@ async function buildGameEmbed(game: HLGame): Promise<EmbedWithFiles> {
 async function buildResultEmbed(
   game: HLGame,
   nextCard: Card,
-  won: boolean,
+  result: "win" | "lose" | "draw",
 ): Promise<EmbedWithFiles> {
   const e = game.suitEmojis;
   await cacheCardBuffer(nextCard, game.cardPaths, game.cardBuffers);
   const cardImage = await buildStripFromCards([game.currentCard, nextCard], game.cardBuffers, "result.png");
 
-  if (won) {
+  if (result === "win") {
     const newWin = Math.floor(game.currentWin * PAYOUT_MULTIPLIER);
     const embed  = new EmbedBuilder()
       .setTitle("🃏 ハイアンドロー — ✅ 正解！")
@@ -246,6 +246,18 @@ async function buildResultEmbed(
         { name: "受け取り予定", value: `**${newWin.toLocaleString()}** ${game.currencyName}`, inline: true },
       )
       .setFooter({ text: "受け取るか、続けるかを選んでください" });
+    if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
+    return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
+  } else if (result === "draw") {
+    const embed = new EmbedBuilder()
+      .setTitle("🃏 ハイアンドロー — 🤝 引き分け")
+      .setColor(0xf0c040)
+      .addFields(
+        { name: "前のカード", value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
+        { name: "次のカード", value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
+        { name: "\u200B",     value: "\u200B", inline: true },
+        { name: "返却",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
+      );
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
     return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
   } else {
@@ -385,19 +397,30 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     const [nextCard, newDeck]  = draw(game.deck);
     const currentValue         = hlCardValue(game.currentCard.rank);
     const nextValue            = hlCardValue(nextCard.rank);
-    const won                  = action === "high" ? nextValue > currentValue : nextValue < currentValue;
+    const isDraw               = nextValue === currentValue;
+    const won                  = !isDraw && (action === "high" ? nextValue > currentValue : nextValue < currentValue);
+
+    if (isDraw) {
+      // 引き分け → ベット返却してゲーム終了
+      activeGames.delete(key);
+      await creditAmount(guildId, user.id, game.originalBet);
+      await recordTransaction(guildId, user.id, 0, `ハイアンドロー引き分け（賭け: ${game.originalBet}）`).catch(() => {});
+      const { embeds, files } = await buildResultEmbed(game, nextCard, "draw");
+      await interaction.editReply({ content: "", embeds, files, components: [] });
+      return;
+    }
 
     if (!won) {
       // 不正解 → ゲーム終了
       activeGames.delete(key);
       await recordTransaction(guildId, user.id, -game.originalBet, `ハイアンドロー敗北（賭け: ${game.originalBet}）`).catch(() => {});
-      const { embeds, files } = await buildResultEmbed(game, nextCard, false);
+      const { embeds, files } = await buildResultEmbed(game, nextCard, "lose");
       await interaction.editReply({ content: "", embeds, files, components: [] });
       return;
     }
 
     // 正解 → 結果表示（ゲーム状態は buildResultEmbed の後に更新）
-    const { embeds, files } = await buildResultEmbed(game, nextCard, true);
+    const { embeds, files } = await buildResultEmbed(game, nextCard, "win");
     game.streak++;
     game.currentWin  = Math.floor(game.currentWin * PAYOUT_MULTIPLIER);
     game.currentCard = nextCard;
