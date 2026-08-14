@@ -34,6 +34,7 @@
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
+import type { VoiceState } from "discord.js";
 
 // ─── Hoist mocks ─────────────────────────────────────────────────────────────
 const mocks = vi.hoisted(() => ({
@@ -65,6 +66,7 @@ import {
 } from "../lib/vcReward.js";
 
 import { handleVcLogMove, type VcLogMoveNotify } from "../lib/vcLogMove.js";
+import { sendVcNotifyLeave as realSendVcNotifyLeave } from "../lib/vcNotify.js";
 
 // ─── Inline helpers (mirrors index.ts exactly) ────────────────────────────────
 
@@ -436,6 +438,36 @@ describe("handleVcLogMove – tracked → tracked (different category)", () => {
 
     await expect(
       handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notifyWithRealJoin),
+    ).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not call send and does not throw when the notify channel has been deleted (leave half)", async () => {
+    // notifyChannelId points to a channel that is NOT in guild.channels.cache
+    mocks.getVcLogSettings.mockResolvedValue({
+      notifyChannelId: "deleted-notify-ch",
+      categoryIds: ["cat-1", "cat-2"],
+    });
+    mocks.getVcLogPresence.mockResolvedValue({ joinedAt: new Date(Date.now() - 60 * 1000) });
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    // guild has "ch-old" in cache but NOT "deleted-notify-ch" — simulates deleted notify channel
+    const fakeGuild = {
+      id: "guild-1",
+      channels: { cache: new Map([["ch-old", { send }]]) },
+      members: { cache: new Map() },
+    } as unknown as VoiceState["guild"];
+
+    // Wire the real production sendVcNotifyLeave (which checks guild.channels.cache)
+    // so the deleted-channel guard is exercised, not just the local inline helper.
+    const notifyWithRealLeave: VcLogMoveNotify = {
+      sendLeave: (uid, channelId, notifyChannelId, joinedAt) =>
+        realSendVcNotifyLeave(fakeGuild, uid, channelId, notifyChannelId, joinedAt),
+      sendJoin: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      handleVcLogMove("guild-1", "user-1", "ch-old", "ch-new", channelParentId, notifyWithRealLeave),
     ).resolves.toBeUndefined();
     expect(send).not.toHaveBeenCalled();
   });
