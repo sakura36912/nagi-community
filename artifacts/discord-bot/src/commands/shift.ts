@@ -276,7 +276,7 @@ export function buildShiftEmbeds(
   if (isWeekMode) {
     // Generate all 7 days in range
     const days: string[] = [];
-    const startD = new Date(`${from}T00:00:00+09:00`);
+    const startD = new Date(`${from}T00:00:00Z`); // UTC 真夜中で統一（+09:00 だと UTC 日付が1日ズレる）
     for (let i = 0; i < 7; i++) {
       const d = new Date(startD);
       d.setUTCDate(startD.getUTCDate() + i);
@@ -290,9 +290,10 @@ export function buildShiftEmbeds(
     }
 
     const lines = days.map((date) => {
-      const d = new Date(`${date}T00:00:00+09:00`);
-      const dow = WEEKDAY_JA[d.getDay()]!;
-      const label = `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+      const d = new Date(`${date}T00:00:00Z`);
+      const dow = WEEKDAY_JA[d.getUTCDay()]!;
+      const [, dm, dd] = date.split("-").map(Number);
+      const label = `${dm}/${dd}`;
       const dayShifts = byDate.get(date) ?? [];
       if (dayShifts.length === 0) {
         return `**${dow} ${label}**　─`;
