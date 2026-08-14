@@ -577,6 +577,33 @@ describe("runVcDeleteScheduler – channel deletion", () => {
     expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
   });
 
+  it("does not throw and does not log an error when the channel is absent from cache and fetch returns null during deletion", async () => {
+    // Scenario: a guild admin manually deleted the private VC before the expiry
+    // scheduler ran.  The channel is absent from the bot cache AND Discord's API
+    // returns null (confirmed gone) when the scheduler tries to fetch it during
+    // the deletion loop.  The scheduler must:
+    //   • skip channel.delete() silently (nothing to delete)
+    //   • still call deleteSchedule to clean up the stale DB row
+    //   • NOT throw an unhandled error
+    //   • NOT log any error (this is a clean, expected path)
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+
+    const client = makeClient({ noChannel: true });
+
+    // Must resolve cleanly — no throw.
+    await expect(runVcDeleteScheduler(client)).resolves.toBeUndefined();
+
+    // channel.delete() must never have been called — the channel object was null.
+    expect(client._channelDelete).not.toHaveBeenCalled();
+
+    // The stale schedule row must still be cleaned up.
+    expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
+    expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
+
+    // No error must be logged — the manually-deleted channel path is silent.
+    expect(mocks.loggerError).not.toHaveBeenCalled();
+  });
+
   it("does NOT remove the DB row when the bot lacks permissions (code 50013)", async () => {
     mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
 
