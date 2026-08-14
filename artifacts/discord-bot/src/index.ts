@@ -73,6 +73,7 @@ import { getHubSession, getHubChannelById } from "@workspace/db";
 import {
   getExpiredSchedules,
   getSchedulesExpiringSoon,
+  getScheduleByChannelId,
   deleteSchedule,
   markScheduleNotified,
   pruneOrphanedVcSchedules,
@@ -594,6 +595,18 @@ async function runVcDeleteScheduler(): Promise<void> {
   // ── Delete expired channels ───────────────────────────────────────────────
   const expired = await getExpiredSchedules(now);
   for (const schedule of expired) {
+    // Re-check the current expiresAt to guard against a race where the user
+    // called extendSchedule() after getExpiredSchedules() captured the stale
+    // row but before we act on it.  If the row has been extended (expiresAt >
+    // now) or already removed, skip the deletion entirely.
+    const currentSchedule = await getScheduleByChannelId(schedule.channelId);
+    if (!currentSchedule || currentSchedule.expiresAt > now) {
+      logger.info(
+        `[vc-schedule] Skipping deletion of ${schedule.channelId} — schedule was extended or already removed`,
+      );
+      continue;
+    }
+
     let missingPermissions = false;
     try {
       const guild = client.guilds.cache.get(schedule.guildId);
@@ -610,8 +623,8 @@ async function runVcDeleteScheduler(): Promise<void> {
       }
     } catch (err) {
       // DiscordAPIError code 50013 = Missing Permissions.
-      // In this case we must NOT remove the DB row so that /vc list still shows
-      // the entry and an admin can notice the permission problem and act on it.
+      // In this case we must NOT remove the DB row so that the scheduler can
+      // retry on the next tick once an admin restores the permission.
       if (err instanceof DiscordAPIError && err.code === 50013) {
         missingPermissions = true;
         logger.error(
@@ -626,7 +639,7 @@ async function runVcDeleteScheduler(): Promise<void> {
     }
 
     // Skip DB cleanup when the channel is still alive but we lack permission —
-    // leave the row so /vc list stays accurate and the admin can investigate.
+    // leave the row so the scheduler retries on the next tick.
     if (missingPermissions) continue;
 
     // Remove the DB row (channel was deleted or was already gone).

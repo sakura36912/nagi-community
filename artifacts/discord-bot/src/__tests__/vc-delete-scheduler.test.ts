@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   getSchedulesExpiringSoon: vi.fn(),
   markScheduleNotified: vi.fn(),
   getExpiredSchedules: vi.fn(),
+  getScheduleByChannelId: vi.fn(),
   deleteSchedule: vi.fn(),
   getGuildSettings: vi.fn(),
   loggerInfo: vi.fn(),
@@ -57,6 +58,7 @@ vi.mock("../lib/vc.js", () => ({
   getSchedulesExpiringSoon: mocks.getSchedulesExpiringSoon,
   markScheduleNotified: mocks.markScheduleNotified,
   getExpiredSchedules: mocks.getExpiredSchedules,
+  getScheduleByChannelId: mocks.getScheduleByChannelId,
   deleteSchedule: mocks.deleteSchedule,
 }));
 
@@ -79,6 +81,7 @@ import {
   getSchedulesExpiringSoon,
   markScheduleNotified,
   getExpiredSchedules,
+  getScheduleByChannelId,
   deleteSchedule,
 } from "../lib/vc.js";
 import { getGuildSettings } from "../lib/economy.js";
@@ -198,6 +201,18 @@ async function runVcDeleteScheduler(
   // ── Delete expired channels ──────────────────────────────────────────────
   const expired = await getExpiredSchedules(now);
   for (const schedule of expired) {
+    // Re-check the current expiresAt to guard against a race where the user
+    // called extendSchedule() after getExpiredSchedules() captured the stale
+    // row but before we act on it.  If the row has been extended (expiresAt >
+    // now) or already removed, skip the deletion entirely.
+    const currentSchedule = await getScheduleByChannelId(schedule.channelId);
+    if (!currentSchedule || currentSchedule.expiresAt > now) {
+      logger.info(
+        `[vc-schedule] Skipping deletion of ${schedule.channelId} — schedule was extended or already removed`,
+      );
+      continue;
+    }
+
     let missingPermissions = false;
     try {
       const guild = client.guilds.cache.get(schedule.guildId);
@@ -529,6 +544,8 @@ describe("runVcDeleteScheduler – channel deletion", () => {
     mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
     mocks.markScheduleNotified.mockResolvedValue(undefined);
     mocks.deleteSchedule.mockResolvedValue(true);
+    // Default: row is still expired at act-time (no concurrent extension).
+    mocks.getScheduleByChannelId.mockResolvedValue(makeSchedule({ expiresAt: new Date(Date.now() - 60_000) }));
   });
 
   it("deletes the Discord channel when the schedule is expired", async () => {
@@ -611,6 +628,8 @@ describe("runVcDeleteScheduler – DM failure does not block channel deletion", 
     mocks.getGuildSettings.mockResolvedValue({ vcWarnBeforeMinutes: 10 });
     mocks.markScheduleNotified.mockResolvedValue(undefined);
     mocks.deleteSchedule.mockResolvedValue(true);
+    // Default: row is still expired at act-time.
+    mocks.getScheduleByChannelId.mockResolvedValue(makeSchedule({ expiresAt: new Date(Date.now() - 60_000) }));
   });
 
   it("deletes the expired channel even when the pre-expiry DM failed earlier", async () => {
@@ -641,6 +660,8 @@ describe("runVcDeleteScheduler – retry after permission is restored", () => {
     mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
     mocks.markScheduleNotified.mockResolvedValue(undefined);
     mocks.deleteSchedule.mockResolvedValue(true);
+    // Default: row is still expired at act-time.
+    mocks.getScheduleByChannelId.mockResolvedValue(makeSchedule({ expiresAt: new Date(Date.now() - 60_000) }));
   });
 
   it("preserves the DB row on the first tick (50013) and removes it on the second tick once permissions are restored", async () => {
@@ -1359,22 +1380,62 @@ describe("runVcDeleteScheduler – race: extend near expiry vs scheduler tick", 
     mocks.getSchedulesExpiringSoon.mockResolvedValue([]);
     mocks.markScheduleNotified.mockResolvedValue(undefined);
     mocks.deleteSchedule.mockResolvedValue(true);
+    // Default: row is still expired at act-time (no concurrent extension).
+    mocks.getScheduleByChannelId.mockResolvedValue(makeSchedule({ expiresAt: new Date(Date.now() - 60_000) }));
   });
 
-  it("deletes the channel exactly once when the scheduler holds a stale expired row that was subsequently extended", async () => {
-    // The scheduler fetched the row while it was still expired (stale data).
-    // The user extended after the fetch — simulated by the mock returning the
-    // row regardless.  The scheduler must process it exactly once: one
-    // channel.delete(), one deleteSchedule().  No second pass should happen.
+  it("does NOT delete the channel when the row has a future expiresAt at act-time (user extended after the fetch)", async () => {
+    // The scheduler fetched the row while it was expired (stale snapshot).
+    // Between that fetch and the act-time re-check, the user called
+    // extendSchedule() which advanced expiresAt into the future.
+    // The re-check must detect this and skip channel.delete().
     mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+    // Re-check returns a row with a future expiresAt — extension happened.
+    mocks.getScheduleByChannelId.mockResolvedValueOnce(
+      makeSchedule({ expiresAt: new Date(Date.now() + 30 * 60_000) }),
+    );
     const client = makeClient();
 
     await runVcDeleteScheduler(client);
 
-    // channel.delete() is called exactly once — not zero, not two.
+    // Channel must NOT be deleted — the row was extended.
+    expect(client._channelDelete).not.toHaveBeenCalled();
+    // DB row must NOT be removed — the extension owns the live row.
+    expect(mocks.deleteSchedule).not.toHaveBeenCalled();
+    // A skip log must be emitted so the behaviour is observable.
+    expect(mocks.loggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining("Skipping deletion of channel-1"),
+    );
+  });
+
+  it("does NOT delete the channel when the row is absent at act-time (already cleaned up)", async () => {
+    // Another path (e.g. runVcExpiryScheduler) already removed the DB row
+    // between the fetch and the re-check.
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+    // Re-check returns null — row is gone.
+    mocks.getScheduleByChannelId.mockResolvedValueOnce(null);
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
+    expect(client._channelDelete).not.toHaveBeenCalled();
+    expect(mocks.deleteSchedule).not.toHaveBeenCalled();
+    expect(mocks.loggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining("Skipping deletion of channel-1"),
+    );
+  });
+
+  it("deletes the channel when the re-check confirms expiresAt is still <= now (no race)", async () => {
+    // Happy path: the row was not extended between the fetch and the re-check.
+    // The re-check returns a row still in the past → proceed with deletion.
+    mocks.getExpiredSchedules.mockResolvedValueOnce([makeSchedule()]);
+    // getScheduleByChannelId default (beforeEach) returns an expired row.
+    const client = makeClient();
+
+    await runVcDeleteScheduler(client);
+
     expect(client._channelDelete).toHaveBeenCalledOnce();
     expect(client._channelDelete).toHaveBeenCalledWith("スケジュールによる自動削除");
-    // The DB row is removed exactly once.
     expect(mocks.deleteSchedule).toHaveBeenCalledOnce();
     expect(mocks.deleteSchedule).toHaveBeenCalledWith("channel-1");
   });

@@ -48,6 +48,15 @@ export async function listSchedules(guildId: string): Promise<VcSchedule[]> {
     .where(eq(vcSchedulesTable.guildId, guildId));
 }
 
+/** Return the schedule row for a specific channel, or null if absent. */
+export async function getScheduleByChannelId(channelId: string): Promise<VcSchedule | null> {
+  const [row] = await db
+    .select()
+    .from(vcSchedulesTable)
+    .where(eq(vcSchedulesTable.channelId, channelId));
+  return row ?? null;
+}
+
 /** Delete the schedule for a specific channel. Returns true if a row was removed. */
 export async function deleteSchedule(channelId: string): Promise<boolean> {
   const deleted = await db
