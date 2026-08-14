@@ -1962,8 +1962,7 @@ export function buildChestPanelMessage(chestType: "shinniri" | "honsennin") {
     .setColor(isHon ? 0x5865f2 : 0xf6a623)
     .setDescription(
       `**${isHon ? "本船員" : "新入り"}** ロールを持つメンバー限定\n\n` +
-      "**酒場🍺** に累計 **1時間** 接続すると 1回チャレンジできます。\n" +
-      "カウントは毎日 **JST 0:00** にリセット。\n\n" +
+      "**酒場🍺** に累計 **1時間** 接続すると 1回チャレンジできます。\n\n" +
       "🎲 何が出るかはお楽しみ！",
     )
     .setFooter({ text: "🎲 運試し、してみる？" });
