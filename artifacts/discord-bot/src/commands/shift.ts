@@ -713,9 +713,10 @@ export const shiftCommand: Command = {
         const dates = getWeekDates(offset);
         const from = dates[0]!;
         const to   = dates[6]!;
-        const fd = new Date(`${from}T00:00:00+09:00`);
-        const td = new Date(`${to}T00:00:00+09:00`);
-        const range = `${fd.getMonth() + 1}/${fd.getDate()}〜${td.getMonth() + 1}/${td.getDate()}`;
+        // "YYYY-MM-DD" を直接パース（Date オブジェクト経由だと UTC サーバーで1日ズレる）
+        const [, fm, fd] = from.split("-").map(Number);
+        const [, tm, td] = to.split("-").map(Number);
+        const range = `${fm}/${fd}〜${tm}/${td}`;
         const name = offset === 0 ? "今週" : offset === 1 ? "来週" : "再来週";
         return `${name} (${range})`;
       };
