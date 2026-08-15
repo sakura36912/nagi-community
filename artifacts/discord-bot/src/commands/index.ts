@@ -2660,6 +2660,66 @@ const chestCommand: Command = {
   },
 };
 
+// ─── /引き落とし ─────────────────────────────────────────────────────────────
+
+const debitCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("引き落とし")
+    .setDescription("指定ユーザーの残高を引き落とす（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addUserOption((opt) =>
+      opt.setName("対象").setDescription("引き落とし対象のユーザー").setRequired(true),
+    )
+    .addIntegerOption((opt) =>
+      opt.setName("金額").setDescription("引き落とす金額").setRequired(true).setMinValue(1),
+    )
+    .addStringOption((opt) =>
+      opt.setName("理由").setDescription("引き落とし理由（任意）").setRequired(false),
+    ),
+
+  async execute(interaction) {
+    if (!interaction.guildId) {
+      await interaction.reply({ content: "このコマンドはサーバー内でのみ使用できます。", ephemeral: true });
+      return;
+    }
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理者のみ使用できます。", ephemeral: true });
+      return;
+    }
+
+    const target = interaction.options.getUser("対象", true);
+    const amount = interaction.options.getInteger("金額", true);
+    const reason = interaction.options.getString("理由") ?? "admin-debit";
+
+    if (target.bot) {
+      await interaction.reply({ content: "Botを対象にはできません。", ephemeral: true });
+      return;
+    }
+
+    const settings = await getGuildSettings(interaction.guildId);
+    const result = await giveCurrency(interaction.guildId, target.id, -amount, settings.currencyName, reason);
+
+    if (!result.ok) {
+      await interaction.reply({ content: `❌ ${result.reason}`, ephemeral: true });
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("💸 引き落とし完了")
+      .setColor(0xe74c3c)
+      .setDescription(
+        `<@${target.id}> から **${amount.toLocaleString()}${settings.currencyName}** を引き落としました。\n残高: **${result.balance.toLocaleString()}${settings.currencyName}**`,
+      )
+      .addFields(
+        { name: "理由", value: reason, inline: true },
+        { name: "実行者", value: `<@${interaction.user.id}>`, inline: true },
+      )
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed] });
+  },
+};
+
 export const commands: Command[] = [
   interviewCommand,
   balanceCommand,
@@ -2691,4 +2751,5 @@ export const commands: Command[] = [
   adviceEndCommand,
   clearCommand,
   chestCommand,
+  debitCommand,
 ];
