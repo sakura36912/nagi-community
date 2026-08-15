@@ -44,7 +44,9 @@ export async function getTavernChannelNames(guildId: string): Promise<Set<string
 
 /** 指定チャンネルが酒場かどうかを返す（ギルド固有設定を参照）。 */
 export async function isTavernChannel(guildId: string, guild: Guild, channelId: string): Promise<boolean> {
-  const ch = guild.channels.cache.get(channelId);
+  // キャッシュになければ API から取得（hub 生成直後など未キャッシュのケース対策）
+  const ch = guild.channels.cache.get(channelId)
+    ?? await guild.channels.fetch(channelId).catch(() => null);
   if (!ch) return false;
   const names = await getTavernChannelNames(guildId);
   return names.has(ch.name);

@@ -86,7 +86,7 @@ import {
   getGuildWalletUserIds,
 } from "../lib/economy";
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds } from "../lib/vcReward";
-import { getCurrentTavernSeconds, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
+import { getCurrentTavernSeconds, isTavernChannel, onTavernJoin, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
 import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
@@ -2032,6 +2032,15 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   // elapsedSinceLastOpen >= CHEST_INTERVAL_SEC で開封可能
   let totalSecondsAtOpen = 0;
   if (!isAdmin) {
+    // 酒場VCにいるのにトラッキングされていない場合（Bot再起動直後など）は自己修復
+    if (getCurrentTavernSeconds(interaction.guild.id, interaction.user.id) === 0) {
+      const voiceChannelId = interaction.guild.voiceStates.cache.get(interaction.user.id)?.channelId;
+      if (voiceChannelId && await isTavernChannel(interaction.guild.id, interaction.guild, voiceChannelId)) {
+        onTavernJoin(interaction.guild.id, interaction.user.id);
+        logger.info(`[chest] Self-healed tavern tracking for ${interaction.user.id} in ${voiceChannelId}`);
+      }
+    }
+
     const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
     const [pastSeconds, opensCount, lastOpenVcSeconds] = await Promise.all([
       getTotalChestVcSeconds(interaction.guild.id, interaction.user.id),
@@ -2044,13 +2053,16 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
 
     if (elapsed < CHEST_INTERVAL_SEC) {
       const remaining = Math.ceil((CHEST_INTERVAL_SEC - elapsed) / 60);
+      const elapsedMin = Math.floor(elapsed / 60);
+      const neededMin = Math.ceil(CHEST_INTERVAL_SEC / 60);
+      const progressLine = `（累計酒場VC時間: ${elapsedMin}分 / ${neededMin}分）`;
       if (opensCount === 0) {
         await interaction.editReply(
-          `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です。`,
+          `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です。\n${progressLine}`,
         );
       } else {
         await interaction.editReply(
-          `📦 次の宝箱まであと **${remaining}分** の酒場VC接続が必要です。（${opensCount}回開封済み）`,
+          `📦 次の宝箱まであと **${remaining}分** の酒場VC接続が必要です。（${opensCount}回開封済み）\n${progressLine}`,
         );
       }
       return;
