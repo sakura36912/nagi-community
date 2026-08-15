@@ -1948,7 +1948,7 @@ function rollChest(): ChestResult {
   return "limited_role";                  // 🌈  0.1%
 }
 
-const CHEST_ROLE_LIMITED = "永久ロール";
+const CHEST_ROLE_LIMITED = "豪運";
 
 /** 指定名のロールをメンバーに付与する。ロールが存在しない場合は false を返す。 */
 async function grantRoleByName(guild: Guild, userId: string, roleName: string): Promise<boolean> {
