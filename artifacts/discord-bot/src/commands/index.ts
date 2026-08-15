@@ -2704,7 +2704,6 @@ const debitCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("引き落とし")
     .setDescription("指定ユーザーの残高を引き落とす（管理者専用）")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addUserOption((opt) =>
       opt.setName("対象").setDescription("引き落とし対象のユーザー").setRequired(true),
     )
