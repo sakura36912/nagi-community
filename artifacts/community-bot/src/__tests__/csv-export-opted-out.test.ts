@@ -417,6 +417,68 @@ describe("getAllTempVcDeletions – opted_out column in CSV export", () => {
     expect(result[0]?.optedOut).toBe(true);
   });
 
+  // ── OR semantics (symmetric): global removed, per-guild remains ───────────
+  //
+  // This is the symmetric counterpart to the tests above (task #257 direction).
+  // When a user has BOTH a per-guild and a global opt-out active, removing only
+  // the global opt-out row should leave optedOut:true because the per-guild
+  // EXISTS clause still matches.  A regression to AND logic would require both
+  // rows to be present and would silently flip the flag to false after the
+  // global row is deleted — a privacy bug in the other direction.
+
+  it("SQL uses OR so the per-guild EXISTS alone is sufficient to set opted_out without the global clause", async () => {
+    // If OR is used, the per-guild EXISTS independently satisfies the condition
+    // even when the global row is absent (or has opted_out=false).  An AND would
+    // require BOTH EXISTS to be true simultaneously — meaning removing the global
+    // row while the per-guild one remains would produce opted_out=false.
+    // We verify the OR appears between the two EXISTS blocks by inspecting the
+    // token immediately before the second EXISTS keyword, mirroring the approach
+    // used in the symmetric test above.
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getAllTempVcDeletions("guild-test");
+
+    const sqlArg = mocks.execute.mock.calls[0]?.[0] as { strings: string[] };
+    const text = sqlString(sqlArg);
+
+    // Locate both EXISTS keywords.
+    const firstExists  = text.indexOf("EXISTS");
+    const secondExists = text.indexOf("EXISTS", firstExists + 1);
+    expect(firstExists).toBeGreaterThanOrEqual(0);
+    expect(secondExists).toBeGreaterThan(firstExists);
+
+    // The connector immediately before the second EXISTS must be OR, not AND.
+    // Reading ~20 chars back captures the close-paren and whitespace of the
+    // first subquery plus the connector, without entering the second subquery.
+    const preamble = text.slice(Math.max(0, secondExists - 20), secondExists);
+    expect(preamble).toMatch(/\bOR\b/);
+    expect(preamble).not.toMatch(/\bAND\b/);
+
+    // The per-guild subquery must itself exist and contain opted_out = true,
+    // confirming it can independently satisfy the computed column when the
+    // global row is absent.
+    expect(text).toMatch(/community_vc_privacy\b[^)]*opted_out\s*=\s*true/s);
+  });
+
+  it("mapper returns optedOut:true when per-guild opt-out is active but global opt-out row is absent", async () => {
+    // Simulates the path where a user removed their global opt-out but their
+    // per-guild opt-out remains.  The DB evaluates the OR of both EXISTS subqueries:
+    // the per-guild EXISTS returns true (per-guild row present with opted_out=true),
+    // so the computed column resolves to true even though the global clause
+    // would return false.  The mapper must faithfully surface optedOut:true.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [makeDbRow("guild-opted-out-user", { opted_out: true })],
+    });
+
+    const result = await getAllTempVcDeletions("guild-test");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("guild-opted-out-user");
+    // The per-guild opt-out is still active; optedOut must stay true even though
+    // the global row is absent (DB already resolved this via OR to true).
+    expect(result[0]?.optedOut).toBe(true);
+  });
+
   it("mapper returns optedOut:false when DB resolves the subquery to false (per-guild re-opt-in path)", async () => {
     // This confirms the mapper correctly passes through false from the DB-evaluated
     // subquery.  The SQL predicate tests above prove the subquery only returns false
