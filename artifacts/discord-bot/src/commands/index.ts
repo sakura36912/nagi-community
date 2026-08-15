@@ -2002,12 +2002,27 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   const requiredRole = chestType === "honsennin" ? CHEST_ROLE_HONSENNIN : CHEST_ROLE_SHINNIRI;
 
   // ロールチェック（管理者は免除）
+  // 新入り宝箱 → 新入りロール限定（本船員は本船員宝箱のみ）
+  // 本船員宝箱 → 本船員ロール限定
   if (!isAdmin) {
     const member = interaction.member as GuildMember;
-    const hasRole = member.roles.cache.some((r) => r.name === requiredRole);
-    if (!hasRole) {
-      await interaction.editReply(`❌ この宝箱は **${requiredRole}** ロールを持つメンバーのみ引けます。`);
-      return;
+    const hasShinniri  = member.roles.cache.some((r) => r.name === CHEST_ROLE_SHINNIRI);
+    const hasHonsennin = member.roles.cache.some((r) => r.name === CHEST_ROLE_HONSENNIN);
+
+    if (chestType === "shinniri") {
+      if (hasHonsennin) {
+        await interaction.editReply(`❌ **${CHEST_ROLE_HONSENNIN}** は本船員の宝箱のみ引けます。`);
+        return;
+      }
+      if (!hasShinniri) {
+        await interaction.editReply(`❌ この宝箱は **${CHEST_ROLE_SHINNIRI}** ロールを持つメンバーのみ引けます。`);
+        return;
+      }
+    } else {
+      if (!hasHonsennin) {
+        await interaction.editReply(`❌ この宝箱は **${CHEST_ROLE_HONSENNIN}** ロールを持つメンバーのみ引けます。`);
+        return;
+      }
     }
   }
 
