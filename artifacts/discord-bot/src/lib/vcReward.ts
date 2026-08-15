@@ -8,6 +8,7 @@ import {
   vcLogPresenceTable,
   vcSessionLogsTable,
   chestVcAccumTable,
+  chestCooldownTable,
   walletsTable,
   transactionsTable,
   type VcPresence,
@@ -245,6 +246,50 @@ export async function getTodayChestOpensCount(guildId: string, userId: string): 
     );
   return row?.chestOpensCount ?? 0;
 }
+
+// ─── Chest per-open cooldown ─────────────────────────────────────────────────
+
+/**
+ * 前回開封時の累積酒場 VC 秒数を取得する。
+ * 未開封の場合は 0 を返す。
+ */
+export async function getChestLastOpenVcSeconds(
+  guildId: string,
+  userId: string,
+  chestType: string,
+): Promise<number> {
+  const [row] = await db
+    .select({ s: chestCooldownTable.lastOpenVcSeconds })
+    .from(chestCooldownTable)
+    .where(
+      and(
+        eq(chestCooldownTable.guildId, guildId),
+        eq(chestCooldownTable.userId, userId),
+        eq(chestCooldownTable.chestType, chestType),
+      ),
+    );
+  return row?.s ?? 0;
+}
+
+/**
+ * 開封時に前回開封 VC 秒数を更新する。
+ */
+export async function setChestLastOpenVcSeconds(
+  guildId: string,
+  userId: string,
+  chestType: string,
+  vcSeconds: number,
+): Promise<void> {
+  await db
+    .insert(chestCooldownTable)
+    .values({ guildId, userId, chestType, lastOpenVcSeconds: vcSeconds })
+    .onConflictDoUpdate({
+      target: [chestCooldownTable.guildId, chestCooldownTable.userId, chestCooldownTable.chestType],
+      set: { lastOpenVcSeconds: vcSeconds },
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** 本日の宝箱開封回数を1増やす。 */
 export async function incrementChestOpensToday(guildId: string, userId: string): Promise<void> {

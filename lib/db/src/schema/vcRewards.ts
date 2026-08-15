@@ -109,6 +109,23 @@ export const chestVcAccumTable = pgTable(
 );
 export type ChestVcAccum = typeof chestVcAccumTable.$inferSelect;
 
+/**
+ * Per-user cooldown state for each chest type.
+ * Stores the total tavern-VC seconds at the time of the last open.
+ * Next open is allowed once (currentTotalSeconds - lastOpenVcSeconds) >= CHEST_INTERVAL_SEC.
+ */
+export const chestCooldownTable = pgTable(
+  "chest_cooldown",
+  {
+    guildId:            text("guild_id").notNull(),
+    userId:             text("user_id").notNull(),
+    chestType:          text("chest_type").notNull(), // 'shinniri' | 'honsennin'
+    lastOpenVcSeconds:  integer("last_open_vc_seconds").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.guildId, t.userId, t.chestType] })],
+);
+export type ChestCooldown = typeof chestCooldownTable.$inferSelect;
+
 /** Completed VC session records. */
 export const vcSessionLogsTable = pgTable(
   "vc_session_logs",

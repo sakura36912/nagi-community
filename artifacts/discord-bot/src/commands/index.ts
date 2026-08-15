@@ -85,7 +85,7 @@ import {
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
-import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount } from "../lib/vcReward";
+import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds } from "../lib/vcReward";
 import { getCurrentTavernSeconds, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
 import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
@@ -2026,34 +2026,44 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
     }
   }
 
+  // VC時間チェック（前回開封から CHEST_INTERVAL_SEC 以上の酒場VC接続が必要）
+  // totalSeconds = 全期間の累積DB秒数 + 現在セッション中の秒数
+  // elapsedSinceLastOpen = totalSeconds - 前回開封時のtotalSeconds
+  // elapsedSinceLastOpen >= CHEST_INTERVAL_SEC で開封可能
+  let totalSecondsAtOpen = 0;
   if (!isAdmin) {
-    // 累積VC時間チェック（全期間合計DB分 + 現在のセッション中の時間）
     const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
-    const [pastSeconds, opensCount] = await Promise.all([
+    const [pastSeconds, opensCount, lastOpenVcSeconds] = await Promise.all([
       getTotalChestVcSeconds(interaction.guild.id, interaction.user.id),
       getTotalChestOpensCount(interaction.guild.id, interaction.user.id),
+      getChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType),
     ]);
     const totalSeconds = pastSeconds + currentSeconds;
-    const maxOpens = Math.floor(totalSeconds / CHEST_INTERVAL_SEC);
+    totalSecondsAtOpen = totalSeconds;
+    const elapsed = totalSeconds - lastOpenVcSeconds;
 
-    if (maxOpens === 0) {
-      const remaining = Math.ceil((CHEST_INTERVAL_SEC - totalSeconds) / 60);
-      await interaction.editReply(
-        `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です（累積: ${Math.floor(totalSeconds / 60)}分）。`,
-      );
-      return;
-    }
-    if (opensCount >= maxOpens) {
-      const nextAt = Math.ceil(((opensCount + 1) * CHEST_INTERVAL_SEC - totalSeconds) / 60);
-      await interaction.editReply(
-        `📦 次の宝箱まであと **${nextAt}分** の酒場VC接続が必要です。（${opensCount}回開封済み）`,
-      );
+    if (elapsed < CHEST_INTERVAL_SEC) {
+      const remaining = Math.ceil((CHEST_INTERVAL_SEC - elapsed) / 60);
+      if (opensCount === 0) {
+        await interaction.editReply(
+          `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です。`,
+        );
+      } else {
+        await interaction.editReply(
+          `📦 次の宝箱まであと **${remaining}分** の酒場VC接続が必要です。（${opensCount}回開封済み）`,
+        );
+      }
       return;
     }
   }
 
   // 開封記録（管理者は記録しない＝何度でも開封可能）
-  if (!isAdmin) await incrementChestOpensToday(interaction.guild.id, interaction.user.id);
+  if (!isAdmin) {
+    await Promise.all([
+      incrementChestOpensToday(interaction.guild.id, interaction.user.id),
+      setChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType, totalSecondsAtOpen),
+    ]);
+  }
 
   const settings = await getGuildSettings(interaction.guild.id);
   const cn = settings.currencyName;
