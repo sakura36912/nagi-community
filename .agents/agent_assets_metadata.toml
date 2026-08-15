@@ -1,0 +1,9 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "0zwe4tgKp0D28ZqhoKoAG"
+uri = "file://preview_chest.html"
+type = "text"
+title = "限定ロール当選通知　プレビュー"
+description = "Discord embed の表示イメージ"
