@@ -74,6 +74,22 @@ describe("runOrphanVcPrune", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it("warns with a message explaining why the prune was skipped when activeGuildIds is empty", async () => {
+    await runOrphanVcPrune([], pruneOrphans);
+
+    const [message] = (logger.warn as ReturnType<typeof vi.fn>).mock.calls[0];
+    // The message should convey that the prune was skipped due to an empty guild list
+    expect(message.toLowerCase()).toContain("skip");
+    expect(message.toLowerCase()).toContain("empty");
+  });
+
+  it("does not log info or error when activeGuildIds is empty", async () => {
+    await runOrphanVcPrune([], pruneOrphans);
+
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it("calls pruneOrphans with the activeGuildIds and default 180-day retention", async () => {
     await runOrphanVcPrune(["guild-a", "guild-b"], pruneOrphans);
 
