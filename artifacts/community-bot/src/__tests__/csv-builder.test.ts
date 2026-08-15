@@ -381,4 +381,71 @@ describe("buildTempVcCsv", () => {
     // opted_out must still be in position 7 (index 6).
     expect(dataFields[6]).toBe("false");
   });
+
+  // ── unusual characters in timestamp fields ────────────────────────────────
+
+  it("opted_out is still in column position 7 when joinedAt serialises to a string with a comma", () => {
+    // ISO strings today never contain commas, but csvField() is applied to
+    // them so a future schema change (e.g. storing a human-readable timestamp
+    // such as "Mar 1, 2025 10:00:00") would still produce a valid CSV row.
+    // We simulate that by injecting a fake Date whose toISOString() returns a
+    // comma-bearing string, exercising the quoting branch for timestamp fields.
+    const fakeJoinedAt = {
+      toISOString: () => "2025-03-01T10:00:00,000Z", // comma instead of period
+      getTime:     () => new Date("2025-03-01T10:00:00.000Z").getTime(),
+    } as unknown as Date;
+    const fakeLeftAt = {
+      toISOString: () => "2025-03-01T10:01:30,000Z",
+      getTime:     () => new Date("2025-03-01T10:01:30.000Z").getTime(),
+    } as unknown as Date;
+
+    const row = makeRow({ joinedAt: fakeJoinedAt, leftAt: fakeLeftAt, optedOut: true });
+    const csv = buildTempVcCsv([row]);
+
+    const lines = csv.split("\n");
+    // Header + exactly 1 data line — the comma inside the timestamp must NOT
+    // create an extra row or shift columns.
+    expect(lines).toHaveLength(2);
+
+    const dataLine = lines[1]!;
+    const fields = parseCsvRow(dataLine);
+
+    // All 7 columns must be present in a single logical record.
+    expect(fields).toHaveLength(7);
+    // joined_at (index 3) must be recovered verbatim, comma and all.
+    expect(fields[3]).toBe("2025-03-01T10:00:00,000Z");
+    // left_at (index 4) must also be recovered verbatim.
+    expect(fields[4]).toBe("2025-03-01T10:01:30,000Z");
+    // opted_out must still be the last field (index 6) with the correct value.
+    expect(fields[6]).toBe("true");
+  });
+
+  it("opted_out is still in column position 7 when left_at serialises to a string with a newline", () => {
+    // Same guard as above but for left_at and using an embedded newline,
+    // which would split the data record into two physical lines if unquoted.
+    const fakeJoinedAt = {
+      toISOString: () => "2025-03-01T10:00:00.000Z",
+      getTime:     () => new Date("2025-03-01T10:00:00.000Z").getTime(),
+    } as unknown as Date;
+    const fakeLeftAt = {
+      toISOString: () => "2025-03-01\n10:01:30.000Z", // newline mid-timestamp
+      getTime:     () => new Date("2025-03-01T10:01:30.000Z").getTime(),
+    } as unknown as Date;
+
+    const row = makeRow({ joinedAt: fakeJoinedAt, leftAt: fakeLeftAt, optedOut: false });
+    const csv = buildTempVcCsv([row]);
+
+    // Use the multi-line-aware parser — the newline inside left_at is embedded
+    // inside a quoted field, so the logical record count must still be 2.
+    const records = parseAllCsvRecords(csv);
+    expect(records).toHaveLength(2);
+
+    const dataFields = records[1]!;
+    // All 7 columns must be present in the single logical data record.
+    expect(dataFields).toHaveLength(7);
+    // left_at (index 4) must be recovered verbatim, newline and all.
+    expect(dataFields[4]).toBe("2025-03-01\n10:01:30.000Z");
+    // opted_out must still be in position 7 (index 6).
+    expect(dataFields[6]).toBe("false");
+  });
 });
