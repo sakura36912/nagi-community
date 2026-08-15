@@ -94,7 +94,7 @@ export async function seedDefaultShopItems(guildId: string): Promise<void> {
       guildId,
       name: "期間延長券",
       description: "あなたの評価シートの期限を1週間延長します。",
-      price: 3000,
+      price: 100000,
       effectType: EVAL_EXTEND_EFFECT,
       category: "general",
     },
