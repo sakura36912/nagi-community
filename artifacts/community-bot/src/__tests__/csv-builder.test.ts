@@ -420,6 +420,38 @@ describe("buildTempVcCsv", () => {
     expect(fields[6]).toBe("true");
   });
 
+  // ── all fields requiring quoting simultaneously ───────────────────────────
+
+  it("handles a row where userId has a comma AND channelId has a newline at the same time", () => {
+    // This is the combined-quoting path: two distinct fields both need RFC 4180
+    // wrapping in the same row.  An off-by-one in the builder loop or a shared
+    // quoting buffer could let the fields interfere with each other, causing one
+    // field's quoting to bleed into the next or the record to split prematurely.
+    const row = makeRow({
+      userId:    "user,with,commas",   // index 1 — needs quoting for commas
+      channelId: "chan\nwith\nnewlines", // index 2 — needs quoting for newlines
+      optedOut:  true,
+    });
+    const csv = buildTempVcCsv([row]);
+
+    // Use the multi-line-aware parser — the embedded newlines in channelId live
+    // inside a quoted field, so the whole output must still be 2 logical records.
+    const records = parseAllCsvRecords(csv);
+
+    // Header + exactly 1 data record — no record split or column shift.
+    expect(records).toHaveLength(2);
+
+    const dataFields = records[1]!;
+    // All 7 fields must be present and individually correct.
+    expect(dataFields).toHaveLength(7);
+    // userId (index 1) — commas must be preserved verbatim, not treated as delimiters.
+    expect(dataFields[1]).toBe("user,with,commas");
+    // channelId (index 2) — newlines must be preserved verbatim inside the field.
+    expect(dataFields[2]).toBe("chan\nwith\nnewlines");
+    // opted_out must still be at index 6 with the correct value.
+    expect(dataFields[6]).toBe("true");
+  });
+
   it("opted_out is still in column position 7 when left_at serialises to a string with a newline", () => {
     // Same guard as above but for left_at and using an embedded newline,
     // which would split the data record into two physical lines if unquoted.
