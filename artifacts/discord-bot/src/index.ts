@@ -735,6 +735,9 @@ client.once(Events.ClientReady, async (readyClient) => {
     logger.info(`[chest] Seeded ${tavernSeedCount} tavern member(s) into tracker on startup`);
   }
 
+  // 起動直後に全シートを即時更新（名簿リンク等の変更を既存シートに即反映）
+  runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Startup refresh error", err));
+
   // Tick every 60 s; actual payout only happens when an interval has elapsed.
   setInterval(() => {
     runRewardScheduler().catch((err) => logger.error("[reward] Scheduler error", err));
