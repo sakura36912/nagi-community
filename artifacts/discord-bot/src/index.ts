@@ -128,6 +128,7 @@ import {
   createEvalSheet,
   getSheetVcSeconds,
   listActiveSheets,
+  deactivateSheet,
   claimInitialIssue,
   listSheetsNeedingReminder,
   markSheetReminderSent,
@@ -367,6 +368,7 @@ async function runVcExpiryScheduler(): Promise<void> {
 // ─── Eval-sheet VC-time periodic refresh ─────────────────────────────────────
 
 let lastSheetVcRefresh = 0;
+let sheetVcRefreshRunning = false;
 const SHEET_VC_REFRESH_INTERVAL_MS = 60 * 1000; // 1 minute
 
 // GuildMemberUpdate の oldMember が partial のときに使うロール事前スナップショット。
@@ -376,8 +378,11 @@ const memberRoleSnapshots = new Map<string, Set<string>>();
 async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
   const now = Date.now();
   if (now - lastSheetVcRefresh < SHEET_VC_REFRESH_INTERVAL_MS) return;
+  if (sheetVcRefreshRunning) return; // 前バッチが終わるまで新バッチを起動しない
   lastSheetVcRefresh = now;
+  sheetVcRefreshRunning = true;
 
+  try {
   const sheets = await listActiveSheets();
   if (sheets.length === 0) return;
 
@@ -387,7 +392,13 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
     if (!sheet.messageId) continue;
     try {
       const thread = await bot.channels.fetch(sheet.messageId).catch(() => null);
-      if (!thread?.isTextBased()) continue;
+      if (!thread) {
+        // Discord スレッドが存在しない → DB から除外して次回以降スキップ
+        logger.warn(`[sheet-vc] sheet ${sheet.id} thread not found — deactivating`);
+        await deactivateSheet(sheet.id).catch(() => null);
+        continue;
+      }
+      if (!thread.isTextBased()) continue;
       const message = await thread.messages.fetch(sheet.messageId).catch(() => null);
       if (!message) continue;
 
@@ -429,6 +440,9 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
     } catch (err) {
       logger.error(`[sheet-vc] Failed to refresh sheet ${sheet.id}`, err);
     }
+  }
+  } finally {
+    sheetVcRefreshRunning = false;
   }
 }
 

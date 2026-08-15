@@ -1292,6 +1292,17 @@ export async function listActiveSheets(): Promise<CommunitySheet[]> {
     .where(sql`${communitySheetsTable.endDate} > now()`);
 }
 
+/**
+ * Discord スレッドが削除されたなど、シートを即時終了扱いにする。
+ * end_date を now() にセットして listActiveSheets() から除外する。
+ */
+export async function deactivateSheet(id: number): Promise<void> {
+  await db
+    .update(communitySheetsTable)
+    .set({ endDate: sql`now()` })
+    .where(eq(communitySheetsTable.id, id));
+}
+
 /** Total VC seconds for a user between two dates (mirrors community bot's getVcTimeInPeriod). */
 export async function getSheetVcSeconds(
   guildId: string,
