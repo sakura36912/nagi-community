@@ -1898,17 +1898,21 @@ export async function handleVcPanelExpiryBtn(interaction: ButtonInteraction): Pr
 // ─── 宝箱 ────────────────────────────────────────────────────────────────────
 
 // 本船員宝箱の当選確率テーブル（累積）:
-//   miss        68.5%
-//   coin_10k    20.0%
-//   coin_50k    10.0%
-//   coin_100k    1.0%
-//   coin_300k    0.5%
+//   miss          49.9%
+//   coin_5k       28.0%
+//   coin_10k      15.0%
+//   coin_30k       4.5%
+//   coin_50k       1.5%
+//   coin_100k      1.0%
+//   limited_role   0.1%
 type ChestResult =
   | "miss"
+  | "coin_5k"
   | "coin_10k"
+  | "coin_30k"
   | "coin_50k"
   | "coin_100k"
-  | "coin_300k";
+  | "limited_role";
 
 /**
  * 新入り宝箱の確率テーブル:
@@ -1935,11 +1939,13 @@ function rollShinniriChest(): number | "advice_ticket" {
 /** 本船員宝箱の確率テーブル */
 function rollChest(): ChestResult {
   const r = Math.random();
-  if (r < 0.685)  return "miss";         // 💨 68.5%
-  if (r < 0.885)  return "coin_10k";     // 🎁 20.0%
-  if (r < 0.985)  return "coin_50k";     // 🎊 10.0%
-  if (r < 0.995)  return "coin_100k";    // 💎  1.0%
-  return "coin_300k";                     // ✨  0.5%
+  if (r < 0.499)  return "miss";         // 💨 49.9%
+  if (r < 0.779)  return "coin_5k";      // 🌟 28.0%
+  if (r < 0.929)  return "coin_10k";     // 🎁 15.0%
+  if (r < 0.974)  return "coin_30k";     // 🎊  4.5%
+  if (r < 0.989)  return "coin_50k";     // 💎  1.5%
+  if (r < 0.999)  return "coin_100k";    // 👑  1.0%
+  return "limited_role";                  // 🌈  0.1%
 }
 
 const CHEST_ROLE_LIMITED = "永久ロール";
@@ -2105,12 +2111,27 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   // ── 本船員宝箱: 既存の確率テーブル ────────────────────────────────────────
   const result = rollChest();
 
+  // ── 限定ロール賞品 ────────────────────────────────────────────────────────
+  if (result === "limited_role") {
+    const granted = await grantRoleByName(interaction.guild, interaction.user.id, CHEST_ROLE_LIMITED);
+    await Promise.all([
+      interaction.editReply(
+        granted
+          ? `📦 宝箱を開けた！\n\n🌈 **限定ロール「${CHEST_ROLE_LIMITED}」** を獲得しました！おめでとうございます！`
+          : `📦 宝箱を開けた！\n\n🌈 **限定ロール** が当たりましたが、ロールが見つかりませんでした（管理者に連絡してください）。`,
+      ),
+      postChestLog({ chestLabel: "本船員宝箱", resultLabel: `限定ロール（${CHEST_ROLE_LIMITED}）`, resultEmoji: "🌈", amount: null, hit: true }),
+    ]);
+    return;
+  }
+
   // ── 通貨賞品 ──────────────────────────────────────────────────────────────
   const coinPrizes: Partial<Record<ChestResult, { amount: number; label: string; emoji: string }>> = {
-    coin_10k:  { amount:  10_000, label: "当たり",   emoji: "🎁" },
-    coin_50k:  { amount:  50_000, label: "大当たり", emoji: "🎊" },
-    coin_100k: { amount: 100_000, label: "超レア",   emoji: "💎" },
-    coin_300k: { amount: 300_000, label: "伝説",     emoji: "✨" },
+    coin_5k:   { amount:   5_000, label: "当たり",   emoji: "🌟" },
+    coin_10k:  { amount:  10_000, label: "大当たり", emoji: "🎁" },
+    coin_30k:  { amount:  30_000, label: "レア",     emoji: "🎊" },
+    coin_50k:  { amount:  50_000, label: "超レア",   emoji: "💎" },
+    coin_100k: { amount: 100_000, label: "伝説",     emoji: "👑" },
   };
 
   const coin = coinPrizes[result];
