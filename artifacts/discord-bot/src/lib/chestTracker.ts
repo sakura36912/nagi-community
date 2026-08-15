@@ -54,7 +54,14 @@ export async function isTavernChannel(guildId: string, guild: Guild, channelId: 
 
 /** 酒場に入室したとき呼ぶ */
 export function onTavernJoin(guildId: string, userId: string): void {
-  tavernJoinedAt.set(tavernKey(guildId, userId), new Date());
+  const key = tavernKey(guildId, userId);
+  if (tavernJoinedAt.has(key)) {
+    logger.warn(
+      `[chest] onTavernJoin: ${key} already tracked (double-join without leave) — skipping to avoid overwriting existing session`,
+    );
+    return;
+  }
+  tavernJoinedAt.set(key, new Date());
 }
 
 /**
