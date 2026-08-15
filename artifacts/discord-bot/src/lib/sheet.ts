@@ -36,8 +36,10 @@ export function buildSheetEmbed(opts: {
   createdByLabel: string;
   /** サーバーアイコンURL */
   guildIconUrl?: string | null;
+  /** 船員名簿への投稿URL */
+  rosterPostUrl?: string | null;
 }): EmbedBuilder {
-  const { targetUser, member, displayName, startDate, endDate, vcSeconds, selfIntro, createdByLabel, guildIconUrl } = opts;
+  const { targetUser, member, displayName, startDate, endDate, vcSeconds, selfIntro, createdByLabel, guildIconUrl, rosterPostUrl } = opts;
   const startTs = Math.floor(startDate.getTime() / 1000);
   const endTs = Math.floor(endDate.getTime() / 1000);
 
@@ -51,6 +53,10 @@ export function buildSheetEmbed(opts: {
 
   if (selfIntro) {
     embed.addFields({ name: "📝 自己紹介", value: selfIntro.slice(0, 1024), inline: false });
+  }
+
+  if (rosterPostUrl) {
+    embed.addFields({ name: "📋 船員名簿", value: `[名簿投稿を見る](${rosterPostUrl})`, inline: false });
   }
 
   embed
@@ -72,7 +78,7 @@ export async function findSelfIntro(
   guild: import("discord.js").Guild,
   userId: string,
   rosterCategoryId: string | null | undefined,
-): Promise<string | null> {
+): Promise<{ content: string; url: string } | null> {
   if (!rosterCategoryId) return null;
   // キャッシュが不完全な場合に備えて API から取得する
   await guild.channels.fetch().catch(() => null);
@@ -86,7 +92,7 @@ export async function findSelfIntro(
       const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
       if (!messages || messages.size === 0) break;
       const found = messages.find((m) => m.author.id === userId && m.content.trim().length > 0);
-      if (found) return found.content;
+      if (found) return { content: found.content, url: found.url };
       before = messages.last()?.id;
     }
   }
@@ -146,7 +152,7 @@ export async function applySheetEmbedUpdate(
     } catch { /* fallback */ }
 
     const settings = await getEvalSheetSettings(guildId);
-    const [vcSeconds, selfIntro] = await Promise.all([
+    const [vcSeconds, selfIntroResult] = await Promise.all([
       getSheetVcSeconds(guildId, userId, startDate, newEndDate),
       guild ? findSelfIntro(guild, userId, settings?.rosterCategoryId) : Promise.resolve(null),
     ]);
@@ -158,7 +164,8 @@ export async function applySheetEmbedUpdate(
       startDate,
       endDate: newEndDate,
       vcSeconds,
-      selfIntro,
+      selfIntro: selfIntroResult?.content ?? null,
+      rosterPostUrl: selfIntroResult?.url ?? null,
       createdByLabel: "評価期間延長券により更新",
       guildIconUrl: guild?.iconURL() ?? null,
     });
@@ -204,7 +211,7 @@ export async function refreshSheetEmbedForUser(
     try {
       guildForIcon = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
     } catch { /* fallback */ }
-    const [vcSeconds, selfIntro] = await Promise.all([
+    const [vcSeconds, selfIntroResult] = await Promise.all([
       getSheetVcSeconds(guildId, userId, sheet.startDate, sheet.endDate),
       guildForIcon
         ? findSelfIntro(guildForIcon, userId, settings?.rosterCategoryId)
@@ -222,7 +229,8 @@ export async function refreshSheetEmbedForUser(
       startDate: sheet.startDate,
       endDate: sheet.endDate,
       vcSeconds,
-      selfIntro,
+      selfIntro: selfIntroResult?.content ?? null,
+      rosterPostUrl: selfIntroResult?.url ?? null,
       createdByLabel: "ニックネーム変更により更新",
       guildIconUrl: guildForIcon?.iconURL() ?? null,
     });

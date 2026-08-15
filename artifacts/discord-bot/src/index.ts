@@ -404,7 +404,7 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
       } catch { /* use user displayName */ }
 
       const settings = await getEvalSheetSettings(sheet.guildId);
-      const [vcSeconds, selfIntro] = await Promise.all([
+      const [vcSeconds, selfIntroResult] = await Promise.all([
         getSheetVcSeconds(sheet.guildId, sheet.userId, sheet.startDate, sheet.endDate),
         sheetGuild
           ? findSelfIntro(sheetGuild, sheet.userId, settings?.rosterCategoryId)
@@ -418,7 +418,8 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
         startDate: sheet.startDate,
         endDate: sheet.endDate,
         vcSeconds,
-        selfIntro,
+        selfIntro: selfIntroResult?.content ?? null,
+        rosterPostUrl: selfIntroResult?.url ?? null,
         createdByLabel: "自動更新（定期集計）",
         guildIconUrl: sheetGuild?.iconURL() ?? null,
       });
@@ -1175,7 +1176,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const startDate = new Date();
     const endDate = new Date(startDate.getTime() + cfg.evalPeriodDays * 24 * 60 * 60 * 1000);
 
-    const [vcSeconds, selfIntro] = await Promise.all([
+    const [vcSeconds, selfIntroResult] = await Promise.all([
       getSheetVcSeconds(guildId, newMember.id, startDate, endDate).catch(() => 0),
       findSelfIntro(newMember.guild, newMember.id, globalSettings?.rosterCategoryId ?? null).catch(() => null),
     ]);
@@ -1187,7 +1188,8 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       startDate,
       endDate,
       vcSeconds,
-      selfIntro,
+      selfIntro: selfIntroResult?.content ?? null,
+      rosterPostUrl: selfIntroResult?.url ?? null,
       createdByLabel: `ロール付与により自動生成（${roleName}）`,
       guildIconUrl: newMember.guild.iconURL() ?? null,
     });
