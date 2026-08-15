@@ -2114,12 +2114,29 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   // ── 限定ロール賞品 ────────────────────────────────────────────────────────
   if (result === "limited_role") {
     const granted = await grantRoleByName(interaction.guild, interaction.user.id, CHEST_ROLE_LIMITED);
+    const limitedEmbed = granted
+      ? new EmbedBuilder()
+          .setTitle("🌈✨　大当たり　✨🌈")
+          .setDescription(
+            `## <@${interaction.user.id}> さん、おめでとうございます！\n\n` +
+            `宝箱から **超激レア** な景品が飛び出した！\n\n` +
+            `> 🎊 **限定ロール「${CHEST_ROLE_LIMITED}」** を獲得！\n\n` +
+            `*確率 0.1% の奇跡を引き当てました。*`,
+          )
+          .setColor(0xffd700)
+          .setThumbnail(interaction.user.displayAvatarURL())
+          .setFooter({ text: "本船員宝箱 — 0.1% の奇跡" })
+          .setTimestamp()
+      : new EmbedBuilder()
+          .setTitle("🌈　限定ロール当選！")
+          .setDescription(
+            `<@${interaction.user.id}> さんに **限定ロール** が当たりました！\n\n` +
+            `⚠️ ロール「${CHEST_ROLE_LIMITED}」が見つかりませんでした。管理者にお問い合わせください。`,
+          )
+          .setColor(0xff9900)
+          .setTimestamp();
     await Promise.all([
-      interaction.editReply(
-        granted
-          ? `📦 宝箱を開けた！\n\n🌈 **限定ロール「${CHEST_ROLE_LIMITED}」** を獲得しました！おめでとうございます！`
-          : `📦 宝箱を開けた！\n\n🌈 **限定ロール** が当たりましたが、ロールが見つかりませんでした（管理者に連絡してください）。`,
-      ),
+      interaction.editReply({ content: granted ? "🎉🎉🎉" : "", embeds: [limitedEmbed] }),
       postChestLog({ chestLabel: "本船員宝箱", resultLabel: `限定ロール（${CHEST_ROLE_LIMITED}）`, resultEmoji: "🌈", amount: null, hit: true }),
     ]);
     return;
