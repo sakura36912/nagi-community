@@ -319,6 +319,72 @@ describe("handleShopSelectMenu (applyShopPurchase) — VC extend, extendPrivateV
   });
 });
 
+// ─── No-active-session guard tests ───────────────────────────────────────────
+
+describe("handleShopBuyButton — VC extend, no active session → skip extension entirely", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("replies with the no-session error and never calls buyItem or extendPrivateVcSession", async () => {
+    const interaction = makeShopBuyBtnInteraction();
+    const item = makeExtendItem();
+
+    mocks.getShopItem.mockResolvedValue(item);
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+    // No active session for this user
+    mocks.getActivePrivateVcSession.mockResolvedValue(null);
+
+    await expect(handleShopBuyButton(interaction as never)).resolves.toBeUndefined();
+
+    // deferReply was called first (item is not nickname/vc-rename type)
+    expect(interaction.deferReply).toHaveBeenCalledOnce();
+
+    // buyItem must NOT be called — user is not charged
+    expect(mocks.buyItem).not.toHaveBeenCalled();
+
+    // extendPrivateVcSession must NOT be called
+    expect(mocks.extendPrivateVcSession).not.toHaveBeenCalled();
+
+    // An error reply must be sent containing the no-session message
+    expect(interaction.editReply).toHaveBeenCalledOnce();
+    const reply = interaction.editReply.mock.calls[0][0] as string;
+    expect(reply).toContain("有効な高級船室がありません");
+  });
+});
+
+describe("handleShopSelectMenu (applyShopPurchase) — VC extend, no active session → skip extension entirely", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("replies with the no-session error and never calls buyItem or extendPrivateVcSession", async () => {
+    const interaction = makeShopSelectMenuInteraction();
+    const item = makeExtendItem();
+
+    mocks.getShopItem.mockResolvedValue(item);
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+    // No active session for this user
+    mocks.getActivePrivateVcSession.mockResolvedValue(null);
+
+    await expect(handleShopSelectMenu(interaction as never)).resolves.toBeUndefined();
+
+    // deferReply was called first
+    expect(interaction.deferReply).toHaveBeenCalledOnce();
+
+    // buyItem must NOT be called — user is not charged
+    expect(mocks.buyItem).not.toHaveBeenCalled();
+
+    // extendPrivateVcSession must NOT be called
+    expect(mocks.extendPrivateVcSession).not.toHaveBeenCalled();
+
+    // An error reply must be sent containing the no-session message
+    expect(interaction.editReply).toHaveBeenCalledOnce();
+    const reply = interaction.editReply.mock.calls[0][0] as string;
+    expect(reply).toContain("有効な高級船室がありません");
+  });
+});
+
 describe("handleShopBuyButton — VC extend, channel absent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
