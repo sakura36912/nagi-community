@@ -1659,6 +1659,30 @@ describe('handlePrivacyAdminDeleteConfirm – admin-initiated member data wipe',
     expect(description).toContain("3件");
   });
 
+  it("deleteUserVcSessions calls db.delete() exactly twice – once for sessions, once for the per-guild privacy row", async () => {
+    // This test pins the delete count to 2 so any accidental third DELETE
+    // (e.g. touching the global privacy table) is caught immediately.
+    //
+    // Delete 1 – communityVcSessionsTable  (proxy prefix "sessions.")
+    mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+    // Delete 2 – communityVcPrivacyTable    (proxy prefix "privacy.")
+    mocks.deleteReturning.mockResolvedValueOnce([]);
+
+    const interaction = makeAdminInteraction("admin-count", "guild-count", "target-count");
+    await handlePrivacyAdminDeleteConfirm(interaction as never);
+
+    // Exactly 2 deletes – no more, no less
+    expect(mocks.deleteFn).toHaveBeenCalledTimes(2);
+
+    // First delete must target communityVcSessionsTable (any property → "sessions.<prop>")
+    const [sessionsTableArg] = mocks.deleteFn.mock.calls[0] as unknown as [Record<string, string>];
+    expect(sessionsTableArg["userId"]).toBe("sessions.userId");
+
+    // Second delete must target communityVcPrivacyTable (any property → "privacy.<prop>")
+    const [privacyTableArg] = mocks.deleteFn.mock.calls[1] as unknown as [Record<string, string>];
+    expect(privacyTableArg["userId"]).toBe("privacy.userId");
+  });
+
   it("clears the stale audit channel id (setAuditLogChannel null) when channels.fetch throws with code 10003", async () => {
     // deleteUserVcSessions calls db.delete() twice (sessions + privacy row)
     mocks.deleteReturning.mockResolvedValueOnce([{ id: 1 }]);
