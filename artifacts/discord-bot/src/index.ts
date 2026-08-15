@@ -836,11 +836,16 @@ function getMemberDisplayName(guild: VoiceState["guild"], userId: string): strin
  * Returns true if the given channelId is in the eligible channel list.
  * When includedChannelIds is empty, all voice channels are eligible.
  * Private VCs created by /vc are always eligible regardless of the list.
+ * Hub-generated VCs (高級船室) are always excluded — hub salary is handled separately.
  */
 async function isEligibleChannel(
   channelId: string,
   includedChannelIds: string[],
 ): Promise<boolean> {
+  // Hub生成のプライベートVC（高級船室）は通常報酬対象外（Hub分給で別途制御）
+  const hubSession = await getHubSession(channelId).catch(() => null);
+  if (hubSession != null) return false;
+
   if (includedChannelIds.length === 0) return true;
   if (includedChannelIds.includes(channelId)) return true;
   // /vc で作成された private VC は常に対象
