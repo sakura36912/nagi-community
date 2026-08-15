@@ -361,6 +361,7 @@ const rankingCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("ranking")
     .setDescription("VC滞在時間のランキングを表示・設定します")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("show")
@@ -750,6 +751,7 @@ const mystatsCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("vc時間")
     .setDescription("自分（または指定メンバー）のVC滞在時間を確認します")
+    .setDefaultMemberPermissions(0)
     .addUserOption((opt) =>
       opt
         .setName("user")
@@ -918,6 +920,7 @@ const privacyCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("privacy")
     .setDescription("VCトラッキングのプライバシー設定を管理します")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("optout")
@@ -1246,7 +1249,8 @@ async function buildBotstatusContent(
 const botstatusCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("botstatus")
-    .setDescription("Botのセットアップ状況を確認します（管理者）"),
+    .setDescription("Botのセットアップ状況を確認します（管理者）")
+    .setDefaultMemberPermissions(0),
   async execute(interaction) {
     requireGuild(interaction);
 
@@ -1702,6 +1706,7 @@ const roleButtonCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("rolebutton")
     .setDescription("ボタンを押すとロールが付与・解除されるパネルを管理します")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("create")
@@ -1946,6 +1951,7 @@ const leavelogCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("leavelog")
     .setDescription("メンバー退出ログの設定をします（管理者用）")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("setup")
@@ -2020,6 +2026,7 @@ const tempvcCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("tempvc")
     .setDescription("一時VCセッションのログを管理します（管理者用）")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("export")
@@ -2139,6 +2146,7 @@ const eventCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("event")
     .setDescription("イベントを管理します")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("create")
@@ -2366,6 +2374,7 @@ const ticketCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("ticket")
     .setDescription("チケットシステムを設定・管理します（管理者用）")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("setup")

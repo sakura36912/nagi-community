@@ -52,6 +52,7 @@ export const pointCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("point")
     .setDescription("ポイントシステム")
+    .setDefaultMemberPermissions(0)
 
     // ── balance ──────────────────────────────────────────────────────────────
     .addSubcommand((sub) =>

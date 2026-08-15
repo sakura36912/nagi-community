@@ -473,6 +473,7 @@ export const highlowCommand = {
   data: new SlashCommandBuilder()
     .setName("highlow")
     .setDescription("ハイアンドロー — 次のカードが高いか低いかを当てる")
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("play")
