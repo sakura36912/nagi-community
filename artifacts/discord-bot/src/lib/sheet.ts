@@ -1,4 +1,4 @@
-import { type Client, type GuildMember, type User, EmbedBuilder } from "discord.js";
+import { type Client, type GuildMember, type User, EmbedBuilder, ChannelType } from "discord.js";
 import {
   getEvalSheetSettings,
   getLatestEvalSheet,
@@ -83,19 +83,43 @@ export async function findSelfIntro(
   // キャッシュが不完全な場合に備えて API から取得する
   await guild.channels.fetch().catch(() => null);
   const candidates = [...guild.channels.cache.values()].filter(
-    (c) => c.isTextBased() && "parentId" in c && c.parentId === rosterCategoryId,
+    (c) => "parentId" in c && c.parentId === rosterCategoryId,
   );
+
   for (const channel of candidates) {
-    if (!channel.isTextBased()) continue;
-    let before: string | undefined;
-    for (let page = 0; page < 5; page++) {
-      const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
-      if (!messages || messages.size === 0) break;
-      const found = messages.find((m) => m.author.id === userId && m.content.trim().length > 0);
-      if (found) return { content: found.content, url: found.url };
-      before = messages.last()?.id;
+    // ── テキストチャンネル / アナウンスチャンネル: メッセージを直接検索 ──────
+    if (channel.isTextBased()) {
+      let before: string | undefined;
+      for (let page = 0; page < 5; page++) {
+        const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
+        if (!messages || messages.size === 0) break;
+        const found = messages.find((m) => m.author.id === userId && m.content.trim().length > 0);
+        if (found) return { content: found.content, url: found.url };
+        before = messages.last()?.id;
+      }
+    }
+
+    // ── フォーラムチャンネル: スレッドを検索（1人1スレッド形式の名簿）──────
+    if (channel.type === ChannelType.GuildForum) {
+      // アクティブスレッドから探す
+      const active = await channel.threads.fetch().catch(() => null);
+      const activeThread = active?.threads.find((t) => t.ownerId === userId);
+      if (activeThread) {
+        const starter = await activeThread.fetchStarterMessage().catch(() => null);
+        if (starter?.content.trim()) return { content: starter.content, url: starter.url };
+        return { content: activeThread.name, url: activeThread.url };
+      }
+      // アーカイブ済みスレッドから探す
+      const archived = await channel.threads.fetchArchived().catch(() => null);
+      const archivedThread = archived?.threads.find((t) => t.ownerId === userId);
+      if (archivedThread) {
+        const starter = await archivedThread.fetchStarterMessage().catch(() => null);
+        if (starter?.content.trim()) return { content: starter.content, url: starter.url };
+        return { content: archivedThread.name, url: archivedThread.url };
+      }
     }
   }
+
   return null;
 }
 
