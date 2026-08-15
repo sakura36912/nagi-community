@@ -71,7 +71,7 @@ type Outcome = "blackjack" | "win" | "push" | "lose";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MIN_BET = 10;
-const MAX_BET = 100_000;
+const MAX_BET = 10_000;
 const GAME_TTL_MS = 5 * 60 * 1000;
 
 const COLOR_NEUTRAL = 0x5865f2;
