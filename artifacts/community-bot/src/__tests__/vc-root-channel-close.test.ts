@@ -2,13 +2,16 @@
  * Confirms VC session closes cleanly when a user moves to a root-level voice
  * channel (parentId = null) while a tracked category is configured.
  *
- * The VoiceStateUpdate handler in index.ts:
+ * The VoiceStateUpdate handler in index.ts delegates to handleVoiceStateUpdate
+ * in lib/vc-session-handler.ts, which:
  *   1. Always closes the session (closeSessionAndGetDuration) when oldChannelId
  *      is set — regardless of channel parent.
  *   2. Then calls openVcSessionIfTracked for the new channel.
  *      When parentId is null and a category IS configured, isTracked → false
  *      so openSession is NOT called.
  *   3. Awards VC time when the closed session had duration > 0.
+ *   4. Catches DB errors from closeSessionAndGetDuration, logs them, and
+ *      continues without crashing.
  *
  * Done-looks-like coverage:
  *   1. closeSessionAndGetDuration IS called for the move (close side is unconditional)
@@ -16,6 +19,9 @@
  *   3. awardVcTime IS called for the duration of the closed session
  *   4. awardVcTime is NOT called when duration is 0 (e.g. very short session)
  *   5. awardVcTime is NOT called when closeSessionAndGetDuration returns null
+ *   6. awardVcTime is NOT called when closeSessionAndGetDuration rejects
+ *   7. logger.error is called when closeSessionAndGetDuration rejects
+ *   8. the handler resolves without throwing when closeSessionAndGetDuration rejects
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -25,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   closeSessionAndGetDuration: vi.fn(),
   openVcSessionIfTracked:    vi.fn(),
   awardVcTime:               vi.fn(),
+  resolveIsExile:            vi.fn(),
   loggerError:               vi.fn(),
   loggerInfo:                vi.fn(),
   loggerWarn:                vi.fn(),
@@ -48,57 +55,23 @@ vi.mock("../lib/logger.js", () => ({
   },
 }));
 
+vi.mock("../lib/vc-exile.js", () => ({
+  resolveIsExile: mocks.resolveIsExile,
+}));
+
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 import { closeSessionAndGetDuration, openVcSessionIfTracked } from "../lib/community.js";
 import { awardVcTime } from "../lib/points.js";
 import { logger } from "../lib/logger.js";
-
-// ─── Inline handler ────────────────────────────────────────────────────────────
-//
-// Mirrors the VoiceStateUpdate handler in index.ts exactly.
-// We cannot import index.ts because it immediately creates a Discord client,
-// logs in, and starts cron jobs.  The inline copy ensures tests exercise the
-// same logic without those side-effects.
-//
-// Source reference: artifacts/community-bot/src/index.ts, ~line 560-588.
-
-async function simulateVcMove(opts: {
-  guildId:          string;
-  userId:           string;
-  oldChannelId:     string | null;
-  newChannelId:     string | null;
-  newChannelParentId: string | null;
-  isExile:          boolean;
-}): Promise<void> {
-  const { guildId, userId, oldChannelId, newChannelId, newChannelParentId, isExile } = opts;
-
-  // Nothing VC-related changed (mute/deaf/etc.)
-  if (oldChannelId === newChannelId) return;
-
-  // ── Close side: unconditional when leaving a channel ─────────────────────
-  if (oldChannelId) {
-    const duration = await closeSessionAndGetDuration(guildId, userId).catch((err) => {
-      logger.error(`[vc] closeSession error user=${userId}`, err);
-      return null;
-    });
-    if (duration !== null && duration > 0) {
-      awardVcTime(guildId, userId, duration).catch((err) =>
-        logger.error(`[point] awardVcTime error user=${userId}`, err),
-      );
-    }
-  }
-
-  // ── Join side: only open session when destination is tracked ─────────────
-  if (newChannelId) {
-    await openVcSessionIfTracked(guildId, userId, newChannelId, newChannelParentId, isExile);
-  }
-}
+import { handleVoiceStateUpdate } from "../lib/vc-session-handler.js";
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("VoiceStateUpdate handler – move to root-level channel (parentId = null)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: not an exile user
+    mocks.resolveIsExile.mockReturnValue(false);
     // Default: awardVcTime resolves cleanly
     mocks.awardVcTime.mockResolvedValue(undefined);
     // Default: openVcSessionIfTracked resolves cleanly (join side gated inside that fn)
@@ -110,13 +83,13 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
   it("calls closeSessionAndGetDuration when moving from a tracked channel to a root-level channel", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValue(120); // 2-minute session
 
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "user-1",
-      oldChannelId:      "ch-tracked",
-      newChannelId:      "ch-root",
-      newChannelParentId: null,          // ← root-level: no parent
-      isExile:           false,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,          // ← root-level: no parent
+      member:          null,
     });
 
     expect(closeSessionAndGetDuration).toHaveBeenCalledOnce();
@@ -128,13 +101,13 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
   it("calls openVcSessionIfTracked for the root-level destination (gating is inside that fn)", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValue(60);
 
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "user-1",
-      oldChannelId:      "ch-tracked",
-      newChannelId:      "ch-root",
-      newChannelParentId: null,
-      isExile:           false,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
     });
 
     // The handler delegates the tracking decision to openVcSessionIfTracked;
@@ -151,13 +124,13 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
   it("awards VC time for the closed session duration", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValue(300); // 5-minute session
 
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "user-1",
-      oldChannelId:      "ch-tracked",
-      newChannelId:      "ch-root",
-      newChannelParentId: null,
-      isExile:           false,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
     });
 
     expect(awardVcTime).toHaveBeenCalledOnce();
@@ -169,30 +142,30 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
   it("does NOT award VC time when the closed session had zero duration", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValue(0);
 
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "user-1",
-      oldChannelId:      "ch-tracked",
-      newChannelId:      "ch-root",
-      newChannelParentId: null,
-      isExile:           false,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
     });
 
     expect(awardVcTime).not.toHaveBeenCalled();
   });
 
-  // ── 5. No award when close returns null (DB error path) ───────────────────
+  // ── 5. No award when close returns null ───────────────────────────────────
 
   it("does NOT award VC time when closeSessionAndGetDuration returns null", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValue(null);
 
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "user-1",
-      oldChannelId:      "ch-tracked",
-      newChannelId:      "ch-root",
-      newChannelParentId: null,
-      isExile:           false,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
     });
 
     expect(awardVcTime).not.toHaveBeenCalled();
@@ -207,13 +180,13 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
   it("still closes the session when the old channel was also root-level", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValue(45);
 
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "user-1",
-      oldChannelId:      "ch-root-old",  // ← old channel also had no parent
-      newChannelId:      "ch-root-new",
-      newChannelParentId: null,
-      isExile:           false,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-root-old",  // ← old channel also had no parent
+      newChannelId:    "ch-root-new",
+      channelParentId: null,
+      member:          null,
     });
 
     expect(closeSessionAndGetDuration).toHaveBeenCalledOnce();
@@ -225,14 +198,15 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
 
   it("passes isExile=true to openVcSessionIfTracked for exile users", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValue(90);
+    mocks.resolveIsExile.mockReturnValue(true);
 
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "exile-user",
-      oldChannelId:      "ch-tracked",
-      newChannelId:      "ch-root",
-      newChannelParentId: null,
-      isExile:           true,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "exile-user",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          { roles: { cache: new Map() } } as never,
     });
 
     expect(openVcSessionIfTracked).toHaveBeenCalledWith(
@@ -243,13 +217,13 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
   // ── 8. No-op when channels are identical (mute/deaf event) ───────────────
 
   it("does not close or open a session when old and new channel are the same", async () => {
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "user-1",
-      oldChannelId:      "ch-root",
-      newChannelId:      "ch-root",
-      newChannelParentId: null,
-      isExile:           false,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-root",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
     });
 
     expect(closeSessionAndGetDuration).not.toHaveBeenCalled();
@@ -262,17 +236,79 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
   it("closes the session but does not open one when the user disconnects (newChannelId=null)", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValue(180);
 
-    await simulateVcMove({
-      guildId:           "guild-1",
-      userId:            "user-1",
-      oldChannelId:      "ch-root",
-      newChannelId:      null,
-      newChannelParentId: null,
-      isExile:           false,
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-root",
+      newChannelId:    null,
+      channelParentId: null,
+      member:          null,
     });
 
     expect(closeSessionAndGetDuration).toHaveBeenCalledOnce();
     expect(openVcSessionIfTracked).not.toHaveBeenCalled();
     expect(awardVcTime).toHaveBeenCalledWith("guild-1", "user-1", 180);
+  });
+
+  // ── 10. DB error on close: awardVcTime NOT called ────────────────────────
+  //
+  // When closeSessionAndGetDuration rejects (e.g. DB connection lost),
+  // the .catch() in the handler swallows the error and returns null.
+  // null fails the (duration !== null && duration > 0) guard, so
+  // awardVcTime must NOT be called.
+
+  it("does NOT call awardVcTime when closeSessionAndGetDuration rejects", async () => {
+    const dbError = new Error("DB connection lost");
+    mocks.closeSessionAndGetDuration.mockRejectedValue(dbError);
+
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
+    });
+
+    expect(awardVcTime).not.toHaveBeenCalled();
+  });
+
+  // ── 11. DB error on close: error is logged ───────────────────────────────
+
+  it("logs the error via logger.error when closeSessionAndGetDuration rejects", async () => {
+    const dbError = new Error("DB connection lost");
+    mocks.closeSessionAndGetDuration.mockRejectedValue(dbError);
+
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-2",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
+    });
+
+    expect(mocks.loggerError).toHaveBeenCalledOnce();
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("user-2"),
+      dbError,
+    );
+  });
+
+  // ── 12. DB error on close: handler resolves without throwing ─────────────
+
+  it("resolves without throwing when closeSessionAndGetDuration rejects", async () => {
+    mocks.closeSessionAndGetDuration.mockRejectedValue(new Error("DB timeout"));
+
+    await expect(
+      handleVoiceStateUpdate({
+        guildId:         "guild-1",
+        userId:          "user-1",
+        oldChannelId:    "ch-tracked",
+        newChannelId:    "ch-root",
+        channelParentId: null,
+        member:          null,
+      }),
+    ).resolves.toBeUndefined();
   });
 });
