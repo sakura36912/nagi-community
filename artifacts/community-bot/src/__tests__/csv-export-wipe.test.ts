@@ -1163,6 +1163,52 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
     });
   });
 
+  // ── Per-guild wipe → openSession: new session row is created after a per-guild wipe ──
+  //
+  // The wipe → openSession tests above only exercise deleteAllUserVcSessions (global
+  // wipe).  A regression in deleteUserVcSessions — where it fails to clear the per-guild
+  // opt-out row — would leave openSession returning null for that guild after a per-guild
+  // wipe, silently breaking re-tracking without any test catching it.
+
+  describe("per-guild wipe → openSession: new session row is created after deleteUserVcSessions", () => {
+    it("openSession returns a non-null session row after the per-guild opt-out is cleared by the wipe", async () => {
+      // Seed a per-guild opt-out so the user was opted out in guild-A before the wipe.
+      store.seedPrivacy([{ user_id: "wiped-user", guild_id: "guild-A", opted_out: true }]);
+
+      // Per-guild wipe clears the opt-out row and session rows for that guild.
+      await deleteUserVcSessions("guild-A", "wiped-user");
+
+      // Simulating a join event after the wipe: openSession must detect no opt-out
+      // and insert a new session row.
+      const session = await openSession("guild-A", "wiped-user", "ch-1");
+
+      // Must return a non-null row — tracking is fully resumed in guild-A.
+      expect(session).not.toBeNull();
+      expect(session?.userId).toBe("wiped-user");
+      expect(session?.guildId).toBe("guild-A");
+    });
+
+    it("openSession works in the wiped guild while a per-guild opt-out in a different guild still blocks tracking", async () => {
+      // Seed per-guild opt-outs for both guild-A and guild-B.
+      store.seedPrivacy([
+        { user_id: "wiped-user", guild_id: "guild-A", opted_out: true },
+        { user_id: "wiped-user", guild_id: "guild-B", opted_out: true },
+      ]);
+
+      // Wipe only guild-A — clears the guild-A opt-out row but leaves guild-B intact.
+      await deleteUserVcSessions("guild-A", "wiped-user");
+
+      // guild-A: opt-out was removed by the wipe, so openSession must succeed.
+      const sessionA = await openSession("guild-A", "wiped-user", "ch-1");
+      expect(sessionA).not.toBeNull();
+      expect(sessionA?.guildId).toBe("guild-A");
+
+      // guild-B: opt-out row was NOT removed, so openSession must still return null.
+      const sessionB = await openSession("guild-B", "wiped-user", "ch-2");
+      expect(sessionB).toBeNull();
+    });
+  });
+
   // ── SQL shape assertions (supplementary) ────────────────────────────────
 
   describe("SQL shape assertions", () => {
