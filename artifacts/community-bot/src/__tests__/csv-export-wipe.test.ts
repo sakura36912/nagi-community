@@ -820,6 +820,25 @@ describe("CSV export after data wipe – deleted rows must not appear", () => {
 
       expect(count).toBe(0);
     });
+
+    it("trailing leave event after per-guild wipe cannot recreate an exportable row", async () => {
+      // Seed one open session (left_at = null) — simulates a user still in VC.
+      store.seed([makeRow("wiped-user", "guild-A", { leftAt: null })]);
+
+      // Admin wipes the user's per-guild data while they are still connected.
+      await deleteUserVcSessions("guild-A", "wiped-user");
+
+      // The Discord leave event fires after the wipe — closeSession must find
+      // no open row to update, so no completed row is written to the store.
+      await closeSession("guild-A", "wiped-user");
+
+      // No session row must exist in the store (not recreated by closeSession).
+      expect(store.getSessions()).toHaveLength(0);
+
+      // The export query must return no rows for this user/guild.
+      const exported = await getAllTempVcDeletions("guild-A", { userId: "wiped-user" });
+      expect(exported).toHaveLength(0);
+    });
   });
 
   // ── Mixed wipe + export ──────────────────────────────────────────────────
