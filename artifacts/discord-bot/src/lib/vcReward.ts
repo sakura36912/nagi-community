@@ -1,5 +1,5 @@
 import { DiscordAPIError } from "discord.js";
-import { and, eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import {
   db,
   vcPresenceTable,
@@ -9,6 +9,7 @@ import {
   vcSessionLogsTable,
   chestVcAccumTable,
   chestCooldownTable,
+  communityTavernChannelsTable,
   walletsTable,
   transactionsTable,
   type VcPresence,
@@ -212,6 +213,36 @@ export async function getTotalChestVcSeconds(
       and(
         eq(chestVcAccumTable.guildId, guildId),
         eq(chestVcAccumTable.userId, userId),
+      ),
+    );
+  return row?.total ?? 0;
+}
+
+/**
+ * vc_session_logs の酒場チャンネルセッションから累積秒数を取得する。
+ * chest_vc_accum とは独立した別経路で、二重カウント防止のため呼び出し側が max() を取ること。
+ */
+export async function getTavernSessionLogSeconds(
+  guildId: string,
+  userId: string,
+): Promise<number> {
+  // community_tavern_channels からギルドの酒場チャンネル ID 一覧を取得
+  const tavernRows = await db
+    .select({ channelId: communityTavernChannelsTable.channelId })
+    .from(communityTavernChannelsTable)
+    .where(eq(communityTavernChannelsTable.guildId, guildId));
+
+  if (tavernRows.length === 0) return 0;
+  const channelIds = tavernRows.map((r) => r.channelId);
+
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${vcSessionLogsTable.durationSeconds}), 0)::int` })
+    .from(vcSessionLogsTable)
+    .where(
+      and(
+        eq(vcSessionLogsTable.guildId, guildId),
+        eq(vcSessionLogsTable.userId, userId),
+        inArray(vcSessionLogsTable.channelId, channelIds),
       ),
     );
   return row?.total ?? 0;
