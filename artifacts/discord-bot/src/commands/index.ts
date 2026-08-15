@@ -2046,7 +2046,7 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
     if (opensCount >= maxOpens) {
       const nextAt = Math.ceil(((opensCount + 1) * CHEST_INTERVAL_SEC - totalSeconds) / 60);
       await interaction.editReply(
-        `📦 次の宝箱まであと **${nextAt}分** の酒場VC接続が必要です（累積${opensCount}回開封済み）。`,
+        `📦 次の宝箱まであと **${nextAt}分** の酒場VC接続が必要です。（${opensCount}回開封済み）`,
       );
       return;
     }

@@ -79,3 +79,24 @@ export function getCurrentTavernSeconds(guildId: string, userId: string): number
   if (!joined) return 0;
   return Math.floor((Date.now() - joined.getTime()) / 1000);
 }
+
+/**
+ * 現在酒場に在室している全ユーザーの累積時間を DB へ書き出す。
+ * Bot 再起動時にメモリが消えて時間が失われるのを防ぐため、定期的に呼ぶこと。
+ * 書き出し後は joinedAt をリセットするので二重カウントは起きない。
+ */
+export async function flushAllTavernSessions(): Promise<void> {
+  const now = new Date();
+  const entries = [...tavernJoinedAt.entries()];
+  if (entries.length === 0) return;
+  await Promise.allSettled(
+    entries.map(async ([key, joined]) => {
+      const seconds = Math.floor((now.getTime() - joined.getTime()) / 1000);
+      if (seconds <= 0) return;
+      // joinedAt を今の時刻にリセット（退出時に二重カウントされないよう）
+      tavernJoinedAt.set(key, now);
+      const [guildId, userId] = key.split(":");
+      await addChestVcSeconds(guildId, userId, seconds);
+    }),
+  );
+}
