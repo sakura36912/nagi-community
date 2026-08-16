@@ -311,4 +311,76 @@ describe("VoiceStateUpdate handler – move to root-level channel (parentId = nu
       }),
     ).resolves.toBeUndefined();
   });
+
+  // ── 13. awardVcTime rejects: handler still resolves ───────────────────────
+  //
+  // awardVcTime is called fire-and-forget with a .catch().  If the points
+  // service rejects the error must be swallowed — the handler must not throw
+  // or propagate the failure to callers.
+
+  it("resolves without throwing when awardVcTime rejects", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(120);
+    mocks.awardVcTime.mockRejectedValue(new Error("Points service unavailable"));
+
+    await expect(
+      handleVoiceStateUpdate({
+        guildId:         "guild-1",
+        userId:          "user-1",
+        oldChannelId:    "ch-tracked",
+        newChannelId:    "ch-root",
+        channelParentId: null,
+        member:          null,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  // ── 14. awardVcTime rejects: error is logged ──────────────────────────────
+  //
+  // The .catch() handler must call logger.error with the rejection error and
+  // a context string that includes the userId so on-call engineers can trace
+  // which user's VC time was not awarded.
+
+  it("logs the error via logger.error when awardVcTime rejects", async () => {
+    const pointsError = new Error("Points service unavailable");
+    mocks.closeSessionAndGetDuration.mockResolvedValue(120);
+    mocks.awardVcTime.mockRejectedValue(pointsError);
+
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-42",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
+    });
+
+    expect(mocks.loggerError).toHaveBeenCalledOnce();
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining("user-42"),
+      pointsError,
+    );
+  });
+
+  // ── 15. awardVcTime rejects: session was still closed ────────────────────
+  //
+  // The session-close side completes successfully before awardVcTime is
+  // called.  A rejection from the points service must not affect — or roll
+  // back — the already-completed closeSessionAndGetDuration call.
+
+  it("still calls closeSessionAndGetDuration when awardVcTime rejects", async () => {
+    mocks.closeSessionAndGetDuration.mockResolvedValue(120);
+    mocks.awardVcTime.mockRejectedValue(new Error("Points service unavailable"));
+
+    await handleVoiceStateUpdate({
+      guildId:         "guild-1",
+      userId:          "user-1",
+      oldChannelId:    "ch-tracked",
+      newChannelId:    "ch-root",
+      channelParentId: null,
+      member:          null,
+    });
+
+    expect(closeSessionAndGetDuration).toHaveBeenCalledOnce();
+    expect(closeSessionAndGetDuration).toHaveBeenCalledWith("guild-1", "user-1");
+  });
 });
