@@ -85,7 +85,7 @@ import {
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
-import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTavernSessionLogSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds } from "../lib/vcReward";
+import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds } from "../lib/vcReward";
 import { getCurrentTavernSeconds, isTavernChannel, onTavernJoin, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
 import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
@@ -2042,19 +2042,19 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
     }
 
     const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
-    // chest_vc_accum と vc_session_logs（酒場チャンネル限定）の両方を取得し大きい方を使う
-    // → vc_session_logs は /vcランク と同じ経路で記録されるため取りこぼしが少ない
-    // → 双方を MAX() することで double-count を防ぎつつ精度の高い方を採用
-    const [chestAccumSeconds, vcLogSeconds, opensCount, lastOpenVcSeconds] = await Promise.all([
+    // chest_vc_accum（10分ごとにフラッシュ）＋現在セッション中の秒数のみを使う。
+    // vc_session_logs との MAX() は Flush 後に currentSeconds がリセットされると
+    // totalSeconds が下がり elapsed が負になる問題を起こすため廃止。
+    const [chestAccumSeconds, opensCount, lastOpenVcSeconds] = await Promise.all([
       getTotalChestVcSeconds(interaction.guild.id, interaction.user.id),
-      getTavernSessionLogSeconds(interaction.guild.id, interaction.user.id),
       getTotalChestOpensCount(interaction.guild.id, interaction.user.id),
       getChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType),
     ]);
-    const pastSeconds = Math.max(chestAccumSeconds, vcLogSeconds);
-    const totalSeconds = pastSeconds + currentSeconds;
+    const totalSeconds = chestAccumSeconds + currentSeconds;
     totalSecondsAtOpen = totalSeconds;
-    const elapsed = totalSeconds - lastOpenVcSeconds;
+    // lastOpenVcSeconds が totalSeconds より大きい場合は過去の計算方式の不整合。
+    // elapsed を 0 として次回 1 時間滞在で開封できるよう正規化する。
+    const elapsed = Math.max(0, totalSeconds - lastOpenVcSeconds);
 
     if (elapsed < CHEST_INTERVAL_SEC) {
       const remaining = Math.ceil((CHEST_INTERVAL_SEC - elapsed) / 60);
