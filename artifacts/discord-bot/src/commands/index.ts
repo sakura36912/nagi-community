@@ -471,7 +471,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     return;
   }
 
-  // 評価落ち浮上券
+  // オチテモータ島浮上券
   if (item.effectType === EVAL_RESURFACE_EFFECT) {
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
     if (!result.ok) { await interaction.editReply(result.reason); return; }
@@ -1248,7 +1248,7 @@ const COMBINED_EFFECT_CHOICES: EffectChoice[] = [
   { name: "ニックネーム変更権",        value: NICKNAME_CHANGE_EFFECT   },
   { name: "高級船室作成(無期限)",        value: PRIVATE_VC_EFFECT        },
   { name: "永久ロール付与",              value: PERM_ROLE_EFFECT         },
-  { name: "評価落ち浮上券",             value: EVAL_RESURFACE_EFFECT    },
+  { name: "オチテモータ島浮上券",        value: EVAL_RESURFACE_EFFECT    },
   { name: "個人ショップ開業券",          value: SHOP_LICENSE_EFFECT      },
   { name: "高級船室（1日）",            value: PRIVATE_VC_1D_EFFECT     },
   { name: "高級船室（3日）",            value: PRIVATE_VC_3D_EFFECT     },
