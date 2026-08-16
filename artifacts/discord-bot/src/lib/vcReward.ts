@@ -320,6 +320,75 @@ export async function setChestLastOpenVcSeconds(
     });
 }
 
+// ─── Chest bonus opens ───────────────────────────────────────────────────────
+
+/**
+ * 管理者が付与したボーナス開封回数を取得する。
+ */
+export async function getChestBonusOpens(
+  guildId: string,
+  userId: string,
+  chestType: string,
+): Promise<number> {
+  const [row] = await db
+    .select({ b: chestCooldownTable.bonusOpens })
+    .from(chestCooldownTable)
+    .where(
+      and(
+        eq(chestCooldownTable.guildId, guildId),
+        eq(chestCooldownTable.userId, userId),
+        eq(chestCooldownTable.chestType, chestType),
+      ),
+    );
+  return row?.b ?? 0;
+}
+
+/**
+ * ボーナス開封を1消費する（bonus_opens > 0 の場合のみ）。
+ * 消費できた場合 true を返す。
+ */
+export async function consumeChestBonusOpen(
+  guildId: string,
+  userId: string,
+  chestType: string,
+): Promise<boolean> {
+  const result = await db
+    .update(chestCooldownTable)
+    .set({ bonusOpens: sql`GREATEST(0, ${chestCooldownTable.bonusOpens} - 1)` })
+    .where(
+      and(
+        eq(chestCooldownTable.guildId, guildId),
+        eq(chestCooldownTable.userId, userId),
+        eq(chestCooldownTable.chestType, chestType),
+        sql`${chestCooldownTable.bonusOpens} > 0`,
+      ),
+    );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * 管理者操作でボーナス開封回数を加算する（マイナス値で減算、最低 0）。
+ * 行が存在しない場合は新規作成する。
+ */
+export async function addChestBonusOpens(
+  guildId: string,
+  userId: string,
+  chestType: string,
+  count: number,
+): Promise<number> {
+  const [row] = await db
+    .insert(chestCooldownTable)
+    .values({ guildId, userId, chestType, lastOpenVcSeconds: 0, bonusOpens: Math.max(0, count) })
+    .onConflictDoUpdate({
+      target: [chestCooldownTable.guildId, chestCooldownTable.userId, chestCooldownTable.chestType],
+      set: {
+        bonusOpens: sql`GREATEST(0, ${chestCooldownTable.bonusOpens} + ${count})`,
+      },
+    })
+    .returning({ bonusOpens: chestCooldownTable.bonusOpens });
+  return row?.bonusOpens ?? 0;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 本日の宝箱開封回数を1増やす。 */

@@ -85,7 +85,7 @@ import {
   distributeRoleRewards,
   getGuildWalletUserIds,
 } from "../lib/economy";
-import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds } from "../lib/vcReward";
+import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds, getChestBonusOpens, consumeChestBonusOpen, addChestBonusOpens } from "../lib/vcReward";
 import { getCurrentTavernSeconds, isTavernChannel, onTavernJoin, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
 import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
@@ -2031,55 +2031,71 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   // elapsedSinceLastOpen = totalSeconds - 前回開封時のtotalSeconds
   // elapsedSinceLastOpen >= CHEST_INTERVAL_SEC で開封可能
   let totalSecondsAtOpen = 0;
+  let usedBonusOpen = false;
   if (!isAdmin) {
-    // 酒場VCにいるのにトラッキングされていない場合（Bot再起動直後など）は自己修復
-    if (getCurrentTavernSeconds(interaction.guild.id, interaction.user.id) === 0) {
-      const voiceChannelId = interaction.guild.voiceStates.cache.get(interaction.user.id)?.channelId;
-      if (voiceChannelId && await isTavernChannel(interaction.guild.id, interaction.guild, voiceChannelId)) {
-        onTavernJoin(interaction.guild.id, interaction.user.id);
-        logger.info(`[chest] Self-healed tavern tracking for ${interaction.user.id} in ${voiceChannelId}`);
-      }
+    // ── ボーナス開封チェック ──────────────────────────────────────────────────
+    // 管理者が付与したボーナス回数が残っていれば、クールダウン無視で1回消費する。
+    // ボーナス消費時は lastOpenVcSeconds を更新しない（通常クールダウンに影響させない）。
+    const bonus = await getChestBonusOpens(interaction.guild.id, interaction.user.id, chestType);
+    if (bonus > 0) {
+      const consumed = await consumeChestBonusOpen(interaction.guild.id, interaction.user.id, chestType);
+      if (consumed) usedBonusOpen = true;
     }
 
-    const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
-    // chest_vc_accum（10分ごとにフラッシュ）＋現在セッション中の秒数のみを使う。
-    // vc_session_logs との MAX() は Flush 後に currentSeconds がリセットされると
-    // totalSeconds が下がり elapsed が負になる問題を起こすため廃止。
-    const [chestAccumSeconds, opensCount, lastOpenVcSeconds] = await Promise.all([
-      getTotalChestVcSeconds(interaction.guild.id, interaction.user.id),
-      getTotalChestOpensCount(interaction.guild.id, interaction.user.id),
-      getChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType),
-    ]);
-    const totalSeconds = chestAccumSeconds + currentSeconds;
-    totalSecondsAtOpen = totalSeconds;
-    // lastOpenVcSeconds が totalSeconds より大きい場合は過去の計算方式の不整合。
-    // elapsed を 0 として次回 1 時間滞在で開封できるよう正規化する。
-    const elapsed = Math.max(0, totalSeconds - lastOpenVcSeconds);
-
-    if (elapsed < CHEST_INTERVAL_SEC) {
-      const remaining = Math.ceil((CHEST_INTERVAL_SEC - elapsed) / 60);
-      const elapsedMin = Math.floor(elapsed / 60);
-      const neededMin = Math.ceil(CHEST_INTERVAL_SEC / 60);
-      const progressLine = `（累計酒場VC時間: ${elapsedMin}分 / ${neededMin}分）`;
-      if (opensCount === 0) {
-        await interaction.editReply(
-          `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です。\n${progressLine}`,
-        );
-      } else {
-        await interaction.editReply(
-          `📦 次の宝箱まであと **${remaining}分** の酒場VC接続が必要です。（${opensCount}回開封済み）\n${progressLine}`,
-        );
+    if (!usedBonusOpen) {
+      // 酒場VCにいるのにトラッキングされていない場合（Bot再起動直後など）は自己修復
+      if (getCurrentTavernSeconds(interaction.guild.id, interaction.user.id) === 0) {
+        const voiceChannelId = interaction.guild.voiceStates.cache.get(interaction.user.id)?.channelId;
+        if (voiceChannelId && await isTavernChannel(interaction.guild.id, interaction.guild, voiceChannelId)) {
+          onTavernJoin(interaction.guild.id, interaction.user.id);
+          logger.info(`[chest] Self-healed tavern tracking for ${interaction.user.id} in ${voiceChannelId}`);
+        }
       }
-      return;
+
+      const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
+      // chest_vc_accum（10分ごとにフラッシュ）＋現在セッション中の秒数のみを使う。
+      // vc_session_logs との MAX() は Flush 後に currentSeconds がリセットされると
+      // totalSeconds が下がり elapsed が負になる問題を起こすため廃止。
+      const [chestAccumSeconds, opensCount, lastOpenVcSeconds] = await Promise.all([
+        getTotalChestVcSeconds(interaction.guild.id, interaction.user.id),
+        getTotalChestOpensCount(interaction.guild.id, interaction.user.id),
+        getChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType),
+      ]);
+      const totalSeconds = chestAccumSeconds + currentSeconds;
+      totalSecondsAtOpen = totalSeconds;
+      // lastOpenVcSeconds が totalSeconds より大きい場合は過去の計算方式の不整合。
+      // elapsed を 0 として次回 1 時間滞在で開封できるよう正規化する。
+      const elapsed = Math.max(0, totalSeconds - lastOpenVcSeconds);
+
+      if (elapsed < CHEST_INTERVAL_SEC) {
+        const remaining = Math.ceil((CHEST_INTERVAL_SEC - elapsed) / 60);
+        const elapsedMin = Math.floor(elapsed / 60);
+        const neededMin = Math.ceil(CHEST_INTERVAL_SEC / 60);
+        const progressLine = `（累計酒場VC時間: ${elapsedMin}分 / ${neededMin}分）`;
+        if (opensCount === 0) {
+          await interaction.editReply(
+            `⏳ 宝箱を開けるにはあと **${remaining}分** の酒場VC接続が必要です。\n${progressLine}`,
+          );
+        } else {
+          await interaction.editReply(
+            `📦 次の宝箱まであと **${remaining}分** の酒場VC接続が必要です。（${opensCount}回開封済み）\n${progressLine}`,
+          );
+        }
+        return;
+      }
     }
   }
 
   // 開封記録（管理者は記録しない＝何度でも開封可能）
+  // ボーナス消費時は lastOpenVcSeconds を更新しない（通常クールダウンに影響させない）。
   if (!isAdmin) {
-    await Promise.all([
+    const recordOps: Promise<unknown>[] = [
       incrementChestOpensToday(interaction.guild.id, interaction.user.id),
-      setChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType, totalSecondsAtOpen),
-    ]);
+    ];
+    if (!usedBonusOpen) {
+      recordOps.push(setChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType, totalSecondsAtOpen));
+    }
+    await Promise.all(recordOps);
   }
 
   const settings = await getGuildSettings(interaction.guild.id);
@@ -2605,6 +2621,30 @@ const chestCommand: Command = {
             .setDescription("ログ投稿先チャンネル（省略するとログ無効化）")
             .setRequired(false),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("add-bonus")
+        .setDescription("【管理者専用】指定ユーザーの宝箱を引ける回数を追加・減算します")
+        .addUserOption((opt) =>
+          opt.setName("user").setDescription("対象ユーザー").setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("type")
+            .setDescription("宝箱の種類")
+            .setRequired(true)
+            .addChoices(
+              { name: "🎁 新入り宝箱", value: "shinniri" },
+              { name: "🎁 本船員宝箱", value: "honsennin" },
+            ),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("count")
+            .setDescription("追加回数（マイナスで減算、合計は0未満にならない）")
+            .setRequired(true),
+        ),
     ) as SlashCommandBuilder,
   async execute(interaction) {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
@@ -2710,6 +2750,25 @@ const chestCommand: Command = {
       } else {
         await interaction.reply({ content: "✅ 宝箱ログを無効化しました。", ephemeral: true });
       }
+    } else if (sub === "add-bonus") {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "❌ サーバー内でのみ使用できます。", ephemeral: true });
+        return;
+      }
+      const targetUser = interaction.options.getUser("user", true);
+      const chestType = interaction.options.getString("type", true) as "shinniri" | "honsennin";
+      const count = interaction.options.getInteger("count", true);
+      if (targetUser.bot) {
+        await interaction.reply({ content: "❌ Botには付与できません。", ephemeral: true });
+        return;
+      }
+      const newTotal = await addChestBonusOpens(interaction.guildId, targetUser.id, chestType, count);
+      const chestLabel = chestType === "honsennin" ? "本船員宝箱" : "新入り宝箱";
+      const verb = count >= 0 ? `+${count}回 追加` : `${count}回 減算`;
+      await interaction.reply({
+        content: `✅ <@${targetUser.id}> の **${chestLabel}** ボーナス開封回数を ${verb} しました。\n残り: **${newTotal}回**`,
+        ephemeral: true,
+      });
     } else if (sub === "set-channels") {
       if (!interaction.guildId) {
         await interaction.reply({ content: "❌ サーバー内でのみ使用できます。", ephemeral: true });

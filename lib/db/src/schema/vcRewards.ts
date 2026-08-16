@@ -121,6 +121,7 @@ export const chestCooldownTable = pgTable(
     userId:             text("user_id").notNull(),
     chestType:          text("chest_type").notNull(), // 'shinniri' | 'honsennin'
     lastOpenVcSeconds:  integer("last_open_vc_seconds").notNull().default(0),
+    bonusOpens:         integer("bonus_opens").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.guildId, t.userId, t.chestType] })],
 );
