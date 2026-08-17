@@ -1340,6 +1340,14 @@ const shopCommand: Command = {
         .addStringOption((opt) =>
           opt.setName("category").setDescription("表示するショップカテゴリ").setRequired(true).addChoices(...CATEGORY_CHOICES),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("set-license").setDescription("個人ショップ開業券の隊ロール→ライセンスロール対応を設定します（管理者）")
+        .addRoleOption((opt) => opt.setName("squad_role").setDescription("隊ロール（本船員・隊員ロールなど）").setRequired(true))
+        .addRoleOption((opt) => opt.setName("license_role").setDescription("付与するショップ開業ロール").setRequired(true)),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list-licenses").setDescription("個人ショップ開業券の隊ロール対応一覧を表示します（管理者）"),
     ),
 
   async execute(interaction) {
@@ -1508,6 +1516,36 @@ const shopCommand: Command = {
           ephemeral: true,
         });
       }
+      return;
+    }
+
+    if (sub === "set-license") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const squadRole   = interaction.options.getRole("squad_role", true);
+      const licenseRole = interaction.options.getRole("license_role", true);
+      await setShopLicenseConfig(guildId, squadRole.id, licenseRole.id);
+      await interaction.reply({
+        content: `✅ 隊ロール <@&${squadRole.id}> → ショップ開業ロール <@&${licenseRole.id}> の対応を設定しました。`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    if (sub === "list-licenses") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const configs = await listShopLicenseConfigs(guildId);
+      if (configs.length === 0) {
+        await interaction.reply({ content: "個人ショップ開業券の隊ロール対応がまだ設定されていません。`/shop set-license` で設定してください。", ephemeral: true });
+        return;
+      }
+      const lines = configs.map((c) => `<@&${c.squadRoleId}> → <@&${c.licenseRoleId}>`);
+      await interaction.reply({ content: `## 🏪 個人ショップ開業ロール対応一覧\n${lines.join("\n")}`, ephemeral: true });
       return;
     }
 
