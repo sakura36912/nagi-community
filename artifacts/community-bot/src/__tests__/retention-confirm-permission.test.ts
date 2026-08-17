@@ -322,13 +322,13 @@ describe("handleRetentionConfirm – cross-guild nonce isolation", () => {
     expect(replyArg.content).toMatch(/有効期限/);
   });
 
-  it("removes the nonce entry from the registry after a cross-guild attempt", async () => {
+  it("does NOT remove the nonce entry from the registry after a cross-guild attempt", async () => {
     const interaction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
     await handleRetentionConfirm(interaction as never);
 
-    // The stale-entry cleanup branch fires even for the guild-mismatch path,
-    // so the nonce must be gone after the cross-guild replay.
-    expect(retentionConfirmExpiry.has(NONCE)).toBe(false);
+    // A guild-ID mismatch must NOT consume the nonce — the legitimate guild-A
+    // admin must still be able to confirm after guild B's replay is rejected.
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(true);
   });
 
   it("does NOT proceed to deferUpdate or editReply on a cross-guild replay", async () => {
@@ -345,6 +345,46 @@ describe("handleRetentionConfirm – cross-guild nonce isolation", () => {
 
     expect(mocks.update).not.toHaveBeenCalled();
     expect(mocks.del).not.toHaveBeenCalled();
+  });
+
+  it("guild A can still confirm successfully after guild B's cross-guild replay is rejected", async () => {
+    // Step 1: guild B presents guild A's nonce — rejected, nonce must survive.
+    const guildBInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionConfirm(guildBInteraction as never);
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(true);
+
+    // Step 2: guild A's legitimate admin confirms — must succeed.
+    const guildAInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_A });
+    await handleRetentionConfirm(guildAInteraction as never);
+
+    expect(guildAInteraction.reply).not.toHaveBeenCalled();
+    expect(guildAInteraction.deferUpdate).toHaveBeenCalled();
+    expect(guildAInteraction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("guild A's successful confirm consumes the nonce after guild B's rejected replay", async () => {
+    const guildBInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionConfirm(guildBInteraction as never);
+
+    const guildAInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_A });
+    await handleRetentionConfirm(guildAInteraction as never);
+
+    // The nonce must be gone after the legitimate guild-A confirmation.
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(false);
+  });
+
+  it("guild A's success embed title indicates the change was applied after guild B's rejected replay", async () => {
+    const guildBInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionConfirm(guildBInteraction as never);
+
+    const guildAInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_A });
+    await handleRetentionConfirm(guildAInteraction as never);
+
+    const [[replyArg]] = guildAInteraction.editReply.mock.calls as [[{ embeds: { data: { title?: string } }[] }]];
+    const title = replyArg.embeds[0]?.data?.title ?? "";
+    expect(title).toMatch(/保持期間/);
   });
 });
 

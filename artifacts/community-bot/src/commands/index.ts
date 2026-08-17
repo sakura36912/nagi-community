@@ -1625,8 +1625,20 @@ export async function handleRetentionConfirm(interaction: ButtonInteraction): Pr
   const nonce = interaction.customId.slice(COMM_RETENTION_CONFIRM_PREFIX.length);
   const record = retentionConfirmExpiry.get(nonce);
 
-  if (!record || record.guildId !== interaction.guildId || Date.now() > record.expiry) {
-    retentionConfirmExpiry.delete(nonce); // remove stale entry if present
+  // No entry, or the entry is for a different guild.
+  // A cross-guild mismatch is silently rejected WITHOUT removing the nonce so
+  // the legitimate guild-A admin can still confirm.
+  if (!record || record.guildId !== interaction.guildId) {
+    await interaction.reply({
+      content: "⏱️ この確認の有効期限が切れています。コマンドを再実行してください。",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // The entry belongs to this guild but its TTL has elapsed — clean it up.
+  if (Date.now() > record.expiry) {
+    retentionConfirmExpiry.delete(nonce);
     await interaction.reply({
       content: "⏱️ この確認の有効期限が切れています。コマンドを再実行してください。",
       ephemeral: true,
