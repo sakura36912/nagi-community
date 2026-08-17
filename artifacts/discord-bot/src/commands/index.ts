@@ -2868,21 +2868,28 @@ const balanceRankingCommand: Command = {
     const guildId = requireGuild(interaction);
     await interaction.deferReply({ ephemeral: true });
 
+    // 現在のギルドメンバー一覧を取得（脱退者除外に使用）
+    const members = await interaction.guild!.members.fetch();
+    const memberIds = new Set(members.keys());
+
     const [wallets, settings] = await Promise.all([
-      getLeaderboard(guildId, undefined), // 全員取得
+      getLeaderboard(guildId, undefined),
       getGuildSettings(guildId),
     ]);
 
-    if (wallets.length === 0) {
+    // サーバー在籍中のメンバーのみに絞り込み
+    const activeWallets = wallets.filter((w) => memberIds.has(w.userId));
+
+    if (activeWallets.length === 0) {
       await interaction.editReply("まだ残高データがありません。");
       return;
     }
 
-    const lines = wallets.map(
+    const lines = activeWallets.map(
       (w, i) => `**${i + 1}位** <@${w.userId}> — ${w.balance.toLocaleString()}${settings.currencyName}`,
     );
 
-    const header = `## 💰 残高ランキング（${wallets.length}人）`;
+    const header = `## 💰 残高ランキング（${activeWallets.length}人）`;
     const chunks: string[] = [];
     let current = header;
     for (const line of lines) {
