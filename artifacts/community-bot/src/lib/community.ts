@@ -781,6 +781,7 @@ export async function getVcTimeInPeriod(
       AND user_id = ${userId}
       AND joined_at < ${endDate}
       AND COALESCE(left_at, NOW()) > ${startDate}
+      AND is_privacy_closed = false
       ${exileFilter}
       AND channel_id IN (
         SELECT channel_id FROM community_tavern_channels WHERE guild_id = ${guildId}
