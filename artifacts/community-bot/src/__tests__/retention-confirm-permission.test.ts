@@ -85,8 +85,10 @@ vi.mock("drizzle-orm", () => ({
 // ─── Import after mocks ───────────────────────────────────────────────────────
 import {
   handleRetentionConfirm,
+  handleRetentionCancel,
   retentionConfirmExpiry,
   COMM_RETENTION_CONFIRM_PREFIX,
+  COMM_RETENTION_CANCEL_PREFIX,
 } from "../commands/index.js";
 
 // ─── Interaction factory ──────────────────────────────────────────────────────
@@ -346,6 +348,36 @@ describe("handleRetentionConfirm – cross-guild nonce isolation", () => {
   });
 });
 
+// ─── Cancel interaction factory ───────────────────────────────────────────────
+
+function makeCancelInteraction(opts: {
+  userId?: string;
+  guildId?: string | null;
+  nonce?: string;
+  isAdministrator?: boolean;
+}) {
+  const {
+    userId = "admin-user",
+    guildId = "guild-123",
+    nonce = "test-nonce-cancel",
+    isAdministrator = true,
+  } = opts;
+
+  return {
+    user: { id: userId, tag: "TestUser#0001" },
+    guildId,
+    customId: `${COMM_RETENTION_CANCEL_PREFIX}${nonce}`,
+    member: {
+      permissions: {
+        has: vi.fn().mockReturnValue(isAdministrator),
+      },
+    },
+    reply: vi.fn().mockResolvedValue(undefined),
+    deferUpdate: vi.fn().mockResolvedValue(undefined),
+    editReply: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 // ─── Unregistered nonce tests ─────────────────────────────────────────────────
 
 describe("handleRetentionConfirm – nonce never registered", () => {
@@ -386,6 +418,87 @@ describe("handleRetentionConfirm – nonce never registered", () => {
   it("does NOT write to the database when the nonce was never registered", async () => {
     const interaction = makeInteraction({ isAdministrator: true, nonce: UNREGISTERED_NONCE, guildId: GUILD_ID });
     await handleRetentionConfirm(interaction as never);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.del).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Cancel-then-confirm cross-button invalidation tests ──────────────────────
+
+describe("handleRetentionCancel → handleRetentionConfirm cross-button invalidation", () => {
+  const NONCE    = "test-nonce-cancel-then-confirm";
+  const GUILD_ID = "guild-123";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Seed a valid, non-expired nonce before each test.
+    retentionConfirmExpiry.set(NONCE, {
+      guildId: GUILD_ID,
+      days: 90,
+      expiry: Date.now() + 60_000,
+    });
+  });
+
+  it("handleRetentionCancel removes the nonce from the registry", async () => {
+    const cancelInteraction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionCancel(cancelInteraction as never);
+
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(false);
+  });
+
+  it("handleRetentionCancel defers and edits reply on success", async () => {
+    const cancelInteraction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionCancel(cancelInteraction as never);
+
+    expect(cancelInteraction.deferUpdate).toHaveBeenCalled();
+    expect(cancelInteraction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+  });
+
+  it("handleRetentionConfirm returns an ephemeral error when called after handleRetentionCancel", async () => {
+    // Step 1: cancel consumes the nonce.
+    const cancelInteraction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionCancel(cancelInteraction as never);
+
+    // Step 2: confirm now sees no entry for the same nonce.
+    const confirmInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(confirmInteraction as never);
+
+    expect(confirmInteraction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+  });
+
+  it("ephemeral error from confirm-after-cancel mentions the expiry notice (有効期限)", async () => {
+    const cancelInteraction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionCancel(cancelInteraction as never);
+
+    const confirmInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(confirmInteraction as never);
+
+    const [[replyArg]] = confirmInteraction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    expect(replyArg.content).toMatch(/有効期限/);
+  });
+
+  it("confirm-after-cancel does NOT call deferUpdate or editReply on the confirm interaction", async () => {
+    const cancelInteraction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionCancel(cancelInteraction as never);
+
+    const confirmInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(confirmInteraction as never);
+
+    expect(confirmInteraction.deferUpdate).not.toHaveBeenCalled();
+    expect(confirmInteraction.editReply).not.toHaveBeenCalled();
+  });
+
+  it("confirm-after-cancel does NOT write to the database", async () => {
+    const cancelInteraction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionCancel(cancelInteraction as never);
+
+    const confirmInteraction = makeInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(confirmInteraction as never);
 
     expect(mocks.update).not.toHaveBeenCalled();
     expect(mocks.del).not.toHaveBeenCalled();
