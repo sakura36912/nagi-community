@@ -189,32 +189,27 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   const bet = interaction.options.getInteger("bet", true);
 
-  const [settings] = await Promise.all([
-    getGuildSettings(guildId),
-    getOrCreateWallet(guildId, userId),
-  ]);
-
-  const maxBet       = settings.casinoMaxBet ?? CASINO_DEFAULT_MAX_BET;
-  const currencyName = settings.currencyName ?? "コイン";
-
-  if (bet < MIN_BET) {
-    await interaction.reply({
-      content: `❌ 最低賭け金は **${MIN_BET.toLocaleString()}** ${currencyName} です。`,
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-  if (bet > maxBet) {
-    await interaction.reply({
-      content: `❌ 賭け金が上限（**${maxBet.toLocaleString()}** ${currencyName}）を超えています。`,
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
+  // Discord の3秒タイムアウトを回避するため、DB アクセス前に defer する
+  await interaction.deferReply();
   processing.add(key);
+
   try {
-    await interaction.deferReply();
+    const [settings] = await Promise.all([
+      getGuildSettings(guildId),
+      getOrCreateWallet(guildId, userId),
+    ]);
+
+    const maxBet       = settings.casinoMaxBet ?? CASINO_DEFAULT_MAX_BET;
+    const currencyName = settings.currencyName ?? "コイン";
+
+    if (bet < MIN_BET) {
+      await interaction.editReply(`❌ 最低賭け金は **${MIN_BET.toLocaleString()}** ${currencyName} です。`);
+      return;
+    }
+    if (bet > maxBet) {
+      await interaction.editReply(`❌ 賭け金が上限（**${maxBet.toLocaleString()}** ${currencyName}）を超えています。`);
+      return;
+    }
 
     const afterDeduct = await deductBet(guildId, userId, bet);
     if (!afterDeduct) {
