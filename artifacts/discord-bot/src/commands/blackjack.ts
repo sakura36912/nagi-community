@@ -64,6 +64,10 @@ interface BJGame {
   cardBuffers: Map<string, Buffer>;
   /** true の間はボタン操作を受け付けない（ヒット処理中の二重押し防止） */
   processing: boolean;
+  /** セッション開始からこのゲーム開始時点までの累計収支 */
+  sessionDeltaBefore: number;
+  /** セッション内のゲーム回数（このゲーム開始時点） */
+  sessionGamesBefore: number;
 }
 
 type Outcome = "blackjack" | "win" | "push" | "lose";
@@ -91,6 +95,10 @@ interface PendingReplay {
   currencyName: string;
   suitEmojis: SuitEmojis;
   expiresAt: number;
+  /** セッション開始からの累計収支 */
+  sessionDelta: number;
+  /** セッション内のゲーム回数 */
+  sessionGames: number;
 }
 const pendingReplay = new Map<string, PendingReplay>();
 /** replay ボタンの二重押し防止用 */
@@ -494,6 +502,10 @@ async function finishGame(
   const key = gameKey(guildId, userId);
   activeGames.delete(key);
 
+  // セッション累計を引き継ぐ（ゲームオブジェクトに開始前の累計を持たせている）
+  const sessionDelta = game.sessionDeltaBefore + netDelta;
+  const sessionGames = game.sessionGamesBefore + 1;
+
   // リプレイ用の情報を保存（ダブルダウン済みなら元の賭け金に戻す）
   const replayBet = game.doubled ? game.bet / 2 : game.bet;
   pendingReplay.set(key, {
@@ -502,6 +514,8 @@ async function finishGame(
     currencyName: game.currencyName,
     suitEmojis: game.suitEmojis,
     expiresAt: Date.now() + GAME_TTL_MS,
+    sessionDelta,
+    sessionGames,
   });
 
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
@@ -563,6 +577,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
       doubled: false, currencyName: pr.currencyName,
       balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
       suitEmojis: pr.suitEmojis, cardPaths: pr.cardPaths, cardBuffers, processing: false,
+      sessionDeltaBefore: pr.sessionDelta,
+      sessionGamesBefore: pr.sessionGames,
     };
 
     if (isBlackjack(playerHand)) {
@@ -579,8 +595,22 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
   }
 
   if (action === "quit") {
+    const pr = pendingReplay.get(key);
     pendingReplay.delete(key);
     await interaction.update({ components: [] });
+    // セッション収支をフォローアップで表示（1ゲーム以上プレイ済みの場合）
+    if (pr && pr.sessionGames > 0) {
+      const sign  = pr.sessionDelta >= 0 ? "+" : "";
+      const color = pr.sessionDelta >= 0 ? 0x57f287 : 0xed4245;
+      const embed = new EmbedBuilder()
+        .setTitle("🃏 ブラックジャック — セッション終了")
+        .setColor(color)
+        .addFields(
+          { name: "プレイ回数", value: `${pr.sessionGames} 回`,                                          inline: true },
+          { name: "合計収支",   value: `${sign}${pr.sessionDelta.toLocaleString()} ${pr.currencyName}`, inline: true },
+        );
+      await interaction.followUp({ embeds: [embed] });
+    }
     return;
   }
 
@@ -724,6 +754,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     doubled: false, currencyName: settings.currencyName,
     balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
     suitEmojis, cardPaths, cardBuffers, processing: false,
+    sessionDeltaBefore: 0, sessionGamesBefore: 0,
   };
 
   if (isBlackjack(playerHand)) {
