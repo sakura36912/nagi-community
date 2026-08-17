@@ -77,6 +77,7 @@ export const COMM_PRIVACY_GLOBAL_OPTOUT_DELETE = "comm:privacy:global:optout:del
 export const COMM_PRIVACY_ADMIN_DELETE_CONFIRM_PREFIX = "comm:privacy:admin-delete:confirm:";
 export const COMM_PRIVACY_ADMIN_DELETE_CANCEL_PREFIX = "comm:privacy:admin-delete:cancel:";
 export const COMM_BOTSTATUS_REFRESH = "comm:botstatus:refresh";
+export const COMM_VC_RANK_BEACH_BTN = "comm:vcrank:beach";
 export const COMM_RETENTION_CONFIRM_PREFIX = "comm:retention:confirm:";
 export const COMM_RETENTION_CANCEL_PREFIX = "comm:retention:cancel:";
 
@@ -910,9 +911,64 @@ const vcRankCommand: Command = {
       });
     }
 
-    await interaction.editReply({ embeds: [embed] });
+    const beachRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(COMM_VC_RANK_BEACH_BTN)
+        .setLabel("🏖️ 砂浜に移動")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await interaction.editReply({ embeds: [embed], components: [beachRow] });
   },
 };
+
+// ─── /vcランク beach transfer handler ────────────────────────────────────────
+
+/** 砂浜VCへの自己転送ボタン */
+export async function handleVcRankBeachTransfer(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) {
+    await interaction.reply({ content: "❌ サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member) {
+    await interaction.reply({ content: "❌ メンバー情報を取得できませんでした。", ephemeral: true });
+    return;
+  }
+
+  // 現在VCに接続しているか確認
+  const voiceState = member.voice;
+  if (!voiceState.channelId) {
+    await interaction.reply({ content: "❌ 転送するにはVCに接続している必要があります。", ephemeral: true });
+    return;
+  }
+
+  // 「砂浜」を含むVCチャンネルを検索
+  await interaction.guild.channels.fetch().catch(() => {});
+  const beachChannel = interaction.guild.channels.cache.find(
+    (ch) =>
+      (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) &&
+      ch.name.includes("砂浜"),
+  );
+
+  if (!beachChannel) {
+    await interaction.reply({ content: "❌ 砂浜VCチャンネルが見つかりませんでした。", ephemeral: true });
+    return;
+  }
+
+  if (voiceState.channelId === beachChannel.id) {
+    await interaction.reply({ content: "🏖️ すでに砂浜VCにいます！", ephemeral: true });
+    return;
+  }
+
+  try {
+    await member.voice.setChannel(beachChannel.id);
+    await interaction.reply({ content: `✅ <#${beachChannel.id}> に移動しました！`, ephemeral: true });
+  } catch {
+    await interaction.reply({ content: "❌ 移動に失敗しました。Botにメンバーの移動権限があるか確認してください。", ephemeral: true });
+  }
+}
 
 // ─── /privacy ────────────────────────────────────────────────────────────────
 

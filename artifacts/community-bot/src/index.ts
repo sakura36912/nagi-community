@@ -650,6 +650,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await handleTicketOpen(interaction);
         return;
       }
+      if (id === COMM_VC_RANK_BEACH_BTN) {
+        await handleVcRankBeachTransfer(interaction);
+        return;
+      }
     }
   } catch (err) {
     logger.error("Error handling interaction", err);
