@@ -169,6 +169,12 @@ async function pickSymbolPool(
 
   // ── Emoji fixed mode ─────────────────────────────────────────────────────
   if (settings.fixedEmojiIds.length > 0) {
+    // キャッシュにない絵文字は個別に fetch してキャッシュを補完する
+    const uncachedIds = settings.fixedEmojiIds.filter((id) => !guild.emojis.cache.has(id));
+    if (uncachedIds.length > 0) {
+      await Promise.all(uncachedIds.map((id) => guild.emojis.fetch(id).catch(() => null)));
+    }
+
     const resolved = settings.fixedEmojiIds
       .map((id) => resolveEmoji(guild, id))
       .filter((s): s is Sym => s !== null);
