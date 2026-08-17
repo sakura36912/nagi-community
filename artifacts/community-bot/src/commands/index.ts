@@ -878,45 +878,9 @@ const vcRankCommand: Command = {
 
     const now = new Date();
 
-    // チャンネルをキャッシュに取得
-    await interaction.guild!.channels.fetch().catch(() => {});
-    const channels = interaction.guild!.channels.cache;
-
-    // ① 「酒場」を含むカテゴリー配下の全VCチャンネル
-    const tavernCategoryIds = new Set(
-      channels
-        .filter((ch) => ch.type === ChannelType.GuildCategory && ch.name.includes("酒場"))
-        .map((ch) => ch.id),
-    );
-    const tavernChannelIds = channels
-      .filter(
-        (ch) =>
-          (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) &&
-          ch.parentId != null && tavernCategoryIds.has(ch.parentId),
-      )
-      .map((ch) => ch.id);
-
-    // ② 「オチテモータ島」を含むカテゴリー配下の「砂浜」を含むVCチャンネルのみ
-    const ochiteCategoryIds = new Set(
-      channels
-        .filter((ch) => ch.type === ChannelType.GuildCategory && ch.name.includes("オチテモータ島"))
-        .map((ch) => ch.id),
-    );
-    const beachChannelIds = channels
-      .filter(
-        (ch) =>
-          (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) &&
-          ch.name.includes("砂浜") &&
-          ch.parentId != null && ochiteCategoryIds.has(ch.parentId),
-      )
-      .map((ch) => ch.id);
-
-    // ①＋②を合算（重複除去）
-    const targetChannelIds = [...new Set([...tavernChannelIds, ...beachChannelIds])];
-
     const [rank, cumulativeSeconds, activeSession] = await Promise.all([
       isExile ? Promise.resolve(null) : getUserVcRank(guildId, interaction.user.id, undefined),
-      getVcTimeByChannelIds(guildId, interaction.user.id, targetChannelIds),
+      getVcTimeInPeriod(guildId, interaction.user.id, new Date(0), now, isExile),
       getActiveSession(guildId, interaction.user.id),
     ]);
 
