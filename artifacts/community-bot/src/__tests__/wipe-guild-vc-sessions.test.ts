@@ -384,6 +384,46 @@ describe("/ranking reset – audit log embed", () => {
     expect(sendArg.embeds).toHaveLength(1);
   });
 
+  it("サーバー field shows the guild ID when guild.name is unavailable", async () => {
+    if (!rankingExecute) return;
+
+    const sendMock = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = makeAuditChannel({ send: sendMock });
+
+    // Guild has channels (so the audit channel can be resolved) but no name
+    // property — this forces interaction.guild?.name to be undefined so the
+    // fallback `?? guildId` must kick in.
+    const guildWithoutName = {
+      // name intentionally omitted → undefined
+      channels: {
+        cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        fetch: vi.fn().mockResolvedValue(null),
+      },
+    };
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-123" }]);
+
+    const interaction = makeResetInteraction({ confirm: true, guild: guildWithoutName });
+    await rankingExecute(interaction as never);
+
+    // The embed must have been sent
+    expect(sendMock).toHaveBeenCalledTimes(1);
+
+    // Locate the audit embed instance and inspect its addFields calls
+    const embedMockResults = (EmbedBuilder as unknown as ReturnType<typeof vi.fn>).mock.results;
+    const auditEmbedInstance = embedMockResults
+      .map((r) => r.value as { addFields: ReturnType<typeof vi.fn> })
+      .find((inst) => inst.addFields.mock.calls.length > 0);
+
+    expect(auditEmbedInstance).toBeDefined();
+
+    const allFields = auditEmbedInstance!.addFields.mock.calls.flat() as { name: string; value: string }[];
+    const serverField = allFields.find((f) => f.name === "サーバー");
+    expect(serverField).toBeDefined();
+    // Must be the raw guild ID string, not blank
+    expect(serverField!.value).toBe("guild-123");
+  });
+
   it("does not propagate a send error to the admin when the audit channel send fails", async () => {
     if (!rankingExecute) return;
 
