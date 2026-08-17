@@ -169,6 +169,24 @@ describe("setLeaveLogChannel", () => {
     expect(valuesArg.leaveLogChannelId).toBeNull();
   });
 
+  it("null reset: onConflictDoUpdate set does not include vcSessionRetentionDays", async () => {
+    await setLeaveLogChannel("guild-1", null);
+
+    const [conflictArg] = mocks.onConflictDoUpdate.mock.calls[0] as unknown as [
+      { set: Record<string, unknown> }
+    ];
+    expect(conflictArg.set).not.toHaveProperty("vcSessionRetentionDays");
+  });
+
+  it("null reset: onConflictDoUpdate set does not include period", async () => {
+    await setLeaveLogChannel("guild-1", null);
+
+    const [conflictArg] = mocks.onConflictDoUpdate.mock.calls[0] as unknown as [
+      { set: Record<string, unknown> }
+    ];
+    expect(conflictArg.set).not.toHaveProperty("period");
+  });
+
   // Round-trip: getter reads back what was written
   it("round-trip: getLeaveLogChannel returns the value written by setLeaveLogChannel", async () => {
     await setLeaveLogChannel("guild-rt", "channel-leave-rt");
