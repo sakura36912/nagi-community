@@ -424,6 +424,42 @@ describe("/ranking reset – audit log embed", () => {
     expect(serverField!.value).toBe("guild-123");
   });
 
+  it("sets the embed footer text to include the acting admin's user ID", async () => {
+    if (!rankingExecute) return;
+
+    const sendMock = vi.fn().mockResolvedValue(undefined);
+    const auditChannel = makeAuditChannel({ send: sendMock });
+
+    const guild = {
+      name: "Test Guild",
+      channels: {
+        cache: { get: vi.fn().mockReturnValue(auditChannel) },
+        fetch: vi.fn().mockResolvedValue(null),
+      },
+    };
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-123" }]);
+
+    const interaction = makeResetInteraction({ confirm: true, guild });
+    await rankingExecute(interaction as never);
+
+    // Locate the audit embed instance (the one whose addFields was called)
+    const embedMockResults = (EmbedBuilder as unknown as ReturnType<typeof vi.fn>).mock.results;
+    const auditEmbedInstance = embedMockResults
+      .map((r) => r.value as { addFields: ReturnType<typeof vi.fn>; setFooter: ReturnType<typeof vi.fn> })
+      .find((inst) => inst.addFields.mock.calls.length > 0);
+
+    expect(auditEmbedInstance).toBeDefined();
+
+    // setFooter must have been called at least once
+    expect(auditEmbedInstance!.setFooter).toHaveBeenCalled();
+
+    // The footer text must contain the acting admin's user ID
+    const footerArg = auditEmbedInstance!.setFooter.mock.calls[0]?.[0] as { text: string } | undefined;
+    expect(footerArg).toBeDefined();
+    expect(footerArg!.text).toContain("admin-user");
+  });
+
   it("does not propagate a send error to the admin when the audit channel send fails", async () => {
     if (!rankingExecute) return;
 
