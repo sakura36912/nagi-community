@@ -70,6 +70,7 @@ vi.mock("drizzle-orm", () => ({
 // ─── Import after mocks ───────────────────────────────────────────────────────
 import {
   handleRetentionCancel,
+  retentionConfirmExpiry,
   COMM_RETENTION_CANCEL_PREFIX,
 } from "../commands/index.js";
 
@@ -105,9 +106,20 @@ function makeInteraction(opts: {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+// Default nonce/guild used by makeInteraction when no overrides are provided.
+const DEFAULT_NONCE    = "test-nonce-abc";
+const DEFAULT_GUILD_ID = "guild-123";
+
 describe("handleRetentionCancel – permission gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Seed a valid, non-expired registry entry so admin-success paths can
+    // proceed past the guild-scope guard added in handleRetentionCancel.
+    retentionConfirmExpiry.set(DEFAULT_NONCE, {
+      guildId: DEFAULT_GUILD_ID,
+      days: 90,
+      expiry: Date.now() + 60_000,
+    });
   });
 
   it("replies with an ephemeral error and does NOT defer when the member lacks Administrator", async () => {

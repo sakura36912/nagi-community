@@ -1709,8 +1709,24 @@ export async function handleRetentionCancel(interaction: ButtonInteraction): Pro
     return;
   }
 
-  // Consume the nonce so the confirm button can no longer be used.
+  // Look up the nonce in the registry.  We must check guild scope before
+  // consuming it — an admin in guild B must NOT be able to cancel guild A's
+  // pending confirmation by presenting the nonce in a cancel button.
+  // A cross-guild mismatch is silently rejected WITHOUT removing the nonce so
+  // the legitimate guild-A admin can still confirm or cancel.
   const nonce = interaction.customId.slice(COMM_RETENTION_CANCEL_PREFIX.length);
+  const record = retentionConfirmExpiry.get(nonce);
+
+  if (!record || record.guildId !== interaction.guildId) {
+    await interaction.reply({
+      content: "⏱️ この確認の有効期限が切れています。コマンドを再実行してください。",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // The entry belongs to this guild — consume it so the confirm button is also
+  // invalidated, then acknowledge the cancellation.
   retentionConfirmExpiry.delete(nonce);
 
   await interaction.deferUpdate();

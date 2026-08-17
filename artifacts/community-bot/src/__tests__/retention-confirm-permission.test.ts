@@ -464,6 +464,75 @@ describe("handleRetentionConfirm – nonce never registered", () => {
   });
 });
 
+// ─── Cross-guild cancel tests ─────────────────────────────────────────────────
+
+describe("handleRetentionCancel – cross-guild nonce isolation", () => {
+  const NONCE   = "test-nonce-cancel-cross-guild";
+  const GUILD_A = "guild-aaa";
+  const GUILD_B = "guild-bbb";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Seed a valid, non-expired nonce that belongs to guild A.
+    retentionConfirmExpiry.set(NONCE, {
+      guildId: GUILD_A,
+      days: 90,
+      expiry: Date.now() + 60_000,
+    });
+  });
+
+  it("replies with an ephemeral error when guild B presents guild A's cancel nonce", async () => {
+    const interaction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionCancel(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+  });
+
+  it("ephemeral error content mentions the expiry notice (有効期限) for the cross-guild cancel", async () => {
+    const interaction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionCancel(interaction as never);
+
+    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    expect(replyArg.content).toMatch(/有効期限/);
+  });
+
+  it("does NOT consume the nonce when guild B attempts to cancel guild A's confirmation", async () => {
+    const interaction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionCancel(interaction as never);
+
+    // The nonce must survive so guild A's admin can still confirm or cancel.
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(true);
+  });
+
+  it("does NOT call deferUpdate or editReply on a cross-guild cancel attempt", async () => {
+    const interaction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionCancel(interaction as never);
+
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(interaction.editReply).not.toHaveBeenCalled();
+  });
+
+  it("guild A can still cancel successfully after guild B's cross-guild cancel is rejected", async () => {
+    // Step 1: guild B's attempt is rejected; nonce survives.
+    const guildBInteraction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_B });
+    await handleRetentionCancel(guildBInteraction as never);
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(true);
+
+    // Step 2: guild A's legitimate admin cancels — must succeed and consume the nonce.
+    const guildAInteraction = makeCancelInteraction({ isAdministrator: true, nonce: NONCE, guildId: GUILD_A });
+    await handleRetentionCancel(guildAInteraction as never);
+
+    expect(guildAInteraction.reply).not.toHaveBeenCalled();
+    expect(guildAInteraction.deferUpdate).toHaveBeenCalled();
+    expect(guildAInteraction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [] }),
+    );
+    expect(retentionConfirmExpiry.has(NONCE)).toBe(false);
+  });
+});
+
 // ─── Cancel-then-confirm cross-button invalidation tests ──────────────────────
 
 describe("handleRetentionCancel → handleRetentionConfirm cross-button invalidation", () => {
