@@ -27,7 +27,7 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MIN_BET = 10;
-const MAX_BET = 100_000;
+const MAX_BET = 10_000;
 const SYMBOL_COUNT = 4;
 const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
 
