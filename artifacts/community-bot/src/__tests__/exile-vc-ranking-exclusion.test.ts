@@ -446,3 +446,128 @@ describe("getVcRanking – empty channelIds [] returns no results without queryi
     expect(result[0]?.userId).toBe("user-c");
   });
 });
+
+// ─── getUserVcRank – channelIds values reach the database ────────────────────
+
+describe("getUserVcRank – channelIds values are interpolated into the SQL", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Fully render the sql argument passed to db.execute (call index 0 by default),
+   * descending into all nested sql / sql.join / sql.raw nodes so that values
+   * interpolated via ${...} in the template are included in the output.
+   */
+  function sqlFull(callIndex = 0): string {
+    const arg = mocks.execute.mock.calls[callIndex]?.[0];
+    return renderSqlFull(arg);
+  }
+
+  it("SQL contains 'chan-x' when channelIds = ['chan-x']", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-a", undefined, ["chan-x"]);
+
+    expect(sqlFull()).toContain("chan-x");
+  });
+
+  it("SQL contains both 'chan-x' and 'chan-y' when channelIds = ['chan-x', 'chan-y']", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-a", undefined, ["chan-x", "chan-y"]);
+
+    const rendered = sqlFull();
+    expect(rendered).toContain("chan-x");
+    expect(rendered).toContain("chan-y");
+  });
+
+  it("each channel ID is a bound sql parameter (sql`${id}`), not a raw literal", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-a", undefined, ["chan-x", "chan-y"]);
+
+    // channelFilter is built with sql.join — find that node anywhere in the
+    // nested mock-sql tree.  getUserVcRank is the only caller of sql.join in
+    // this query, so the first match is always the channel list.
+    function findJoinNode(
+      node: unknown,
+    ): { op: string; parts: unknown[] } | undefined {
+      if (typeof node !== "object" || node === null) return undefined;
+      const obj = node as Record<string, unknown>;
+      if (obj.op === "sql.join") return obj as { op: string; parts: unknown[] };
+      if (Array.isArray(obj.values)) {
+        for (const v of obj.values as unknown[]) {
+          const found = findJoinNode(v);
+          if (found) return found;
+        }
+      }
+      if (Array.isArray(obj.parts)) {
+        for (const p of obj.parts as unknown[]) {
+          const found = findJoinNode(p);
+          if (found) return found;
+        }
+      }
+      return undefined;
+    }
+
+    const root = mocks.execute.mock.calls[0]?.[0];
+    const joinNode = findJoinNode(root);
+    expect(joinNode?.op).toBe("sql.join");
+
+    // Each part must be an `sql` node (op: "sql") whose single bound value IS
+    // the channel ID string — not sql.raw (which would interpolate literally
+    // into the query string and bypass parameterization).
+    const parts = joinNode?.parts as Array<{
+      op: string;
+      strings: string[];
+      values: unknown[];
+    }>;
+    expect(parts).toHaveLength(2);
+
+    const [part0, part1] = parts;
+
+    // Part 0 → "chan-x" as a bound value
+    expect(part0?.op).toBe("sql");
+    expect(part0?.values).toHaveLength(1);
+    expect(part0?.values[0]).toBe("chan-x");
+
+    // Part 1 → "chan-y" as a bound value
+    expect(part1?.op).toBe("sql");
+    expect(part1?.values).toHaveLength(1);
+    expect(part1?.values[0]).toBe("chan-y");
+  });
+
+  it("SQL contains all three channel IDs when channelIds has three entries", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-a", undefined, ["ch-1", "ch-2", "ch-3"]);
+
+    const rendered = sqlFull();
+    expect(rendered).toContain("ch-1");
+    expect(rendered).toContain("ch-2");
+    expect(rendered).toContain("ch-3");
+  });
+
+  it("channel IDs still reach the DB even when periodStart is also supplied", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-a", new Date("2024-06-01T00:00:00Z"), ["chan-x", "chan-y"]);
+
+    const rendered = sqlFull();
+    expect(rendered).toContain("chan-x");
+    expect(rendered).toContain("chan-y");
+  });
+
+  it("SQL does not contain channel ID strings when channelIds is undefined", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [] });
+
+    await getUserVcRank(GUILD, "user-a", undefined, undefined);
+
+    // channelFilter is sql`` (empty) when channelIds is omitted,
+    // so no arbitrary channel ID strings appear in the rendered output.
+    const rendered = sqlFull();
+    expect(rendered).not.toContain("chan-x");
+    expect(rendered).not.toContain("chan-y");
+  });
+});

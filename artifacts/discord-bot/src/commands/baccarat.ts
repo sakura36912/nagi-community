@@ -50,7 +50,7 @@ const SUIT_KEY: Record<Suit, string> = {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MIN_BET = 10;
-const MAX_BET = 10_000;
+const MAX_BET = 100_000;
 
 const COLOR_WIN    = 0x57f287;
 const COLOR_LOSE   = 0xed4245;
