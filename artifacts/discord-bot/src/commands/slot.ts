@@ -180,10 +180,12 @@ async function pickSymbolPool(
       .filter((s): s is Sym => s !== null);
 
     if (resolved.length >= 2) {
+      // 固定絵文字モードは登録数をそのまま使う（上限カットなし）
+      // 2 未満のときだけデフォルト絵文字で補完
       const padded =
-        resolved.length < SYMBOL_COUNT
-          ? [...resolved, ...DEFAULT_SYMBOLS.slice(0, SYMBOL_COUNT - resolved.length)]
-          : resolved.slice(0, SYMBOL_COUNT);
+        resolved.length < 2
+          ? [...resolved, ...DEFAULT_SYMBOLS.slice(0, 2 - resolved.length)]
+          : resolved;
       return { symbols: padded, weights, meta };
     }
   }
