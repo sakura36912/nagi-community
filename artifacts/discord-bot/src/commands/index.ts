@@ -564,24 +564,19 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
     if (!result.ok) { await interaction.editReply(result.reason); return; }
-    try {
-      const member = memberForLicense;
-      const userRoleIds = [...member.roles.cache.keys()];
-      const config = await getShopLicenseForUser(interaction.guildId, userRoleIds);
-      if (!config) {
+    if (item.targetRoleId) {
+      try {
+        await memberForLicense.roles.add(item.targetRoleId);
+        tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
+        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${item.targetRoleId}> が付与されました。`)
+          .catch((err) => logger.error("[shop] editReply failed after role grant (shop-license)", err));
+      } catch {
         await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-        await interaction.editReply("❌ あなたの隊ロールに対応するショップ開業設定が見つかりません。購入を取り消し、返金しました。");
-        return;
+        await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
       }
-      await member.roles.add(config.licenseRoleId);
-      // Role granted — record sale and reply best-effort; don't refund on reply failure.
+    } else {
       tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
-      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`)
-        .catch((err) => logger.error("[shop] editReply failed after role grant (shop-license)", err));
-    } catch {
-      // Only reaches here when role assignment itself failed — safe to refund.
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！`);
     }
     return;
   }
@@ -798,24 +793,21 @@ async function applyShopPurchase(
         return;
       }
     }
-    const configs = await listShopLicenseConfigs(interaction.guildId);
-    const config = configs.find((c) => member.roles.cache.has(c.squadRoleId));
-    if (!config) {
-      await interaction.editReply("❌ このアイテムはあなたの隊に対応したショップ開業ロールが設定されていません。管理者に連絡してください。");
-      return;
-    }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
     if (!result.ok) { await interaction.editReply(result.reason); return; }
-    try {
-      await member.roles.add(config.licenseRoleId);
-      // Role granted — record sale and reply best-effort; don't refund on reply failure.
+    if (item.targetRoleId) {
+      try {
+        await member.roles.add(item.targetRoleId);
+        tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
+        await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${item.targetRoleId}> が付与されました。`)
+          .catch((err) => logger.error("[shop] editReply failed after role grant (shop-license/select)", err));
+      } catch {
+        await refundPurchase(interaction.guildId, interaction.user.id, result.item);
+        await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+      }
+    } else {
       tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
-      await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${config.licenseRoleId}> が付与されました。`)
-        .catch((err) => logger.error("[shop] editReply failed after role grant (shop-license/select)", err));
-    } catch {
-      // Only reaches here when role assignment itself failed — safe to refund.
-      await refundPurchase(interaction.guildId, interaction.user.id, result.item);
-      await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
+      await interaction.editReply(`✅ **${result.item.name}**を購入しました！`);
     }
     return;
   }
@@ -1341,14 +1333,7 @@ const shopCommand: Command = {
           opt.setName("category").setDescription("表示するショップカテゴリ").setRequired(true).addChoices(...CATEGORY_CHOICES),
         ),
     )
-    .addSubcommand((sub) =>
-      sub.setName("set-license").setDescription("個人ショップ開業券の隊ロール→ライセンスロール対応を設定します（管理者）")
-        .addRoleOption((opt) => opt.setName("squad_role").setDescription("隊ロール（本船員・隊員ロールなど）").setRequired(true))
-        .addRoleOption((opt) => opt.setName("license_role").setDescription("付与するショップ開業ロール").setRequired(true)),
-    )
-    .addSubcommand((sub) =>
-      sub.setName("list-licenses").setDescription("個人ショップ開業券の隊ロール対応一覧を表示します（管理者）"),
-    ),
+    ,
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
