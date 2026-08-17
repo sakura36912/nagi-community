@@ -33,6 +33,7 @@ import {
   getVcRanking,
   getVcTimeInPeriod,
   getVcTimeByChannelIds,
+  getVcTimeForTavernAndBeach,
   isVcTrackingOptedOut,
   listRoleButtonPanels,
   listUpcomingEvents,
@@ -878,57 +879,26 @@ const vcRankCommand: Command = {
 
     const now = new Date();
 
-    // チャンネルをキャッシュに取得
+    // 砂浜チャンネルIDをギルドキャッシュから取得（名前に「砂浜」を含むVC）
     await interaction.guild!.channels.fetch().catch(() => {});
-    const channels = interaction.guild!.channels.cache;
-
-    const TAVERN_HUB_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
-
-    // ① 酒場ハブチャンネル（「大酒場🍺」「小酒場🍺」）の parentId → カテゴリーID を逆引き
-    const tavernCategoryIds = new Set(
-      channels
-        .filter(
-          (ch) =>
-            (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) &&
-            TAVERN_HUB_NAMES.has(ch.name) &&
-            ch.parentId != null,
-        )
-        .map((ch) => ch.parentId!),
-    );
-    // そのカテゴリー配下の全VCチャンネル
-    const tavernChannelIds = channels
+    const beachChannelIds = interaction.guild!.channels.cache
       .filter(
         (ch) =>
           (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) &&
-          ch.parentId != null && tavernCategoryIds.has(ch.parentId),
+          ch.name.includes("砂浜"),
       )
       .map((ch) => ch.id);
-
-    // ② 砂浜ハブチャンネルの parentId → カテゴリーID を逆引きし、同カテゴリーの砂浜VCのみ
-    //    「砂浜」を名前に含むVCのうち、「オチテモータ島」に属するものを parentId で絞る
-    //    → まず「砂浜」VCを全取得し、その parentId を砂浜カテゴリーとして扱う
-    const beachVcChannels = channels.filter(
-      (ch) =>
-        (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) &&
-        ch.name.includes("砂浜"),
-    );
-    const beachCategoryIds = new Set(
-      beachVcChannels.filter((ch) => ch.parentId != null).map((ch) => ch.parentId!),
-    );
-    // 酒場カテゴリーと重複するカテゴリーを除外（砂浜は酒場とは別カテゴリーのみ）
-    const beachChannelIds = beachVcChannels
-      .filter(
-        (ch) => ch.parentId != null && !tavernCategoryIds.has(ch.parentId),
-      )
-      .map((ch) => ch.id);
-
-    // ①＋②を合算（重複除去）
-    const targetChannelIds = [...new Set([...tavernChannelIds, ...beachChannelIds])];
-    console.log(`[vcランク] tavernCatIds=${[...tavernCategoryIds].join(",")} tavernCh=${tavernChannelIds.length} beachCatIds=${[...beachCategoryIds].join(",")} beachCh=${beachChannelIds.length} total=${targetChannelIds.length}`);
 
     const [rank, cumulativeSeconds, activeSession] = await Promise.all([
       isExile ? Promise.resolve(null) : getUserVcRank(guildId, interaction.user.id, undefined),
-      getVcTimeByChannelIds(guildId, interaction.user.id, targetChannelIds),
+      // 酒場: community_tavern_channels.hub_name で DB 結合（削除済みチャンネルも含む）
+      // 砂浜: guild cache から取得した砂浜チャンネルID
+      getVcTimeForTavernAndBeach(
+        guildId,
+        interaction.user.id,
+        ["大酒場🍺", "小酒場🍺"],
+        beachChannelIds,
+      ),
       getActiveSession(guildId, interaction.user.id),
     ]);
 

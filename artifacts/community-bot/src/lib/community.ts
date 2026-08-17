@@ -798,6 +798,50 @@ export async function getVcTimeInPeriod(
 }
 
 /**
+ * 酒場ハブ名（hub_name）で登録された全チャンネルの累計VC時間 ＋
+ * 任意の追加チャンネルID（砂浜など）の時間を合算して返す。
+ * community_tavern_channels.hub_name を使うため、削除済みチャンネルも正しく集計できる。
+ */
+export async function getVcTimeForTavernAndBeach(
+  guildId: string,
+  userId: string,
+  tavernHubNames: string[],   // 例: ['大酒場🍺', '小酒場🍺']
+  extraChannelIds: string[],  // 例: 砂浜チャンネルIDの配列
+): Promise<number> {
+  const hubNameList = sql.join(tavernHubNames.map((n) => sql`${n}`), sql`, `);
+
+  // 酒場ハブチャンネル経由のVC時間（community_tavern_channels.hub_name で絞り込み）
+  const tavernRows = await db.execute<{ total_seconds: string }>(sql`
+    SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+      COALESCE(s.left_at, NOW()) - s.joined_at
+    ))))::bigint AS total_seconds
+    FROM community_vc_sessions s
+    JOIN community_tavern_channels ctc
+      ON ctc.guild_id = s.guild_id AND ctc.channel_id = s.channel_id
+    WHERE s.guild_id = ${guildId}
+      AND s.user_id = ${userId}
+      AND ctc.hub_name IN (${hubNameList})
+      AND s.is_privacy_closed = false
+      AND s.user_id NOT IN (
+        SELECT user_id FROM community_vc_privacy
+        WHERE guild_id = ${guildId} AND opted_out = true
+      )
+      AND s.user_id NOT IN (
+        SELECT user_id FROM community_vc_privacy_global
+        WHERE opted_out = true
+      )
+  `);
+  const tavernSeconds = Number(tavernRows.rows[0]?.total_seconds ?? 0);
+
+  // 追加チャンネル（砂浜など）のVC時間
+  const extraSeconds = extraChannelIds.length > 0
+    ? await getVcTimeByChannelIds(guildId, userId, extraChannelIds)
+    : 0;
+
+  return tavernSeconds + extraSeconds;
+}
+
+/**
  * 指定チャンネルIDに限定した累計VC時間を返す（全期間）。
  * プライバシーオプトアウトを考慮する。channelIds が空の場合は 0 を返す。
  */
