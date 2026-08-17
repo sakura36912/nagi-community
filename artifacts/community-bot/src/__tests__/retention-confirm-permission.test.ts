@@ -345,3 +345,49 @@ describe("handleRetentionConfirm – cross-guild nonce isolation", () => {
     expect(mocks.del).not.toHaveBeenCalled();
   });
 });
+
+// ─── Unregistered nonce tests ─────────────────────────────────────────────────
+
+describe("handleRetentionConfirm – nonce never registered", () => {
+  const UNREGISTERED_NONCE = "nonce-that-was-never-seeded";
+  const GUILD_ID = "guild-123";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Intentionally do NOT seed retentionConfirmExpiry with UNREGISTERED_NONCE.
+    // This simulates a replayed or fabricated customId whose nonce never existed.
+  });
+
+  it("replies with an ephemeral error when the nonce was never registered", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: UNREGISTERED_NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+  });
+
+  it("ephemeral error content contains the expiry notice (有効期限) for an unregistered nonce", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: UNREGISTERED_NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    const [[replyArg]] = interaction.reply.mock.calls as [[{ content: string; ephemeral: boolean }]];
+    expect(replyArg.content).toMatch(/有効期限/);
+  });
+
+  it("does NOT call deferUpdate or editReply when the nonce was never registered", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: UNREGISTERED_NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(interaction.editReply).not.toHaveBeenCalled();
+  });
+
+  it("does NOT write to the database when the nonce was never registered", async () => {
+    const interaction = makeInteraction({ isAdministrator: true, nonce: UNREGISTERED_NONCE, guildId: GUILD_ID });
+    await handleRetentionConfirm(interaction as never);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.del).not.toHaveBeenCalled();
+  });
+});
