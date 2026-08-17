@@ -484,4 +484,30 @@ describe("/ranking reset – audit log embed", () => {
     // The admin received the success reply despite the send failure
     expect(interaction.editReply).toHaveBeenCalled();
   });
+
+  it("skips the audit embed silently when channels.fetch rejects (e.g. Missing Permissions)", async () => {
+    if (!rankingExecute) return;
+
+    const guild = {
+      name: "Test Guild",
+      channels: {
+        // Cache miss: channel is not in cache
+        cache: { get: vi.fn().mockReturnValue(undefined) },
+        // fetch rejects instead of resolving null
+        fetch: vi.fn().mockRejectedValue(new Error("Missing Permissions")),
+      },
+    };
+
+    mocks.selectWhere.mockResolvedValueOnce([{ auditLogChannelId: "audit-ch-999" }]);
+
+    const interaction = makeResetInteraction({ confirm: true, guild });
+
+    // Must resolve without throwing despite the fetch rejection
+    await expect(rankingExecute(interaction as never)).resolves.toBeUndefined();
+
+    // The admin still receives the success reply
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.stringContaining("削除しました"),
+    );
+  });
 });
