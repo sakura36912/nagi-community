@@ -2859,6 +2859,49 @@ const debitCommand: Command = {
   },
 };
 
+const balanceRankingCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("残高ランキング")
+    .setDescription("全メンバーの残高をランキング表示します（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    await interaction.deferReply({ ephemeral: true });
+
+    const [wallets, settings] = await Promise.all([
+      getLeaderboard(guildId, undefined), // 全員取得
+      getGuildSettings(guildId),
+    ]);
+
+    if (wallets.length === 0) {
+      await interaction.editReply("まだ残高データがありません。");
+      return;
+    }
+
+    const lines = wallets.map(
+      (w, i) => `**${i + 1}位** <@${w.userId}> — ${w.balance.toLocaleString()}${settings.currencyName}`,
+    );
+
+    const header = `## 💰 残高ランキング（${wallets.length}人）`;
+    const chunks: string[] = [];
+    let current = header;
+    for (const line of lines) {
+      if (current.length + line.length + 1 > DISCORD_MESSAGE_LIMIT) {
+        chunks.push(current);
+        current = line;
+      } else {
+        current += `\n${line}`;
+      }
+    }
+    chunks.push(current);
+
+    await interaction.editReply({ content: chunks[0], allowedMentions: { parse: [] } });
+    for (const chunk of chunks.slice(1)) {
+      await interaction.followUp({ content: chunk, allowedMentions: { parse: [] }, ephemeral: true });
+    }
+  },
+};
+
 export const commands: Command[] = [
   interviewCommand,
   balanceCommand,
@@ -2891,4 +2934,5 @@ export const commands: Command[] = [
   clearCommand,
   chestCommand,
   debitCommand,
+  balanceRankingCommand,
 ];
