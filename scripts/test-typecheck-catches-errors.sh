@@ -96,6 +96,34 @@ if ! echo "$SELFTEST_OUT" | grep -qF "probe target not found"; then
 fi
 echo "[typecheck-guard] Self-test PASS: probe_file correctly rejected a non-existent target."
 
+# ── Step 2c: Self-test — probe_file must catch a file outside all tsconfigs ──
+# A file that EXISTS but is not covered by any tsconfig will be compiled by
+# `tsc` only if that tsconfig's include/exclude globs reach it.  If not
+# covered, the injected error is invisible and typecheck exits 0 — probe_file
+# must detect that and exit 1 with "typecheck passed despite a type error".
+echo "[typecheck-guard] Self-test: probe_file with an existing but uncovered file must exit 1 with 'typecheck passed despite a type error'..."
+UNCOVERED_FILE="/tmp/__uncovered_probe_target_guard_selftest_$$.ts"
+# Create the file so the existence check passes, then let probe_file inject the error.
+echo "// uncovered file — not in any tsconfig" > "$UNCOVERED_FILE"
+set +e
+UNCOVERED_OUT=$(probe_file "$UNCOVERED_FILE" 2>&1)
+UNCOVERED_EXIT=$?
+set -e
+# Always clean up even if probe_file left a backup alongside the original.
+rm -f "$UNCOVERED_FILE" "${UNCOVERED_FILE}.bak"
+
+if [ "$UNCOVERED_EXIT" -ne 1 ]; then
+  echo "[typecheck-guard] FAIL: self-test expected probe_file to exit 1 for an uncovered file, but got exit $UNCOVERED_EXIT" >&2
+  echo "$UNCOVERED_OUT" >&2
+  exit 1
+fi
+if ! echo "$UNCOVERED_OUT" | grep -qF "typecheck passed despite a type error"; then
+  echo "[typecheck-guard] FAIL: self-test did not find 'typecheck passed despite a type error' in probe_file output for uncovered file" >&2
+  echo "$UNCOVERED_OUT" >&2
+  exit 1
+fi
+echo "[typecheck-guard] Self-test PASS: probe_file correctly detected an uncovered-file blind spot."
+
 # ── Step 3: Probe each library ──────────────────────────────────────────────
 probe_file "lib/api-zod/src/index.ts"
 probe_file "lib/api-spec/orval.config.ts"
