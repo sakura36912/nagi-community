@@ -707,6 +707,13 @@ export async function getVcRanking(
   periodStart?: Date,
   channelIds?: string[],
 ): Promise<RankingEntry[]> {
+  // An explicitly empty channel list means "no channels to include" → no results.
+  // This is distinct from omitting channelIds (undefined), which falls through to
+  // the tavern-channels sub-query.
+  if (channelIds !== undefined && channelIds.length === 0) {
+    return [];
+  }
+
   const periodFilter = periodStart
     ? sql`AND COALESCE(${communityVcSessionsTable.leftAt}, NOW()) > ${periodStart}`
     : sql``;

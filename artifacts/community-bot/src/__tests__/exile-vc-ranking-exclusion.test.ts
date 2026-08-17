@@ -100,6 +100,39 @@ function sqlText(mock: ReturnType<typeof vi.fn>, callIndex = 0): string {
   return arg?.strings?.join("") ?? "";
 }
 
+/**
+ * Recursively flatten the entire nested sql-mock structure — including all
+ * interpolated `values` — into a single string.  Unlike `sqlText`, which only
+ * joins the outer template's string fragments, this helper descends into
+ * nested `sql` / `sql.join` / `sql.raw` nodes so that a value like
+ * `channelFilter` (which is interpolated as a `values` entry, not baked into
+ * the outer `strings`) is also rendered.  Use this when you need to assert
+ * the presence or absence of SQL that originates from an interpolated fragment.
+ */
+function renderSqlFull(node: unknown): string {
+  if (node === null || node === undefined) return "";
+  if (typeof node !== "object") return String(node);
+  const obj = node as Record<string, unknown>;
+  if (obj.op === "sql") {
+    const strings = obj.strings as string[];
+    const values = obj.values as unknown[];
+    let out = "";
+    for (let i = 0; i < strings.length; i++) {
+      out += strings[i];
+      if (i < values.length) out += renderSqlFull(values[i]);
+    }
+    return out;
+  }
+  if (obj.op === "sql.raw") return String(obj.v);
+  if (obj.op === "sql.join") {
+    const parts = obj.parts as unknown[];
+    const sep = renderSqlFull(obj.sep);
+    return parts.map(renderSqlFull).join(sep);
+  }
+  // Other drizzle-orm helpers (eq, and, …) are not SQL text — omit.
+  return "";
+}
+
 // ─── getVcRanking – exile exclusion ──────────────────────────────────────────
 
 describe("getVcRanking – exile session exclusion", () => {
@@ -364,5 +397,52 @@ describe("getUserVcRank – exile exclusion holds when channelIds filter is supp
     expect(query).toContain("community_vc_privacy_global");
     const notInMatches = query.match(/NOT IN/g) ?? [];
     expect(notInMatches.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ─── getVcRanking – empty channelIds [] returns no results immediately ─────────
+
+describe("getVcRanking – empty channelIds [] returns no results without querying the DB", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns empty array when channelIds is []", async () => {
+    // No mock needed — the early return fires before db.execute is ever called.
+    const result = await getVcRanking(GUILD, undefined, []);
+
+    expect(result).toEqual([]);
+  });
+
+  it("never calls db.execute when channelIds is []", async () => {
+    await getVcRanking(GUILD, undefined, []);
+
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it("returns empty array when channelIds is [] even with a periodStart supplied", async () => {
+    // No mock needed — the early return fires before db.execute is ever called.
+    const result = await getVcRanking(GUILD, new Date("2024-06-01T00:00:00Z"), []);
+
+    expect(result).toEqual([]);
+  });
+
+  it("never calls db.execute when channelIds is [] even with a periodStart supplied", async () => {
+    await getVcRanking(GUILD, new Date("2024-06-01T00:00:00Z"), []);
+
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it("still queries DB and returns results when channelIds is undefined (omitted)", async () => {
+    // Confirm the early return only fires for [], not for undefined.
+    mocks.execute.mockResolvedValueOnce({
+      rows: [{ user_id: "user-c", total_seconds: "1800", is_live: false }],
+    });
+
+    const result = await getVcRanking(GUILD);
+
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.userId).toBe("user-c");
   });
 });
