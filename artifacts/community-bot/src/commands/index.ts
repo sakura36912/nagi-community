@@ -32,6 +32,7 @@ import {
   getUserVcRank,
   getVcRanking,
   getVcTimeInPeriod,
+  getVcTimeByChannelIds,
   isVcTrackingOptedOut,
   listRoleButtonPanels,
   listUpcomingEvents,
@@ -877,9 +878,19 @@ const vcRankCommand: Command = {
 
     const now = new Date();
 
-    const [rank, seconds, activeSession] = await Promise.all([
+    // 酒場・砂浜チャンネルIDをギルドキャッシュから解決
+    await interaction.guild!.channels.fetch().catch(() => {});
+    const allVcChannels = interaction.guild!.channels.cache.filter(
+      (ch) => ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice,
+    );
+    const tavernChannelIds = allVcChannels.filter((ch) => ch.name.includes("酒場")).map((ch) => ch.id);
+    const beachChannelIds  = allVcChannels.filter((ch) => ch.name.includes("砂浜")).map((ch) => ch.id);
+
+    const [rank, seconds, tavernSeconds, beachSeconds, activeSession] = await Promise.all([
       isExile ? Promise.resolve(null) : getUserVcRank(guildId, interaction.user.id, undefined),
       getVcTimeInPeriod(guildId, interaction.user.id, new Date(0), now, isExile),
+      getVcTimeByChannelIds(guildId, interaction.user.id, tavernChannelIds),
+      getVcTimeByChannelIds(guildId, interaction.user.id, beachChannelIds),
       getActiveSession(guildId, interaction.user.id),
     ]);
 
@@ -899,6 +910,9 @@ const vcRankCommand: Command = {
       .addFields(
         { name: "順位", value: rankText, inline: true },
         { name: "累計滞在時間", value: timeText, inline: true },
+        { name: "\u200b", value: "\u200b", inline: true },
+        { name: "🍺 酒場", value: tavernChannelIds.length > 0 ? formatSeconds(tavernSeconds) : "—", inline: true },
+        { name: "🏖️ 砂浜", value: beachChannelIds.length  > 0 ? formatSeconds(beachSeconds)  : "—", inline: true },
       )
       .setTimestamp();
 

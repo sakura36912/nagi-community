@@ -798,6 +798,38 @@ export async function getVcTimeInPeriod(
 }
 
 /**
+ * 指定チャンネルIDに限定した累計VC時間を返す（全期間）。
+ * プライバシーオプトアウトを考慮する。channelIds が空の場合は 0 を返す。
+ */
+export async function getVcTimeByChannelIds(
+  guildId: string,
+  userId: string,
+  channelIds: string[],
+): Promise<number> {
+  if (channelIds.length === 0) return 0;
+  const idList = sql.join(channelIds.map((id) => sql`${id}`), sql`, `);
+  const rows = await db.execute<{ total_seconds: string }>(sql`
+    SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+      COALESCE(left_at, NOW()) - joined_at
+    ))))::bigint AS total_seconds
+    FROM community_vc_sessions
+    WHERE guild_id = ${guildId}
+      AND user_id = ${userId}
+      AND channel_id IN (${idList})
+      AND is_privacy_closed = false
+      AND user_id NOT IN (
+        SELECT user_id FROM community_vc_privacy
+        WHERE guild_id = ${guildId} AND opted_out = true
+      )
+      AND user_id NOT IN (
+        SELECT user_id FROM community_vc_privacy_global
+        WHERE opted_out = true
+      )
+  `);
+  return Number(rows.rows[0]?.total_seconds ?? 0);
+}
+
+/**
  * Returns the 1-based rank of a user for a given period, or null if they have no sessions.
  * periodStart = undefined means all time.
  * channelIds = optional list that restricts the ranking to sessions in those channels only
