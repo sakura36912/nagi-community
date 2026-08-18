@@ -2308,7 +2308,9 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
   await interaction.reply({ content: `✅ <@${targetId}> をキックしました。`, ephemeral: true });
   // Refresh the panel so the removed member disappears from the access list (best-effort).
   try {
-    const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
+    // permissionOverwrites.delete() のキャッシュ反映を待たず、kicked ユーザーを明示的に除外する
+    const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id)
+      .filter((id) => id !== targetId);
     const streamEnabledOnKick = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, ownerId);
     if ("messages" in ch) {
       const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
