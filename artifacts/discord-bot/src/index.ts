@@ -1370,10 +1370,14 @@ client.on(Events.MessageCreate, async (message) => {
     const sticky = await getStickyMessage(guildId, message.channelId).catch(() => null);
     if (!sticky) return;
 
-    // 直近100件のうちボット自身のスティッキーと同内容のものをまとめて削除
-    // （過去の重複投稿による孤立メッセージも一緒に消える）
+    // 1. DBに記録されたIDで直接削除（100件圏外でも確実に消える）
+    if (sticky.lastMessageId) {
+      await message.channel.messages.delete(sticky.lastMessageId).catch(() => null);
+    }
+
+    // 2. 直近50件も念のりスキャンして同内容の孤立スティッキーを除去
     try {
-      const recent = await message.channel.messages.fetch({ limit: 100 });
+      const recent = await message.channel.messages.fetch({ limit: 50 });
       const botStickies = recent.filter(
         (m) => m.author.bot && m.content === sticky.content,
       );
