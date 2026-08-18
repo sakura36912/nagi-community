@@ -55,18 +55,29 @@ const recentJoins = new Map<string, number>(); // `guildId:userId:channelId` →
  *
  * Deduplicates notifications within a 5-second window to suppress the
  * spurious duplicate events that Discord mobile clients emit on join.
+ *
+ * @param channelNameHint - Caller-supplied channel name (e.g. from
+ *   `newState.channel?.name`) that bypasses the guild-cache lookup.
+ *   Hub temp VCs are created dynamically and may not yet be in
+ *   `guild.channels.cache` when this function runs, so without the hint
+ *   the fallback `チャンネル(channelId)` produces a unique dedup key per
+ *   event and the window is bypassed.  Pass the name whenever the caller
+ *   has direct access to the VoiceState or Channel object.
  */
 export async function sendVcNotifyJoin(
   guild: VoiceState["guild"],
   userId: string,
   channelId: string,
   notifyChannelId: string,
+  channelNameHint?: string,
 ): Promise<void> {
   // Dedup: skip if we already sent a join for this user+channel recently.
   // Hub チャンネルは移動のたびに新しい channelId を持つ VC が作られるが、
   // テンプレート由来の表示名（例「大酒場🍺」）は共通のため、
-  // channelId ではなくチャンネル表示名でデdup する。
-  const channelName = getVcChannelName(guild, channelId);
+  // channelId ではなく表示名でキーを組む。
+  // channelNameHint を優先することで、guild キャッシュ未登録の Hub 動的
+  // VC でもフォールバック名「チャンネル(id)」で別キーになるのを防ぐ。
+  const channelName = channelNameHint ?? getVcChannelName(guild, channelId);
   const dedupKey = `${guild.id}:${userId}:${channelName}`;
   const lastSent = recentJoins.get(dedupKey);
   if (lastSent !== undefined && Date.now() - lastSent < JOIN_DEDUP_MS) return;
@@ -78,7 +89,8 @@ export async function sendVcNotifyJoin(
     const member = guild.members.cache.get(userId);
     const memberName = member?.displayName ?? `ユーザー(${userId})`;
     const memberIconUrl = member?.displayAvatarURL() ?? undefined;
-    const channelName = getVcChannelName(guild, channelId);
+    // 表示名も hint を優先（同じく未キャッシュ対策）
+    const channelName = channelNameHint ?? getVcChannelName(guild, channelId);
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
       .setAuthor({ name: memberName, iconURL: memberIconUrl })

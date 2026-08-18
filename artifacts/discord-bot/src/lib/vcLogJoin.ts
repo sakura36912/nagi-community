@@ -44,6 +44,9 @@ export async function handleVcLogJoin(
   guild: VoiceState["guild"],
   userId: string,
   newChannelId: string,
+  /** 呼び出し元が持つ VoiceState から取得したチャンネル名。
+   *  guild.channels.cache のミスを防ぎ dedup キーを安定させる。 */
+  channelNameHint?: string,
 ): Promise<void> {
   const logSettings = await getVcLogSettings(guild.id);
   const catId = getLogCategoryId(newChannelId, logSettings.categoryIds, guild);
@@ -51,6 +54,6 @@ export async function handleVcLogJoin(
   // 追跡カテゴリ内のチャンネルのみ通知。
   // 追跡外（Hub 待機チャンネル等）は通知しない → 移動後の実VCで handleVcLogMove が通知する。
   if (catId && logSettings.notifyChannelId) {
-    await sendVcNotifyJoin(guild, userId, newChannelId, logSettings.notifyChannelId);
+    await sendVcNotifyJoin(guild, userId, newChannelId, logSettings.notifyChannelId, channelNameHint);
   }
 }

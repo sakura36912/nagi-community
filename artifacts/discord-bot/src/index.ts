@@ -1055,7 +1055,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       (async () => {
         try {
           const isHub = await getHubByChannelId(newState.channelId!).catch(() => null);
-          if (!isHub) await handleVcLogJoin(guild, userId, newState.channelId!);
+          if (!isHub) await handleVcLogJoin(guild, userId, newState.channelId!, newState.channel?.name);
         } catch (err) {
           logger.error(`[vclog] handleVcLogJoin error for ${userId}`, err);
         }
@@ -1192,7 +1192,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           (channelId) => guild.channels.cache.get(channelId)?.parentId,
           {
             sendJoin: (uid, channelId, notifyChannelId) =>
-              sendVcNotifyJoin(guild, uid, channelId, notifyChannelId),
+              sendVcNotifyJoin(
+                guild, uid, channelId, notifyChannelId,
+                // Hub 動的 VC は guild.channels.cache に未登録のことがある。
+                // newState.channel?.name を直接渡してフォールバック名での
+                // dedup キー分散（→ 3件通知）を防ぐ。
+                channelId === newState.channelId ? (newState.channel?.name) : undefined,
+              ),
             sendLeave: (uid, channelId, notifyChannelId, joinedAt) =>
               sendVcNotifyLeave(guild, uid, channelId, notifyChannelId, joinedAt),
           },
