@@ -2,7 +2,8 @@
  * /casino — カジノ統計コマンド
  *
  * サブコマンド:
- *   stats [user] : カジノの勝敗履歴をゲーム別・合計で表示する
+ *   stats [user]   : カジノの勝敗履歴をゲーム別・合計で表示する
+ *   wallet         : サーバー内メンバーの保持通貨の中央値・平均値・最大値を表示する（管理者）
  */
 
 import {
@@ -10,7 +11,7 @@ import {
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { and, eq, or, sql } from "drizzle-orm";
-import { db, transactionsTable } from "@workspace/db";
+import { db, transactionsTable, walletsTable } from "@workspace/db";
 import {
   EmbedBuilder,
   MessageFlags,
@@ -254,6 +255,69 @@ async function handleStats(interaction: ChatInputCommandInteraction): Promise<vo
   await interaction.editReply({ embeds: [embed] });
 }
 
+// ─── /casino wallet ───────────────────────────────────────────────────────────
+
+async function handleWalletSummary(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ 管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const [settings, rows] = await Promise.all([
+    getGuildSettings(guildId),
+    db
+      .select({ balance: walletsTable.balance })
+      .from(walletsTable)
+      .where(eq(walletsTable.guildId, guildId)),
+  ]);
+
+  const balances = rows.map((r) => r.balance).filter((b) => b > 0);
+
+  if (balances.length === 0) {
+    await interaction.editReply({ content: "まだ通貨データがありません。" });
+    return;
+  }
+
+  balances.sort((a, b) => a - b);
+
+  const count = balances.length;
+  const total = balances.reduce((s, v) => s + v, 0);
+  const mean  = Math.round(total / count);
+  const max   = balances[count - 1]!;
+  const min   = balances[0]!;
+
+  // 中央値（奇数: 中央, 偶数: 中央2値の平均）
+  const mid    = Math.floor(count / 2);
+  const median = count % 2 === 1
+    ? balances[mid]!
+    : Math.round((balances[mid - 1]! + balances[mid]!) / 2);
+
+  const { currencyName } = settings;
+  const fmt = (n: number) => `**${n.toLocaleString()}** ${currencyName}`;
+
+  const embed = new EmbedBuilder()
+    .setTitle("💰 サーバー内通貨分布")
+    .setColor(COLOR_NEUTRAL)
+    .addFields(
+      { name: "対象人数",   value: `**${count.toLocaleString()}** 人`, inline: true },
+      { name: "合計",       value: fmt(total),                         inline: true },
+      { name: "\u200b",     value: "\u200b",                           inline: true },
+      { name: "平均値",     value: fmt(mean),                          inline: true },
+      { name: "中央値",     value: fmt(median),                        inline: true },
+      { name: "最大値",     value: fmt(max),                           inline: true },
+      { name: "最小値",     value: fmt(min),                           inline: true },
+    )
+    .setFooter({ text: "残高 0 のメンバーは除外しています" })
+    .setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
 // ─── Command export ───────────────────────────────────────────────────────────
 
 export const casinoCommand = {
@@ -271,6 +335,11 @@ export const casinoCommand = {
             .setDescription("確認したいユーザー（省略すると自分）")
             .setRequired(false),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("wallet")
+        .setDescription("【管理者】サーバー内メンバーの保持通貨の中央値・平均値・最大値を表示する"),
     )
     .addSubcommandGroup((group) =>
       group
@@ -293,7 +362,8 @@ export const casinoCommand = {
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const sub   = interaction.options.getSubcommand();
     const group = interaction.options.getSubcommandGroup(false);
-    if (sub === "stats") { await handleStats(interaction); return; }
+    if (sub === "stats")   { await handleStats(interaction);         return; }
+    if (sub === "wallet")  { await handleWalletSummary(interaction);  return; }
     if (group === "setup" && sub === "max_bet") await handleSetupMaxBet(interaction);
   },
 };
