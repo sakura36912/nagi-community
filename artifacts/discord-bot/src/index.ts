@@ -1357,10 +1357,20 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     const sticky = await getStickyMessage(message.guildId, message.channelId).catch(() => null);
     if (sticky) {
-      // Delete the previous sticky post
-      if (sticky.lastMessageId) {
-        await message.channel.messages.delete(sticky.lastMessageId).catch(() => null);
+      // 直近100件を取得し、ボット自身が送ったスティッキーと同内容のメッセージを全削除
+      // （修正前に作られた孤立スティッキーも含めてまとめて消す）
+      try {
+        const recent = await message.channel.messages.fetch({ limit: 100 });
+        const botStickies = recent.filter(
+          (m) => m.author.id === client.user?.id && m.content === sticky.content,
+        );
+        if (botStickies.size > 0) {
+          await Promise.allSettled(botStickies.map((m) => m.delete()));
+        }
+      } catch (err) {
+        logger.warn(`[sticky] Failed to bulk-delete old stickies in ${message.channelId}`, err);
       }
+
       // Re-post at the bottom
       try {
         const posted = await message.channel.send({ content: sticky.content, allowedMentions: { parse: [] } });
