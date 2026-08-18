@@ -72,7 +72,7 @@ import {
   handleHubStreamBtn,
   handleHubRenameModal,
 } from "./commands/vc";
-import { getHubSession, getHubChannelById } from "@workspace/db";
+import { getHubSession, getHubChannelById, getHubByChannelId } from "@workspace/db";
 import {
   getExpiredSchedules,
   getSchedulesExpiringSoon,
@@ -1050,9 +1050,16 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         }
       })(),
       // Session log tracking + join notification
-      handleVcLogJoin(guild, userId, newState.channelId!).catch((err) =>
-        logger.error(`[vclog] handleVcLogJoin error for ${userId}`, err),
-      ),
+      // Hub チャンネルは即座に別VCへ転送されるため VClog 通知をスキップする。
+      // 転送後の MOVE イベントで join 通知が1件送られる。
+      (async () => {
+        try {
+          const isHub = await getHubByChannelId(newState.channelId!).catch(() => null);
+          if (!isHub) await handleVcLogJoin(guild, userId, newState.channelId!);
+        } catch (err) {
+          logger.error(`[vclog] handleVcLogJoin error for ${userId}`, err);
+        }
+      })(),
       // Hub: メンバーが Hub チャンネルに参加した場合は新VCを作成して転送
       handleHubJoin(newState).catch((err) =>
         logger.error(`[vcHub] handleHubJoin error for ${userId}`, err),
@@ -1166,20 +1173,32 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           logger.error(`[points] VC move point tracking error for ${userId}`, err);
         }
       })(),
-      // Session log + move notification – category eligibility may have changed
-      handleVcLogMove(
-        guild.id,
-        userId,
-        oldState.channelId!,
-        newState.channelId!,
-        (channelId) => guild.channels.cache.get(channelId)?.parentId,
-        {
-          sendJoin: (uid, channelId, notifyChannelId) =>
-            sendVcNotifyJoin(guild, uid, channelId, notifyChannelId),
-          sendLeave: (uid, channelId, notifyChannelId, joinedAt) =>
-            sendVcNotifyLeave(guild, uid, channelId, notifyChannelId, joinedAt),
-        },
-      ).catch((err) => logger.error(`[vclog] channel-move log error for ${userId}`, err)),
+      // Session log + move notification – category eligibility may have changed.
+      // Hub チャンネル（通過チャンネル）は即座に別VCへ転送されるため、
+      // Hub 自体への join/leave 通知は二重通知を防ぐためスキップする。
+      (async () => {
+        const [oldHub, newHub] = await Promise.all([
+          getHubByChannelId(oldState.channelId!).catch(() => null),
+          getHubByChannelId(newState.channelId!).catch(() => null),
+        ]);
+        const hubIds = new Set<string>();
+        if (oldHub) hubIds.add(oldState.channelId!);
+        if (newHub) hubIds.add(newState.channelId!);
+        await handleVcLogMove(
+          guild.id,
+          userId,
+          oldState.channelId!,
+          newState.channelId!,
+          (channelId) => guild.channels.cache.get(channelId)?.parentId,
+          {
+            sendJoin: (uid, channelId, notifyChannelId) =>
+              sendVcNotifyJoin(guild, uid, channelId, notifyChannelId),
+            sendLeave: (uid, channelId, notifyChannelId, joinedAt) =>
+              sendVcNotifyLeave(guild, uid, channelId, notifyChannelId, joinedAt),
+          },
+          hubIds.size > 0 ? hubIds : undefined,
+        );
+      })().catch((err) => logger.error(`[vclog] channel-move log error for ${userId}`, err)),
       // Hub: 別VCから Hub に移動してきた場合 → 新VC作成＆転送
       handleHubJoin(newState).catch((err) =>
         logger.error(`[vcHub] handleHubJoin (move) error for ${userId}`, err),

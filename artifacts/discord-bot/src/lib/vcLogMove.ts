@@ -72,6 +72,13 @@ export async function handleVcLogMove(
   newChannelId: string,
   channelParentId: (channelId: string) => string | null | undefined,
   notify: VcLogMoveNotify,
+  /**
+   * Hub（通過チャンネル）として扱うチャンネル ID のセット。
+   * これらのチャンネルは通知対象から除外する（セッション記録は続ける）。
+   * Hub に入室した場合は即座に別VCへ転送されるため、join/leave を
+   * 通知しても意味がなく、むしろ二重通知の原因になる。
+   */
+  hubChannelIds?: ReadonlySet<string>,
 ): Promise<void> {
   const logSettings = await getVcLogSettings(guildId);
   const wasLogCat = getLogCategoryId(oldChannelId, logSettings.categoryIds, channelParentId);
@@ -80,7 +87,7 @@ export async function handleVcLogMove(
   if (wasLogCat && !nowLogCat) {
     // Moved out of a tracked category — settle the session and notify leave.
     const leaveResult = await recordVcLogLeave(guildId, userId);
-    if (logSettings.notifyChannelId) {
+    if (logSettings.notifyChannelId && !hubChannelIds?.has(oldChannelId)) {
       const joinedAt = leaveResult
         ? new Date(Date.now() - leaveResult.durationSeconds * 1000)
         : undefined;
@@ -89,13 +96,17 @@ export async function handleVcLogMove(
   } else if (!wasLogCat && nowLogCat) {
     // Moved into a tracked category — start a new session and notify join.
     await recordVcLogJoin(guildId, userId, newChannelId, nowLogCat);
-    if (logSettings.notifyChannelId) {
+    if (logSettings.notifyChannelId && !hubChannelIds?.has(newChannelId)) {
       await notify.sendJoin(userId, newChannelId, logSettings.notifyChannelId);
     }
   } else if (wasLogCat && nowLogCat && logSettings.notifyChannelId) {
     // Moved within tracked categories — session continues uninterrupted.
     const presence = await getVcLogPresence(guildId, userId);
-    await notify.sendLeave(userId, oldChannelId, logSettings.notifyChannelId, presence?.joinedAt);
-    await notify.sendJoin(userId, newChannelId, logSettings.notifyChannelId);
+    if (!hubChannelIds?.has(oldChannelId)) {
+      await notify.sendLeave(userId, oldChannelId, logSettings.notifyChannelId, presence?.joinedAt);
+    }
+    if (!hubChannelIds?.has(newChannelId)) {
+      await notify.sendJoin(userId, newChannelId, logSettings.notifyChannelId);
+    }
   }
 }
