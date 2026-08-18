@@ -1,0 +1,1 @@
+- [Sticky message dedup fix](sticky-dedup.md) — `message.author.bot` を使う。`client.user?.id` 比較は reconnect 時に null になりループが止まらない。
