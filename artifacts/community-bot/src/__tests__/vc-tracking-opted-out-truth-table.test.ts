@@ -220,4 +220,16 @@ describe("isVcTrackingOptedOut: all four global × per-guild flag combinations",
 
     expect(result).toBe(false);
   });
+
+  it("global row exists with optedOut=null, guild row exists with optedOut=null → returns false", async () => {
+    // A row exists in both stores but optedOut is null (e.g. from a partial insert
+    // or a schema migration default). The guard `=== true` must reject null, not
+    // treat it as truthy.
+    mocks.globalStore.set(USER, null as unknown as boolean);
+    mocks.guildStore.set(`${GUILD}:${USER}`, null as unknown as boolean);
+
+    const result = await isVcTrackingOptedOut(GUILD, USER);
+
+    expect(result).toBe(false);
+  });
 });
