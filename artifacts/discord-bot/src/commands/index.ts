@@ -2561,8 +2561,11 @@ export async function handleVcRefreshPanels(interaction: ChatInputCommandInterac
   );
 }
 
-/** 🚀 起動時に全ギルドの既存高級船室パネルを最新レイアウトに一括更新 */
-export async function refreshAllVcPanelsOnStartup(discordClient: import("discord.js").Client): Promise<void> {
+/**
+ * 🔄 全ギルドの既存高級船室パネルをメンバーリスト・期限・ボタン含めて一括更新。
+ * 起動時・定期スケジューラ両方から呼ばれる。
+ */
+export async function refreshAllVcPanels(discordClient: import("discord.js").Client): Promise<void> {
   let updated = 0;
   let skipped = 0;
   for (const guild of discordClient.guilds.cache.values()) {
