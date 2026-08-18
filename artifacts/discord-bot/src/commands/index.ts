@@ -2540,11 +2540,16 @@ export async function handleVcRefreshPanels(interaction: ChatInputCommandInterac
         ?? await interaction.guild.channels.fetch(session.channelId).catch(() => null);
       if (!ch || !("messages" in ch)) { skipped++; continue; }
       const textCh = ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel;
-      const msgs = await textCh.messages.fetch({ limit: 50 });
-      const panelMsg = msgs.find(
-        (m) => m.author.id === interaction.client.user?.id
-          && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
-      );
+      const botId = interaction.client.user?.id;
+      // 旧タイトル「非公開VC コントロールパネル」も含めてマッチ（移行後に新タイトルへ上書き）
+      const isPanel = (m: import("discord.js").Message) =>
+        m.author.id === botId && (
+          m.embeds[0]?.title === "🔒 高級船室 コントロールパネル" ||
+          m.embeds[0]?.title === "🔒 非公開VC コントロールパネル"
+        );
+      const oldMsgs = await textCh.messages.fetch({ limit: 10, after: "0" });
+      const recentMsgs = await textCh.messages.fetch({ limit: 50 });
+      const panelMsg = oldMsgs.find(isPanel) ?? recentMsgs.find(isPanel);
       if (!panelMsg) { skipped++; continue; }
       const memberIds = getVcAccessMemberIds(textCh, session.userId, interaction.client.user?.id);
       const streamEnabled = isPrivateVcStreamEnabled(textCh, session.userId);
@@ -2577,26 +2582,33 @@ export async function refreshAllVcPanels(discordClient: import("discord.js").Cli
             ?? await guild.channels.fetch(session.channelId).catch(() => null);
           if (!ch || !("messages" in ch)) { skipped++; continue; }
           const textCh = ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel;
-          const msgs = await textCh.messages.fetch({ limit: 50 });
-          const panelMsg = msgs.find(
-            (m) => m.author.id === discordClient.user?.id
-              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
-          );
+          const botId = discordClient.user?.id;
+          // 旧タイトル「非公開VC コントロールパネル」も含めてマッチ（移行後に新タイトルへ上書き）
+          const isPanel = (m: import("discord.js").Message) =>
+            m.author.id === botId && (
+              m.embeds[0]?.title === "🔒 高級船室 コントロールパネル" ||
+              m.embeds[0]?.title === "🔒 非公開VC コントロールパネル"
+            );
+          // パネルは通常チャンネル作成直後（最古付近）に投稿される。
+          // 再投稿されて中間〜末尾にある場合も拾えるよう2パスで検索する。
+          const oldMsgs = await textCh.messages.fetch({ limit: 10, after: "0" });
+          const recentMsgs = await textCh.messages.fetch({ limit: 50 });
+          const panelMsg = oldMsgs.find(isPanel) ?? recentMsgs.find(isPanel);
           if (!panelMsg) { skipped++; continue; }
           const memberIds = getVcAccessMemberIds(textCh, session.userId, discordClient.user?.id);
           const streamEnabled = isPrivateVcStreamEnabled(textCh, session.userId);
           await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt ?? undefined, memberIds, streamEnabled));
           updated++;
         } catch (err) {
-          logger.warn(`[vc-startup-refresh] Failed to refresh panel for channel ${session.channelId}`, err);
+          logger.warn(`[vc-panel-refresh] Failed to refresh panel for channel ${session.channelId}`, err);
           skipped++;
         }
       }
     } catch (err) {
-      logger.warn(`[vc-startup-refresh] Failed to get sessions for guild ${guild.id}`, err);
+      logger.warn(`[vc-panel-refresh] Failed to get sessions for guild ${guild.id}`, err);
     }
   }
-  logger.info(`[vc-startup-refresh] 完了: 更新 ${updated} 件 / スキップ ${skipped} 件`);
+  logger.info(`[vc-panel-refresh] 完了: 更新 ${updated} 件 / スキップ ${skipped} 件`);
 }
 
 /** 📺 画面共有トグル（高級船室） */
