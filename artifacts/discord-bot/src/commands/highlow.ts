@@ -422,12 +422,13 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     const won                  = !isDraw && (action === "high" ? nextValue > currentValue : nextValue < currentValue);
 
     if (isDraw) {
-      // 引き分け → ベット返却してゲーム終了
-      activeGames.delete(key);
-      await creditAmount(guildId, user.id, game.originalBet);
-      await recordTransaction(guildId, user.id, 0, `ハイアンドロー引き分け（賭け: ${game.originalBet}）`).catch(() => {});
+      // 引き分け → カードを更新してゲーム続行
       const { embeds, files } = await buildResultEmbed(game, nextCard, "draw");
-      await interaction.editReply({ content: "", embeds, files, components: [] });
+      game.currentCard = nextCard;
+      game.deck        = newDeck;
+      game.processing  = false;
+      activeGames.set(key, game);
+      await interaction.editReply({ content: "", embeds, files, components: [buildGuessButtons()] });
       return;
     }
 
