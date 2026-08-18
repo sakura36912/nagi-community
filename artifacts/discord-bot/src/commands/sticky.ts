@@ -12,6 +12,7 @@ import {
   removeStickyMessage,
   setStickyMessage,
 } from "../lib/sticky";
+import { stickyProcessingChannels } from "../lib/stickyLock";
 
 export const stickyCommand = {
   data: new SlashCommandBuilder()
@@ -80,24 +81,52 @@ export const stickyCommand = {
       const textChannel = interaction.guild.channels.cache.get(channel.id)
         ?? await interaction.guild.channels.fetch(channel.id).catch(() => null);
 
-      // Grab the existing sticky before overwriting so we can delete the old post
-      const existing = await getStickyMessage(guildId, channel.id);
-      if (existing?.lastMessageId && textChannel?.isTextBased()) {
-        await textChannel.messages.delete(existing.lastMessageId).catch(() => null);
+      // ロックを取得して MessageCreate ハンドラとの競合を防ぐ
+      // （古いスティッキー削除→DB更新→新スティッキー投稿→ID更新 の間に
+      //  ユーザーメッセージが割り込んで孤立スティッキーを作るのを防止）
+      const channelKey = `${guildId}:${channel.id}`;
+      // 他の処理がロックを持っている場合は最大2秒待つ
+      const deadline = Date.now() + 2000;
+      while (stickyProcessingChannels.has(channelKey) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
       }
+      stickyProcessingChannels.add(channelKey);
 
-      // Save to DB (resets lastMessageId to null)
-      await setStickyMessage(guildId, channel.id, content);
-
-      // Post the new sticky at the bottom and record its ID
-      if (textChannel?.isTextBased()) {
-        try {
-          const { updateStickyLastMessageId } = await import("../lib/sticky");
-          const msg = await textChannel.send({ content, allowedMentions: { parse: [] } });
-          await updateStickyLastMessageId(guildId, channel.id, msg.id);
-        } catch (err) {
-          logger.warn(`[sticky] Failed to post initial sticky in ${channel.id}`, err);
+      try {
+        // Grab the existing sticky before overwriting so we can delete the old post
+        const existing = await getStickyMessage(guildId, channel.id);
+        if (existing?.lastMessageId && textChannel?.isTextBased()) {
+          await textChannel.messages.delete(existing.lastMessageId).catch(() => null);
         }
+
+        // 直近50件も念のりスキャンして孤立スティッキーを除去
+        if (textChannel?.isTextBased()) {
+          try {
+            const recent = await textChannel.messages.fetch({ limit: 50 });
+            const orphans = recent.filter(
+              (m) => m.author.bot && (m.content === existing?.content || m.content === content),
+            );
+            if (orphans.size > 0) {
+              await Promise.allSettled(orphans.map((m) => m.delete()));
+            }
+          } catch { /* non-fatal */ }
+        }
+
+        // Save to DB (resets lastMessageId to null)
+        await setStickyMessage(guildId, channel.id, content);
+
+        // Post the new sticky at the bottom and record its ID
+        if (textChannel?.isTextBased()) {
+          try {
+            const { updateStickyLastMessageId } = await import("../lib/sticky");
+            const msg = await textChannel.send({ content, allowedMentions: { parse: [] } });
+            await updateStickyLastMessageId(guildId, channel.id, msg.id);
+          } catch (err) {
+            logger.warn(`[sticky] Failed to post initial sticky in ${channel.id}`, err);
+          }
+        }
+      } finally {
+        stickyProcessingChannels.delete(channelKey);
       }
 
       await interaction.editReply(

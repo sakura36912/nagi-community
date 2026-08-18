@@ -84,6 +84,7 @@ import {
 } from "./lib/vc";
 import { buildSheetEmbed, buildSheetThreadName, findSelfIntro } from "./lib/sheet";
 import { getStickyMessage, updateStickyLastMessageId } from "./lib/sticky";
+import { stickyProcessingChannels } from "./lib/stickyLock";
 import { getShiftSettings, getShiftCountsByUser } from "./lib/shift";
 import { handleChannelDelete } from "./lib/handleChannelDelete";
 import { runStartupChannelValidation, validateGuildConfiguredChannels } from "./lib/validateConfiguredChannels";
@@ -1359,8 +1360,6 @@ const INITIAL_ISSUE_CHANNEL_ID = "1526673304327291050";
 // チャンネルごとのロックで同時実行を防ぐ。
 // ※ デバウンス方式は「タイマー削除後に非同期処理が続く間に新規タイマーが
 //    並走して2件投稿される」レースコンディションがあるため採用しない。
-const stickyProcessingChannels = new Set<string>();
-
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return; // ボット投稿（自分自身を含む）は無視
   if (!message.guildId) return;
