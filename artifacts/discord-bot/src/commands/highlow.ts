@@ -503,7 +503,7 @@ export const highlowCommand = {
         .addIntegerOption((opt) =>
           opt
             .setName("bet")
-            .setDescription(`賭け金（最低 ${MIN_BET}）`)
+            .setDescription(`賭け金（最低 ${MIN_BET.toLocaleString()}）`)
             .setRequired(true)
             .setMinValue(MIN_BET),
         ),
