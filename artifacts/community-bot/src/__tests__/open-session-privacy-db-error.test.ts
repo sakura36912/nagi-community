@@ -104,6 +104,12 @@ vi.mock("@workspace/db", () => ({
   communityRoleButtonsTable:         mocks.tables.roleButtons,
 }));
 
+// ─── Mock logger ──────────────────────────────────────────────────────────────
+const loggerMocks = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }));
+vi.mock("../lib/logger.js", () => ({
+  logger: loggerMocks,
+}));
+
 // ─── Mock drizzle-orm ─────────────────────────────────────────────────────────
 vi.mock("drizzle-orm", () => ({
   and: (...args: unknown[]) => ({ op: "and", args }),
@@ -132,6 +138,72 @@ const USER    = "user-001";
 const CHANNEL = "channel-001";
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe("openSession – privacy DB error logged for observability", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls logger.warn exactly once when the privacy table query rejects", async () => {
+    mocks.reset({ global: "resolve-empty", privacy: "reject" });
+
+    await openSession(GUILD, USER, CHANNEL);
+
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes guildId in the logger.warn payload", async () => {
+    mocks.reset({ global: "resolve-empty", privacy: "reject" });
+
+    await openSession(GUILD, USER, CHANNEL);
+
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ guildId: GUILD }),
+    );
+  });
+
+  it("includes userId in the logger.warn payload", async () => {
+    mocks.reset({ global: "resolve-empty", privacy: "reject" });
+
+    await openSession(GUILD, USER, CHANNEL);
+
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ userId: USER }),
+    );
+  });
+
+  it("includes the original error object in the logger.warn payload", async () => {
+    mocks.reset({ global: "resolve-empty", privacy: "reject" });
+
+    await openSession(GUILD, USER, CHANNEL);
+
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ err: mocks.dbError }),
+    );
+  });
+
+  it("calls logger.warn exactly once when the global privacy table query rejects", async () => {
+    mocks.reset({ global: "reject", privacy: "resolve-empty" });
+
+    await openSession(GUILD, USER, CHANNEL);
+
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes guildId, userId, and err when the global table rejects", async () => {
+    mocks.reset({ global: "reject", privacy: "resolve-empty" });
+
+    await openSession(GUILD, USER, CHANNEL);
+
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ guildId: GUILD, userId: USER, err: mocks.dbError }),
+    );
+  });
+});
 
 describe("openSession – privacy table DB error (fail-closed)", () => {
   beforeEach(() => {
