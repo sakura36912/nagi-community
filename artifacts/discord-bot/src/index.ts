@@ -376,6 +376,11 @@ const SHEET_VC_REFRESH_INTERVAL_MS = 60 * 1000; // 1 minute
 // キー: `${guildId}:${userId}`  値: そのメンバーが直前に持っていたロール ID の Set
 const memberRoleSnapshots = new Map<string, Set<string>>();
 
+// 評価シート作成の二重発火を防ぐための処理中ロック
+// Discord が GuildMemberUpdate を短時間に複数回発火することがあり、
+// 両イベントが同時にスナップショットを読むとレースコンディションになる。
+const sheetCreationLocks = new Set<string>();
+
 async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
   const now = Date.now();
   if (now - lastSheetVcRefresh < SHEET_VC_REFRESH_INTERVAL_MS) return;
@@ -1168,6 +1173,16 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
   if (addedRoleIds.length === 0) return;
 
+  // 同一ユーザーの二重処理をロックで防ぐ
+  const lockKey = `${guildId}:${newMember.id}`;
+  if (sheetCreationLocks.has(lockKey)) {
+    logger.warn(`[sheet] Skipping duplicate GuildMemberUpdate for user=${newMember.id} guild=${guildId} (already processing)`);
+    return;
+  }
+  sheetCreationLocks.add(lockKey);
+
+  try {
+
   // ── 複数フォーラム × ロール マッピングで一致するものをすべて処理 ─────────
   let matchedConfigs: Awaited<ReturnType<typeof getEvalSheetConfigsForRoles>> = [];
   try {
@@ -1232,6 +1247,10 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     } catch (err) {
       logger.error(`[sheet] Failed to create forum thread for user ${newMember.id} role=${cfg.roleId}`, err);
     }
+  }
+
+  } finally {
+    sheetCreationLocks.delete(lockKey);
   }
 });
 
