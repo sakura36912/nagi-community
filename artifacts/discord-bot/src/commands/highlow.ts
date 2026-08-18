@@ -234,16 +234,19 @@ async function buildResultEmbed(
   const cardImage = await buildStripFromCards([game.currentCard, nextCard], game.cardBuffers, "result.png");
 
   if (result === "win") {
-    const newWin = Math.floor(game.currentWin * PAYOUT_MULTIPLIER);
+    const newWin   = Math.floor(game.currentWin * PAYOUT_MULTIPLIER);
+    const netDelta = newWin - game.originalBet;
+    const sign     = netDelta >= 0 ? "+" : "";
     const embed  = new EmbedBuilder()
       .setTitle("🃏 ハイアンドロー — ✅ 正解！")
       .setColor(COLOR_WIN)
       .addFields(
-        { name: "前のカード", value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
-        { name: "次のカード", value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
-        { name: "\u200B",     value: "\u200B", inline: true },
-        { name: "連続正解",   value: `**${game.streak + 1}** 回`, inline: true },
-        { name: "受け取り予定", value: `**${newWin.toLocaleString()}** ${game.currencyName}`, inline: true },
+        { name: "前のカード",     value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
+        { name: "次のカード",     value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
+        { name: "\u200B",         value: "\u200B", inline: true },
+        { name: "連続正解",       value: `**${game.streak + 1}** 回`, inline: true },
+        { name: "受け取り予定",   value: `**${newWin.toLocaleString()}** ${game.currencyName}`, inline: true },
+        { name: "収支（予定）",   value: `${sign}**${netDelta.toLocaleString()}** ${game.currencyName}`, inline: true },
       )
       .setFooter({ text: "受け取るか、続けるかを選んでください" });
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
@@ -257,6 +260,7 @@ async function buildResultEmbed(
         { name: "次のカード", value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
         { name: "\u200B",     value: "\u200B", inline: true },
         { name: "返却",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
+        { name: "収支",       value: `**±0** ${game.currencyName}`, inline: true },
       );
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
     return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
