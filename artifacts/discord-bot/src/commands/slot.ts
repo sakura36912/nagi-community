@@ -36,6 +36,21 @@ const SYMBOL_COUNT = 4;
 const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
 
 export const SLOT_REPLAY_PREFIX = "slot:replay:";
+export const SLOT_QUIT_PREFIX   = "slot:quit:";
+
+// ─── Session tracking ─────────────────────────────────────────────────────────
+
+interface SlotSession {
+  totalDelta: number;
+  games: number;
+  currencyName: string;
+}
+
+const activeSessions = new Map<string, SlotSession>();
+
+function sessionKey(guildId: string, userId: string): string {
+  return `${guildId}:${userId}`;
+}
 
 // ─── Paylines: 3 horizontal rows + 2 diagonals ───────────────────────────────
 
@@ -385,16 +400,36 @@ function buildSetupEmbed(
     .setFooter({ text: "weight: 出現重み（高いほど出やすい）| bet × multiplier が利益" });
 }
 
-// ─── Play-again button ────────────────────────────────────────────────────────
+// ─── Button rows & session summary ───────────────────────────────────────────
 
-function buildPlayAgainRow(userId: string, bet: number): ActionRowBuilder<ButtonBuilder> {
+function buildActionRow(userId: string, bet: number): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${SLOT_REPLAY_PREFIX}${userId}:${bet}`)
       .setLabel("もう一度")
       .setEmoji("🎰")
       .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`${SLOT_QUIT_PREFIX}${userId}:${bet}`)
+      .setLabel("終了")
+      .setStyle(ButtonStyle.Secondary),
   );
+}
+
+function buildSessionSummaryEmbed(
+  totalDelta: number,
+  games: number,
+  currencyName: string,
+): EmbedBuilder {
+  const sign  = totalDelta >= 0 ? "+" : "";
+  const color = totalDelta > 0 ? 0x57f287 : totalDelta < 0 ? 0xed4245 : 0x99aab5;
+  return new EmbedBuilder()
+    .setTitle("🎰 スロット — セッション終了")
+    .setDescription(
+      `合計収支: **${sign}${totalDelta.toLocaleString()} ${currencyName}**\n` +
+      `プレイ回数: ${games} 回`,
+    )
+    .setColor(color);
 }
 
 // ─── Shared spin core ─────────────────────────────────────────────────────────
@@ -402,7 +437,7 @@ function buildPlayAgainRow(userId: string, bet: number): ActionRowBuilder<Button
 /**
  * ベット控除 → スピン → 結果表示。
  * スラッシュコマンドとボタンリプレイの両方から呼ばれる。
- * 呼び出し元が reply / deferUpdate を済ませた後に呼ぶこと。
+ * 呼び出し元が reply / update を済ませた後に呼ぶこと。
  */
 async function spinAndReply(
   interaction: ChatInputCommandInteraction | ButtonInteraction,
@@ -411,6 +446,7 @@ async function spinAndReply(
   const { guildId } = interaction;
   if (!guildId || !interaction.guild) return;
   const userId = interaction.user.id;
+  const key = sessionKey(guildId, userId);
 
   const [, { currencyName }, slotSettings] = await Promise.all([
     getOrCreateWallet(guildId, userId),
@@ -418,18 +454,26 @@ async function spinAndReply(
     getSlotSettings(guildId),
   ]);
 
+  // セッションがなければ新規作成（スラッシュコマンド初回）
+  if (!activeSessions.has(key)) {
+    activeSessions.set(key, { totalDelta: 0, games: 0, currencyName });
+  }
+
   const afterDeduct = await deductBet(guildId, userId, bet);
   if (!afterDeduct) {
-    await interaction.editReply({
-      content: "",
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🎰 スロット 3×3")
-          .setDescription("❌ 残高が不足しています。")
-          .setColor(0xed4245),
-      ],
-      components: [],
-    });
+    // 残高不足 → セッション終了してサマリー表示
+    const session = activeSessions.get(key);
+    activeSessions.delete(key);
+    const embeds: EmbedBuilder[] = [
+      new EmbedBuilder()
+        .setTitle("🎰 スロット 3×3")
+        .setDescription("❌ 残高が不足しています。")
+        .setColor(0xed4245),
+    ];
+    if (session && session.games > 0) {
+      embeds.push(buildSessionSummaryEmbed(session.totalDelta, session.games, session.currencyName));
+    }
+    await interaction.editReply({ content: "", embeds, components: [] });
     return;
   }
 
@@ -457,11 +501,16 @@ async function spinAndReply(
     );
   }
 
+  // セッション累計を更新
+  const session = activeSessions.get(key)!;
+  session.totalDelta += netDelta;
+  session.games += 1;
+
   const { content, embed } = buildResult(grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta);
   await interaction.editReply({
     content,
     embeds: [embed],
-    components: [buildPlayAgainRow(userId, bet)],
+    components: [buildActionRow(userId, bet)],
   });
 }
 
@@ -471,33 +520,40 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const bet = interaction.options.getInteger("bet", true);
   const { guildId } = interaction;
   if (!guildId) return;
+  const userId = interaction.user.id;
 
   const { currencyName } = await getGuildSettings(guildId);
+
+  // セッションをリセット（新規プレイ）
+  activeSessions.set(sessionKey(guildId, userId), { totalDelta: 0, games: 0, currencyName });
+
   await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
   await new Promise((res) => setTimeout(res, 1300));
   await spinAndReply(interaction, bet);
 }
 
-// ─── Button handler (replay) ──────────────────────────────────────────────────
+// ─── Button handlers ──────────────────────────────────────────────────────────
 
-export async function handleSlotPlayAgainBtn(interaction: ButtonInteraction): Promise<void> {
-  const payload = interaction.customId.slice(SLOT_REPLAY_PREFIX.length);
+function parseSlotButtonPayload(customId: string, prefix: string): { ownerId: string; bet: number } | null {
+  const payload = customId.slice(prefix.length);
   const colonIdx = payload.indexOf(":");
-  if (colonIdx === -1) { await interaction.deferUpdate(); return; }
-
+  if (colonIdx === -1) return null;
   const ownerId = payload.slice(0, colonIdx);
   const bet = Number(payload.slice(colonIdx + 1));
+  if (!Number.isFinite(bet)) return null;
+  return { ownerId, bet };
+}
 
-  // 本人以外は無視
+export async function handleSlotPlayAgainBtn(interaction: ButtonInteraction): Promise<void> {
+  const parsed = parseSlotButtonPayload(interaction.customId, SLOT_REPLAY_PREFIX);
+  if (!parsed) { await interaction.deferUpdate(); return; }
+  const { ownerId, bet } = parsed;
+
   if (interaction.user.id !== ownerId) {
     await interaction.reply({ content: "❌ このボタンはコマンドを実行した本人のみ使用できます。", flags: MessageFlags.Ephemeral });
     return;
   }
-
-  if (!Number.isFinite(bet) || bet < MIN_BET || bet > MAX_BET) {
-    await interaction.deferUpdate();
-    return;
-  }
+  if (bet < MIN_BET || bet > MAX_BET) { await interaction.deferUpdate(); return; }
 
   const { guildId } = interaction;
   if (!guildId) { await interaction.deferUpdate(); return; }
@@ -506,6 +562,35 @@ export async function handleSlotPlayAgainBtn(interaction: ButtonInteraction): Pr
   await interaction.update({ embeds: [buildSpinningEmbed(bet, currencyName)], components: [], content: "" });
   await new Promise((res) => setTimeout(res, 1300));
   await spinAndReply(interaction, bet);
+}
+
+export async function handleSlotQuitBtn(interaction: ButtonInteraction): Promise<void> {
+  const parsed = parseSlotButtonPayload(interaction.customId, SLOT_QUIT_PREFIX);
+  if (!parsed) { await interaction.deferUpdate(); return; }
+  const { ownerId } = parsed;
+
+  if (interaction.user.id !== ownerId) {
+    await interaction.reply({ content: "❌ このボタンはコマンドを実行した本人のみ使用できます。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const { guildId } = interaction;
+  if (!guildId) { await interaction.deferUpdate(); return; }
+
+  const key = sessionKey(guildId, interaction.user.id);
+  const session = activeSessions.get(key);
+  activeSessions.delete(key);
+
+  if (!session || session.games === 0) {
+    await interaction.update({ components: [] });
+    return;
+  }
+
+  await interaction.update({
+    components: [],
+    embeds: [buildSessionSummaryEmbed(session.totalDelta, session.games, session.currencyName)],
+    content: "",
+  });
 }
 
 /** 入力値が絵文字文字列か sticker ID かを判定してキーを返す */
