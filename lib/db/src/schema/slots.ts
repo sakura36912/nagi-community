@@ -43,6 +43,11 @@ export const slotSettingsTable = pgTable("slot_settings", {
     .array()
     .notNull()
     .default(sql`'{-1,1,5,11,19,34}'::integer[]`),
+  /**
+   * Text channel ID to send a jackpot notification when 5 paylines win.
+   * Null = no notification.
+   */
+  jackpotChannelId: text("jackpot_channel_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()

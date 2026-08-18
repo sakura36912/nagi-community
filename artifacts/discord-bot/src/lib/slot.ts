@@ -178,6 +178,25 @@ export async function setSlotPayout(
   return row!;
 }
 
+// ─── Jackpot channel management ──────────────────────────────────────────────
+
+/**
+ * Set (or clear) the jackpot notification channel for a guild.
+ * Pass null to disable notifications.
+ */
+export async function setSlotJackpotChannel(
+  guildId: string,
+  channelId: string | null,
+): Promise<SlotSettings> {
+  await getSlotSettings(guildId);
+  const [row] = await db
+    .update(slotSettingsTable)
+    .set({ jackpotChannelId: channelId })
+    .where(eq(slotSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
 /** Resolve the multiplier array, falling back to defaults for missing elements. */
 export function resolveMultipliers(stored: number[] | null): number[] {
   const base = [...DEFAULT_MULTIPLIERS] as number[];

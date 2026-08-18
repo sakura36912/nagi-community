@@ -10,6 +10,8 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
   StickerFormatType,
+  TextChannel,
+  ChannelType,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
@@ -24,6 +26,7 @@ import {
   clearSlotEmojis,
   setSlotEmojiWeight,
   setSlotPayout,
+  setSlotJackpotChannel,
   resolveMultipliers,
   DEFAULT_MULTIPLIERS,
 } from "../lib/slot";
@@ -512,6 +515,30 @@ async function spinAndReply(
     embeds: [embed],
     components: [buildActionRow(userId, bet)],
   });
+
+  // ─── ジャックポット（5ライン全当選）通知 ─────────────────────────────────
+  if (wins === 5 && slotSettings.jackpotChannelId) {
+    try {
+      const notifyCh = await interaction.client.channels
+        .fetch(slotSettings.jackpotChannelId)
+        .catch(() => null);
+      if (notifyCh && notifyCh.type === ChannelType.GuildText) {
+        const profit = Math.abs(netDelta);
+        await (notifyCh as TextChannel).send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎰🎉 ジャックポット！")
+              .setDescription(
+                `<@${userId}> が **5ライン全当選** を達成しました！\n` +
+                `獲得: **+${profit.toLocaleString()} ${currencyName}**`,
+              )
+              .setColor(0xf1c40f)
+              .setTimestamp(),
+          ],
+        });
+      }
+    } catch { /* 通知失敗は握りつぶす */ }
+  }
 }
 
 // ─── Subcommand handlers ──────────────────────────────────────────────────────
@@ -725,6 +752,30 @@ async function handleSetupClear(interaction: ChatInputCommandInteraction): Promi
   });
 }
 
+async function handleSetupJackpotChannel(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guild = interaction.guild!;
+  const channel = interaction.options.getChannel("channel", false);
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  if (!channel) {
+    // チャンネル未指定 → 通知を解除
+    await setSlotJackpotChannel(guild.id, null);
+    await interaction.editReply({ content: "✅ ジャックポット通知チャンネルを解除しました。" });
+    return;
+  }
+
+  if (channel.type !== ChannelType.GuildText) {
+    await interaction.editReply({ content: "❌ テキストチャンネルを指定してください。" });
+    return;
+  }
+
+  await setSlotJackpotChannel(guild.id, channel.id);
+  await interaction.editReply({
+    content: `✅ ジャックポット通知チャンネルを <#${channel.id}> に設定しました。\n5ライン全当選が出た際にそのチャンネルへ通知します。`,
+  });
+}
+
 // ─── Command definition ───────────────────────────────────────────────────────
 
 export const slotCommand: Command = {
@@ -807,6 +858,17 @@ export const slotCommand: Command = {
         )
         .addSubcommand((sub) =>
           sub.setName("clear").setDescription("絵柄設定をリセットします（配当倍率は保持）"),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("jackpot-channel")
+            .setDescription("5ライン全当選（ジャックポット）の通知チャンネルを設定します")
+            .addChannelOption((opt) =>
+              opt
+                .setName("channel")
+                .setDescription("通知先テキストチャンネル（省略で通知解除）")
+                .setRequired(false),
+            ),
         ),
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
@@ -825,12 +887,13 @@ export const slotCommand: Command = {
         await interaction.reply({ content: "❌ このサブコマンドは管理者のみ使用できます。", flags: MessageFlags.Ephemeral });
         return;
       }
-      if (sub === "add")     { await handleSetupAdd(interaction); return; }
-      if (sub === "remove")  { await handleSetupRemove(interaction); return; }
-      if (sub === "weight")  { await handleSetupWeight(interaction); return; }
-      if (sub === "payout")  { await handleSetupPayout(interaction); return; }
-      if (sub === "list")    { await handleSetupList(interaction); return; }
-      if (sub === "clear")   { await handleSetupClear(interaction); return; }
+      if (sub === "add")              { await handleSetupAdd(interaction); return; }
+      if (sub === "remove")           { await handleSetupRemove(interaction); return; }
+      if (sub === "weight")           { await handleSetupWeight(interaction); return; }
+      if (sub === "payout")           { await handleSetupPayout(interaction); return; }
+      if (sub === "list")             { await handleSetupList(interaction); return; }
+      if (sub === "clear")            { await handleSetupClear(interaction); return; }
+      if (sub === "jackpot-channel")  { await handleSetupJackpotChannel(interaction); return; }
       return;
     }
 
