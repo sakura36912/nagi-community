@@ -1348,7 +1348,7 @@ const INITIAL_ISSUE_CHANNEL_ID = "1526673304327291050";
 const stickyDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 client.on(Events.MessageCreate, async (message) => {
-  if (message.author.id === client.user?.id) return; // 自分の投稿は無視
+  if (message.author.bot) return; // ボット（自分自身を含む）の投稿は無視
   if (!message.guildId) return;
 
   const guildId    = message.guildId;
