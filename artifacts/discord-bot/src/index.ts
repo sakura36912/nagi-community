@@ -1025,10 +1025,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         try {
           const logSettings = await getVcLogSettings(guild.id);
           const leaveResult = await recordVcLogLeave(guild.id, userId);
-          if (logSettings.notifyChannelId) {
-            const joinedAt = leaveResult
-              ? new Date(Date.now() - leaveResult.durationSeconds * 1000)
-              : undefined;
+          // 追跡セッションが存在した場合のみ通知（追跡外チャンネルからの退出は無視）
+          if (logSettings.notifyChannelId && leaveResult) {
+            const joinedAt = new Date(Date.now() - leaveResult.durationSeconds * 1000);
             await sendVcNotifyLeave(guild, userId, oldState.channelId!, logSettings.notifyChannelId, joinedAt);
           }
         } catch (err) {

@@ -48,7 +48,9 @@ export async function handleVcLogJoin(
   const logSettings = await getVcLogSettings(guild.id);
   const catId = getLogCategoryId(newChannelId, logSettings.categoryIds, guild);
   if (catId) await recordVcLogJoin(guild.id, userId, newChannelId, catId);
-  if (logSettings.notifyChannelId) {
+  // 追跡カテゴリ内のチャンネルのみ通知。
+  // 追跡外（Hub 待機チャンネル等）は通知しない → 移動後の実VCで handleVcLogMove が通知する。
+  if (catId && logSettings.notifyChannelId) {
     await sendVcNotifyJoin(guild, userId, newChannelId, logSettings.notifyChannelId);
   }
 }
