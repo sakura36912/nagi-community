@@ -370,10 +370,28 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
   const game = activeGames.get(key);
 
   if (!game || game.expiresAt < Date.now()) {
+    const timedOutGame = game; // 期限切れの場合はデータが残っている
     activeGames.delete(key);
+
+    const embeds = timedOutGame
+      ? [
+          new EmbedBuilder()
+            .setTitle("⏱️ ハイアンドロー — タイムアウト")
+            .setColor(COLOR_LOSE)
+            .addFields(
+              { name: "連続正解",   value: `**${timedOutGame.streak}** 回`, inline: true },
+              { name: "賭け金",     value: `**${timedOutGame.originalBet.toLocaleString()}** ${timedOutGame.currencyName}`, inline: true },
+              { name: "収支",       value: `**-${timedOutGame.originalBet.toLocaleString()}** ${timedOutGame.currencyName}`, inline: true },
+            )
+            .setFooter({ text: "/highlow play で新しいゲームを始めてください。" }),
+        ]
+      : [];
+
     await interaction.update({
-      content: "⏱️ ゲームがタイムアウトまたはリセットされました。`/highlow play` で新しいゲームを始めてください。",
-      embeds: [], files: [], components: [],
+      content: timedOutGame ? "" : "⏱️ ゲームがタイムアウトまたはリセットされました。`/highlow play` で新しいゲームを始めてください。",
+      embeds,
+      files: [],
+      components: [],
     });
     return;
   }
