@@ -63,7 +63,11 @@ export async function sendVcNotifyJoin(
   notifyChannelId: string,
 ): Promise<void> {
   // Dedup: skip if we already sent a join for this user+channel recently.
-  const dedupKey = `${guild.id}:${userId}:${channelId}`;
+  // Hub チャンネルは移動のたびに新しい channelId を持つ VC が作られるが、
+  // テンプレート由来の表示名（例「大酒場🍺」）は共通のため、
+  // channelId ではなくチャンネル表示名でデdup する。
+  const channelName = getVcChannelName(guild, channelId);
+  const dedupKey = `${guild.id}:${userId}:${channelName}`;
   const lastSent = recentJoins.get(dedupKey);
   if (lastSent !== undefined && Date.now() - lastSent < JOIN_DEDUP_MS) return;
   recentJoins.set(dedupKey, Date.now());
