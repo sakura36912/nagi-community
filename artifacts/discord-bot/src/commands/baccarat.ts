@@ -27,8 +27,8 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { and, eq, sql } from "drizzle-orm";
-import { db, walletsTable } from "@workspace/db";
+import { and, eq, lt, sql } from "drizzle-orm";
+import { db, walletsTable, baccaratSessionsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages } from "../lib/bjCardImages";
@@ -567,10 +567,32 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   const msg = await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components });
 
+  // DB に永続化（ボット再起動後もボタン操作を継続できるように）
+  const expiresAt = new Date(Date.now() + 60_000);
+  await db.insert(baccaratSessionsTable).values({
+    guildId, userId, bet, betOn,
+    playerHand: JSON.stringify(playerHand),
+    bankerHand: JSON.stringify(bankerHand),
+    deck:       JSON.stringify(deck),
+    currencyName, expiresAt,
+  }).onConflictDoUpdate({
+    target: [baccaratSessionsTable.guildId, baccaratSessionsTable.userId],
+    set: {
+      bet, betOn,
+      playerHand: JSON.stringify(playerHand),
+      bankerHand: JSON.stringify(bankerHand),
+      deck:       JSON.stringify(deck),
+      currencyName, expiresAt,
+    },
+  }).catch(() => { /* non-fatal */ });
+
   // 60秒後に自動解決（放置対策）
   let session: BaccaratSession;
   const timeoutHandle = setTimeout(async () => {
     baccaratSessions.delete(key);
+    await db.delete(baccaratSessionsTable)
+      .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)))
+      .catch(() => {});
     try {
       const { embeds: rEmbeds, files: rFiles } = await resolveAndPayout(
         session.guildId, session.userId, session.bet, session.betOn,
@@ -606,15 +628,57 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
     return;
   }
 
-  const key     = sessionKey(guildId, userId);
-  const session = baccaratSessions.get(key);
-  if (!session) {
-    await interaction.reply({ content: "❌ セッションが期限切れです（60秒でタイムアウト）。", flags: MessageFlags.Ephemeral });
-    return;
+  const key        = sessionKey(guildId, userId);
+  const memSession = baccaratSessions.get(key);
+
+  // ゲームデータ（メモリ優先、なければ DB からリストア）
+  let gameData: {
+    bet: number; betOn: BetOn;
+    playerHand: Card[]; bankerHand: Card[]; deck: Card[];
+    currencyName: string; suitEmojis: SuitEmojis; cardPaths: Map<string, string>;
+  } | null = null;
+
+  if (memSession) {
+    clearTimeout(memSession.timeoutHandle);
+    baccaratSessions.delete(key);
+    gameData = memSession;
+  } else {
+    // ボット再起動後の DB fallback
+    const [row] = await db.select().from(baccaratSessionsTable)
+      .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)));
+
+    if (!row) {
+      await interaction.reply({ content: "❌ セッションが見つかりません。**/baccarat を再実行してください。**", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (new Date() > row.expiresAt) {
+      await db.delete(baccaratSessionsTable)
+        .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)))
+        .catch(() => {});
+      await interaction.reply({ content: "❌ セッションが期限切れです（60秒でタイムアウト）。", flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const [settings, cardPaths] = await Promise.all([
+      getGuildSettings(guildId),
+      getBjCardImages(guildId),
+    ]);
+    gameData = {
+      bet:         row.bet,
+      betOn:       row.betOn as BetOn,
+      playerHand:  JSON.parse(row.playerHand) as Card[],
+      bankerHand:  JSON.parse(row.bankerHand) as Card[],
+      deck:        JSON.parse(row.deck) as Card[],
+      currencyName: row.currencyName,
+      suitEmojis:  resolveSuitEmojis(settings),
+      cardPaths,
+    };
   }
 
-  clearTimeout(session.timeoutHandle);
-  baccaratSessions.delete(key);
+  // DB から削除（処理完了 or 再起動後のリストア完了）
+  await db.delete(baccaratSessionsTable)
+    .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)))
+    .catch(() => {});
 
   await interaction.deferUpdate();
 
@@ -633,9 +697,9 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
 
   try {
     const { embeds, files } = await resolveAndPayout(
-      session.guildId, session.userId, session.bet, session.betOn,
-      session.playerHand, session.bankerHand, session.deck,
-      session.currencyName, session.suitEmojis, session.cardPaths,
+      guildId, userId, gameData.bet, gameData.betOn,
+      gameData.playerHand, gameData.bankerHand, gameData.deck,
+      gameData.currencyName, gameData.suitEmojis, gameData.cardPaths,
     );
     await interaction.editReply({ embeds, files, components: [] });
   } catch {

@@ -142,7 +142,8 @@ import {
   countPastJoins,
   findWallet,
 } from "./lib/economy";
-import { getEvalSheetConfigsForRoles, getExpiredTimedRoleGrants, deleteTimedRoleGrant, pool, checkSchemaDrift } from "@workspace/db";
+import { getEvalSheetConfigsForRoles, getExpiredTimedRoleGrants, deleteTimedRoleGrant, pool, checkSchemaDrift, baccaratSessionsTable, db } from "@workspace/db";
+import { lt } from "drizzle-orm";
 
 import { appendFileSync } from "fs";
 const DEBUG_LOG = "/tmp/bot-debug.log";
@@ -687,6 +688,11 @@ client.once(Events.ClientReady, async (readyClient) => {
       logger.info(`[roulette-cache] All ${total} GIFs pre-generated and cached`);
     }
   }).catch((err) => logger.error("[roulette-cache] Failed to initialize GIF cache", err));
+
+  // 期限切れのバカラセッションをクリーンアップ（ボット再起動後の残留レコード削除）
+  db.delete(baccaratSessionsTable)
+    .where(lt(baccaratSessionsTable.expiresAt, new Date()))
+    .catch((err) => logger.error("[baccarat] Failed to clear expired sessions on startup", err));
 
   // Clear stale vc_presence rows left over from a previous bot session.
   // We cannot recover exact join times after a restart, so we simply discard
