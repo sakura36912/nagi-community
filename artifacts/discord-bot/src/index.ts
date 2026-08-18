@@ -1,4 +1,4 @@
-import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayIntentBits, GuildMember, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
+import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, FetchMessagesOptions, GatewayIntentBits, GuildMember, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { initRouletteGifCache } from "./lib/rouletteWheel";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
@@ -143,7 +143,7 @@ import {
   countPastJoins,
   findWallet,
 } from "./lib/economy";
-import { getEvalSheetConfigsForRoles, getExpiredTimedRoleGrants, deleteTimedRoleGrant, pool, checkSchemaDrift, baccaratSessionsTable, db } from "@workspace/db";
+import { getEvalSheetConfigsForRoles, getExpiredTimedRoleGrants, deleteTimedRoleGrant, pool, checkSchemaDrift, baccaratSessionsTable, stickyMessagesTable, db } from "@workspace/db";
 import { lt } from "drizzle-orm";
 
 import { appendFileSync } from "fs";
@@ -694,6 +694,60 @@ client.once(Events.ClientReady, async (readyClient) => {
   db.delete(baccaratSessionsTable)
     .where(lt(baccaratSessionsTable.expiresAt, new Date()))
     .catch((err) => logger.error("[baccarat] Failed to clear expired sessions on startup", err));
+
+  // ボット再起動後に孤立したスティッキーメッセージを掃除する。
+  // 起動から5秒後にバックグラウンドで実行し、各チャンネルの
+  // 最新200件をスキャンして lastMessageId 以外の同内容ボットメッセージを削除する。
+  setTimeout(async () => {
+    try {
+      const allStickies = await db.select().from(stickyMessagesTable);
+      if (allStickies.length === 0) return;
+      logger.info(`[sticky] Orphan cleanup: checking ${allStickies.length} channel(s)`);
+
+      for (const sticky of allStickies) {
+        await new Promise((r) => setTimeout(r, 500)); // Rate-limit buffer between channels
+
+        const guild = readyClient.guilds.cache.get(sticky.guildId);
+        if (!guild) continue;
+        const channel = guild.channels.cache.get(sticky.channelId);
+        if (!channel?.isTextBased()) continue;
+
+        try {
+          let totalDeleted = 0;
+          let before: string | undefined = undefined;
+
+          for (let page = 0; page < 5; page++) {
+            const fetchOpts: FetchMessagesOptions = { limit: 100 };
+            if (before) fetchOpts.before = before;
+            const batch = await channel.messages.fetch(fetchOpts);
+            if (batch.size === 0) break;
+
+            const orphans = batch.filter(
+              (m) => m.author.bot && m.content === sticky.content && m.id !== sticky.lastMessageId,
+            );
+            if (orphans.size > 0) {
+              await Promise.allSettled([...orphans.values()].map((m) => m.delete()));
+              totalDeleted += orphans.size;
+            }
+
+            before = batch.last()?.id;
+            // 2ページ連続で孤立なし → 残りはスキャン不要
+            if (orphans.size === 0 && page >= 1) break;
+          }
+
+          if (totalDeleted > 0) {
+            logger.info(`[sticky] Orphan cleanup: deleted ${totalDeleted} orphan(s) in channel ${sticky.channelId}`);
+          }
+        } catch (err) {
+          logger.warn(`[sticky] Orphan cleanup error for channel ${sticky.channelId}`, err);
+        }
+      }
+
+      logger.info(`[sticky] Orphan cleanup complete`);
+    } catch (err) {
+      logger.error("[sticky] Failed to run orphan cleanup", err);
+    }
+  }, 5_000);
 
   // Clear stale vc_presence rows left over from a previous bot session.
   // We cannot recover exact join times after a restart, so we simply discard
@@ -1379,14 +1433,22 @@ client.on(Events.MessageCreate, async (message) => {
       await message.channel.messages.delete(sticky.lastMessageId).catch(() => null);
     }
 
-    // 2. 直近50件も念のりスキャンして同内容の孤立スティッキーを除去
+    // 2. 直近200件（2ページ×100件）をスキャンして孤立スティッキーを除去。
+    //    50件だとボット再起動後に圏外に押し出された孤立スティッキーを取りこぼす。
     try {
-      const recent = await message.channel.messages.fetch({ limit: 50 });
-      const botStickies = recent.filter(
-        (m) => m.author.bot && m.content === sticky.content,
-      );
-      if (botStickies.size > 0) {
-        await Promise.allSettled(botStickies.map((m) => m.delete()));
+      const batch1 = await message.channel.messages.fetch({ limit: 100 });
+      const orphans1 = batch1.filter((m) => m.author.bot && m.content === sticky.content);
+      if (orphans1.size > 0) {
+        await Promise.allSettled(orphans1.map((m) => m.delete()));
+      }
+      // 2ページ目（101〜200件前）
+      const lastId = batch1.last()?.id;
+      if (lastId) {
+        const batch2 = await message.channel.messages.fetch({ limit: 100, before: lastId });
+        const orphans2 = batch2.filter((m) => m.author.bot && m.content === sticky.content);
+        if (orphans2.size > 0) {
+          await Promise.allSettled(orphans2.map((m) => m.delete()));
+        }
       }
     } catch (err) {
       logger.warn(`[sticky] Failed to bulk-delete old stickies in ${message.channelId}`, err);
