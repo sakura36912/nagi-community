@@ -258,15 +258,36 @@ async function handleStats(interaction: ChatInputCommandInteraction): Promise<vo
 
 // ─── /casino average ─────────────────────────────────────────────────────────
 
+interface GameAvgStats {
+  userCount: number;
+  totalNet:  number;
+  avgNet:    number;
+}
+
+interface PeriodBreakdown {
+  label:  string;
+  byGame: Record<GameKey, GameAvgStats>;
+  total:  GameAvgStats;
+}
+
+const GAME_LABELS_SHORT: Record<GameKey, string> = {
+  blackjack: "🃏 BJ",
+  poker:     "🎴 ポーカー",
+  roulette:  "🎡 ルーレット",
+  slot:      "🎰 スロット",
+  highlow:   "🃏 ハイロー",
+  baccarat:  "🎴 バカラ",
+};
+
 /**
- * 指定期間内のカジノトランザクションから、
- * ユーザーごとの純損益を集計して返す。
- * since を省略すると全期間。
+ * 指定期間のカジノTXをゲーム別・ユーザー別に集計し、
+ * ゲームごとの平均収支と全体平均収支を返す。
  */
-async function fetchNetDeltaByUser(
+async function fetchPeriodBreakdown(
   guildId: string,
+  label: string,
   since?: Date,
-): Promise<Map<string, number>> {
+): Promise<PeriodBreakdown> {
   const conditions = [
     eq(transactionsTable.guildId, guildId),
     or(
@@ -285,15 +306,29 @@ async function fetchNetDeltaByUser(
     .from(transactionsTable)
     .where(and(...conditions));
 
-  const netByUser = new Map<string, number>();
+  // ゲーム別: userId → net の Map
+  const byGameUser: Record<GameKey, Map<string, number>> = {
+    blackjack: new Map(), poker: new Map(), roulette: new Map(),
+    slot: new Map(), highlow: new Map(), baccarat: new Map(),
+  };
+  // 全体: userId → net 合計
+  const totalUser = new Map<string, number>();
 
   for (const row of rows) {
     const bet    = extractBet(row.reason);
     const amount = row.amount;
-    const isSlot = row.reason.startsWith("スロット");
+
+    let key: GameKey;
+    if      (row.reason.startsWith("BJ"))           key = "blackjack";
+    else if (row.reason.startsWith("ポーカー"))       key = "poker";
+    else if (row.reason.startsWith("ルーレット"))     key = "roulette";
+    else if (row.reason.startsWith("スロット"))       key = "slot";
+    else if (row.reason.startsWith("ハイアンドロー")) key = "highlow";
+    else if (row.reason.startsWith("バカラ"))         key = "baccarat";
+    else continue;
 
     let net: number;
-    if (isSlot) {
+    if (key === "slot") {
       net = amount > 0 ? amount - bet : amount;
     } else if (amount === 0) {
       net = 0; // BJ 引き分け
@@ -301,29 +336,29 @@ async function fetchNetDeltaByUser(
       net = amount;
     }
 
-    netByUser.set(row.userId, (netByUser.get(row.userId) ?? 0) + net);
+    const gm = byGameUser[key];
+    gm.set(row.userId, (gm.get(row.userId) ?? 0) + net);
+    totalUser.set(row.userId, (totalUser.get(row.userId) ?? 0) + net);
   }
 
-  return netByUser;
-}
+  const toStats = (m: Map<string, number>): GameAvgStats => {
+    const userCount = m.size;
+    const totalNet  = [...m.values()].reduce((s, v) => s + v, 0);
+    return { userCount, totalNet, avgNet: userCount > 0 ? Math.round(totalNet / userCount) : 0 };
+  };
 
-interface PeriodResult {
-  label:       string;
-  userCount:   number;
-  totalNet:    number;
-  avgNet:      number;
-}
-
-async function buildPeriodResult(
-  guildId: string,
-  label: string,
-  since?: Date,
-): Promise<PeriodResult> {
-  const netByUser = await fetchNetDeltaByUser(guildId, since);
-  const userCount = netByUser.size;
-  const totalNet  = [...netByUser.values()].reduce((s, v) => s + v, 0);
-  const avgNet    = userCount > 0 ? Math.round(totalNet / userCount) : 0;
-  return { label, userCount, totalNet, avgNet };
+  return {
+    label,
+    byGame: {
+      blackjack: toStats(byGameUser.blackjack),
+      poker:     toStats(byGameUser.poker),
+      roulette:  toStats(byGameUser.roulette),
+      slot:      toStats(byGameUser.slot),
+      highlow:   toStats(byGameUser.highlow),
+      baccarat:  toStats(byGameUser.baccarat),
+    },
+    total: toStats(totalUser),
+  };
 }
 
 async function handleAverage(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -337,42 +372,54 @@ async function handleAverage(interaction: ChatInputCommandInteraction): Promise<
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const now       = new Date();
+  const now         = new Date();
   const oneWeekAgo  = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000);
   const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   const [settings, weekResult, monthResult, allResult] = await Promise.all([
     getGuildSettings(guildId),
-    buildPeriodResult(guildId, "直近1週間",   oneWeekAgo),
-    buildPeriodResult(guildId, "直近1ヶ月",   oneMonthAgo),
-    buildPeriodResult(guildId, "全期間"),
+    fetchPeriodBreakdown(guildId, "直近1週間", oneWeekAgo),
+    fetchPeriodBreakdown(guildId, "直近1ヶ月", oneMonthAgo),
+    fetchPeriodBreakdown(guildId, "全期間"),
   ]);
 
   const { currencyName } = settings;
 
   const fmtNet = (n: number) => {
     const sign = n >= 0 ? "+" : "";
-    return `**${sign}${n.toLocaleString()}** ${currencyName}`;
+    return `${sign}${n.toLocaleString()} ${currencyName}`;
   };
 
-  const fieldValue = (r: PeriodResult) =>
-    r.userCount === 0
-      ? "データなし"
-      : [
-          `参加人数: **${r.userCount}** 人`,
-          `平均収支: ${fmtNet(r.avgNet)}`,
-          `合計収支: ${fmtNet(r.totalNet)}`,
-        ].join("\n");
+  const buildFieldValue = (p: PeriodBreakdown): string => {
+    if (p.total.userCount === 0) return "データなし";
+
+    const gameLines = (Object.keys(GAME_LABELS_SHORT) as GameKey[])
+      .map((key) => {
+        const s = p.byGame[key];
+        if (s.userCount === 0) return null;
+        return `${GAME_LABELS_SHORT[key]}: **${fmtNet(s.avgNet)}** (${s.userCount}人)`;
+      })
+      .filter(Boolean);
+
+    const totalLine = `📊 合計: **${fmtNet(p.total.avgNet)}** (${p.total.userCount}人)`;
+    return [...gameLines, totalLine].join("\n");
+  };
+
+  const PERIOD_ICONS: Record<string, string> = {
+    "直近1週間": "📅",
+    "直近1ヶ月": "📅",
+    "全期間":     "🏛️",
+  };
 
   const embed = new EmbedBuilder()
-    .setTitle("📊 全メンバー平均収支")
+    .setTitle("📊 全メンバー平均収支（ゲーム別）")
     .setColor(COLOR_NEUTRAL)
     .addFields(
-      { name: `📅 ${weekResult.label}`,  value: fieldValue(weekResult)  },
-      { name: `📅 ${monthResult.label}`, value: fieldValue(monthResult) },
-      { name: `🏛️ ${allResult.label}`,   value: fieldValue(allResult)   },
+      { name: `${PERIOD_ICONS[weekResult.label]}  ${weekResult.label}`,   value: buildFieldValue(weekResult)  },
+      { name: `${PERIOD_ICONS[monthResult.label]} ${monthResult.label}`,  value: buildFieldValue(monthResult) },
+      { name: `${PERIOD_ICONS[allResult.label]}  ${allResult.label}`,     value: buildFieldValue(allResult)   },
     )
-    .setFooter({ text: "平均収支 = 期間内の合計純損益 ÷ プレイ人数" })
+    .setFooter({ text: "平均収支 = 期間内の純損益合計 ÷ そのゲームのプレイ人数" })
     .setTimestamp();
 
   await interaction.editReply({ embeds: [embed] });
