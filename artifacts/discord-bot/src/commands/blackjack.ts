@@ -663,6 +663,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     await interaction.editReply({ content: "", embeds, files, components: [buildButtons()] });
 
   } else if (action === "stand") {
+    game.processing = true;
+    activeGames.set(key, game);
     const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
     await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
     await finishGame(interaction, dealerPlay(game));
