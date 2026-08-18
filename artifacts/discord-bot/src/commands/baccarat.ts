@@ -63,7 +63,9 @@ const CARD_STRIP_HEIGHT = 90;
 
 // ─── Button prefix & session ──────────────────────────────────────────────────
 
-export const BACCARAT_DRAW_PREFIX = "baccarat:draw:";
+export const BACCARAT_DRAW_PREFIX   = "baccarat:draw:";
+export const BACCARAT_REPLAY_PREFIX = "baccarat:replay:";
+export const BACCARAT_QUIT_PREFIX   = "baccarat:quit:";
 
 interface BaccaratSession {
   guildId: string;
@@ -82,6 +84,41 @@ interface BaccaratSession {
 
 const baccaratSessions = new Map<string, BaccaratSession>();
 function sessionKey(guildId: string, userId: string): string { return `${guildId}:${userId}`; }
+
+// ─── Continuous-play session (累計収支) ────────────────────────────────────────
+
+interface BaccaratPlaySession { totalDelta: number; plays: number }
+const baccaratPlaySessions = new Map<string, BaccaratPlaySession>();
+
+function buildBaccaratActionRow(
+  guildId: string, userId: string, bet: number, betOn: BetOn,
+): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${BACCARAT_REPLAY_PREFIX}${guildId}:${userId}:${bet}:${betOn}`)
+      .setLabel("🔄 もう一度")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`${BACCARAT_QUIT_PREFIX}${guildId}:${userId}`)
+      .setLabel("🏁 終了")
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
+function buildBaccaratSummaryEmbed(
+  totalDelta: number, plays: number, currencyName: string,
+): EmbedBuilder {
+  const sign  = totalDelta > 0 ? "+" : "";
+  const color = totalDelta > 0 ? COLOR_WIN : totalDelta < 0 ? COLOR_LOSE : COLOR_PUSH;
+  return new EmbedBuilder()
+    .setTitle("🎴 バカラ — セッション終了")
+    .setColor(color)
+    .addFields(
+      { name: "プレイ回数", value: `**${plays}**回`, inline: true },
+      { name: "合計収支",   value: `${sign}**${totalDelta.toLocaleString()}** ${currencyName}`, inline: true },
+    )
+    .setTimestamp();
+}
 
 // ─── Deck helpers ─────────────────────────────────────────────────────────────
 
@@ -437,7 +474,7 @@ async function resolveAndPayout(
   currencyName: string,
   suitEmojis: SuitEmojis,
   cardPaths: Map<string, string>,
-): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[] }> {
+): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[]; netDelta: number }> {
   const { player: finalPlayer, banker: finalBanker } = playBaccarat(playerHand, bankerHand, deck);
   const cardBuffers = new Map<string, Buffer>();
   await cacheHandBuffers([...finalPlayer, ...finalBanker], cardPaths, cardBuffers);
@@ -477,9 +514,10 @@ async function resolveAndPayout(
 
   await recordTransaction(guildId, userId, netDelta, reason).catch(() => {});
 
-  return buildResultEmbeds(
+  const { embeds, files } = await buildResultEmbeds(
     finalPlayer, finalBanker, gameResult, betOn, bet, netDelta, currencyName, suitEmojis, cardBuffers,
   );
+  return { embeds, files, netDelta };
 }
 
 // ─── /baccarat ────────────────────────────────────────────────────────────────
@@ -540,13 +578,19 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   const suitEmojis = resolveSuitEmojis(settings);
 
+  // 新規コマンド実行でプレイセッションをリセット
+  baccaratPlaySessions.set(sessionKey(guildId, userId), { totalDelta: 0, plays: 0 });
+
   // ─── 3枚目なし（ナチュラル or 双方スタンド）→ 即時結果表示 ────────────────
   if (!willAnyDraw(playerHand, bankerHand)) {
-    const { embeds, files } = await resolveAndPayout(
+    const { embeds, files, netDelta } = await resolveAndPayout(
       guildId, userId, bet, betOn, playerHand, bankerHand, deck,
       currencyName, suitEmojis, cardPaths,
     );
-    await interaction.editReply({ embeds, files });
+    const pKey = sessionKey(guildId, userId);
+    const ps = baccaratPlaySessions.get(pKey) ?? { totalDelta: 0, plays: 0 };
+    baccaratPlaySessions.set(pKey, { totalDelta: ps.totalDelta + netDelta, plays: ps.plays + 1 });
+    await interaction.editReply({ embeds, files, components: [buildBaccaratActionRow(guildId, userId, bet, betOn)] });
     return;
   }
 
@@ -594,12 +638,16 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
       .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)))
       .catch(() => {});
     try {
-      const { embeds: rEmbeds, files: rFiles } = await resolveAndPayout(
+      const { embeds: rEmbeds, files: rFiles, netDelta } = await resolveAndPayout(
         session.guildId, session.userId, session.bet, session.betOn,
         session.playerHand, session.bankerHand, session.deck,
         session.currencyName, session.suitEmojis, session.cardPaths,
       );
-      await session.message.edit({ embeds: rEmbeds, files: rFiles, components: [] });
+      const pKey = sessionKey(session.guildId, session.userId);
+      const ps = baccaratPlaySessions.get(pKey) ?? { totalDelta: 0, plays: 0 };
+      baccaratPlaySessions.set(pKey, { totalDelta: ps.totalDelta + netDelta, plays: ps.plays + 1 });
+      const row = buildBaccaratActionRow(session.guildId, session.userId, session.bet, session.betOn);
+      await session.message.edit({ embeds: rEmbeds, files: rFiles, components: [row] });
     } catch { /* non-fatal */ }
   }, 60_000);
 
@@ -696,15 +744,186 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
   });
 
   try {
-    const { embeds, files } = await resolveAndPayout(
+    const { embeds, files, netDelta } = await resolveAndPayout(
       guildId, userId, gameData.bet, gameData.betOn,
       gameData.playerHand, gameData.bankerHand, gameData.deck,
       gameData.currencyName, gameData.suitEmojis, gameData.cardPaths,
     );
-    await interaction.editReply({ embeds, files, components: [] });
+    const pKey = sessionKey(guildId, userId);
+    const ps = baccaratPlaySessions.get(pKey) ?? { totalDelta: 0, plays: 0 };
+    baccaratPlaySessions.set(pKey, { totalDelta: ps.totalDelta + netDelta, plays: ps.plays + 1 });
+    const replayRow = buildBaccaratActionRow(guildId, userId, gameData.bet, gameData.betOn);
+    await interaction.editReply({ embeds, files, components: [replayRow] });
   } catch {
     await interaction.editReply({ content: "❌ エラーが発生しました。", components: [] }).catch(() => {});
   }
+}
+
+// ─── Replay / Quit handlers ───────────────────────────────────────────────────
+
+/** 「🔄 もう一度」ボタン押下 → 同じ bet/betOn で新ゲーム開始 */
+export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): Promise<void> {
+  // custom ID: "baccarat:replay:{guildId}:{userId}:{bet}:{betOn}"
+  const payload = interaction.customId.slice(BACCARAT_REPLAY_PREFIX.length);
+  // guildId と userId はスノーフレーク（数字のみ）、bet も数字、betOn は文字列
+  const parts  = payload.split(":");
+  const guildId = parts[0]!;
+  const userId  = parts[1]!;
+  const bet     = parseInt(parts[2]!, 10);
+  const betOn   = parts[3]! as BetOn;
+
+  if (interaction.user.id !== userId) {
+    await interaction.reply({ content: "❌ このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferUpdate();
+
+  // ボタンを即時無効化
+  await interaction.editReply({
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId("bac_r_dis").setLabel("🔄 処理中…").setStyle(ButtonStyle.Primary).setDisabled(true),
+        new ButtonBuilder().setCustomId("bac_q_dis").setLabel("🏁 終了").setStyle(ButtonStyle.Secondary).setDisabled(true),
+      ),
+    ],
+  });
+
+  const [, settings, cardPaths] = await Promise.all([
+    getOrCreateWallet(guildId, userId),
+    getGuildSettings(guildId),
+    getBjCardImages(guildId),
+  ]);
+
+  const { currencyName } = settings;
+  const maxBet = settings.casinoMaxBet ?? CASINO_DEFAULT_MAX_BET;
+
+  if (bet > maxBet) {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle("🎴 バカラ").setDescription(`❌ 賭け金が上限（**${maxBet.toLocaleString()}** ${currencyName}）を超えています。`).setColor(COLOR_LOSE)],
+      components: [],
+    });
+    return;
+  }
+
+  const afterDeduct = await deductBet(guildId, userId, bet);
+  if (!afterDeduct) {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle("🎴 バカラ").setDescription("❌ 残高が不足しています。").setColor(COLOR_LOSE)],
+      components: [],
+    });
+    return;
+  }
+
+  // ディール
+  let deck = buildShoe();
+  let [c, rest] = drawCard(deck); const p1 = c; deck = rest;
+  [c, rest] = drawCard(deck);     const b1 = c; deck = rest;
+  [c, rest] = drawCard(deck);     const p2 = c; deck = rest;
+  [c, rest] = drawCard(deck);     const b2 = c; deck = rest;
+
+  const playerHand: Card[] = [p1, p2];
+  const bankerHand: Card[] = [b1, b2];
+  const suitEmojis = resolveSuitEmojis(settings);
+
+  if (!willAnyDraw(playerHand, bankerHand)) {
+    const { embeds, files, netDelta } = await resolveAndPayout(
+      guildId, userId, bet, betOn, playerHand, bankerHand, deck,
+      currencyName, suitEmojis, cardPaths,
+    );
+    const pKey = sessionKey(guildId, userId);
+    const ps = baccaratPlaySessions.get(pKey) ?? { totalDelta: 0, plays: 0 };
+    baccaratPlaySessions.set(pKey, { totalDelta: ps.totalDelta + netDelta, plays: ps.plays + 1 });
+    await interaction.editReply({ embeds, files, components: [buildBaccaratActionRow(guildId, userId, bet, betOn)] });
+    return;
+  }
+
+  // ドロー必要 → ディール状態を表示してドローボタンを置く
+  const dealCardBuffers = new Map<string, Buffer>();
+  await cacheHandBuffers([...playerHand, ...bankerHand], cardPaths, dealCardBuffers);
+  const { embeds: dealEmbeds, files: dealFiles, components } = await buildDealEmbeds(
+    playerHand, bankerHand, betOn, bet, currencyName, suitEmojis, dealCardBuffers, guildId, userId,
+  );
+
+  const key = sessionKey(guildId, userId);
+  const existingSession = baccaratSessions.get(key);
+  if (existingSession) {
+    clearTimeout(existingSession.timeoutHandle);
+    baccaratSessions.delete(key);
+  }
+
+  const msg = await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components });
+
+  const expiresAt = new Date(Date.now() + 60_000);
+  await db.insert(baccaratSessionsTable).values({
+    guildId, userId, bet, betOn,
+    playerHand: JSON.stringify(playerHand),
+    bankerHand: JSON.stringify(bankerHand),
+    deck:       JSON.stringify(deck),
+    currencyName, expiresAt,
+  }).onConflictDoUpdate({
+    target: [baccaratSessionsTable.guildId, baccaratSessionsTable.userId],
+    set: {
+      bet, betOn,
+      playerHand: JSON.stringify(playerHand),
+      bankerHand: JSON.stringify(bankerHand),
+      deck:       JSON.stringify(deck),
+      currencyName, expiresAt,
+    },
+  }).catch(() => {});
+
+  let session: BaccaratSession;
+  const timeoutHandle = setTimeout(async () => {
+    baccaratSessions.delete(key);
+    await db.delete(baccaratSessionsTable)
+      .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)))
+      .catch(() => {});
+    try {
+      const { embeds: rEmbeds, files: rFiles, netDelta } = await resolveAndPayout(
+        session.guildId, session.userId, session.bet, session.betOn,
+        session.playerHand, session.bankerHand, session.deck,
+        session.currencyName, session.suitEmojis, session.cardPaths,
+      );
+      const pKey = sessionKey(session.guildId, session.userId);
+      const ps = baccaratPlaySessions.get(pKey) ?? { totalDelta: 0, plays: 0 };
+      baccaratPlaySessions.set(pKey, { totalDelta: ps.totalDelta + netDelta, plays: ps.plays + 1 });
+      const row = buildBaccaratActionRow(session.guildId, session.userId, session.bet, session.betOn);
+      await session.message.edit({ embeds: rEmbeds, files: rFiles, components: [row] });
+    } catch { /* non-fatal */ }
+  }, 60_000);
+
+  session = {
+    guildId, userId, bet, betOn,
+    playerHand, bankerHand, deck,
+    currencyName, suitEmojis, cardPaths,
+    message: msg as Message,
+    timeoutHandle,
+  };
+  baccaratSessions.set(key, session);
+}
+
+/** 「🏁 終了」ボタン押下 → セッション集計を表示して終了 */
+export async function handleBaccaratQuitBtn(interaction: ButtonInteraction): Promise<void> {
+  // custom ID: "baccarat:quit:{guildId}:{userId}"
+  const payload  = interaction.customId.slice(BACCARAT_QUIT_PREFIX.length);
+  const colonIdx = payload.indexOf(":");
+  const guildId  = payload.slice(0, colonIdx);
+  const userId   = payload.slice(colonIdx + 1);
+
+  if (interaction.user.id !== userId) {
+    await interaction.reply({ content: "❌ このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferUpdate();
+
+  const pKey = sessionKey(guildId, userId);
+  const ps   = baccaratPlaySessions.get(pKey) ?? { totalDelta: 0, plays: 0 };
+  baccaratPlaySessions.delete(pKey);
+
+  const settings     = await getGuildSettings(guildId);
+  const summaryEmbed = buildBaccaratSummaryEmbed(ps.totalDelta, ps.plays, settings.currencyName);
+  await interaction.editReply({ embeds: [summaryEmbed], files: [], components: [] });
 }
 
 // ─── Command export ───────────────────────────────────────────────────────────
