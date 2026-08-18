@@ -37,6 +37,25 @@ const mocks = vi.hoisted(() => {
   return { execute, update, select };
 });
 
+// ─── Hoist logger mock state ──────────────────────────────────────────────────
+const loggerMocks = vi.hoisted(() => {
+  const warn = vi.fn();
+  const error = vi.fn();
+  const info = vi.fn();
+  const debug = vi.fn();
+  return { warn, error, info, debug };
+});
+
+// ─── Mock logger ─────────────────────────────────────────────────────────────
+vi.mock("../lib/logger.js", () => ({
+  logger: {
+    warn: loggerMocks.warn,
+    error: loggerMocks.error,
+    info: loggerMocks.info,
+    debug: loggerMocks.debug,
+  },
+}));
+
 // ─── Mock @workspace/db ───────────────────────────────────────────────────────
 vi.mock("@workspace/db", () => {
   const tbl = (name: string) =>
@@ -1023,5 +1042,105 @@ describe("isVcTrackingOptedOut – both DB queries are issued in parallel", () =
     const result = await isVcTrackingOptedOut(GUILD, "user-guild-opted-out");
 
     expect(result).toBe(true);
+  });
+});
+
+// ─── openSession – warn log on DB rejection ───────────────────────────────────
+
+describe("openSession – logger.warn fires exactly once when DB rejects", () => {
+  /**
+   * openSession wraps isVcTrackingOptedOut in a try/catch.
+   * When the DB call inside that check throws, openSession must:
+   *   1. Call logger.warn exactly once (not zero = silent, not two = double-log).
+   *   2. Return null (fail-closed: treat as opted-out during the outage).
+   *
+   * When the privacy check succeeds, logger.warn must NOT be called, regardless
+   * of whether the user is actually opted out.
+   */
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls logger.warn exactly once when db.select rejects during the privacy check", async () => {
+    const dbError = new Error("DB_CONN_REFUSED");
+
+    // Both db.select() calls inside isVcTrackingOptedOut are run via Promise.all.
+    // Making the first one reject is enough — Promise.all rejects immediately and
+    // the catch block in openSession fires.
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.reject(dbError)),
+      })),
+    }));
+
+    const result = await openSession(GUILD, "user-db-down", "channel-001");
+
+    expect(result).toBeNull();
+    expect(loggerMocks.warn).toHaveBeenCalledOnce();
+  });
+
+  it("includes the error, guildId, and userId in the single warn call", async () => {
+    const dbError = new Error("DB_TIMEOUT");
+
+    mocks.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Promise.reject(dbError)),
+      })),
+    }));
+
+    await openSession(GUILD, "user-db-down", "channel-001");
+
+    const [_message, context] = loggerMocks.warn.mock.calls[0] as [string, Record<string, unknown>];
+    expect(context).toMatchObject({ err: dbError, guildId: GUILD, userId: "user-db-down" });
+  });
+
+  it("does NOT call logger.warn when the privacy check succeeds and user is opted out", async () => {
+    // Make both db.select() calls (global + guild) return an opted-out row so
+    // isVcTrackingOptedOut resolves to true without throwing.
+    // openSession then returns null early (before insert) — no warn should fire.
+    const optedOutRow = [{ optedOut: true }];
+    mocks.select
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => Promise.resolve(optedOutRow)) })),
+      }))
+      .mockImplementationOnce(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => Promise.resolve(optedOutRow)) })),
+      }));
+
+    const result = await openSession(GUILD, "user-opted-out", "channel-001");
+
+    expect(result).toBeNull();
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call logger.warn when the privacy check succeeds and user is not opted out", async () => {
+    // Both db.select() calls return [] (no opt-out row) → isVcTrackingOptedOut
+    // resolves to false → openSession proceeds to insert.
+    // Mock insert to complete cleanly so the function resolves without throwing.
+    const fakeSession = {
+      id: 1,
+      guildId: GUILD,
+      userId: "user-normal",
+      channelId: "channel-001",
+      joinedAt: new Date(),
+      leftAt: null,
+      isExile: false,
+      isPrivacyClosed: false,
+    };
+    // select already returns [] by default (not opted out).
+    // Override insert to provide .values().returning() chain.
+    const returningFn = vi.fn().mockResolvedValue([fakeSession]);
+    const valuesFn = vi.fn(() => ({ returning: returningFn }));
+    // Temporarily replace insert on the mocked db object.
+    const { db } = await import("@workspace/db");
+    (db.insert as ReturnType<typeof vi.fn>).mockImplementationOnce(() => ({
+      values: valuesFn,
+    }));
+
+    const result = await openSession(GUILD, "user-normal", "channel-001");
+
+    expect(result).not.toBeNull();
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
   });
 });
