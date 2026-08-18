@@ -1,6 +1,6 @@
 /**
  * /blackjack — ブラックジャック
- * ヒット・スタンド・ダブルダウン対応。6デッキシュー。
+ * ヒット・スタンド対応。6デッキシュー。
  *
  * サブコマンド:
  *   play          : ゲームを開始する
@@ -49,7 +49,6 @@ interface BJGame {
   playerHand: Card[];
   dealerHand: Card[];
   deck: Card[];
-  doubled: boolean;
   currencyName: string;
   balance: number;
   expiresAt: number;
@@ -356,10 +355,10 @@ async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWit
       { name: "ディーラーの手札", value: dealerValue },
       {
         name: "賭け金",
-        value: `**${game.bet.toLocaleString()}** ${game.currencyName}${game.doubled ? "（ダブルダウン）" : ""}`,
+        value: `**${game.bet.toLocaleString()}** ${game.currencyName}`,
         inline: true,
       },
-      { name: "操作方法", value: "🃏 **ヒット** — 1枚追加　🛑 **スタンド** — このままで勝負　⬆️ **ダブルダウン** — 賭け倍額+1枚（初手のみ）" },
+      { name: "操作方法", value: "🃏 **ヒット** — 1枚追加　🛑 **スタンド** — このままで勝負" },
     )
     .setFooter({ text: "BJ=1.5倍 / 通常勝利=1倍 / 引き分け=返金 | 5分でタイムアウト" });
 
@@ -438,12 +437,10 @@ async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWi
 
 // ─── Buttons ──────────────────────────────────────────────────────────────────
 
-function buildButtons(canDouble: boolean): ActionRowBuilder<ButtonBuilder> {
+function buildButtons(): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId("bj:hit").setLabel("ヒット").setEmoji("🃏").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("bj:stand").setLabel("スタンド").setEmoji("🛑").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("bj:double").setLabel("ダブルダウン").setEmoji("⬆️")
-      .setStyle(ButtonStyle.Danger).setDisabled(!canDouble),
   );
 }
 
@@ -468,7 +465,7 @@ function dealerPlay(game: BJGame): BJGame {
 function resolveOutcome(game: BJGame): { outcome: Outcome; netDelta: number } {
   const pTotal = total(game.playerHand);
   const dTotal = total(game.dealerHand);
-  const pBJ = isBlackjack(game.playerHand) && !game.doubled;
+  const pBJ = isBlackjack(game.playerHand);
   const dBJ = isBlackjack(game.dealerHand);
 
   if (pBJ && dBJ)                                return { outcome: "push",      netDelta: 0 };
@@ -506,8 +503,7 @@ async function finishGame(
   const sessionDelta = game.sessionDeltaBefore + netDelta;
   const sessionGames = game.sessionGamesBefore + 1;
 
-  // リプレイ用の情報を保存（ダブルダウン済みなら元の賭け金に戻す）
-  const replayBet = game.doubled ? game.bet / 2 : game.bet;
+  const replayBet = game.bet;
   pendingReplay.set(key, {
     bet: replayBet,
     cardPaths: game.cardPaths,
@@ -574,7 +570,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
     const newGame: BJGame = {
       guildId, userId: user.id, bet: pr.bet, playerHand, dealerHand, deck,
-      doubled: false, currencyName: pr.currencyName,
+      currencyName: pr.currencyName,
       balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
       suitEmojis: pr.suitEmojis, cardPaths: pr.cardPaths, cardBuffers, processing: false,
       sessionDeltaBefore: pr.sessionDelta,
@@ -590,7 +586,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     activeGames.set(key, newGame);
     processingReplay.delete(key);
     const { embeds, files } = await buildGameEmbed(newGame, true);
-    await interaction.editReply({ content: "", embeds, files, components: [buildButtons(true)] });
+    await interaction.editReply({ content: "", embeds, files, components: [buildButtons()] });
     return;
   }
 
@@ -664,25 +660,11 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     activeGames.set(key, game);
 
     const { embeds, files } = await buildGameEmbed(game, true);
-    await interaction.editReply({ content: "", embeds, files, components: [buildButtons(false)] });
+    await interaction.editReply({ content: "", embeds, files, components: [buildButtons()] });
 
   } else if (action === "stand") {
     const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
     await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
-    await finishGame(interaction, dealerPlay(game));
-
-  } else if (action === "double") {
-    const extra = await deductBet(guildId, user.id, game.bet);
-    if (!extra) {
-      await interaction.followUp({ content: "残高が不足しているためダブルダウンできません。", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
-    await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
-    game.bet *= 2; game.doubled = true; game.balance = extra.balance;
-    const [card, newDeck] = draw(game.deck);
-    game.playerHand = [...game.playerHand, card]; game.deck = newDeck;
-    await cacheCardBuffer(card, game.cardPaths, game.cardBuffers);
     await finishGame(interaction, dealerPlay(game));
 
   } else if (action === "quit") {
@@ -751,7 +733,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   const game: BJGame = {
     guildId, userId, bet, playerHand, dealerHand, deck,
-    doubled: false, currencyName: settings.currencyName,
+    currencyName: settings.currencyName,
     balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
     suitEmojis, cardPaths, cardBuffers, processing: false,
     sessionDeltaBefore: 0, sessionGamesBefore: 0,
@@ -764,7 +746,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   activeGames.set(key, game);
   const { embeds, files } = await buildGameEmbed(game, true);
-  await interaction.editReply({ embeds, files, components: [buildButtons(true)] });
+  await interaction.editReply({ embeds, files, components: [buildButtons()] });
 }
 
 // ─── /blackjack config suit ───────────────────────────────────────────────────
