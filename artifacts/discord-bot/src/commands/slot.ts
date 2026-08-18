@@ -1,4 +1,8 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
   ChatInputCommandInteraction,
   EmbedBuilder,
   Guild,
@@ -30,6 +34,8 @@ const MIN_BET = 1000;
 const MAX_BET = 10_000;
 const SYMBOL_COUNT = 4;
 const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
+
+export const SLOT_REPLAY_PREFIX = "slot:replay:";
 
 // ─── Paylines: 3 horizontal rows + 2 diagonals ───────────────────────────────
 
@@ -140,9 +146,8 @@ function pickOne(pool: Sym[]): Sym {
 }
 
 async function pickSymbolPool(
-  interaction: ChatInputCommandInteraction,
+  guild: Guild,
 ): Promise<{ symbols: Sym[]; weights: Record<string, number>; meta: Map<string, StickerInfo> }> {
-  const guild = interaction.guild!;
   const settings = await getSlotSettings(guild.id);
   const weights = settings.emojiWeights ?? {};
   const meta = new Map<string, StickerInfo>();
@@ -380,12 +385,31 @@ function buildSetupEmbed(
     .setFooter({ text: "weight: 出現重み（高いほど出やすい）| bet × multiplier が利益" });
 }
 
-// ─── Subcommand handlers ──────────────────────────────────────────────────────
+// ─── Play-again button ────────────────────────────────────────────────────────
 
-async function handlePlay(interaction: ChatInputCommandInteraction): Promise<void> {
-  const bet = interaction.options.getInteger("bet", true);
+function buildPlayAgainRow(userId: string, bet: number): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${SLOT_REPLAY_PREFIX}${userId}:${bet}`)
+      .setLabel("もう一度")
+      .setEmoji("🎰")
+      .setStyle(ButtonStyle.Primary),
+  );
+}
+
+// ─── Shared spin core ─────────────────────────────────────────────────────────
+
+/**
+ * ベット控除 → スピン → 結果表示。
+ * スラッシュコマンドとボタンリプレイの両方から呼ばれる。
+ * 呼び出し元が reply / deferUpdate を済ませた後に呼ぶこと。
+ */
+async function spinAndReply(
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
+  bet: number,
+): Promise<void> {
   const { guildId } = interaction;
-  if (!guildId) return;
+  if (!guildId || !interaction.guild) return;
   const userId = interaction.user.id;
 
   const [, { currencyName }, slotSettings] = await Promise.all([
@@ -394,22 +418,22 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     getSlotSettings(guildId),
   ]);
 
-  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
-
   const afterDeduct = await deductBet(guildId, userId, bet);
   if (!afterDeduct) {
     await interaction.editReply({
+      content: "",
       embeds: [
         new EmbedBuilder()
           .setTitle("🎰 スロット 3×3")
           .setDescription("❌ 残高が不足しています。")
           .setColor(0xed4245),
       ],
+      components: [],
     });
     return;
   }
 
-  const { symbols, weights, meta } = await pickSymbolPool(interaction);
+  const { symbols, weights, meta } = await pickSymbolPool(interaction.guild);
   const pool = buildWeightedPool(symbols, weights);
   const grid = spinGrid(pool);
   const paylines = evaluatePaylines(grid);
@@ -433,9 +457,55 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     );
   }
 
-  await new Promise((res) => setTimeout(res, 1300));
   const { content, embed } = buildResult(grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta);
-  await interaction.editReply({ content, embeds: [embed] });
+  await interaction.editReply({
+    content,
+    embeds: [embed],
+    components: [buildPlayAgainRow(userId, bet)],
+  });
+}
+
+// ─── Subcommand handlers ──────────────────────────────────────────────────────
+
+async function handlePlay(interaction: ChatInputCommandInteraction): Promise<void> {
+  const bet = interaction.options.getInteger("bet", true);
+  const { guildId } = interaction;
+  if (!guildId) return;
+
+  const { currencyName } = await getGuildSettings(guildId);
+  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
+  await new Promise((res) => setTimeout(res, 1300));
+  await spinAndReply(interaction, bet);
+}
+
+// ─── Button handler (replay) ──────────────────────────────────────────────────
+
+export async function handleSlotPlayAgainBtn(interaction: ButtonInteraction): Promise<void> {
+  const payload = interaction.customId.slice(SLOT_REPLAY_PREFIX.length);
+  const colonIdx = payload.indexOf(":");
+  if (colonIdx === -1) { await interaction.deferUpdate(); return; }
+
+  const ownerId = payload.slice(0, colonIdx);
+  const bet = Number(payload.slice(colonIdx + 1));
+
+  // 本人以外は無視
+  if (interaction.user.id !== ownerId) {
+    await interaction.reply({ content: "❌ このボタンはコマンドを実行した本人のみ使用できます。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  if (!Number.isFinite(bet) || bet < MIN_BET || bet > MAX_BET) {
+    await interaction.deferUpdate();
+    return;
+  }
+
+  const { guildId } = interaction;
+  if (!guildId) { await interaction.deferUpdate(); return; }
+
+  const { currencyName } = await getGuildSettings(guildId);
+  await interaction.update({ embeds: [buildSpinningEmbed(bet, currencyName)], components: [], content: "" });
+  await new Promise((res) => setTimeout(res, 1300));
+  await spinAndReply(interaction, bet);
 }
 
 /** 入力値が絵文字文字列か sticker ID かを判定してキーを返す */
