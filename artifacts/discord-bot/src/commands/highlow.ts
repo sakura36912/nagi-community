@@ -390,9 +390,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     game.processing = true;
     activeGames.set(key, game);
 
-    // 現在のカード画像を維持したまま「更新中」を表示
-    const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game);
-    await interaction.update({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
+    // 即座に acknowledge してから重い処理を行う
+    await interaction.deferUpdate();
 
     const [nextCard, newDeck]  = draw(game.deck);
     const currentValue         = hlCardValue(game.currentCard.rank);
