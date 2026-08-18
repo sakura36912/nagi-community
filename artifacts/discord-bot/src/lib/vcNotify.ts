@@ -27,6 +27,23 @@ export function formatDuration(totalSecs: number): string {
   return `${s}秒`;
 }
 
+// ─── Join deduplication ───────────────────────────────────────────────────────
+
+/**
+ * Tracks the last time a join notification was sent for a given
+ * guildId:userId:channelId triple.
+ *
+ * Discord mobile clients sometimes fire multiple VOICE_STATE_UPDATE events
+ * in rapid succession for a single physical join (e.g. during connection
+ * negotiation). Without dedup this results in 2–3 identical join embeds.
+ *
+ * 5 seconds is long enough to absorb any Discord gateway burst, yet short
+ * enough that a user who genuinely leaves and rejoins the same VC within
+ * a few seconds will still get a notification on the second entry.
+ */
+const JOIN_DEDUP_MS = 5_000;
+const recentJoins = new Map<string, number>(); // `guildId:userId:channelId` → timestamp
+
 // ─── Notification senders ─────────────────────────────────────────────────────
 
 /**
@@ -35,6 +52,9 @@ export function formatDuration(totalSecs: number): string {
  * Silently no-ops when `notifyChannelId` is absent from
  * `guild.channels.cache` (e.g. the channel was deleted after the bot
  * fetched its settings), or when sending fails for any reason.
+ *
+ * Deduplicates notifications within a 5-second window to suppress the
+ * spurious duplicate events that Discord mobile clients emit on join.
  */
 export async function sendVcNotifyJoin(
   guild: VoiceState["guild"],
@@ -42,6 +62,12 @@ export async function sendVcNotifyJoin(
   channelId: string,
   notifyChannelId: string,
 ): Promise<void> {
+  // Dedup: skip if we already sent a join for this user+channel recently.
+  const dedupKey = `${guild.id}:${userId}:${channelId}`;
+  const lastSent = recentJoins.get(dedupKey);
+  if (lastSent !== undefined && Date.now() - lastSent < JOIN_DEDUP_MS) return;
+  recentJoins.set(dedupKey, Date.now());
+
   try {
     const ch = guild.channels.cache.get(notifyChannelId);
     if (!ch || !("send" in ch)) return;
