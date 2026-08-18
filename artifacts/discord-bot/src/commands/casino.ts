@@ -4,13 +4,14 @@
  * サブコマンド:
  *   stats [user]   : カジノの勝敗履歴をゲーム別・合計で表示する
  *   wallet         : サーバー内メンバーの保持通貨の中央値・平均値・最大値を表示する（管理者）
+ *   average        : 全メンバーの平均収支を1週間・1ヶ月・全期間で表示する（管理者）
  */
 
 import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, gte, or, sql } from "drizzle-orm";
 import { db, transactionsTable, walletsTable } from "@workspace/db";
 import {
   EmbedBuilder,
@@ -255,6 +256,128 @@ async function handleStats(interaction: ChatInputCommandInteraction): Promise<vo
   await interaction.editReply({ embeds: [embed] });
 }
 
+// ─── /casino average ─────────────────────────────────────────────────────────
+
+/**
+ * 指定期間内のカジノトランザクションから、
+ * ユーザーごとの純損益を集計して返す。
+ * since を省略すると全期間。
+ */
+async function fetchNetDeltaByUser(
+  guildId: string,
+  since?: Date,
+): Promise<Map<string, number>> {
+  const conditions = [
+    eq(transactionsTable.guildId, guildId),
+    or(
+      sql`${transactionsTable.reason} LIKE 'BJ%'`,
+      sql`${transactionsTable.reason} LIKE 'ポーカー%'`,
+      sql`${transactionsTable.reason} LIKE 'ルーレット%'`,
+      sql`${transactionsTable.reason} LIKE 'スロット%'`,
+      sql`${transactionsTable.reason} LIKE 'ハイアンドロー%'`,
+      sql`${transactionsTable.reason} LIKE 'バカラ%'`,
+    ),
+  ];
+  if (since) conditions.push(gte(transactionsTable.createdAt, since));
+
+  const rows = await db
+    .select({ userId: transactionsTable.userId, amount: transactionsTable.amount, reason: transactionsTable.reason })
+    .from(transactionsTable)
+    .where(and(...conditions));
+
+  const netByUser = new Map<string, number>();
+
+  for (const row of rows) {
+    const bet    = extractBet(row.reason);
+    const amount = row.amount;
+    const isSlot = row.reason.startsWith("スロット");
+
+    let net: number;
+    if (isSlot) {
+      net = amount > 0 ? amount - bet : amount;
+    } else if (amount === 0) {
+      net = 0; // BJ 引き分け
+    } else {
+      net = amount;
+    }
+
+    netByUser.set(row.userId, (netByUser.get(row.userId) ?? 0) + net);
+  }
+
+  return netByUser;
+}
+
+interface PeriodResult {
+  label:       string;
+  userCount:   number;
+  totalNet:    number;
+  avgNet:      number;
+}
+
+async function buildPeriodResult(
+  guildId: string,
+  label: string,
+  since?: Date,
+): Promise<PeriodResult> {
+  const netByUser = await fetchNetDeltaByUser(guildId, since);
+  const userCount = netByUser.size;
+  const totalNet  = [...netByUser.values()].reduce((s, v) => s + v, 0);
+  const avgNet    = userCount > 0 ? Math.round(totalNet / userCount) : 0;
+  return { label, userCount, totalNet, avgNet };
+}
+
+async function handleAverage(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ 管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const now       = new Date();
+  const oneWeekAgo  = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000);
+  const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  const [settings, weekResult, monthResult, allResult] = await Promise.all([
+    getGuildSettings(guildId),
+    buildPeriodResult(guildId, "直近1週間",   oneWeekAgo),
+    buildPeriodResult(guildId, "直近1ヶ月",   oneMonthAgo),
+    buildPeriodResult(guildId, "全期間"),
+  ]);
+
+  const { currencyName } = settings;
+
+  const fmtNet = (n: number) => {
+    const sign = n >= 0 ? "+" : "";
+    return `**${sign}${n.toLocaleString()}** ${currencyName}`;
+  };
+
+  const fieldValue = (r: PeriodResult) =>
+    r.userCount === 0
+      ? "データなし"
+      : [
+          `参加人数: **${r.userCount}** 人`,
+          `平均収支: ${fmtNet(r.avgNet)}`,
+          `合計収支: ${fmtNet(r.totalNet)}`,
+        ].join("\n");
+
+  const embed = new EmbedBuilder()
+    .setTitle("📊 全メンバー平均収支")
+    .setColor(COLOR_NEUTRAL)
+    .addFields(
+      { name: `📅 ${weekResult.label}`,  value: fieldValue(weekResult)  },
+      { name: `📅 ${monthResult.label}`, value: fieldValue(monthResult) },
+      { name: `🏛️ ${allResult.label}`,   value: fieldValue(allResult)   },
+    )
+    .setFooter({ text: "平均収支 = 期間内の合計純損益 ÷ プレイ人数" })
+    .setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
 // ─── /casino wallet ───────────────────────────────────────────────────────────
 
 async function handleWalletSummary(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -341,6 +464,11 @@ export const casinoCommand = {
         .setName("wallet")
         .setDescription("【管理者】サーバー内メンバーの保持通貨の中央値・平均値・最大値を表示する"),
     )
+    .addSubcommand((sub) =>
+      sub
+        .setName("average")
+        .setDescription("【管理者】全メンバーの平均収支を1週間・1ヶ月・全期間で表示する"),
+    )
     .addSubcommandGroup((group) =>
       group
         .setName("setup")
@@ -364,6 +492,7 @@ export const casinoCommand = {
     const group = interaction.options.getSubcommandGroup(false);
     if (sub === "stats")   { await handleStats(interaction);         return; }
     if (sub === "wallet")  { await handleWalletSummary(interaction);  return; }
+    if (sub === "average") { await handleAverage(interaction);        return; }
     if (group === "setup" && sub === "max_bet") await handleSetupMaxBet(interaction);
   },
 };
