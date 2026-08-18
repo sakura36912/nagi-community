@@ -16,8 +16,14 @@
 
 import Jimp from "jimp";
 import {
+  ActionRowBuilder,
   AttachmentBuilder,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
   EmbedBuilder,
+  Message,
+  MessageFlags,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
@@ -54,6 +60,28 @@ const COLOR_LOSE = 0xed4245;
 const COLOR_PUSH = 0xfee75c;
 
 const CARD_STRIP_HEIGHT = 90;
+
+// ─── Button prefix & session ──────────────────────────────────────────────────
+
+export const BACCARAT_DRAW_PREFIX = "baccarat:draw:";
+
+interface BaccaratSession {
+  guildId: string;
+  userId: string;
+  bet: number;
+  betOn: BetOn;
+  playerHand: Card[];
+  bankerHand: Card[];
+  deck: Card[];
+  currencyName: string;
+  suitEmojis: SuitEmojis;
+  cardPaths: Map<string, string>;
+  message: Message;
+  timeoutHandle: ReturnType<typeof setTimeout>;
+}
+
+const baccaratSessions = new Map<string, BaccaratSession>();
+function sessionKey(guildId: string, userId: string): string { return `${guildId}:${userId}`; }
 
 // ─── Deck helpers ─────────────────────────────────────────────────────────────
 
@@ -149,6 +177,21 @@ function resolveResult(player: Card[], banker: Card[]): GameResult {
   const b = handTotal(banker);
   if (p === b) return "tie";
   return p > b ? "player" : "banker";
+}
+
+// ─── 3枚目ドロー判定 ─────────────────────────────────────────────────────────
+
+/**
+ * 2枚の初期配布から3枚目が引かれるかを判定する。
+ * ナチュラル（8/9）や双方スタンド（P:6/7 かつ B:6/7）は false。
+ */
+function willAnyDraw(playerHand: Card[], bankerHand: Card[]): boolean {
+  const pTotal = handTotal(playerHand);
+  const bTotal = handTotal(bankerHand);
+  if (pTotal >= 8 || bTotal >= 8) return false; // ナチュラル
+  if (pTotal <= 5) return true;                  // プレイヤーが引く
+  // プレイヤースタンド（6 or 7）: バンカーが 0〜5 なら引く
+  return bTotal <= 5;
 }
 
 // ─── Balance helpers ──────────────────────────────────────────────────────────
@@ -317,6 +360,128 @@ async function buildResultEmbeds(
   return { embeds, files };
 }
 
+// ─── Deal embed（2枚配布後の表示） ────────────────────────────────────────────
+
+async function buildDealEmbeds(
+  playerHand: Card[],
+  bankerHand: Card[],
+  betOn: BetOn,
+  bet: number,
+  currencyName: string,
+  suitEmojis: SuitEmojis,
+  cardBuffers: Map<string, Buffer>,
+  guildId: string,
+  userId: string,
+): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] }> {
+  const pTotal = handTotal(playerHand);
+  const bTotal = handTotal(bankerHand);
+
+  const [playerStrip, bankerStrip] = await Promise.all([
+    buildHandStrip(playerHand, cardBuffers, "deal_player.png"),
+    buildHandStrip(bankerHand, cardBuffers, "deal_banker.png"),
+  ]);
+
+  const BET_LABEL: Record<BetOn, string> = {
+    player: "🔵 プレイヤー", banker: "🔴 バンカー", tie: "🤝 タイ",
+  };
+
+  const pValue = playerStrip
+    ? `**${pTotal}**（2枚）`
+    : `${fmtHand(playerHand, suitEmojis)}　**${pTotal}**`;
+  const bValue = bankerStrip
+    ? `**${bTotal}**（2枚）`
+    : `${fmtHand(bankerHand, suitEmojis)}　**${bTotal}**`;
+
+  const dealEmbed = new EmbedBuilder()
+    .setTitle("🎴 バカラ — 2枚配布")
+    .setColor(0x5865f2)
+    .addFields(
+      { name: "🔵 プレイヤー", value: pValue, inline: true },
+      { name: "🔴 バンカー",   value: bValue, inline: true },
+      { name: "\u200B",        value: "\u200B", inline: true },
+      { name: "ベット",        value: BET_LABEL[betOn], inline: true },
+      { name: "賭け金",        value: `**${bet.toLocaleString()}** ${currencyName}`, inline: true },
+    )
+    .setFooter({ text: "60秒以内にドローしてください" });
+
+  const embeds: EmbedBuilder[] = [];
+  const files: AttachmentBuilder[] = [];
+  if (playerStrip) {
+    embeds.push(new EmbedBuilder().setTitle("🔵 プレイヤー").setImage("attachment://deal_player.png"));
+    files.push(playerStrip.attachment);
+  }
+  if (bankerStrip) {
+    embeds.push(new EmbedBuilder().setTitle("🔴 バンカー").setImage("attachment://deal_banker.png"));
+    files.push(bankerStrip.attachment);
+  }
+  embeds.push(dealEmbed);
+
+  const drawButton = new ButtonBuilder()
+    .setCustomId(`${BACCARAT_DRAW_PREFIX}${guildId}:${userId}`)
+    .setLabel("🃏 ドロー")
+    .setStyle(ButtonStyle.Primary);
+
+  return { embeds, files, components: [new ActionRowBuilder<ButtonBuilder>().addComponents(drawButton)] };
+}
+
+// ─── Resolve & payout（ボタンハンドラ・タイムアウト共用） ──────────────────────
+
+async function resolveAndPayout(
+  guildId: string,
+  userId: string,
+  bet: number,
+  betOn: BetOn,
+  playerHand: Card[],
+  bankerHand: Card[],
+  deck: Card[],
+  currencyName: string,
+  suitEmojis: SuitEmojis,
+  cardPaths: Map<string, string>,
+): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[] }> {
+  const { player: finalPlayer, banker: finalBanker } = playBaccarat(playerHand, bankerHand, deck);
+  const cardBuffers = new Map<string, Buffer>();
+  await cacheHandBuffers([...finalPlayer, ...finalBanker], cardPaths, cardBuffers);
+  const gameResult = resolveResult(finalPlayer, finalBanker);
+
+  let netDelta: number;
+  let reason: string;
+
+  if (gameResult === "tie") {
+    if (betOn === "tie") {
+      const winnings = bet * 8;
+      await creditAmount(guildId, userId, bet + winnings);
+      netDelta = winnings;
+      reason   = `バカラ タイ的中（賭け: ${bet}）`;
+    } else {
+      await creditAmount(guildId, userId, bet);
+      netDelta = 0;
+      reason   = `バカラ プッシュ（賭け: ${bet}）`;
+    }
+  } else if (gameResult === betOn) {
+    if (betOn === "banker") {
+      const winnings = Math.floor(bet * 0.95);
+      await creditAmount(guildId, userId, bet + winnings);
+      netDelta = winnings;
+      reason   = `バカラ バンカー勝利（賭け: ${bet}）`;
+    } else {
+      const winnings = bet;
+      await creditAmount(guildId, userId, bet + winnings);
+      netDelta = winnings;
+      reason   = `バカラ プレイヤー勝利（賭け: ${bet}）`;
+    }
+  } else {
+    netDelta = -bet;
+    const side = betOn === "player" ? "プレイヤーベット" : betOn === "banker" ? "バンカーベット" : "タイベット";
+    reason = `バカラ 敗北 ${side}（賭け: ${bet}）`;
+  }
+
+  await recordTransaction(guildId, userId, netDelta, reason).catch(() => {});
+
+  return buildResultEmbeds(
+    finalPlayer, finalBanker, gameResult, betOn, bet, netDelta, currencyName, suitEmojis, cardBuffers,
+  );
+}
+
 // ─── /baccarat ────────────────────────────────────────────────────────────────
 
 async function handlePlay(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -373,56 +538,95 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const playerHand: Card[] = [p1, p2];
   const bankerHand: Card[] = [b1, b2];
 
-  // ─── 3枚目自動処理 ────────────────────────────────────────────────────────
-  const { player: finalPlayer, banker: finalBanker } = playBaccarat(playerHand, bankerHand, deck);
+  const suitEmojis = resolveSuitEmojis(settings);
 
-  // ─── カード画像キャッシュ ──────────────────────────────────────────────────
-  const suitEmojis  = resolveSuitEmojis(settings);
-  const cardBuffers = new Map<string, Buffer>();
-  await cacheHandBuffers([...finalPlayer, ...finalBanker], cardPaths, cardBuffers);
-
-  // ─── 精算 ─────────────────────────────────────────────────────────────────
-  const gameResult = resolveResult(finalPlayer, finalBanker);
-  let netDelta: number;
-  let reason: string;
-
-  if (gameResult === "tie") {
-    if (betOn === "tie") {
-      const winnings = bet * 8;
-      await creditAmount(guildId, userId, bet + winnings);
-      netDelta = winnings;
-      reason   = `バカラ タイ的中（賭け: ${bet}）`;
-    } else {
-      await creditAmount(guildId, userId, bet);
-      netDelta = 0;
-      reason   = `バカラ プッシュ（賭け: ${bet}）`;
-    }
-  } else if (gameResult === betOn) {
-    if (betOn === "banker") {
-      const winnings = Math.floor(bet * 0.95);
-      await creditAmount(guildId, userId, bet + winnings);
-      netDelta = winnings;
-      reason   = `バカラ バンカー勝利（賭け: ${bet}）`;
-    } else {
-      const winnings = bet;
-      await creditAmount(guildId, userId, bet + winnings);
-      netDelta = winnings;
-      reason   = `バカラ プレイヤー勝利（賭け: ${bet}）`;
-    }
-  } else {
-    netDelta = -bet;
-    const side = betOn === "player" ? "プレイヤーベット" : betOn === "banker" ? "バンカーベット" : "タイベット";
-    reason = `バカラ 敗北 ${side}（賭け: ${bet}）`;
+  // ─── 3枚目なし（ナチュラル or 双方スタンド）→ 即時結果表示 ────────────────
+  if (!willAnyDraw(playerHand, bankerHand)) {
+    const { embeds, files } = await resolveAndPayout(
+      guildId, userId, bet, betOn, playerHand, bankerHand, deck,
+      currencyName, suitEmojis, cardPaths,
+    );
+    await interaction.editReply({ embeds, files });
+    return;
   }
 
-  await recordTransaction(guildId, userId, netDelta, reason).catch(() => {});
-
-  // ─── 結果表示 ─────────────────────────────────────────────────────────────
-  const { embeds, files } = await buildResultEmbeds(
-    finalPlayer, finalBanker, gameResult, betOn, bet, netDelta, currencyName, suitEmojis, cardBuffers,
+  // ─── 3枚目あり → 2枚状態を表示してドローボタンを置く ──────────────────────
+  const dealCardBuffers = new Map<string, Buffer>();
+  await cacheHandBuffers([...playerHand, ...bankerHand], cardPaths, dealCardBuffers);
+  const { embeds: dealEmbeds, files: dealFiles, components } = await buildDealEmbeds(
+    playerHand, bankerHand, betOn, bet, currencyName, suitEmojis, dealCardBuffers, guildId, userId,
   );
 
-  await interaction.editReply({ embeds, files });
+  // 同ユーザーの既存セッションがあればキャンセル
+  const key = sessionKey(guildId, userId);
+  const existingSession = baccaratSessions.get(key);
+  if (existingSession) {
+    clearTimeout(existingSession.timeoutHandle);
+    baccaratSessions.delete(key);
+  }
+
+  const msg = await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components });
+
+  // 60秒後に自動解決（放置対策）
+  let session: BaccaratSession;
+  const timeoutHandle = setTimeout(async () => {
+    baccaratSessions.delete(key);
+    try {
+      const { embeds: rEmbeds, files: rFiles } = await resolveAndPayout(
+        session.guildId, session.userId, session.bet, session.betOn,
+        session.playerHand, session.bankerHand, session.deck,
+        session.currencyName, session.suitEmojis, session.cardPaths,
+      );
+      await session.message.edit({ embeds: rEmbeds, files: rFiles, components: [] });
+    } catch { /* non-fatal */ }
+  }, 60_000);
+
+  session = {
+    guildId, userId, bet, betOn,
+    playerHand, bankerHand, deck,
+    currencyName, suitEmojis, cardPaths,
+    message: msg as Message,
+    timeoutHandle,
+  };
+  baccaratSessions.set(key, session);
+}
+
+// ─── Button handler ───────────────────────────────────────────────────────────
+
+/** 「🃏 ドロー」ボタン押下 → 3枚目処理 → 結果表示 */
+export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Promise<void> {
+  // custom ID format: "baccarat:draw:{guildId}:{userId}"
+  const payload  = interaction.customId.slice(BACCARAT_DRAW_PREFIX.length);
+  const colonIdx = payload.indexOf(":");
+  const guildId  = payload.slice(0, colonIdx);
+  const userId   = payload.slice(colonIdx + 1);
+
+  if (interaction.user.id !== userId) {
+    await interaction.reply({ content: "❌ このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const key     = sessionKey(guildId, userId);
+  const session = baccaratSessions.get(key);
+  if (!session) {
+    await interaction.reply({ content: "❌ セッションが期限切れです（60秒でタイムアウト）。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  clearTimeout(session.timeoutHandle);
+  baccaratSessions.delete(key);
+
+  await interaction.deferUpdate();
+  try {
+    const { embeds, files } = await resolveAndPayout(
+      session.guildId, session.userId, session.bet, session.betOn,
+      session.playerHand, session.bankerHand, session.deck,
+      session.currencyName, session.suitEmojis, session.cardPaths,
+    );
+    await interaction.editReply({ embeds, files, components: [] });
+  } catch {
+    await interaction.editReply({ content: "❌ エラーが発生しました。", components: [] }).catch(() => {});
+  }
 }
 
 // ─── Command export ───────────────────────────────────────────────────────────
