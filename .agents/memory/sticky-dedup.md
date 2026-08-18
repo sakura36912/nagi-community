@@ -1,24 +1,43 @@
 ---
 name: Sticky message deduplication
-description: スティッキーメッセージが重複投稿される問題の根本原因と修正方針
+description: スティッキーメッセージが重複投稿される問題の根本原因と確定実装
 ---
 
-## ルール
-スティッキーメッセージの MessageCreate ハンドラでボット自身のメッセージを除外するときは
-`message.author.bot` を使う。`message.author.id === client.user?.id` は使わない。
+## 確定実装（lock + author.bot）
 
-## Why
-`client.user?.id` は WebSocket reconnect の瞬間に `undefined` を返すことがある。
-その状態でボット自身が投稿したスティッキーの MessageCreate が届くと除外されず、
-デバウンスタイマーが再セットされて1秒後にもう1件投稿される（計2件）。
-`message.author.bot` は discord.js が常に正しく設定するフラグなので安全。
-
-## How to apply
-スティッキーハンドラ冒頭:
 ```typescript
-if (message.author.bot) return; // ボット（自分自身を含む）の投稿は無視
+const stickyProcessingChannels = new Set<string>();
+
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot) return; // ボット投稿（自分自身を含む）は無視
+  if (!message.guildId) return;
+
+  const channelKey = `${message.guildId}:${message.channelId}`;
+  if (stickyProcessingChannels.has(channelKey)) return;
+  stickyProcessingChannels.add(channelKey);
+
+  try {
+    // getStickyMessage → bulk-delete → channel.send → updateLastMessageId
+  } finally {
+    stickyProcessingChannels.delete(channelKey);
+  }
+});
 ```
 
-また、デバウンス方式（チャンネルごとに 1 秒タイマーをリセット）を採用している。
-孤立スティッキーの一掃: 再投稿前に直近 100 件から `author.bot && content === sticky.content` を
-全削除 (`Promise.allSettled(msgs.map(m => m.delete()))`) してから新規投稿する。
+## Why: デバウンスを使わない理由
+
+デバウンスは「タイマーが自分をマップから削除した直後から非同期処理完了まで」の間に
+新規メッセージが届くと第2タイマーが立ち上がり並走する。結果として2件投稿される。
+構造的に解消できないため採用しない。
+
+## Why: `message.author.id === client.user?.id` を使わない理由
+
+WebSocket reconnect の瞬間に `client.user` が null になることがあり、
+ボット自身のスティッキー投稿が除外されずロック解放後に再度処理される。
+`message.author.bot` は discord.js が常に正しく設定するため安全。
+
+## 孤立スティッキーの除去
+
+再投稿前に直近100件を fetch し `m.author.bot && m.content === sticky.content` に
+マッチするものを `Promise.allSettled(msgs.map(m => m.delete()))` で全削除する。
+これにより過去の重複投稿バグで生じた孤立メッセージも次回ユーザー投稿時に消える。

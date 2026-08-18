@@ -1342,55 +1342,50 @@ const INITIAL_ISSUE_CHANNEL_ID = "1526673304327291050";
 
 // ─── MessageCreate — スティッキーメッセージ ───────────────────────────────────
 
-// デバウンス方式: チャンネルごとに 1 秒タイマーをリセットしながら積み、
-// 最後のメッセージから 1 秒後に1度だけ再投稿する。
-// これにより Discord の重複イベントやバースト送信でも必ず1回しか再投稿されない。
-const stickyDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// ボットメッセージは message.author.bot で弾き、ユーザーメッセージは
+// チャンネルごとのロックで同時実行を防ぐ。
+// ※ デバウンス方式は「タイマー削除後に非同期処理が続く間に新規タイマーが
+//    並走して2件投稿される」レースコンディションがあるため採用しない。
+const stickyProcessingChannels = new Set<string>();
 
 client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return; // ボット（自分自身を含む）の投稿は無視
+  if (message.author.bot) return; // ボット投稿（自分自身を含む）は無視
   if (!message.guildId) return;
 
   const guildId    = message.guildId;
   const channelKey = `${guildId}:${message.channelId}`;
 
-  // 既存タイマーをキャンセルしてリセット
-  const existing = stickyDebounceTimers.get(channelKey);
-  if (existing) clearTimeout(existing);
+  if (stickyProcessingChannels.has(channelKey)) return; // 処理中はスキップ
+  stickyProcessingChannels.add(channelKey);
 
-  const timer = setTimeout(async () => {
-    stickyDebounceTimers.delete(channelKey);
+  try {
+    const sticky = await getStickyMessage(guildId, message.channelId).catch(() => null);
+    if (!sticky) return;
 
+    // 直近100件のうちボット自身のスティッキーと同内容のものをまとめて削除
+    // （過去の重複投稿による孤立メッセージも一緒に消える）
     try {
-      const sticky = await getStickyMessage(guildId, message.channelId).catch(() => null);
-      if (!sticky) return;
-
-      // 直近100件のうちボット自身が送ったスティッキーと同内容のメッセージを全削除
-      try {
-        const recent = await message.channel.messages.fetch({ limit: 100 });
-        const botStickies = recent.filter(
-          (m) => m.author.id === client.user?.id && m.content === sticky.content,
-        );
-        if (botStickies.size > 0) {
-          await Promise.allSettled(botStickies.map((m) => m.delete()));
-        }
-      } catch (err) {
-        logger.warn(`[sticky] Failed to bulk-delete old stickies in ${message.channelId}`, err);
-      }
-
-      // 最下部に再投稿
-      try {
-        const posted = await message.channel.send({ content: sticky.content, allowedMentions: { parse: [] } });
-        await updateStickyLastMessageId(guildId, message.channelId, posted.id);
-      } catch (err) {
-        logger.warn(`[sticky] Failed to re-post sticky in ${message.channelId}`, err);
+      const recent = await message.channel.messages.fetch({ limit: 100 });
+      const botStickies = recent.filter(
+        (m) => m.author.bot && m.content === sticky.content,
+      );
+      if (botStickies.size > 0) {
+        await Promise.allSettled(botStickies.map((m) => m.delete()));
       }
     } catch (err) {
-      logger.warn(`[sticky] Unexpected error in debounce handler for ${message.channelId}`, err);
+      logger.warn(`[sticky] Failed to bulk-delete old stickies in ${message.channelId}`, err);
     }
-  }, 1000);
 
-  stickyDebounceTimers.set(channelKey, timer);
+    // 最下部に再投稿
+    try {
+      const posted = await message.channel.send({ content: sticky.content, allowedMentions: { parse: [] } });
+      await updateStickyLastMessageId(guildId, message.channelId, posted.id);
+    } catch (err) {
+      logger.warn(`[sticky] Failed to re-post sticky in ${message.channelId}`, err);
+    }
+  } finally {
+    stickyProcessingChannels.delete(channelKey);
+  }
 });
 
 client.on(Events.MessageCreate, async (message) => {
