@@ -25,8 +25,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, recordTransaction, getOrCreateWallet, setBjSuitEmoji } from "../lib/economy";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
-import { getBjCardImages, setBjCardImage } from "../lib/bjCardImages";
-import { uploadImageFromUrl, downloadImageAsBuffer } from "../lib/gcsStorage";
+import { getBjCardImages, setBjCardImage, deleteBjCardImage } from "../lib/bjCardImages";
+import { uploadImageFromUrl, downloadImageAsBuffer, deleteGcsObject } from "../lib/gcsStorage";
 import type { GuildSettings } from "@workspace/db";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -871,6 +871,52 @@ async function handleConfigList(interaction: ChatInputCommandInteraction): Promi
   await interaction.editReply({ embeds: [embed] });
 }
 
+// ─── /blackjack config delete ─────────────────────────────────────────────────
+
+async function handleConfigDelete(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ 管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const rank = interaction.options.getString("rank", true);
+  const suit = interaction.options.getString("suit", true);
+
+  // DB から登録済みのオブジェクトパスを取得する
+  const cardImages = await getBjCardImages(guildId);
+  const key        = `${rank}:${suit}`;
+  const objectPath = cardImages.get(key);
+
+  if (!objectPath) {
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🃏 ブラックジャック — カード画像削除")
+          .setColor(COLOR_LOSE)
+          .setDescription(`**${rank} ${SUIT_DISPLAY[suit] ?? suit}** の画像は登録されていません。`),
+      ],
+    });
+    return;
+  }
+
+  // GCS（Object Storage）から削除してから DB レコードを削除する
+  await deleteGcsObject(objectPath);
+  await deleteBjCardImage(guildId, rank, suit);
+
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🃏 ブラックジャック — カード画像削除")
+        .setColor(COLOR_NEUTRAL)
+        .setDescription(`**${rank} ${SUIT_DISPLAY[suit] ?? suit}** の画像を削除しました。`)
+        .setFooter({ text: "次回ゲームからデフォルト（画像なし）に戻ります" }),
+    ],
+  });
+}
+
 // ─── Command export ───────────────────────────────────────────────────────────
 
 export const blackjackCommand = {
@@ -911,6 +957,15 @@ export const blackjackCommand = {
         )
         .addSubcommand((sub) =>
           sub.setName("list").setDescription("登録済みカード画像の一覧を表示する"),
+        )
+        .addSubcommand((sub) =>
+          sub.setName("delete").setDescription("登録済みカード画像を削除してデフォルトに戻す")
+            .addStringOption((opt) =>
+              opt.setName("rank").setDescription("カードのランク").setRequired(true).addChoices(...RANK_CHOICES),
+            )
+            .addStringOption((opt) =>
+              opt.setName("suit").setDescription("カードのスート").setRequired(true).addChoices(...SUIT_CHOICES),
+            ),
         ),
     ),
 
@@ -922,6 +977,7 @@ export const blackjackCommand = {
       if (sub === "suit") await handleConfigSuit(interaction);
       else if (sub === "card") await handleConfigCard(interaction);
       else if (sub === "list") await handleConfigList(interaction);
+      else if (sub === "delete") await handleConfigDelete(interaction);
     }
   },
 };
