@@ -59,7 +59,7 @@ type EmbedWithFiles = { embeds: EmbedBuilder[]; files: AttachmentBuilder[] };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MIN_BET = 10;
+const MIN_BET = 1000;
 const GAME_TTL_MS = 5 * 60 * 1000;
 
 /** 正解ごとに受け取り予定額に掛けるペイアウト倍率 */

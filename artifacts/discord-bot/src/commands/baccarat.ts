@@ -53,7 +53,7 @@ const SUIT_KEY: Record<Suit, string> = {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MIN_BET = 10;
+const MIN_BET = 1000;
 const MAX_BET = 10_000;
 const SESSION_TTL_MS = 5 * 60 * 1000; // 5分
 
