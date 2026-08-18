@@ -60,6 +60,7 @@ type EmbedWithFiles = { embeds: EmbedBuilder[]; files: AttachmentBuilder[] };
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MIN_BET = 1000;
+const MAX_BET = 10_000;
 const GAME_TTL_MS = 5 * 60 * 1000;
 
 /** 正解ごとに受け取り予定額に掛けるペイアウト倍率 */
@@ -503,9 +504,10 @@ export const highlowCommand = {
         .addIntegerOption((opt) =>
           opt
             .setName("bet")
-            .setDescription(`賭け金（最低 ${MIN_BET.toLocaleString()}）`)
+            .setDescription(`賭け金（${MIN_BET.toLocaleString()}〜${MAX_BET.toLocaleString()}）`)
             .setRequired(true)
-            .setMinValue(MIN_BET),
+            .setMinValue(MIN_BET)
+            .setMaxValue(MAX_BET),
         ),
     ),
   async execute(interaction: ChatInputCommandInteraction) {

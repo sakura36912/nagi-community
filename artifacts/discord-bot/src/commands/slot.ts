@@ -584,7 +584,7 @@ export const slotCommand: Command = {
         .addIntegerOption((opt) =>
           opt
             .setName("bet")
-            .setDescription(`賭け金額（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
+            .setDescription(`賭け金額（${MIN_BET.toLocaleString()}〜${MAX_BET.toLocaleString()}）`)
             .setRequired(true)
             .setMinValue(MIN_BET)
             .setMaxValue(MAX_BET),

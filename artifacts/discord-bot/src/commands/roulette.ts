@@ -29,8 +29,8 @@ import { CASINO_DEFAULT_MAX_BET } from "./casino";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MIN_BET       = 10;
-const MAX_BET       = 100_000;
+const MIN_BET       = 1000;
+const MAX_BET       = 10_000;
 const SESSION_TTL   = 3 * 60 * 1000; // 3分
 
 const RED_NUMBERS = new Set([
@@ -382,7 +382,7 @@ export const rouletteCommand = {
     .setDefaultMemberPermissions(0)
     .addIntegerOption((o) =>
       o.setName("bet")
-        .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
+        .setDescription(`賭け金（${MIN_BET.toLocaleString()}〜${MAX_BET.toLocaleString()}）`)
         .setMinValue(MIN_BET)
         .setMaxValue(MAX_BET)
         .setRequired(true),

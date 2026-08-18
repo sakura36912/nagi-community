@@ -846,7 +846,7 @@ export const blackjackCommand = {
       sub.setName("play")
         .setDescription("ブラックジャック — 21を目指せ！BJ=1.5倍・通常勝利=1倍")
         .addIntegerOption((opt) =>
-          opt.setName("bet").setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
+          opt.setName("bet").setDescription(`賭け金（${MIN_BET.toLocaleString()}〜${MAX_BET.toLocaleString()}）`)
             .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
         ),
     )

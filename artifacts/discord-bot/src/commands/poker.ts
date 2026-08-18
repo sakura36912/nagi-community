@@ -534,7 +534,7 @@ export const pokerCommand = {
     .addIntegerOption((opt) =>
       opt
         .setName("bet")
-        .setDescription(`賭け金（${MIN_BET}〜${MAX_BET.toLocaleString()}）`)
+        .setDescription(`賭け金（${MIN_BET.toLocaleString()}〜${MAX_BET.toLocaleString()}）`)
         .setMinValue(MIN_BET)
         .setMaxValue(MAX_BET)
         .setRequired(true),
