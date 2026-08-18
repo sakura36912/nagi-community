@@ -19,6 +19,7 @@ import {
   getShiftSettings,
   getShiftsInRange,
   removeShift,
+  setShiftListRoles,
   setShiftRewardAmount,
   setShiftSettings,
   setShiftSubmitRoles,
@@ -584,6 +585,18 @@ export const shiftCommand: Command = {
         )
         .addBooleanOption((opt) =>
           opt.setName("submit_role_clear").setDescription("submitロール制限を解除して全員に開放する").setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("list_role_1").setDescription("/shift list を使えるロール①").setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("list_role_2").setDescription("/shift list を使えるロール②").setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("list_role_3").setDescription("/shift list を使えるロール③").setRequired(false),
+        )
+        .addBooleanOption((opt) =>
+          opt.setName("list_role_clear").setDescription("listロール制限を解除して全員に開放する").setRequired(false),
         ),
     ),
 
@@ -665,6 +678,23 @@ export const shiftCommand: Command = {
 
     // ── /shift list ───────────────────────────────────────────────────────────
     if (sub === "list") {
+      // ロール制限チェック
+      const listSettings = await getShiftSettings(guildId);
+      const listAllowedRoles = listSettings?.listRoleIds ?? [];
+      if (listAllowedRoles.length > 0 && !isAdmin) {
+        const memberRoles = interaction.member && "roles" in interaction.member
+          ? (interaction.member.roles as { cache: Map<string, unknown> }).cache
+          : null;
+        const hasListRole = memberRoles ? listAllowedRoles.some((id: string) => memberRoles.has(id)) : false;
+        if (!hasListRole) {
+          await interaction.reply({
+            content: "❌ このコマンドは指定されたロールのメンバーのみ使用できます。",
+            ephemeral: true,
+          });
+          return;
+        }
+      }
+
       await interaction.deferReply();
 
       const period = interaction.options.getString("period") ?? "week_0";
@@ -777,10 +807,14 @@ export const shiftCommand: Command = {
       const submitRoles    = [1, 2, 3]
         .map((n) => interaction.options.getRole(`submit_role_${n}`))
         .filter(Boolean);
+      const clearListRoles = interaction.options.getBoolean("list_role_clear") ?? false;
+      const listRoles      = [1, 2, 3]
+        .map((n) => interaction.options.getRole(`list_role_${n}`))
+        .filter(Boolean);
 
-      if (!channelOpt && !postNow && rewardOpt === null && submitRoles.length === 0 && !clearRoles) {
+      if (!channelOpt && !postNow && rewardOpt === null && submitRoles.length === 0 && !clearRoles && listRoles.length === 0 && !clearListRoles) {
         await interaction.editReply(
-          "`channel`・`reward`・`post-now`・`submit_role_*`・`submit_role_clear` のいずれかを指定してください。",
+          "`channel`・`reward`・`post-now`・`submit_role_*`・`submit_role_clear`・`list_role_*`・`list_role_clear` のいずれかを指定してください。",
         );
         return;
       }
@@ -805,6 +839,16 @@ export const shiftCommand: Command = {
         const roleIds = submitRoles.map((r) => r!.id);
         await setShiftSubmitRoles(guildId, roleIds);
         lines.push(`✅ \`/shift submit\` を使用できるロールを設定しました: ${submitRoles.map((r) => `<@&${r!.id}>`).join(" ")}`);
+      }
+
+      // listロール設定
+      if (clearListRoles) {
+        await setShiftListRoles(guildId, []);
+        lines.push("✅ `/shift list` のロール制限を解除しました（全員が使用可能）。");
+      } else if (listRoles.length > 0) {
+        const listRoleIds = listRoles.map((r) => r!.id);
+        await setShiftListRoles(guildId, listRoleIds);
+        lines.push(`✅ \`/shift list\` を使用できるロールを設定しました: ${listRoles.map((r) => `<@&${r!.id}>`).join(" ")}`);
       }
 
       // チャンネル変更

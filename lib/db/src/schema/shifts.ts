@@ -12,6 +12,8 @@ export const shiftSettingsTable = pgTable("shift_settings", {
   shiftRewardAmount: integer("shift_reward_amount").notNull().default(0),
   /** Role IDs allowed to use /shift submit. Empty = everyone. */
   submitRoleIds: text("submit_role_ids").array().notNull().default(sql`'{}'::text[]`),
+  /** Role IDs allowed to use /shift list. Empty = everyone. */
+  listRoleIds: text("list_role_ids").array().notNull().default(sql`'{}'::text[]`),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
