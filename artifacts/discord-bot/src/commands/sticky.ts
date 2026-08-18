@@ -99,15 +99,24 @@ export const stickyCommand = {
           await textChannel.messages.delete(existing.lastMessageId).catch(() => null);
         }
 
-        // 直近50件も念のりスキャンして孤立スティッキーを除去
+        // 直近200件（2ページ×100件）をスキャンして孤立スティッキーを除去。
+        // MessageCreate ハンドラと同じ範囲にそろえることで、50件圏外に
+        // 押し出された孤立スティッキーを /sticky set 実行時にも確実に消す。
         if (textChannel?.isTextBased()) {
           try {
-            const recent = await textChannel.messages.fetch({ limit: 50 });
-            const orphans = recent.filter(
+            const batch1 = await textChannel.messages.fetch({ limit: 100 });
+            const orphans1 = batch1.filter(
               (m) => m.author.bot && (m.content === existing?.content || m.content === content),
             );
-            if (orphans.size > 0) {
-              await Promise.allSettled(orphans.map((m) => m.delete()));
+            if (orphans1.size > 0) await Promise.allSettled(orphans1.map((m) => m.delete()));
+
+            const lastId = batch1.last()?.id;
+            if (lastId) {
+              const batch2 = await textChannel.messages.fetch({ limit: 100, before: lastId });
+              const orphans2 = batch2.filter(
+                (m) => m.author.bot && (m.content === existing?.content || m.content === content),
+              );
+              if (orphans2.size > 0) await Promise.allSettled(orphans2.map((m) => m.delete()));
             }
           } catch { /* non-fatal */ }
         }
