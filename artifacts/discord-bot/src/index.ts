@@ -52,6 +52,7 @@ import {
   handleVcPanelRenameBtn,
   handleVcPanelStreamBtn,
   handleVcRefreshPanels,
+  refreshAllVcPanelsOnStartup,
   handleChestOpenBtn,
   handleVcPanelAddSel,
   handleVcPanelKickSel,
@@ -757,6 +758,9 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   // 起動直後に全シートを即時更新（名簿リンク等の変更を既存シートに即反映）
   runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Startup refresh error", err));
+
+  // 起動直後に全高級船室パネルを最新レイアウトに一括更新（ボタン追加・変更等を既存パネルに即反映）
+  refreshAllVcPanelsOnStartup(readyClient).catch((err) => logger.error("[vc-startup-refresh] Startup panel refresh error", err));
 
   // 酒場 VC 滞在時間を 10 分ごとに DB へフラッシュ（Bot 再起動によるロストを最大 10 分に制限）
   setInterval(() => {

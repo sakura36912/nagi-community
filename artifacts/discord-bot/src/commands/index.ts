@@ -1448,6 +1448,23 @@ const shopCommand: Command = {
         ViewChannel: true, Connect: true, Speak: true, Stream: true, SendMessages: true,
       });
       await interaction.editReply(`✅ <@${targetUser.id}> を高級船室に招待しました。`);
+      // パネルのメンバーリストをリアルタイム更新（best-effort）
+      try {
+        if ("messages" in ch) {
+          const streamEnabled = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, interaction.user.id);
+          const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
+          const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
+          const panelMsg = msgs.find(
+            (m) => m.author.id === interaction.client.user?.id
+              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+          );
+          if (panelMsg) {
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled));
+          }
+        }
+      } catch (err) {
+        logger.warn(`[vc-invite] Failed to refresh panel for channel ${session.channelId}`, err);
+      }
       return;
     }
 
@@ -1475,6 +1492,25 @@ const shopCommand: Command = {
         if (kicked.voice.channelId === session.channelId) await kicked.voice.disconnect();
       } catch { /* non-fatal */ }
       await interaction.editReply(`✅ <@${targetUser.id}> のアクセスを取り消しました。`);
+      // パネルのメンバーリストをリアルタイム更新（best-effort）
+      try {
+        if ("messages" in ch) {
+          const streamEnabled = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, interaction.user.id);
+          // permissionOverwrites.delete() のキャッシュ反映を待たず、kicked ユーザーを明示的に除外する
+          const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id)
+            .filter((id) => id !== targetUser.id);
+          const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
+          const panelMsg = msgs.find(
+            (m) => m.author.id === interaction.client.user?.id
+              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+          );
+          if (panelMsg) {
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled));
+          }
+        }
+      } catch (err) {
+        logger.warn(`[vc-kick] Failed to refresh panel for channel ${session.channelId}`, err);
+      }
       return;
     }
 
@@ -2523,6 +2559,41 @@ export async function handleVcRefreshPanels(interaction: ChatInputCommandInterac
   await interaction.editReply(
     `✅ 高級船室パネルを更新しました。\n更新: ${updated} 件 / スキップ: ${skipped} 件（チャンネル消失・パネルなし）`,
   );
+}
+
+/** 🚀 起動時に全ギルドの既存高級船室パネルを最新レイアウトに一括更新 */
+export async function refreshAllVcPanelsOnStartup(discordClient: import("discord.js").Client): Promise<void> {
+  let updated = 0;
+  let skipped = 0;
+  for (const guild of discordClient.guilds.cache.values()) {
+    try {
+      const sessions = await getActivePrivateVcSessionsByGuild(guild.id);
+      for (const session of sessions) {
+        try {
+          const ch = guild.channels.cache.get(session.channelId)
+            ?? await guild.channels.fetch(session.channelId).catch(() => null);
+          if (!ch || !("messages" in ch)) { skipped++; continue; }
+          const textCh = ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel;
+          const msgs = await textCh.messages.fetch({ limit: 50 });
+          const panelMsg = msgs.find(
+            (m) => m.author.id === discordClient.user?.id
+              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+          );
+          if (!panelMsg) { skipped++; continue; }
+          const memberIds = getVcAccessMemberIds(textCh, session.userId, discordClient.user?.id);
+          const streamEnabled = isPrivateVcStreamEnabled(textCh, session.userId);
+          await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt ?? undefined, memberIds, streamEnabled));
+          updated++;
+        } catch (err) {
+          logger.warn(`[vc-startup-refresh] Failed to refresh panel for channel ${session.channelId}`, err);
+          skipped++;
+        }
+      }
+    } catch (err) {
+      logger.warn(`[vc-startup-refresh] Failed to get sessions for guild ${guild.id}`, err);
+    }
+  }
+  logger.info(`[vc-startup-refresh] 完了: 更新 ${updated} 件 / スキップ ${skipped} 件`);
 }
 
 /** 📺 画面共有トグル（高級船室） */
