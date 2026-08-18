@@ -2,6 +2,7 @@ import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, GatewayInt
 import { initRouletteGifCache } from "./lib/rouletteWheel";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
+import { handleBaccaratButton, BACCARAT_PREFIX } from "./commands/baccarat";
 import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
 import { handlePokerButton, POKER_PREFIX } from "./commands/poker";
 import { handleRouletteInteraction, ROULETTE_PREFIX } from "./commands/roulette";
@@ -1477,6 +1478,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(BJ_PREFIX)) {
       await handleBlackjackButton(interaction);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(BACCARAT_PREFIX)) {
+      await handleBaccaratButton(interaction);
       return;
     }
 
