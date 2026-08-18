@@ -835,6 +835,42 @@ async function handleConfigCard(interaction: ChatInputCommandInteraction): Promi
   });
 }
 
+// ─── /blackjack config list ───────────────────────────────────────────────────
+
+const SUIT_DISPLAY: Record<string, string> = {
+  spade: "♠️ スペード", heart: "♥️ ハート", diamond: "♦️ ダイヤ", club: "♣️ クラブ",
+};
+
+async function handleConfigList(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ 管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const cardImages = await getBjCardImages(guildId);
+
+  const registeredCount = cardImages.size;
+  const totalCount = SUITS.length * RANKS.length;
+
+  const embed = new EmbedBuilder()
+    .setTitle("🃏 ブラックジャック — カード画像一覧")
+    .setColor(COLOR_NEUTRAL)
+    .setDescription(`登録済み: **${registeredCount}** / ${totalCount} 枚`);
+
+  for (const suit of ["spade", "heart", "diamond", "club"] as const) {
+    const lines = RANKS.map((rank) => {
+      const key = `${rank}:${suit}`;
+      return cardImages.has(key) ? `✅ ${rank}` : `❌ ${rank}（未設定）`;
+    });
+    embed.addFields({ name: SUIT_DISPLAY[suit] ?? suit, value: lines.join("\n"), inline: true });
+  }
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
 // ─── Command export ───────────────────────────────────────────────────────────
 
 export const blackjackCommand = {
@@ -872,6 +908,9 @@ export const blackjackCommand = {
             .addAttachmentOption((opt) =>
               opt.setName("image").setDescription("カードの画像ファイル（PNG / JPG / GIF / WebP）").setRequired(true),
             ),
+        )
+        .addSubcommand((sub) =>
+          sub.setName("list").setDescription("登録済みカード画像の一覧を表示する"),
         ),
     ),
 
@@ -882,6 +921,7 @@ export const blackjackCommand = {
     if (group === "config") {
       if (sub === "suit") await handleConfigSuit(interaction);
       else if (sub === "card") await handleConfigCard(interaction);
+      else if (sub === "list") await handleConfigList(interaction);
     }
   },
 };
