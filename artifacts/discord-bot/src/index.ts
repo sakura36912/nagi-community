@@ -1342,23 +1342,35 @@ const INITIAL_ISSUE_CHANNEL_ID = "1526673304327291050";
 
 // ─── MessageCreate — スティッキーメッセージ ───────────────────────────────────
 
+// 複数メッセージが連続して届いたとき lastMessageId 更新前に次の処理が走る
+// レースコンディションを防ぐためのチャンネルごとの処理中ロック
+const stickyProcessingChannels = new Set<string>();
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.id === client.user?.id) return; // ignore own sticky posts to prevent loops
   if (!message.guildId) return;
 
-  const sticky = await getStickyMessage(message.guildId, message.channelId).catch(() => null);
-  if (sticky) {
-    // Delete the previous sticky post
-    if (sticky.lastMessageId) {
-      await message.channel.messages.delete(sticky.lastMessageId).catch(() => null);
+  const channelKey = `${message.guildId}:${message.channelId}`;
+  if (stickyProcessingChannels.has(channelKey)) return; // 処理中はスキップ
+  stickyProcessingChannels.add(channelKey);
+
+  try {
+    const sticky = await getStickyMessage(message.guildId, message.channelId).catch(() => null);
+    if (sticky) {
+      // Delete the previous sticky post
+      if (sticky.lastMessageId) {
+        await message.channel.messages.delete(sticky.lastMessageId).catch(() => null);
+      }
+      // Re-post at the bottom
+      try {
+        const posted = await message.channel.send({ content: sticky.content, allowedMentions: { parse: [] } });
+        await updateStickyLastMessageId(message.guildId, message.channelId, posted.id);
+      } catch (err) {
+        logger.warn(`[sticky] Failed to re-post sticky in ${message.channelId}`, err);
+      }
     }
-    // Re-post at the bottom
-    try {
-      const posted = await message.channel.send({ content: sticky.content, allowedMentions: { parse: [] } });
-      await updateStickyLastMessageId(message.guildId, message.channelId, posted.id);
-    } catch (err) {
-      logger.warn(`[sticky] Failed to re-post sticky in ${message.channelId}`, err);
-    }
+  } finally {
+    stickyProcessingChannels.delete(channelKey);
   }
 });
 
