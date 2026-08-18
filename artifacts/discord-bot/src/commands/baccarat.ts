@@ -617,6 +617,20 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
   baccaratSessions.delete(key);
 
   await interaction.deferUpdate();
+
+  // ボタンをすぐ無効化して連打を防ぐ
+  await interaction.editReply({
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${BACCARAT_DRAW_PREFIX}${guildId}:${userId}`)
+          .setLabel("🃏 処理中…")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+      ),
+    ],
+  });
+
   try {
     const { embeds, files } = await resolveAndPayout(
       session.guildId, session.userId, session.bet, session.betOn,
