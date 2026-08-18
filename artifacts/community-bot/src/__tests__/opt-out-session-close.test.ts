@@ -3125,6 +3125,60 @@ describe("isVcTrackingOptedOut – parallel query execution", () => {
     // No session row must be created
     expect(mocks.insert).not.toHaveBeenCalled();
   });
+
+  // ── Both queries reject simultaneously ────────────────────────────────────
+  //
+  // Promise.all fast-fails with the first rejection, but it also attaches an
+  // internal rejection handler to the second promise upfront.  This means the
+  // second rejection is already "handled" before it settles, so Node.js must
+  // NOT fire an unhandledRejection event.  This test pins that guarantee so
+  // any future restructuring that breaks the Promise.all pattern is caught
+  // immediately.
+
+  it("rejects exactly once (with the first error) and emits no unhandledRejection when both queries reject simultaneously", async () => {
+    // Two distinct errors so we can tell which one propagated.
+    const firstError  = new Error("DB error: global table unreachable");
+    const secondError = new Error("DB error: per-guild table unreachable");
+
+    // Deferred handles — both will reject.
+    let rejectGlobal!: (err: Error) => void;
+    let rejectGuild!:  (err: Error) => void;
+    const globalPending = new Promise<unknown[]>((_, rej) => { rejectGlobal = rej; });
+    const guildPending  = new Promise<unknown[]>((_, rej) => { rejectGuild  = rej; });
+
+    mocks.selectWhere
+      .mockImplementationOnce(() => globalPending)
+      .mockImplementationOnce(() => guildPending);
+
+    const pending = isVcTrackingOptedOut("guild-par-both-rej", "user-par-both-rej");
+
+    // Collect any unhandledRejection events that fire while the test runs.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      // Fire both rejections in the same synchronous turn.
+      // Promise.all has already subscribed to both promises, so neither
+      // rejection is left without a handler.
+      rejectGlobal(firstError);
+      rejectGuild(secondError);
+
+      // isVcTrackingOptedOut must reject — Promise.all fast-fails with the
+      // first rejection in array order (global is index 0).
+      await expect(pending).rejects.toThrow("DB error: global table unreachable");
+
+      // Drain the microtask and macrotask queues so any deferred
+      // unhandledRejection events would have had a chance to surface.
+      await new Promise<void>((res) => setImmediate(res));
+
+      // The second rejection must NOT escape as an unhandledRejection.
+      // Promise.all's internal handler on guildPending absorbs it.
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.removeListener("unhandledRejection", onUnhandled);
+    }
+  });
 });
 
 // ─── openSession – privacy check DB failure (fail-closed) ────────────────────
