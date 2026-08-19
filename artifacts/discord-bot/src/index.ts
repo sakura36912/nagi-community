@@ -1602,22 +1602,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
         logger.warn(`Unknown command: ${interaction.commandName}`);
         return;
       }
-      // 島民・追放者ロール制限: 送金・残高確認のみ許可（スタッフロールは免除）
+        // 島民・追放者ロール制限（スタッフロールは免除）
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
         const EXEMPT_ROLES    = ["守門卿", "門番", "門番見習い", "見習い門番", "航海士", "提督", "大提督"];
-        const RESTRICTED_ROLES = ["島民", "追放者"];
-        const RESTRICTED_ALLOWED = new Set(["送金", "残高確認"]);
         const isExempt = EXEMPT_ROLES.some((name) =>
           interaction.guild?.roles.cache.some((r) => r.name === name && member.roles.cache.has(r.id)),
         );
-        const hasRestrictedRole = !isExempt && RESTRICTED_ROLES.some((name) =>
-          interaction.guild?.roles.cache.some((r) => r.name === name && member.roles.cache.has(r.id)),
-        );
-        if (hasRestrictedRole && !RESTRICTED_ALLOWED.has(interaction.commandName)) {
-          await interaction.reply({ content: "このロールでは `/送金` と `/残高確認` のみ使用できます。", ephemeral: true });
-          return;
-        }
+          const hasIslandRole = !isExempt && interaction.guild?.roles.cache.some((r) =>
+            r.name === "島民" && member.roles.cache.has(r.id),
+          );
+          const hasExpelledRole = !isExempt && interaction.guild?.roles.cache.some((r) =>
+            r.name === "追放者" && member.roles.cache.has(r.id),
+          );
+          const hasRestrictedRole = !isExempt && (hasIslandRole || hasExpelledRole);
+          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow"]);
+          const allowedForExpelled = new Set(["送金", "残高確認"]);
+          const allowedCommands = hasIslandRole && !hasExpelledRole
+            ? allowedForIsland
+            : allowedForExpelled;
+          if (hasRestrictedRole && !allowedCommands.has(interaction.commandName)) {
+            const allowedText = hasIslandRole && !hasExpelledRole
+              ? "`/送金`、`/残高確認`、`/slot play`、`/blackjack`、`/baccarat`、`/highlow`"
+              : "`/送金` と `/残高確認`";
+            await interaction.reply({ content: `このロールでは ${allowedText} のみ使用できます。`, ephemeral: true });
+            return;
+          }
       }
       // /vc refresh-panels は commands/index.ts にあるハンドラで処理
       // (vc.ts から commands/index.ts を import すると循環参照になるため)

@@ -870,8 +870,7 @@ export const slotCommand: Command = {
                 .setRequired(false),
             ),
         ),
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
+    ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guildId || !interaction.guild) {
