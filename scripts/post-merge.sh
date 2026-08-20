@@ -16,6 +16,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS session_key text;
 CREATE UNIQUE INDEX IF NOT EXISTS transactions_session_key_idx
   ON transactions (session_key)
   WHERE session_key IS NOT NULL;
+ALTER TABLE slot_settings ADD COLUMN IF NOT EXISTS win_rate integer;
 SQL
 
 # Run TypeScript type checks across all workspace packages to catch build breaks early.

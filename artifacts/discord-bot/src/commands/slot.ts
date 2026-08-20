@@ -32,6 +32,7 @@ import {
   clearSlotEmojis,
   setSlotEmojiWeight,
   setSlotPayout,
+  setSlotWinRate,
   setSlotJackpotChannel,
   resolveMultipliers,
   DEFAULT_MULTIPLIERS,
@@ -46,6 +47,7 @@ const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
 
 export const SLOT_REPLAY_PREFIX = "slot:replay:";
 export const SLOT_QUIT_PREFIX   = "slot:quit:";
+export const SLOT_WIN_RATE_PREFIX = "slot:win-rate:";
 
 // ─── Session tracking ─────────────────────────────────────────────────────────
 
@@ -171,7 +173,12 @@ function pickOne(pool: Sym[]): Sym {
 
 async function pickSymbolPool(
   guild: Guild,
-): Promise<{ symbols: Sym[]; weights: Record<string, number>; meta: Map<string, StickerInfo> }> {
+): Promise<{
+  symbols: Sym[];
+  weights: Record<string, number>;
+  meta: Map<string, StickerInfo>;
+  mode: "sticker" | "fixed" | "auto";
+}> {
   const settings = await getSlotSettings(guild.id);
   const weights = settings.emojiWeights ?? {};
   const meta = new Map<string, StickerInfo>();
@@ -192,7 +199,7 @@ async function pickSymbolPool(
           animated: s.format === StickerFormatType.APNG || s.format === StickerFormatType.GIF,
         });
       }
-      return { symbols: valid, weights, meta };
+      return { symbols: valid, weights, meta, mode: "sticker" };
     }
   }
 
@@ -215,21 +222,24 @@ async function pickSymbolPool(
         resolved.length < 2
           ? [...resolved, ...DEFAULT_SYMBOLS.slice(0, 2 - resolved.length)]
           : resolved;
-      return { symbols: padded, weights, meta };
+      return { symbols: padded, weights, meta, mode: "fixed" };
     }
   }
 
   // ── Auto mode: all guild custom emojis ───────────────────────────────────
+  const symbols = getAutomaticSymbols(guild);
+  return { symbols: shuffle(symbols).slice(0, SYMBOL_COUNT), weights, meta, mode: "auto" };
+}
+
+/** オート絵柄モードで候補になる絵柄全体を返す。 */
+function getAutomaticSymbols(guild: Guild): Sym[] {
   const custom: Sym[] = [...guild.emojis.cache.values()]
     .filter((e) => !e.managed && !!e.name)
     .map((e) => (e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`));
 
-  const base =
-    custom.length >= SYMBOL_COUNT
-      ? shuffle(custom)
-      : [...custom, ...DEFAULT_SYMBOLS.filter((d) => !custom.includes(d))];
-
-  return { symbols: base.slice(0, SYMBOL_COUNT), weights, meta };
+  return custom.length >= SYMBOL_COUNT
+    ? custom
+    : [...custom, ...DEFAULT_SYMBOLS.filter((d) => !custom.includes(d))];
 }
 
 // ─── Spin & evaluate ──────────────────────────────────────────────────────────
@@ -239,11 +249,44 @@ function spinGrid(pool: Sym[]): Grid {
   return [row(), row(), row()];
 }
 
-function evaluatePaylines(grid: Grid): PaylineResult[] {
+export function evaluatePaylines(grid: Grid): PaylineResult[] {
   return PAYLINE_DEFS.map(({ name, coords }) => {
     const [a, b, c] = coords.map(([r, c]) => grid[r]![c]!);
     return { name, won: a === b && b === c };
   });
+}
+
+/**
+ * 当選率が設定されているときは、少なくとも1ライン当選する確率を制御する。
+ * 当たり・外れそれぞれでは元の絵柄重みに従うため、既存の配当設定はそのまま使われる。
+ */
+export function spinGridWithWinRate(pool: Sym[], winRate: number | null): Grid {
+  if (winRate === null) return spinGrid(pool);
+
+  const targetWin = Math.random() < winRate / 100;
+  for (let attempt = 0; attempt < 250; attempt++) {
+    const grid = spinGrid(pool);
+    const won = evaluatePaylines(grid).some((line) => line.won);
+    if (won === targetWin) return grid;
+  }
+
+  // 極端な重み設定でも選択された結果を守るための安全な最終手段。
+  const symbols = [...new Set(pool)];
+  if (targetWin) {
+    const sym = pool[0]!;
+    const grid = spinGrid(pool);
+    grid[0] = [sym, sym, sym];
+    return grid;
+  }
+  if (symbols.length >= 2) {
+    const [a, b] = symbols;
+    return [
+      [a!, b!, a!],
+      [b!, a!, b!],
+      [b!, a!, b!],
+    ];
+  }
+  return spinGrid(pool);
 }
 
 // ─── Balance helpers ──────────────────────────────────────────────────────────
@@ -411,6 +454,88 @@ function buildSetupEmbed(
     .setFooter({ text: "weight: 出現重み（高いほど出やすい）| bet × multiplier が利益" });
 }
 
+function buildWinRateButtons(
+  guildId: string,
+  selectedRate: number | null,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const rates = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+  const rateButtons = rates.map((rate) =>
+    new ButtonBuilder()
+      .setCustomId(`${SLOT_WIN_RATE_PREFIX}${guildId}:${rate}`)
+      .setLabel(`${rate}%`)
+      .setStyle(selectedRate === rate ? ButtonStyle.Success : ButtonStyle.Secondary),
+  );
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(rateButtons.slice(0, 5)),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(rateButtons.slice(5, 10)),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      ...rateButtons.slice(10),
+      new ButtonBuilder()
+        .setCustomId(`${SLOT_WIN_RATE_PREFIX}${guildId}:reset`)
+        .setLabel("従来方式に戻す")
+        .setStyle(selectedRate === null ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    ),
+  ];
+}
+
+/** 設定済みの絵柄重み・配当から、払い戻し率（賭け金返却分を含む）を推定する。 */
+async function estimatePayoutRate(
+  guild: Guild,
+  multipliers: number[],
+  configuredWinRate: number | null,
+): Promise<number> {
+  const samples = 5_000;
+  const selected = await pickSymbolPool(guild);
+  const automaticSymbols = selected.mode === "auto" ? getAutomaticSymbols(guild) : null;
+  const fixedPool = buildWeightedPool(selected.symbols, selected.weights);
+  let totalPayout = 0;
+  let winningPayout = 0;
+  let winningCount = 0;
+
+  for (let i = 0; i < samples; i++) {
+    // オート絵柄モードは実際の各スピンと同様、候補から4種類を新たに選ぶ。
+    const pool = automaticSymbols
+      ? buildWeightedPool(shuffle(automaticSymbols).slice(0, SYMBOL_COUNT), selected.weights)
+      : fixedPool;
+    const wins = evaluatePaylines(spinGrid(pool)).filter((line) => line.won).length;
+    const payout = wins > 0 ? 1 + (multipliers[Math.min(wins, 5)] ?? 0) : 0;
+    totalPayout += payout;
+    if (wins > 0) {
+      winningPayout += payout;
+      winningCount++;
+    }
+  }
+
+  if (configuredWinRate === null) return (totalPayout / samples) * 100;
+  if (winningCount === 0) return 0;
+  return (configuredWinRate / 100) * (winningPayout / winningCount) * 100;
+}
+
+async function buildWinRateSetupEmbed(
+  guild: Guild,
+  settings: Awaited<ReturnType<typeof getSlotSettings>>,
+): Promise<EmbedBuilder> {
+  const multipliers = resolveMultipliers(settings.payoutMultipliers);
+  const payoutRate = await estimatePayoutRate(guild, multipliers, settings.winRate);
+  const winRateText = settings.winRate === null
+    ? "従来方式（絵柄の出現重みから決定）"
+    : `**${settings.winRate}%**`;
+
+  return new EmbedBuilder()
+    .setTitle("🎰 スロット — 当選確率設定")
+    .setColor(0x5865f2)
+    .addFields(
+      { name: "当選確率", value: winRateText, inline: true },
+      { name: "推定払い戻し率", value: `**${payoutRate.toFixed(1)}%**`, inline: true },
+      { name: "\u200b", value: "\u200b", inline: true },
+      {
+        name: "計算方法",
+        value: "払い戻し率は、現在の絵柄重み・配当倍率と選択中の当選確率から算出した推定値です。賭け金の返却分を含みます。",
+      },
+    )
+    .setFooter({ text: "ボタンを押すと、次回スピンから当選確率が反映されます。" });
+}
+
 // ─── Button rows & session summary ───────────────────────────────────────────
 
 function buildActionRow(userId: string, bet: number): ActionRowBuilder<ButtonBuilder> {
@@ -488,7 +613,7 @@ async function spinAndReply(
 
   const { symbols, weights, meta } = await pickSymbolPool(interaction.guild);
   const pool = buildWeightedPool(symbols, weights);
-  const grid = spinGrid(pool);
+  const grid = spinGridWithWinRate(pool, slotSettings.winRate);
   const paylines = evaluatePaylines(grid);
   const wins = paylines.filter((p) => p.won).length;
 
@@ -647,6 +772,41 @@ export async function handleSlotQuitBtn(interaction: ButtonInteraction): Promise
   });
 }
 
+export async function handleSlotWinRateBtn(interaction: ButtonInteraction): Promise<void> {
+  const { guildId, guild } = interaction;
+  if (!guildId || !guild) {
+    await interaction.deferUpdate();
+    return;
+  }
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ この設定は管理者のみ変更できます。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const payload = interaction.customId.slice(SLOT_WIN_RATE_PREFIX.length);
+  const separator = payload.indexOf(":");
+  const targetGuildId = payload.slice(0, separator);
+  const rawRate = payload.slice(separator + 1);
+  if (separator === -1 || targetGuildId !== guildId) {
+    await interaction.deferUpdate();
+    return;
+  }
+
+  const winRate = rawRate === "reset" ? null : Number(rawRate);
+  if (winRate !== null && (!Number.isInteger(winRate) || winRate < 0 || winRate > 100)) {
+    await interaction.deferUpdate();
+    return;
+  }
+
+  await interaction.deferUpdate();
+  const settings = await setSlotWinRate(guildId, winRate);
+  const embed = await buildWinRateSetupEmbed(guild, settings);
+  await interaction.editReply({
+    embeds: [embed],
+    components: buildWinRateButtons(guildId, settings.winRate),
+  });
+}
+
 /** 入力値が絵文字文字列か sticker ID かを判定してキーを返す */
 function parseSymbolInput(input: string): { type: "emoji"; emojiId: string } | { type: "sticker"; stickerId: string } | null {
   const emojiId = parseEmojiId(input);
@@ -756,6 +916,17 @@ async function handleSetupPayout(interaction: ChatInputCommandInteraction): Prom
   await interaction.editReply({
     content: `✅ **${lines}ライン当選** の倍率を **+${multiplier}×** に設定しました。`,
     embeds: [buildSetupEmbed(guild, s)],
+  });
+}
+
+async function handleSetupProbability(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guild = interaction.guild!;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const settings = await getSlotSettings(guild.id);
+  const embed = await buildWinRateSetupEmbed(guild, settings);
+  await interaction.editReply({
+    embeds: [embed],
+    components: buildWinRateButtons(guild.id, settings.winRate),
   });
 }
 
@@ -881,6 +1052,11 @@ export const slotCommand: Command = {
             ),
         )
         .addSubcommand((sub) =>
+          sub
+            .setName("probability")
+            .setDescription("ボタンで当選確率を設定し、払い戻し率を確認します"),
+        )
+        .addSubcommand((sub) =>
           sub.setName("list").setDescription("現在の設定を表示します"),
         )
         .addSubcommand((sub) =>
@@ -917,6 +1093,7 @@ export const slotCommand: Command = {
       if (sub === "remove")           { await handleSetupRemove(interaction); return; }
       if (sub === "weight")           { await handleSetupWeight(interaction); return; }
       if (sub === "payout")           { await handleSetupPayout(interaction); return; }
+      if (sub === "probability")      { await handleSetupProbability(interaction); return; }
       if (sub === "list")             { await handleSetupList(interaction); return; }
       if (sub === "clear")            { await handleSetupClear(interaction); return; }
       if (sub === "jackpot-channel")  { await handleSetupJackpotChannel(interaction); return; }

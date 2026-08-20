@@ -1,5 +1,4 @@
 import {
-  ChannelType,
   ChatInputCommandInteraction,
   EmbedBuilder,
   MessageFlags,
@@ -9,9 +8,6 @@ import {
 import {
   getVcRewardSettings,
   setVcRewardSettings,
-  addVcRewardChannel,
-  removeVcRewardChannel,
-  clearVcRewardChannels,
 } from "../lib/vcReward";
 import { getGuildSettings } from "../lib/economy";
 
@@ -26,17 +22,10 @@ function buildInfoEmbed(
   ratePerHour: number,
   minMinutes: number,
   currencyName: string,
-  includedChannelIds: string[],
-  channelNames: string[],
 ): EmbedBuilder {
   const enabled = ratePerHour > 0;
 
-  const channelValue =
-    includedChannelIds.length === 0
-      ? "すべてのVCチャンネル"
-      : channelNames.length > 0
-        ? channelNames.map((n) => `• ${n}`).join("\n")
-        : includedChannelIds.map((id) => `• <#${id}>`).join("\n");
+  const channelValue = "名前が **砂浜** のVC、または **砂浜** カテゴリ配下のVCのみ";
 
   return new EmbedBuilder()
     .setTitle("🎙️ VC滞在報酬 設定")
@@ -58,7 +47,7 @@ function buildInfoEmbed(
         inline: true,
       },
       {
-        name: "対象チャンネル",
+        name: "報酬対象",
         value: channelValue,
       },
     )
@@ -93,18 +82,10 @@ async function resolvedInfoEmbed(
     getGuildSettings(guildId),
   ]);
 
-  // Resolve channel names from the guild's channel cache.
-  const channelNames = settings.includedChannelIds.map((id) => {
-    const ch = interaction.guild?.channels.cache.get(id);
-    return ch ? ch.name : id;
-  });
-
   return buildInfoEmbed(
     settings.ratePerHour,
     settings.minMinutes,
     guildSettings.currencyName,
-    settings.includedChannelIds,
-    channelNames,
   );
 }
 
@@ -135,69 +116,6 @@ async function handleInfo(
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const embed = await resolvedInfoEmbed(guildId, interaction);
   await interaction.editReply({ embeds: [embed] });
-}
-
-async function handleChannelAdd(
-  interaction: ChatInputCommandInteraction,
-): Promise<void> {
-  const guildId = requireGuild(interaction);
-  if (!guildId) return;
-
-  const channel = interaction.options.getChannel("channel", true);
-  if (channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice) {
-    await interaction.reply({
-      content: "ボイスチャンネルまたはステージチャンネルを選択してください。",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  await addVcRewardChannel(guildId, channel.id);
-  const embed = await resolvedInfoEmbed(guildId, interaction);
-  await interaction.editReply({
-    content: `✅ **${channel.name}** を対象チャンネルに追加しました。`,
-    embeds: [embed],
-  });
-}
-
-async function handleChannelClear(
-  interaction: ChatInputCommandInteraction,
-): Promise<void> {
-  const guildId = requireGuild(interaction);
-  if (!guildId) return;
-
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  await clearVcRewardChannels(guildId);
-  const embed = await resolvedInfoEmbed(guildId, interaction);
-  await interaction.editReply({
-    content: "✅ 対象チャンネルをすべてクリアしました（すべてのVCが対象になります）。",
-    embeds: [embed],
-  });
-}
-
-async function handleChannelRemove(
-  interaction: ChatInputCommandInteraction,
-): Promise<void> {
-  const guildId = requireGuild(interaction);
-  if (!guildId) return;
-
-  const channel = interaction.options.getChannel("channel", true);
-  if (channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice) {
-    await interaction.reply({
-      content: "ボイスチャンネルまたはステージチャンネルを選択してください。",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  await removeVcRewardChannel(guildId, channel.id);
-  const embed = await resolvedInfoEmbed(guildId, interaction);
-  await interaction.editReply({
-    content: `✅ **${channel.name}** を対象チャンネルから除外しました。`,
-    embeds: [embed],
-  });
 }
 
 // ─── Command definition ───────────────────────────────────────────────────────
@@ -231,54 +149,13 @@ export const vcsalaryCommand: Command = {
     .addSubcommand((sub) =>
       sub.setName("info").setDescription("現在のVC報酬設定を確認します"),
     )
-    .addSubcommandGroup((group) =>
-      group
-        .setName("channel")
-        .setDescription("報酬対象チャンネルの管理（管理者）")
-        .addSubcommand((sub) =>
-          sub
-            .setName("add")
-            .setDescription("対象チャンネルを追加します")
-            .addChannelOption((opt) =>
-              opt
-                .setName("channel")
-                .setDescription("追加するボイスチャンネル")
-                .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
-                .setRequired(true),
-            ),
-        )
-        .addSubcommand((sub) =>
-          sub
-            .setName("remove")
-            .setDescription("対象チャンネルを除外します")
-            .addChannelOption((opt) =>
-              opt
-                .setName("channel")
-                .setDescription("除外するボイスチャンネル")
-                .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
-                .setRequired(true),
-            ),
-        )
-        .addSubcommand((sub) =>
-          sub.setName("clear").setDescription("対象チャンネルをすべてクリアします（すべてのVCが対象になります）"),
-        ),
-    )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const group = interaction.options.getSubcommandGroup(false);
     const sub = interaction.options.getSubcommand();
 
-    const isAdminSub = group === "channel" || sub === "setup";
-    if (isAdminSub && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    if (sub === "setup" && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
       await interaction.reply({ content: "❌ このコマンドは管理者権限が必要です。", flags: MessageFlags.Ephemeral });
-      return;
-    }
-
-    if (group === "channel") {
-      if (sub === "add") await handleChannelAdd(interaction);
-      else if (sub === "remove") await handleChannelRemove(interaction);
-      else if (sub === "clear") await handleChannelClear(interaction);
       return;
     }
 

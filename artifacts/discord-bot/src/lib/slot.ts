@@ -178,6 +178,20 @@ export async function setSlotPayout(
   return row!;
 }
 
+/** Set the chance of at least one winning payline. NULL restores the original draw behavior. */
+export async function setSlotWinRate(
+  guildId: string,
+  winRate: number | null,
+): Promise<SlotSettings> {
+  await getSlotSettings(guildId);
+  const [row] = await db
+    .update(slotSettingsTable)
+    .set({ winRate })
+    .where(eq(slotSettingsTable.guildId, guildId))
+    .returning();
+  return row!;
+}
+
 // ─── Jackpot channel management ──────────────────────────────────────────────
 
 /**

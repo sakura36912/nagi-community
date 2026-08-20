@@ -2,7 +2,14 @@ import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, FetchMessa
 import { initRouletteGifCache } from "./lib/rouletteWheel";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
-import { handleSlotPlayAgainBtn, SLOT_REPLAY_PREFIX, handleSlotQuitBtn, SLOT_QUIT_PREFIX } from "./commands/slot";
+import {
+  handleSlotPlayAgainBtn,
+  SLOT_REPLAY_PREFIX,
+  handleSlotQuitBtn,
+  SLOT_QUIT_PREFIX,
+  handleSlotWinRateBtn,
+  SLOT_WIN_RATE_PREFIX,
+} from "./commands/slot";
 import {
   handleBaccaratDrawBtn,   BACCARAT_DRAW_PREFIX,
   handleBaccaratReplayBtn, BACCARAT_REPLAY_PREFIX,
@@ -97,6 +104,7 @@ import { makeChannelResolver } from "./lib/makeChannelResolver";
 import { handleVcLogMove } from "./lib/vcLogMove";
 import { sendVcNotifyJoin, sendVcNotifyLeave } from "./lib/vcNotify";
 import { handleVcLogJoin } from "./lib/vcLogJoin";
+import { isBeachVoiceChannel } from "./lib/vcRewardEligibility";
 
 import { logger } from "./lib/logger";
 import {
@@ -919,18 +927,23 @@ function getMemberDisplayName(guild: VoiceState["guild"], userId: string): strin
  * Hub-generated VCs (高級船室) are always excluded — hub salary is handled separately.
  */
 async function isEligibleChannel(
+  guild: VoiceState["guild"],
   channelId: string,
-  includedChannelIds: string[],
 ): Promise<boolean> {
   // Hub生成のプライベートVC（高級船室）は通常報酬対象外（Hub分給で別途制御）
   const hubSession = await getHubSession(channelId).catch(() => null);
   if (hubSession != null) return false;
 
-  if (includedChannelIds.length === 0) return true;
-  if (includedChannelIds.includes(channelId)) return true;
-  // /vc で作成された private VC は常に対象
-  const session = await getPrivateVcSessionByChannelId(channelId);
-  return session != null;
+  const channel = guild.channels.cache.get(channelId)
+    ?? await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel || (channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice)) {
+    return false;
+  }
+
+  const parentName = channel.parentId
+    ? guild.channels.cache.get(channel.parentId)?.name
+    : null;
+  return isBeachVoiceChannel(channel.name, parentName);
 }
 
 /**
@@ -1037,7 +1050,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             await recordVcJoin(guild.id, userId, newState.channelId!);
           } else {
             const settings = await getVcRewardSettings(guild.id);
-            if (settings.ratePerHour > 0 && await isEligibleChannel(newState.channelId!, settings.includedChannelIds)) {
+            if (settings.ratePerHour > 0 && await isEligibleChannel(guild, newState.channelId!)) {
               await recordVcJoin(guild.id, userId, newState.channelId!);
             }
           }
@@ -1138,8 +1151,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             getVcRewardSettings(guild.id),
           ]);
           const [wasGeneralEligible, nowGeneralEligible] = await Promise.all([
-            isEligibleChannel(oldState.channelId!, settings.includedChannelIds).then((e) => settings.ratePerHour > 0 && e),
-            isEligibleChannel(newState.channelId!, settings.includedChannelIds).then((e) => settings.ratePerHour > 0 && e),
+            isEligibleChannel(guild, oldState.channelId!).then((e) => settings.ratePerHour > 0 && e),
+            isEligibleChannel(guild, newState.channelId!).then((e) => settings.ratePerHour > 0 && e),
           ]);
           const wasTracked = oldHubSalary != null || wasGeneralEligible;
           const nowTracked = newHubSalary != null || nowGeneralEligible;
@@ -1641,6 +1654,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(BJ_PREFIX)) {
       await handleBlackjackButton(interaction);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(SLOT_WIN_RATE_PREFIX)) {
+      await handleSlotWinRateBtn(interaction);
       return;
     }
 

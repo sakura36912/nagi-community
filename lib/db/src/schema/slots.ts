@@ -44,6 +44,11 @@ export const slotSettingsTable = pgTable("slot_settings", {
     .notNull()
     .default(sql`'{-1,1,5,11,19,34}'::integer[]`),
   /**
+   * Chance of at least one winning payline. NULL keeps the original
+   * weight-based random behavior without an explicit win-rate override.
+   */
+  winRate: integer("win_rate"),
+  /**
    * Text channel ID to send a jackpot notification when 5 paylines win.
    * Null = no notification.
    */
