@@ -260,9 +260,10 @@ async function buildResultEmbed(
         { name: "前のカード", value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
         { name: "次のカード", value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
         { name: "\u200B",     value: "\u200B", inline: true },
-        { name: "返却",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
-        { name: "収支",       value: `**±0** ${game.currencyName}`, inline: true },
-      );
+        { name: "賭け金",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
+        { name: "収支",         value: "このラウンドは変動なし", inline: true },
+      )
+      .setFooter({ text: "賭け金はそのままです。「もう一度プレイ」で次の予想へ進みます" });
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
     return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
   } else {
@@ -289,10 +290,16 @@ function buildGuessButtons(): ActionRowBuilder<ButtonBuilder> {
   );
 }
 
-function buildContinueButtons(): ActionRowBuilder<ButtonBuilder> {
+export function buildContinueButtons(): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId("hl:continue").setLabel("続ける").setEmoji("🔄").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("hl:collect").setLabel("受け取る").setEmoji("💰").setStyle(ButtonStyle.Success),
+  );
+}
+
+export function buildDrawReplayButton(): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("hl:continue").setLabel("もう一度プレイ").setEmoji("🔄").setStyle(ButtonStyle.Primary),
   );
 }
 
@@ -423,13 +430,13 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     const won                  = !isDraw && (action === "high" ? nextValue > currentValue : nextValue < currentValue);
 
     if (isDraw) {
-      // 引き分け → カードを更新してゲーム続行
+      // 引き分け → カードを更新。賭け金は維持し、明示的なボタンから次の予想へ進む。
       const { embeds, files } = await buildResultEmbed(game, nextCard, "draw");
       game.currentCard = nextCard;
       game.deck        = newDeck;
       game.processing  = false;
       activeGames.set(key, game);
-      await interaction.editReply({ content: "", embeds, files, components: [buildGuessButtons()] });
+      await interaction.editReply({ content: "", embeds, files, components: [buildDrawReplayButton()] });
       return;
     }
 
