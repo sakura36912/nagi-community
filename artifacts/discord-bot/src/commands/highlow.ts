@@ -13,13 +13,19 @@ import {
   ButtonStyle,
   EmbedBuilder,
   MessageFlags,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
-import { getGuildSettings, recordTransaction, getOrCreateWallet } from "../lib/economy";
+import {
+  getGuildSettings,
+  recordTransaction,
+  getOrCreateWallet,
+  setHighlowWinRate,
+} from "../lib/economy";
 import {
   addCasinoRound,
   buildCasinoResultFields,
@@ -59,6 +65,7 @@ interface HLGame {
   cardBuffers: Map<string, Buffer>;
   processing: boolean;
   streak: number;
+  winRate: number;
 }
 
 type EmbedWithFiles = { embeds: EmbedBuilder[]; files: AttachmentBuilder[] };
@@ -71,6 +78,7 @@ const GAME_TTL_MS = 5 * 60 * 1000;
 
 /** 正解ごとに受け取り予定額に掛けるペイアウト倍率 */
 const PAYOUT_MULTIPLIER = 1.5;
+export const DEFAULT_WIN_RATE = 50;
 
 const COLOR_NEUTRAL = 0x5865f2;
 const COLOR_WIN     = 0x57f287;
@@ -208,6 +216,63 @@ function buildShoe(decks = 6): Card[] {
 }
 
 function draw(deck: Card[]): [Card, Card[]] { return [deck[0]!, deck.slice(1)]; }
+
+/**
+ * 設定された当選確率を、カードの高低関係と矛盾しない形で反映する。
+ * 設定値は「正解する確率」として扱う。引き分けは通常の設定値では
+ * カード構成に応じて発生するが、0% と 100% では発生しない。
+ */
+export function drawForGuess(
+  deck: Card[],
+  currentValue: number,
+  guess: "high" | "low",
+  winRate: number,
+): [Card, Card[]] {
+  const wins: number[] = [];
+  const losses: number[] = [];
+  const draws: number[] = [];
+
+  for (let index = 0; index < deck.length; index++) {
+    const value = hlCardValue(deck[index]!.rank);
+    if (value === currentValue) {
+      draws.push(index);
+    } else if (guess === "high" ? value > currentValue : value < currentValue) {
+      wins.push(index);
+    } else {
+      losses.push(index);
+    }
+  }
+
+  const clampedRate = Math.max(0, Math.min(100, winRate));
+  const canDraw = wins.length > 0 && losses.length > 0 && draws.length > 0;
+  const naturalDrawRate = canDraw ? draws.length / deck.length : 0;
+  const drawWeight = naturalDrawRate * 100 * (2 * Math.min(clampedRate, 100 - clampedRate) / 100);
+  const winWeight = wins.length > 0
+    ? (losses.length > 0 ? clampedRate : 100)
+    : 0;
+  const lossWeight = losses.length > 0
+    ? (wins.length > 0 ? 100 - clampedRate - drawWeight : 100)
+    : 0;
+  const choices = [
+    { indices: draws, weight: drawWeight },
+    { indices: wins, weight: winWeight },
+    { indices: losses, weight: lossWeight },
+  ].filter((choice) => choice.weight > 0);
+
+  const totalWeight = choices.reduce((sum, choice) => sum + choice.weight, 0);
+  let roll = Math.random() * totalWeight;
+  let selected = choices[choices.length - 1]!.indices;
+  for (const choice of choices) {
+    roll -= choice.weight;
+    if (roll < 0) {
+      selected = choice.indices;
+      break;
+    }
+  }
+
+  const selectedIndex = selected[Math.floor(Math.random() * selected.length)]!;
+  return [deck[selectedIndex]!, deck.filter((_, index) => index !== selectedIndex)];
+}
 
 // ─── Embed builders ───────────────────────────────────────────────────────────
 
@@ -371,6 +436,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     suitEmojis, cardPaths, cardBuffers,
     processing: false,
     streak: 0,
+    winRate: settings.highlowWinRate ?? DEFAULT_WIN_RATE,
   };
 
   activeGames.set(key, game);
@@ -435,8 +501,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     // 即座に acknowledge してから重い処理を行う
     await interaction.deferUpdate();
 
-    const [nextCard, newDeck]  = draw(game.deck);
     const currentValue         = hlCardValue(game.currentCard.rank);
+    const [nextCard, newDeck]  = drawForGuess(game.deck, currentValue, action, game.winRate);
     const nextValue            = hlCardValue(nextCard.rank);
     const isDraw               = nextValue === currentValue;
     const won                  = !isDraw && (action === "high" ? nextValue > currentValue : nextValue < currentValue);
@@ -513,6 +579,23 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
   }
 }
 
+async function handleConfigProbability(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ 管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const winRate = interaction.options.getInteger("percent", true);
+  await setHighlowWinRate(guildId, winRate);
+  await interaction.reply({
+    content: `✅ ハイアンドローの当選確率を **${winRate}%** に設定しました。次回ゲームから反映されます。`,
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
 // ─── Command export ───────────────────────────────────────────────────────────
 
 export const highlowCommand = {
@@ -532,9 +615,30 @@ export const highlowCommand = {
             .setMinValue(MIN_BET)
             .setMaxValue(MAX_BET),
         ),
+    )
+    .addSubcommandGroup((group) =>
+      group
+        .setName("config")
+        .setDescription("【管理者】ハイアンドローの設定を変更する")
+        .addSubcommand((sub) =>
+          sub
+            .setName("probability")
+            .setDescription("当選確率を設定する")
+            .addIntegerOption((opt) =>
+              opt
+                .setName("percent")
+                .setDescription("当選確率（0〜100%）")
+                .setMinValue(0)
+                .setMaxValue(100)
+                .setRequired(true),
+            ),
+        ),
     ),
   async execute(interaction: ChatInputCommandInteraction) {
     const sub = interaction.options.getSubcommand();
     if (sub === "play") await handlePlay(interaction);
+    if (interaction.options.getSubcommandGroup(false) === "config" && sub === "probability") {
+      await handleConfigProbability(interaction);
+    }
   },
 };

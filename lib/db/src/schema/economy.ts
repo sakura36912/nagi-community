@@ -58,6 +58,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
 
   // Per-guild casino max bet. NULL means use the hardcoded default (100,000).
   casinoMaxBet: integer("casino_max_bet"),
+  // High-and-low win probability percentage. NULL means use the default (50%).
+  highlowWinRate: integer("highlow_win_rate"),
 
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()

@@ -246,6 +246,13 @@ export async function setCasinoMaxBet(
   return upsertGuildSetting(guildId, { casinoMaxBet: maxBet });
 }
 
+export async function setHighlowWinRate(
+  guildId: string,
+  winRate: number | null,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, { highlowWinRate: winRate });
+}
+
 export async function setBjSuitEmoji(
   guildId: string,
   suit: "spade" | "heart" | "diamond" | "club",
