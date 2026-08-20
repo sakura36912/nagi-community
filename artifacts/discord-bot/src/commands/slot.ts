@@ -22,6 +22,7 @@ import {
   emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
+import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
 import {
   getSlotSettings,
   addSlotSticker,
@@ -593,8 +594,17 @@ async function spinAndReply(
     activeSessions.set(key, { totals: emptyCasinoResultTotals(), currencyName });
   }
 
-  const afterDeduct = await deductBet(guildId, userId, bet);
-  if (!afterDeduct) {
+  const playStart = await tryStartCasinoPlay(guildId, userId, "slot", bet);
+  if (!playStart.ok && playStart.reason === "daily_limit_reached") {
+    activeSessions.delete(key);
+    await interaction.editReply({
+      content: dailyLimitReachedMessage("slot", playStart.limit),
+      embeds: [],
+      components: [],
+    });
+    return;
+  }
+  if (!playStart.ok) {
     // 残高不足 → セッション終了してサマリー表示
     const session = activeSessions.get(key);
     activeSessions.delete(key);
@@ -610,6 +620,7 @@ async function spinAndReply(
     await interaction.editReply({ content: "", embeds, components: [] });
     return;
   }
+  const afterDeduct = { balance: playStart.balance };
 
   const { symbols, weights, meta } = await pickSymbolPool(interaction.guild);
   const pool = buildWeightedPool(symbols, weights);

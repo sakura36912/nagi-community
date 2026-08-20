@@ -32,6 +32,7 @@ import {
   emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
+import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages } from "../lib/bjCardImages";
 import { downloadImageAsBuffer } from "../lib/gcsStorage";
@@ -412,11 +413,16 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const afterDeduct = await deductBet(guildId, userId, bet);
-  if (!afterDeduct) {
+  const playStart = await tryStartCasinoPlay(guildId, userId, "highlow", bet);
+  if (!playStart.ok && playStart.reason === "daily_limit_reached") {
+    await interaction.editReply(dailyLimitReachedMessage("highlow", playStart.limit));
+    return;
+  }
+  if (!playStart.ok) {
     await interaction.editReply(`❌ 残高が不足しています。`);
     return;
   }
+  const afterDeduct = { balance: playStart.balance };
 
   const suitEmojis  = resolveSuitEmojis(settings);
   const deck        = buildShoe(6);

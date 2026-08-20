@@ -30,6 +30,7 @@ import {
   emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
+import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages } from "../lib/bjCardImages";
 import { downloadImageAsBuffer } from "../lib/gcsStorage";
@@ -457,8 +458,14 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
       return;
     }
 
-    const afterDeduct = await deductBet(guildId, user.id, replay.bet);
-    if (!afterDeduct) {
+    const playStart = await tryStartCasinoPlay(guildId, user.id, "poker", replay.bet);
+    if (!playStart.ok && playStart.reason === "daily_limit_reached") {
+      processingReplays.delete(key);
+      await interaction.editReply({ components: [] });
+      await interaction.followUp({ content: dailyLimitReachedMessage("poker", playStart.limit), flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!playStart.ok) {
       processingReplays.delete(key);
       await interaction.editReply({ components: [] });
       await interaction.followUp({
@@ -467,6 +474,7 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
       });
       return;
     }
+    const afterDeduct = { balance: playStart.balance };
 
     let deck = buildDeck();
     const hand: Card[] = [];
@@ -602,8 +610,14 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const afterDeduct = await deductBet(guildId, userId, bet);
-  if (!afterDeduct) {
+  const playStart = await tryStartCasinoPlay(guildId, userId, "poker", bet);
+  if (!playStart.ok && playStart.reason === "daily_limit_reached") {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle("🃏 ポーカー").setDescription(dailyLimitReachedMessage("poker", playStart.limit)).setColor(COLOR_LOSE)],
+    });
+    return;
+  }
+  if (!playStart.ok) {
     await interaction.editReply({
       embeds: [
         new EmbedBuilder()
@@ -614,6 +628,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     });
     return;
   }
+  const afterDeduct = { balance: playStart.balance };
 
   const cardPaths = cardPathsRaw;
   const suitEmojis = resolveSuitEmojis(settings);

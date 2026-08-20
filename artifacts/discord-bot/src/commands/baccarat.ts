@@ -36,6 +36,7 @@ import {
   emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
+import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages } from "../lib/bjCardImages";
 import { downloadImageAsBuffer } from "../lib/gcsStorage";
@@ -607,8 +608,14 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const afterDeduct = await deductBet(guildId, userId, bet);
-  if (!afterDeduct) {
+  const playStart = await tryStartCasinoPlay(guildId, userId, "baccarat", bet);
+  if (!playStart.ok && playStart.reason === "daily_limit_reached") {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle("🎴 バカラ").setDescription(dailyLimitReachedMessage("baccarat", playStart.limit)).setColor(COLOR_LOSE)],
+    });
+    return;
+  }
+  if (!playStart.ok) {
     await interaction.editReply({
       embeds: [
         new EmbedBuilder()
@@ -619,6 +626,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     });
     return;
   }
+  const afterDeduct = { balance: playStart.balance };
 
   // ─── ディール（2枚ずつ） ───────────────────────────────────────────────────
   let deck = buildShoe();
@@ -864,14 +872,22 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
     return;
   }
 
-  const afterDeduct = await deductBet(guildId, userId, bet);
-  if (!afterDeduct) {
+  const playStart = await tryStartCasinoPlay(guildId, userId, "baccarat", bet);
+  if (!playStart.ok && playStart.reason === "daily_limit_reached") {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle("🎴 バカラ").setDescription(dailyLimitReachedMessage("baccarat", playStart.limit)).setColor(COLOR_LOSE)],
+      components: [],
+    });
+    return;
+  }
+  if (!playStart.ok) {
     await interaction.editReply({
       embeds: [new EmbedBuilder().setTitle("🎴 バカラ").setDescription("❌ 残高が不足しています。").setColor(COLOR_LOSE)],
       components: [],
     });
     return;
   }
+  const afterDeduct = { balance: playStart.balance };
 
   // ディール
   let deck = buildShoe();

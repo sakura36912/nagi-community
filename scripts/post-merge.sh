@@ -17,6 +17,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS transactions_session_key_idx
   ON transactions (session_key)
   WHERE session_key IS NOT NULL;
 ALTER TABLE slot_settings ADD COLUMN IF NOT EXISTS win_rate integer;
+CREATE TABLE IF NOT EXISTS casino_play_limits (
+  guild_id text NOT NULL,
+  game text NOT NULL,
+  daily_limit integer NOT NULL,
+  PRIMARY KEY (guild_id, game)
+);
+CREATE TABLE IF NOT EXISTS casino_daily_play_counts (
+  guild_id text NOT NULL,
+  user_id text NOT NULL,
+  game text NOT NULL,
+  date text NOT NULL,
+  play_count integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (guild_id, user_id, game, date)
+);
 SQL
 
 # Run TypeScript type checks across all workspace packages to catch build breaks early.

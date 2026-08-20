@@ -19,6 +19,13 @@ import {
   PermissionFlagsBits,
 } from "discord.js";
 import { getGuildSettings, setCasinoMaxBet } from "../lib/economy";
+import {
+  CASINO_GAME_LABELS,
+  CASINO_LIMITED_GAMES,
+  getCasinoPlayLimits,
+  setCasinoPlayLimit,
+  type CasinoLimitedGame,
+} from "../lib/casinoPlayLimits";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -187,6 +194,55 @@ async function handleSetupMaxBet(interaction: ChatInputCommandInteraction): Prom
           value: `**${amount.toLocaleString()}** に設定しました\n（ブラックジャック・ポーカー・ルーレット共通）`,
         })
         .setFooter({ text: "次回ゲームから反映されます" }),
+    ],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+// ─── /casino setup play_limit ─────────────────────────────────────────────────
+
+const PLAY_LIMIT_CHOICES = [
+  { name: "🎰 スロット", value: "slot" },
+  { name: "🃏 ブラックジャック", value: "blackjack" },
+  { name: "🃏 ハイアンドロー", value: "highlow" },
+  { name: "🎴 バカラ", value: "baccarat" },
+  { name: "🎴 ポーカー", value: "poker" },
+  { name: "すべての対象ゲーム", value: "all" },
+];
+
+async function handleSetupPlayLimit(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ 管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const selected = interaction.options.getString("game", true);
+  const rawLimit = interaction.options.getInteger("limit", true);
+  const dailyLimit = rawLimit === 0 ? null : rawLimit;
+  const games = selected === "all"
+    ? [...CASINO_LIMITED_GAMES]
+    : [selected as CasinoLimitedGame];
+
+  await Promise.all(games.map((game) => setCasinoPlayLimit(guildId, game, dailyLimit)));
+  const configured = await getCasinoPlayLimits(guildId);
+  const configuredByGame = new Map(configured.map((entry) => [entry.game, entry.dailyLimit]));
+  const settingText = dailyLimit === null ? "無制限" : `1人あたり **${dailyLimit}回 / 日**`;
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🎲 カジノ日次プレイ上限")
+        .setColor(COLOR_NEUTRAL)
+        .setDescription(`**${games.map((game) => CASINO_GAME_LABELS[game]).join("・")}** を ${settingText} に設定しました。`)
+        .addFields({
+          name: "現在の設定（毎日 0:00 JST リセット）",
+          value: CASINO_LIMITED_GAMES
+            .map((game) => `${CASINO_GAME_LABELS[game]}: **${configuredByGame.get(game) ?? "無制限"}**`)
+            .join("\n"),
+        })
+        .setFooter({ text: "limit を 0 にすると、そのゲームを無制限に戻せます。" }),
     ],
     flags: MessageFlags.Ephemeral,
   });
@@ -532,6 +588,26 @@ export const casinoCommand = {
                 .setMaxValue(CASINO_DEFAULT_MAX_BET)
                 .setRequired(true),
             ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("play_limit")
+            .setDescription("ゲームごとの1人あたり日次プレイ上限を設定する")
+            .addStringOption((opt) =>
+              opt
+                .setName("game")
+                .setDescription("上限を設定するゲーム")
+                .addChoices(...PLAY_LIMIT_CHOICES)
+                .setRequired(true),
+            )
+            .addIntegerOption((opt) =>
+              opt
+                .setName("limit")
+                .setDescription("1人あたりの上限回数。0で無制限")
+                .setMinValue(0)
+                .setMaxValue(10_000)
+                .setRequired(true),
+            ),
         ),
     ),
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -540,6 +616,7 @@ export const casinoCommand = {
     if (sub === "stats")   { await handleStats(interaction);         return; }
     if (sub === "wallet")  { await handleWalletSummary(interaction);  return; }
     if (sub === "average") { await handleAverage(interaction);        return; }
-    if (group === "setup" && sub === "max_bet") await handleSetupMaxBet(interaction);
+    if (group === "setup" && sub === "max_bet") { await handleSetupMaxBet(interaction); return; }
+    if (group === "setup" && sub === "play_limit") await handleSetupPlayLimit(interaction);
   },
 };

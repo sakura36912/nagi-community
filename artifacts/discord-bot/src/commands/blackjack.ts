@@ -30,6 +30,7 @@ import {
   emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
+import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages, setBjCardImage, deleteBjCardImage } from "../lib/bjCardImages";
 import { uploadImageFromUrl, downloadImageAsBuffer, deleteGcsObject } from "../lib/gcsStorage";
@@ -573,8 +574,14 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
       return;
     }
 
-    const afterDeduct = await deductBet(guildId, user.id, pr.bet);
-    if (!afterDeduct) {
+    const playStart = await tryStartCasinoPlay(guildId, user.id, "blackjack", pr.bet);
+    if (!playStart.ok && playStart.reason === "daily_limit_reached") {
+      processingReplay.delete(key);
+      await interaction.editReply({ components: [] });
+      await interaction.followUp({ content: dailyLimitReachedMessage("blackjack", playStart.limit), flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!playStart.ok) {
       processingReplay.delete(key);
       await interaction.editReply({ components: [] });
       await interaction.followUp({
@@ -583,6 +590,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
       });
       return;
     }
+    const afterDeduct = { balance: playStart.balance };
 
     let deck = buildShoe();
     let playerHand: Card[] = [], dealerHand: Card[] = [], card: Card;
@@ -752,13 +760,20 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const suitEmojis = resolveSuitEmojis(settings);
   const cardPaths = rawCardImages;
 
-  const afterDeduct = await deductBet(guildId, userId, bet);
-  if (!afterDeduct) {
+  const playStart = await tryStartCasinoPlay(guildId, userId, "blackjack", bet);
+  if (!playStart.ok && playStart.reason === "daily_limit_reached") {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle("🃏 ブラックジャック").setDescription(dailyLimitReachedMessage("blackjack", playStart.limit)).setColor(COLOR_LOSE)],
+    });
+    return;
+  }
+  if (!playStart.ok) {
     await interaction.editReply({
       embeds: [new EmbedBuilder().setTitle("🃏 ブラックジャック").setDescription("❌ 残高が不足しています。").setColor(COLOR_LOSE)],
     });
     return;
   }
+  const afterDeduct = { balance: playStart.balance };
 
   let deck = buildShoe();
   let playerHand: Card[] = [], dealerHand: Card[] = [], card: Card;

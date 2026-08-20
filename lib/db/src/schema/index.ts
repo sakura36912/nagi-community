@@ -32,4 +32,5 @@ export * from "./blackjack";
 export * from "./sticky";
 export * from "./timedRoleGrants";
 export * from "./baccarat";
+export * from "./casinoPlayLimits";
 
