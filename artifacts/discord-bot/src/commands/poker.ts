@@ -24,6 +24,12 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
+import {
+  addCasinoRound,
+  buildCasinoResultFields,
+  emptyCasinoResultTotals,
+  type CasinoResultTotals,
+} from "../lib/casinoResult";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages } from "../lib/bjCardImages";
 import { downloadImageAsBuffer } from "../lib/gcsStorage";
@@ -57,6 +63,7 @@ interface PokerGame {
   cardPaths: Map<string, string>;
   /** カード画像のバッファキャッシュ。キー: "rank:suit"、値: Buffer。 */
   cardBuffers: Map<string, Buffer>;
+  sessionTotals: CasinoResultTotals;
 }
 
 type HandRank =
@@ -118,9 +125,22 @@ const activeGames = new Map<string, PokerGame>();
 
 function gameKey(guildId: string, userId: string) { return `${guildId}:${userId}`; }
 
+interface PendingPokerReplay {
+  bet: number;
+  currencyName: string;
+  suitEmojis: SuitEmojis;
+  cardPaths: Map<string, string>;
+  totals: CasinoResultTotals;
+  expiresAt: number;
+}
+
+const pendingReplays = new Map<string, PendingPokerReplay>();
+const processingReplays = new Set<string>();
+
 setInterval(() => {
   const now = Date.now();
   for (const [k, g] of activeGames) { if (g.expiresAt < now) activeGames.delete(k); }
+  for (const [k, replay] of pendingReplays) { if (replay.expiresAt < now) pendingReplays.delete(k); }
 }, 60_000);
 
 // ─── Deck helpers ─────────────────────────────────────────────────────────────
@@ -319,18 +339,21 @@ async function buildDealContent(game: PokerGame): Promise<{ embeds: EmbedBuilder
   };
 }
 
-async function buildResultContent(game: PokerGame, handRank: HandRank, netDelta: number): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[] }> {
+async function buildResultContent(
+  game: PokerGame,
+  handRank: HandRank,
+  netDelta: number,
+  totals: CasinoResultTotals,
+): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[] }> {
   const multiplier = PAYOUT[handRank];
   const isWin = multiplier > 0;
-  const sign = netDelta > 0 ? "+" : "";
-
   const cardImage = await buildHandStrip(game.hand, game.cardBuffers, "result.png");
 
   const embed = new EmbedBuilder()
     .setTitle(`🃏 ポーカー — ${HAND_LABEL[handRank]}`)
     .setColor(isWin ? COLOR_WIN : COLOR_LOSE)
     .addFields(
-      { name: "収支",   value: `${sign}${netDelta.toLocaleString()} ${game.currencyName}`, inline: true },
+      ...buildCasinoResultFields(totals, game.currencyName),
       ...(multiplier > 0 ? [{ name: "倍率", value: `${multiplier}x`, inline: true }] : []),
     )
     .setTimestamp();
@@ -341,6 +364,24 @@ async function buildResultContent(game: PokerGame, handRank: HandRank, netDelta:
     embeds: [embed],
     files: cardImage ? [cardImage.attachment] : [],
   };
+}
+
+function buildResultButtons(): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("poker:replay").setLabel("もう一度").setEmoji("🔄").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("poker:quit").setLabel("終了").setEmoji("✋").setStyle(ButtonStyle.Secondary),
+  );
+}
+
+function buildSessionSummaryEmbed(totals: CasinoResultTotals, currencyName: string): EmbedBuilder {
+  const color = totals.totalNet > 0 ? COLOR_WIN : totals.totalNet < 0 ? COLOR_LOSE : COLOR_NEUTRAL;
+  return new EmbedBuilder()
+    .setTitle("🃏 ポーカー — セッション終了")
+    .setColor(color)
+    .addFields(
+      ...buildCasinoResultFields(totals, currencyName),
+      { name: "プレイ回数", value: `${totals.games} 回`, inline: true },
+    );
 }
 
 // ─── Finish game ──────────────────────────────────────────────────────────────
@@ -357,11 +398,13 @@ async function finishGame(
   await cacheHandBuffers(game.hand, game.cardPaths, game.cardBuffers);
 
   let netDelta: number;
+  let payout = 0;
   if (multiplier === 0) {
     netDelta = -bet;
   } else {
     const winnings = bet * multiplier;
-    await creditAmount(guildId, userId, bet + winnings);
+    payout = bet + winnings;
+    await creditAmount(guildId, userId, payout);
     netDelta = winnings;
   }
 
@@ -372,8 +415,17 @@ async function finishGame(
 
   activeGames.delete(gameKey(guildId, userId));
 
-  const { embeds, files } = await buildResultContent(game, handRank, netDelta);
-  await interaction.editReply({ embeds, files, components: [] });
+  const totals = addCasinoRound(game.sessionTotals, bet, payout);
+  pendingReplays.set(gameKey(guildId, userId), {
+    bet,
+    currencyName: game.currencyName,
+    suitEmojis: game.suitEmojis,
+    cardPaths: game.cardPaths,
+    totals,
+    expiresAt: Date.now() + GAME_TTL_MS,
+  });
+  const { embeds, files } = await buildResultContent(game, handRank, netDelta, totals);
+  await interaction.editReply({ embeds, files, components: [buildResultButtons()] });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -383,6 +435,78 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
   if (!guildId) return;
 
   const key = gameKey(guildId, user.id);
+  const action = interaction.customId.slice(POKER_PREFIX.length);
+
+  if (action === "replay") {
+    if (activeGames.has(key)) {
+      await interaction.update({ components: [] });
+      return;
+    }
+    if (processingReplays.has(key)) {
+      await interaction.deferUpdate();
+      return;
+    }
+    processingReplays.add(key);
+    await interaction.deferUpdate();
+    const replay = pendingReplays.get(key);
+    pendingReplays.delete(key);
+
+    if (!replay || replay.expiresAt < Date.now()) {
+      processingReplays.delete(key);
+      await interaction.editReply({ components: [] });
+      return;
+    }
+
+    const afterDeduct = await deductBet(guildId, user.id, replay.bet);
+    if (!afterDeduct) {
+      processingReplays.delete(key);
+      await interaction.editReply({ components: [] });
+      await interaction.followUp({
+        content: `❌ 残高が不足しているためリプレイできません（賭け金: **${replay.bet.toLocaleString()}** ${replay.currencyName}）。`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    let deck = buildDeck();
+    const hand: Card[] = [];
+    for (let i = 0; i < 5; i++) {
+      const [card, rest] = draw(deck);
+      hand.push(card);
+      deck = rest;
+    }
+    const cardBuffers = new Map<string, Buffer>();
+    await cacheHandBuffers(hand, replay.cardPaths, cardBuffers);
+
+    const game: PokerGame = {
+      guildId, userId: user.id, bet: replay.bet, hand, deck,
+      held: [false, false, false, false, false], phase: "deal",
+      currencyName: replay.currencyName, expiresAt: Date.now() + GAME_TTL_MS,
+      suitEmojis: replay.suitEmojis, cardPaths: replay.cardPaths, cardBuffers,
+      sessionTotals: replay.totals,
+    };
+    activeGames.set(key, game);
+    processingReplays.delete(key);
+
+    const { embeds, files, components } = await buildDealContent(game);
+    await interaction.editReply({ embeds, files, components });
+    return;
+  }
+
+  if (action === "quit") {
+    if (processingReplays.has(key)) {
+      await interaction.reply({ content: "🔄 リプレイ処理中です。少し待ってください。", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const replay = pendingReplays.get(key);
+    pendingReplays.delete(key);
+    await interaction.update({ components: [] });
+    if (replay) {
+      await interaction.followUp({ embeds: [buildSessionSummaryEmbed(replay.totals, replay.currencyName)] });
+    }
+    return;
+  }
+
   const game = activeGames.get(key);
 
   if (!game || game.expiresAt < Date.now()) {
@@ -406,8 +530,6 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
 
   await interaction.deferUpdate();
 
-  const action = interaction.customId.slice(POKER_PREFIX.length);
-
   if (action.startsWith("hold:")) {
     const idx = parseInt(action.slice(5), 10);
     if (idx >= 0 && idx < 5) {
@@ -420,6 +542,10 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
   }
 
   if (action === "draw") {
+    // deferUpdate より前に状態を確定し、連打による二重精算を防ぐ。
+    game.phase = "done";
+    activeGames.set(key, game);
+
     let { deck } = game;
     const newCards: Card[] = [];
     for (let i = 0; i < 5; i++) {
@@ -431,8 +557,6 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
       }
     }
     game.deck = deck;
-    game.phase = "done";
-    activeGames.set(key, game);
     await finishGame(interaction, game);
   }
 }
@@ -446,13 +570,15 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const bet = interaction.options.getInteger("bet", true);
 
   const key = gameKey(guildId, userId);
-  if (activeGames.has(key)) {
+  if (activeGames.has(key) || processingReplays.has(key)) {
     await interaction.reply({
       content: "すでにゲームが進行中です。先のゲームを終わらせてください。",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
+  // 古い結果メッセージのリプレイでは、新しく始めるゲームを上書きできないようにする。
+  pendingReplays.delete(key);
 
   await interaction.deferReply();
 
@@ -516,6 +642,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     suitEmojis,
     cardPaths,
     cardBuffers,
+    sessionTotals: emptyCasinoResultTotals(),
   };
 
   activeGames.set(key, game);

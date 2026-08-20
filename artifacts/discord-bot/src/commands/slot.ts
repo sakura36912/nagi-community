@@ -17,6 +17,12 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
 import {
+  addCasinoRound,
+  buildCasinoResultFields,
+  emptyCasinoResultTotals,
+  type CasinoResultTotals,
+} from "../lib/casinoResult";
+import {
   getSlotSettings,
   addSlotSticker,
   removeSlotSticker,
@@ -44,12 +50,12 @@ export const SLOT_QUIT_PREFIX   = "slot:quit:";
 // ─── Session tracking ─────────────────────────────────────────────────────────
 
 interface SlotSession {
-  totalDelta: number;
-  games: number;
+  totals: CasinoResultTotals;
   currencyName: string;
 }
 
 const activeSessions = new Map<string, SlotSession>();
+const processingReplays = new Set<string>();
 
 function sessionKey(guildId: string, userId: string): string {
   return `${guildId}:${userId}`;
@@ -290,6 +296,7 @@ function buildResult(
   bet: number,
   currencyName: string,
   meta: Map<string, StickerInfo>,
+  totals: CasinoResultTotals,
 ): { content: string; embed: EmbedBuilder } {
   const rowWins = new Set(
     paylines.filter((p) => p.won && p.name.startsWith("横")).map((p) => p.name),
@@ -329,7 +336,8 @@ function buildResult(
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription(resultText)
-    .setColor(color);
+    .setColor(color)
+    .addFields(...buildCasinoResultFields(totals, currencyName));
 
   return { content, embed };
 }
@@ -420,19 +428,17 @@ function buildActionRow(userId: string, bet: number): ActionRowBuilder<ButtonBui
 }
 
 function buildSessionSummaryEmbed(
-  totalDelta: number,
-  games: number,
+  totals: CasinoResultTotals,
   currencyName: string,
 ): EmbedBuilder {
-  const sign  = totalDelta >= 0 ? "+" : "";
-  const color = totalDelta > 0 ? 0x57f287 : totalDelta < 0 ? 0xed4245 : 0x99aab5;
+  const color = totals.totalNet > 0 ? 0x57f287 : totals.totalNet < 0 ? 0xed4245 : 0x99aab5;
   return new EmbedBuilder()
     .setTitle("🎰 スロット — セッション終了")
-    .setDescription(
-      `合計収支: **${sign}${totalDelta.toLocaleString()} ${currencyName}**\n` +
-      `プレイ回数: ${games} 回`,
-    )
-    .setColor(color);
+    .setColor(color)
+    .addFields(
+      ...buildCasinoResultFields(totals, currencyName),
+      { name: "プレイ回数", value: `${totals.games} 回`, inline: true },
+    );
 }
 
 // ─── Shared spin core ─────────────────────────────────────────────────────────
@@ -459,7 +465,7 @@ async function spinAndReply(
 
   // セッションがなければ新規作成（スラッシュコマンド初回）
   if (!activeSessions.has(key)) {
-    activeSessions.set(key, { totalDelta: 0, games: 0, currencyName });
+    activeSessions.set(key, { totals: emptyCasinoResultTotals(), currencyName });
   }
 
   const afterDeduct = await deductBet(guildId, userId, bet);
@@ -473,8 +479,8 @@ async function spinAndReply(
         .setDescription("❌ 残高が不足しています。")
         .setColor(0xed4245),
     ];
-    if (session && session.games > 0) {
-      embeds.push(buildSessionSummaryEmbed(session.totalDelta, session.games, session.currencyName));
+    if (session && session.totals.games > 0) {
+      embeds.push(buildSessionSummaryEmbed(session.totals, session.currencyName));
     }
     await interaction.editReply({ content: "", embeds, components: [] });
     return;
@@ -488,11 +494,13 @@ async function spinAndReply(
 
   const multipliers = resolveMultipliers(slotSettings.payoutMultipliers);
   const multiplier = multipliers[Math.min(wins, 5)] ?? -1;
-  const netDelta = Math.floor(bet * multiplier);
+  const profit = wins > 0 ? Math.max(0, Math.floor(bet * multiplier)) : 0;
+  const payout = profit > 0 ? bet + profit : 0;
+  const netDelta = payout - bet;
 
   let finalBalance = afterDeduct.balance;
-  if (netDelta > 0) {
-    finalBalance = await creditWinnings(guildId, userId, netDelta);
+  if (payout > 0) {
+    finalBalance = await creditWinnings(guildId, userId, payout);
   }
 
   if (netDelta !== 0) {
@@ -506,10 +514,11 @@ async function spinAndReply(
 
   // セッション累計を更新
   const session = activeSessions.get(key)!;
-  session.totalDelta += netDelta;
-  session.games += 1;
+  session.totals = addCasinoRound(session.totals, bet, payout);
 
-  const { content, embed } = buildResult(grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta);
+  const { content, embed } = buildResult(
+    grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta, session.totals,
+  );
   await interaction.editReply({
     content,
     embeds: [embed],
@@ -552,7 +561,10 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const { currencyName } = await getGuildSettings(guildId);
 
   // セッションをリセット（新規プレイ）
-  activeSessions.set(sessionKey(guildId, userId), { totalDelta: 0, games: 0, currencyName });
+  activeSessions.set(sessionKey(guildId, userId), {
+    totals: emptyCasinoResultTotals(),
+    currencyName,
+  });
 
   await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
   await new Promise((res) => setTimeout(res, 1300));
@@ -585,10 +597,21 @@ export async function handleSlotPlayAgainBtn(interaction: ButtonInteraction): Pr
   const { guildId } = interaction;
   if (!guildId) { await interaction.deferUpdate(); return; }
 
+  const key = sessionKey(guildId, ownerId);
+  if (processingReplays.has(key)) {
+    await interaction.deferUpdate();
+    return;
+  }
+  processingReplays.add(key);
+
   const { currencyName } = await getGuildSettings(guildId);
-  await interaction.update({ embeds: [buildSpinningEmbed(bet, currencyName)], components: [], content: "" });
-  await new Promise((res) => setTimeout(res, 1300));
-  await spinAndReply(interaction, bet);
+  try {
+    await interaction.update({ embeds: [buildSpinningEmbed(bet, currencyName)], components: [], content: "" });
+    await new Promise((res) => setTimeout(res, 1300));
+    await spinAndReply(interaction, bet);
+  } finally {
+    processingReplays.delete(key);
+  }
 }
 
 export async function handleSlotQuitBtn(interaction: ButtonInteraction): Promise<void> {
@@ -605,17 +628,21 @@ export async function handleSlotQuitBtn(interaction: ButtonInteraction): Promise
   if (!guildId) { await interaction.deferUpdate(); return; }
 
   const key = sessionKey(guildId, interaction.user.id);
+  if (processingReplays.has(key)) {
+    await interaction.reply({ content: "🔄 リプレイ処理中です。少し待ってください。", flags: MessageFlags.Ephemeral });
+    return;
+  }
   const session = activeSessions.get(key);
   activeSessions.delete(key);
 
-  if (!session || session.games === 0) {
+  if (!session || session.totals.games === 0) {
     await interaction.update({ components: [] });
     return;
   }
 
   await interaction.update({
     components: [],
-    embeds: [buildSessionSummaryEmbed(session.totalDelta, session.games, session.currencyName)],
+    embeds: [buildSessionSummaryEmbed(session.totals, session.currencyName)],
     content: "",
   });
 }

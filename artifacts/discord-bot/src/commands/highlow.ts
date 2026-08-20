@@ -20,6 +20,12 @@ import {
 import { sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, recordTransaction, getOrCreateWallet } from "../lib/economy";
+import {
+  addCasinoRound,
+  buildCasinoResultFields,
+  emptyCasinoResultTotals,
+  type CasinoResultTotals,
+} from "../lib/casinoResult";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages } from "../lib/bjCardImages";
 import { downloadImageAsBuffer } from "../lib/gcsStorage";
@@ -229,6 +235,7 @@ async function buildResultEmbed(
   game: HLGame,
   nextCard: Card,
   result: "win" | "lose" | "draw",
+  totals?: CasinoResultTotals,
 ): Promise<EmbedWithFiles> {
   const e = game.suitEmojis;
   await cacheCardBuffer(nextCard, game.cardPaths, game.cardBuffers);
@@ -274,7 +281,10 @@ async function buildResultEmbed(
         { name: "前のカード", value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
         { name: "次のカード", value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
         { name: "\u200B",     value: "\u200B", inline: true },
-        { name: "収支",       value: `**-${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
+        ...buildCasinoResultFields(
+          totals ?? addCasinoRound(emptyCasinoResultTotals(), game.originalBet, 0),
+          game.currencyName,
+        ),
       );
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
     return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
@@ -388,8 +398,10 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
             .setColor(COLOR_LOSE)
             .addFields(
               { name: "連続正解",   value: `**${timedOutGame.streak}** 回`, inline: true },
-              { name: "賭け金",     value: `**${timedOutGame.originalBet.toLocaleString()}** ${timedOutGame.currencyName}`, inline: true },
-              { name: "収支",       value: `**-${timedOutGame.originalBet.toLocaleString()}** ${timedOutGame.currencyName}`, inline: true },
+              ...buildCasinoResultFields(
+                addCasinoRound(emptyCasinoResultTotals(), timedOutGame.originalBet, 0),
+                timedOutGame.currencyName,
+              ),
             )
             .setFooter({ text: "/highlow play で新しいゲームを始めてください。" }),
         ]
@@ -444,7 +456,12 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
       // 不正解 → ゲーム終了
       activeGames.delete(key);
       await recordTransaction(guildId, user.id, -game.originalBet, `ハイアンドロー敗北（賭け: ${game.originalBet}）`).catch(() => {});
-      const { embeds, files } = await buildResultEmbed(game, nextCard, "lose");
+      const { embeds, files } = await buildResultEmbed(
+        game,
+        nextCard,
+        "lose",
+        addCasinoRound(emptyCasinoResultTotals(), game.originalBet, 0),
+      );
       await interaction.editReply({ content: "", embeds, files, components: [] });
       return;
     }
@@ -466,18 +483,17 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     game.processing = true;
     activeGames.delete(key);
 
-    const finalBalance = await creditAmount(guildId, user.id, game.currentWin);
+    await creditAmount(guildId, user.id, game.currentWin);
     const netDelta     = game.currentWin - game.originalBet;
     await recordTransaction(guildId, user.id, netDelta, `ハイアンドロー勝利（賭け: ${game.originalBet}）`).catch(() => {});
 
-    const sign  = netDelta >= 0 ? "+" : "";
+    const totals = addCasinoRound(emptyCasinoResultTotals(), game.originalBet, game.currentWin);
     const embed = new EmbedBuilder()
       .setTitle("🃏 ハイアンドロー — 💰 受け取り")
       .setColor(COLOR_WIN)
       .addFields(
         { name: "連続正解",   value: `**${game.streak}** 回`, inline: true },
-        { name: "払い出し",   value: `**${game.currentWin.toLocaleString()}** ${game.currencyName}`, inline: true },
-        { name: "収支",       value: `${sign}**${netDelta.toLocaleString()}** ${game.currencyName}`, inline: true },
+        ...buildCasinoResultFields(totals, game.currencyName),
       );
 
     await interaction.update({ content: "", embeds: [embed], files: [], components: [] });

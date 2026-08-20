@@ -24,6 +24,12 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, recordTransaction, getOrCreateWallet, setBjSuitEmoji } from "../lib/economy";
+import {
+  addCasinoRound,
+  buildCasinoResultFields,
+  emptyCasinoResultTotals,
+  type CasinoResultTotals,
+} from "../lib/casinoResult";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages, setBjCardImage, deleteBjCardImage } from "../lib/bjCardImages";
 import { uploadImageFromUrl, downloadImageAsBuffer, deleteGcsObject } from "../lib/gcsStorage";
@@ -65,6 +71,10 @@ interface BJGame {
   processing: boolean;
   /** セッション開始からこのゲーム開始時点までの累計収支 */
   sessionDeltaBefore: number;
+  /** セッション開始からこのゲーム開始時点までの総賭け金 */
+  sessionBetBefore: number;
+  /** セッション開始からこのゲーム開始時点までの実払い出し額 */
+  sessionPayoutBefore: number;
   /** セッション内のゲーム回数（このゲーム開始時点） */
   sessionGamesBefore: number;
 }
@@ -96,6 +106,10 @@ interface PendingReplay {
   expiresAt: number;
   /** セッション開始からの累計収支 */
   sessionDelta: number;
+  /** セッション開始からの総賭け金 */
+  sessionBet: number;
+  /** セッション開始からの実払い出し額 */
+  sessionPayout: number;
   /** セッション内のゲーム回数 */
   sessionGames: number;
 }
@@ -383,7 +397,11 @@ async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWit
 /**
  * 結果表示用の embed を生成する。
  */
-async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWithFiles> {
+async function buildResultEmbed(
+  game: BJGame,
+  outcome: Outcome,
+  totals: CasinoResultTotals,
+): Promise<EmbedWithFiles> {
   const TITLE: Record<Outcome, string> = {
     blackjack: "🎉 ブラックジャック！",
     win:       "✅ 勝利！",
@@ -394,7 +412,6 @@ async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWi
     blackjack: COLOR_WIN, win: COLOR_WIN, push: COLOR_PUSH, lose: COLOR_LOSE,
   };
   const { netDelta } = resolveOutcome(game);
-  const sign = netDelta > 0 ? "+" : "";
   const e    = game.suitEmojis;
 
   const [playerStrip, dealerStrip] = await Promise.all([
@@ -415,7 +432,7 @@ async function buildResultEmbed(game: BJGame, outcome: Outcome): Promise<EmbedWi
     .addFields(
       { name: "あなたの手札",     value: playerValue },
       { name: "ディーラーの手札", value: dealerValue },
-      { name: "収支", value: `${sign}${netDelta.toLocaleString()} ${game.currencyName}`, inline: true },
+      ...buildCasinoResultFields(totals, game.currencyName),
     )
     .setTimestamp();
 
@@ -485,9 +502,8 @@ async function finishGame(
   const { guildId, userId, bet } = game;
 
   let finalBalance = game.balance;
-  if (outcome === "push")       finalBalance = await creditAmount(guildId, userId, bet);
-  else if (outcome === "blackjack") finalBalance = await creditAmount(guildId, userId, bet + netDelta);
-  else if (outcome === "win")   finalBalance = await creditAmount(guildId, userId, bet + netDelta);
+  const payout = outcome === "lose" ? 0 : bet + netDelta;
+  if (payout > 0) finalBalance = await creditAmount(guildId, userId, payout);
 
   const logReason: Record<Outcome, string> = {
     blackjack: `BJ（賭け: ${bet}）`, win: `BJ勝利（賭け: ${bet}）`,
@@ -500,8 +516,12 @@ async function finishGame(
   activeGames.delete(key);
 
   // セッション累計を引き継ぐ（ゲームオブジェクトに開始前の累計を持たせている）
-  const sessionDelta = game.sessionDeltaBefore + netDelta;
-  const sessionGames = game.sessionGamesBefore + 1;
+  const totals = addCasinoRound({
+    totalBet: game.sessionBetBefore,
+    totalPayout: game.sessionPayoutBefore,
+    totalNet: game.sessionDeltaBefore,
+    games: game.sessionGamesBefore,
+  }, bet, payout);
 
   const replayBet = game.bet;
   pendingReplay.set(key, {
@@ -510,13 +530,15 @@ async function finishGame(
     currencyName: game.currencyName,
     suitEmojis: game.suitEmojis,
     expiresAt: Date.now() + GAME_TTL_MS,
-    sessionDelta,
-    sessionGames,
+    sessionDelta: totals.totalNet,
+    sessionBet: totals.totalBet,
+    sessionPayout: totals.totalPayout,
+    sessionGames: totals.games,
   });
 
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
   await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
-  const { embeds, files } = await buildResultEmbed(game, outcome);
+  const { embeds, files } = await buildResultEmbed(game, outcome, totals);
   await interaction.editReply({ content: "", embeds, files, components: [buildResultButtons()] });
 }
 
@@ -531,6 +553,10 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   // ─── replay / quit は activeGames にゲームがない状態で呼ばれる ───────────────
   if (action === "replay") {
+    if (activeGames.has(key)) {
+      await interaction.update({ components: [] });
+      return;
+    }
     // 二重押し防止: すでに処理中なら無視
     if (processingReplay.has(key)) {
       await interaction.deferUpdate();
@@ -574,6 +600,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
       balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
       suitEmojis: pr.suitEmojis, cardPaths: pr.cardPaths, cardBuffers, processing: false,
       sessionDeltaBefore: pr.sessionDelta,
+      sessionBetBefore: pr.sessionBet,
+      sessionPayoutBefore: pr.sessionPayout,
       sessionGamesBefore: pr.sessionGames,
     };
 
@@ -591,19 +619,27 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
   }
 
   if (action === "quit") {
+    if (processingReplay.has(key)) {
+      await interaction.reply({ content: "🔄 リプレイ処理中です。少し待ってください。", flags: MessageFlags.Ephemeral });
+      return;
+    }
     const pr = pendingReplay.get(key);
     pendingReplay.delete(key);
     await interaction.update({ components: [] });
     // セッション収支をフォローアップで表示（1ゲーム以上プレイ済みの場合）
     if (pr && pr.sessionGames > 0) {
-      const sign  = pr.sessionDelta >= 0 ? "+" : "";
-      const color = pr.sessionDelta >= 0 ? 0x57f287 : 0xed4245;
+      const color = pr.sessionDelta > 0 ? 0x57f287 : pr.sessionDelta < 0 ? 0xed4245 : COLOR_PUSH;
       const embed = new EmbedBuilder()
         .setTitle("🃏 ブラックジャック — セッション終了")
         .setColor(color)
         .addFields(
+          ...buildCasinoResultFields({
+            totalBet: pr.sessionBet,
+            totalPayout: pr.sessionPayout,
+            totalNet: pr.sessionDelta,
+            games: pr.sessionGames,
+          }, pr.currencyName),
           { name: "プレイ回数", value: `${pr.sessionGames} 回`,                                          inline: true },
-          { name: "合計収支",   value: `${sign}${pr.sessionDelta.toLocaleString()} ${pr.currencyName}`, inline: true },
         );
       await interaction.followUp({ embeds: [embed] });
     }
@@ -684,10 +720,12 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const bet = interaction.options.getInteger("bet", true);
 
   const key = gameKey(guildId, userId);
-  if (activeGames.has(key)) {
+  if (activeGames.has(key) || processingReplay.has(key)) {
     await interaction.reply({ content: "すでにゲームが進行中です。先のゲームを終わらせてください。", flags: MessageFlags.Ephemeral });
     return;
   }
+  // 古い結果メッセージのリプレイでは、新しく始めるゲームを上書きできないようにする。
+  pendingReplay.delete(key);
 
   // DB 処理が 3 秒を超える可能性があるため、先に defer して Discord タイムアウトを防ぐ
   await interaction.deferReply();
@@ -738,7 +776,10 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     currencyName: settings.currencyName,
     balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
     suitEmojis, cardPaths, cardBuffers, processing: false,
-    sessionDeltaBefore: 0, sessionGamesBefore: 0,
+    sessionDeltaBefore: 0,
+    sessionBetBefore: 0,
+    sessionPayoutBefore: 0,
+    sessionGamesBefore: 0,
   };
 
   if (isBlackjack(playerHand)) {
