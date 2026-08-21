@@ -65,7 +65,6 @@ interface PokerGame {
   cardPaths: Map<string, string>;
   /** カード画像のバッファキャッシュ。キー: "rank:suit"、値: Buffer。 */
   cardBuffers: Map<string, Buffer>;
-  sessionTotals: CasinoResultTotals;
   publicMessage?: Message;
 }
 
@@ -128,23 +127,9 @@ const activeGames = new Map<string, PokerGame>();
 
 function gameKey(guildId: string, userId: string) { return `${guildId}:${userId}`; }
 
-interface PendingPokerReplay {
-  bet: number;
-  currencyName: string;
-  suitEmojis: SuitEmojis;
-  cardPaths: Map<string, string>;
-  totals: CasinoResultTotals;
-  expiresAt: number;
-  publicMessage?: Message;
-}
-
-const pendingReplays = new Map<string, PendingPokerReplay>();
-const processingReplays = new Set<string>();
-
 setInterval(() => {
   const now = Date.now();
   for (const [k, g] of activeGames) { if (g.expiresAt < now) activeGames.delete(k); }
-  for (const [k, replay] of pendingReplays) { if (replay.expiresAt < now) pendingReplays.delete(k); }
 }, 60_000);
 
 // ─── Deck helpers ─────────────────────────────────────────────────────────────
@@ -370,12 +355,6 @@ async function buildResultContent(
   };
 }
 
-function buildResultButtons(userId: string): ActionRowBuilder<ButtonBuilder> {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(`poker:replay:${userId}`).setLabel("もう一度").setEmoji("🔄").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`poker:quit:${userId}`).setLabel("終了").setEmoji("✋").setStyle(ButtonStyle.Secondary),
-  );
-}
 
 function buildSessionSummaryEmbed(totals: CasinoResultTotals, currencyName: string): EmbedBuilder {
   const color = totals.totalNet > 0 ? COLOR_WIN : totals.totalNet < 0 ? COLOR_LOSE : COLOR_NEUTRAL;
@@ -419,24 +398,13 @@ async function finishGame(
 
   activeGames.delete(gameKey(guildId, userId));
 
-  const totals = addCasinoRound(game.sessionTotals, bet, payout);
-  pendingReplays.set(gameKey(guildId, userId), {
-    bet,
-    currencyName: game.currencyName,
-    suitEmojis: game.suitEmojis,
-    cardPaths: game.cardPaths,
-    totals,
-    expiresAt: Date.now() + GAME_TTL_MS,
-    publicMessage: game.publicMessage,
-  });
+  const totals = addCasinoRound(emptyCasinoResultTotals(), bet, payout);
   const { embeds, files } = await buildResultContent(game, handRank, netDelta, totals);
-  const resultBtns = buildResultButtons(userId);
   if (interaction instanceof ButtonInteraction) {
     await game.publicMessage?.edit({ embeds, files, components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [resultBtns] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
   } else {
     await interaction.editReply({ embeds, files, components: [] });
-    await interaction.followUp({ components: [resultBtns], flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -456,85 +424,6 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
   // 他人の結果画面ボタンを弾く
   if (ownerId !== null && ownerId !== user.id) {
     await interaction.reply({ content: "このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  if (verb === "replay") {
-    if (activeGames.has(key)) {
-      await interaction.update({ components: [] });
-      return;
-    }
-    if (processingReplays.has(key)) {
-      await interaction.deferUpdate();
-      return;
-    }
-    processingReplays.add(key);
-    await interaction.deferUpdate();
-    const replay = pendingReplays.get(key);
-    pendingReplays.delete(key);
-
-    if (!replay || replay.expiresAt < Date.now()) {
-      processingReplays.delete(key);
-      await interaction.editReply({ components: [] });
-      return;
-    }
-
-    const playStart = await tryStartCasinoPlay(guildId, user.id, "poker", replay.bet);
-    if (!playStart.ok && playStart.reason === "daily_limit_reached") {
-      processingReplays.delete(key);
-      await interaction.editReply({ components: [] });
-      await interaction.followUp({ content: dailyLimitReachedMessage("poker", playStart.limit), flags: MessageFlags.Ephemeral });
-      return;
-    }
-    if (!playStart.ok) {
-      processingReplays.delete(key);
-      await interaction.editReply({ components: [] });
-      await interaction.followUp({
-        content: `❌ 残高が不足しているためリプレイできません（賭け金: **${replay.bet.toLocaleString()}** ${replay.currencyName}）。`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    const afterDeduct = { balance: playStart.balance };
-
-    let deck = buildDeck();
-    const hand: Card[] = [];
-    for (let i = 0; i < 5; i++) {
-      const [card, rest] = draw(deck);
-      hand.push(card);
-      deck = rest;
-    }
-    const cardBuffers = new Map<string, Buffer>();
-    await cacheHandBuffers(hand, replay.cardPaths, cardBuffers);
-
-    const game: PokerGame = {
-      guildId, userId: user.id, bet: replay.bet, hand, deck,
-      held: [false, false, false, false, false], phase: "deal",
-      currencyName: replay.currencyName, expiresAt: Date.now() + GAME_TTL_MS,
-      suitEmojis: replay.suitEmojis, cardPaths: replay.cardPaths, cardBuffers,
-      sessionTotals: replay.totals,
-      publicMessage: replay.publicMessage,
-    };
-    activeGames.set(key, game);
-    processingReplays.delete(key);
-
-    const { embeds, files, components } = await buildDealContent(game);
-    await game.publicMessage?.edit({ embeds, files, components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components });
-    return;
-  }
-
-  if (verb === "quit") {
-    if (processingReplays.has(key)) {
-      await interaction.reply({ content: "🔄 リプレイ処理中です。少し待ってください。", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    const replay = pendingReplays.get(key);
-    pendingReplays.delete(key);
-    await interaction.update({ components: [] });
-    if (replay) {
-      await interaction.followUp({ embeds: [buildSessionSummaryEmbed(replay.totals, replay.currencyName)], flags: MessageFlags.Ephemeral });
-    }
     return;
   }
 
@@ -602,15 +491,13 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const bet = interaction.options.getInteger("bet", true);
 
   const key = gameKey(guildId, userId);
-  if (activeGames.has(key) || processingReplays.has(key)) {
+  if (activeGames.has(key)) {
     await interaction.reply({
       content: "すでにゲームが進行中です。先のゲームを終わらせてください。",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
-  // 古い結果メッセージのリプレイでは、新しく始めるゲームを上書きできないようにする。
-  pendingReplays.delete(key);
 
   await interaction.deferReply();
 
@@ -681,7 +568,6 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     suitEmojis,
     cardPaths,
     cardBuffers,
-    sessionTotals: emptyCasinoResultTotals(),
   };
 
   activeGames.set(key, game);

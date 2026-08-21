@@ -12,7 +12,6 @@ import {
   StickerFormatType,
   TextChannel,
   ChannelType,
-  Message,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
@@ -47,24 +46,7 @@ const MAX_BET = 10_000;
 const SYMBOL_COUNT = 4;
 const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
 
-export const SLOT_REPLAY_PREFIX = "slot:replay:";
-export const SLOT_QUIT_PREFIX   = "slot:quit:";
 export const SLOT_WIN_RATE_PREFIX = "slot:win-rate:";
-
-// ─── Session tracking ─────────────────────────────────────────────────────────
-
-interface SlotSession {
-  totals: CasinoResultTotals;
-  currencyName: string;
-  publicMessage?: Message;
-}
-
-const activeSessions = new Map<string, SlotSession>();
-const processingReplays = new Set<string>();
-
-function sessionKey(guildId: string, userId: string): string {
-  return `${guildId}:${userId}`;
-}
 
 // ─── Paylines: 3 horizontal rows + 2 diagonals ───────────────────────────────
 
@@ -539,36 +521,6 @@ async function buildWinRateSetupEmbed(
     .setFooter({ text: "ボタンを押すと、次回スピンから当選確率が反映されます。" });
 }
 
-// ─── Button rows & session summary ───────────────────────────────────────────
-
-function buildActionRow(userId: string, bet: number): ActionRowBuilder<ButtonBuilder> {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`${SLOT_REPLAY_PREFIX}${userId}:${bet}`)
-      .setLabel("もう一度")
-      .setEmoji("🎰")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`${SLOT_QUIT_PREFIX}${userId}:${bet}`)
-      .setLabel("終了")
-      .setStyle(ButtonStyle.Secondary),
-  );
-}
-
-function buildSessionSummaryEmbed(
-  totals: CasinoResultTotals,
-  currencyName: string,
-): EmbedBuilder {
-  const color = totals.totalNet > 0 ? 0x57f287 : totals.totalNet < 0 ? 0xed4245 : 0x99aab5;
-  return new EmbedBuilder()
-    .setTitle("🎰 スロット — セッション終了")
-    .setColor(color)
-    .addFields(
-      ...buildCasinoResultFields(totals, currencyName),
-      { name: "プレイ回数", value: `${totals.games} 回`, inline: true },
-    );
-}
-
 // ─── Shared spin core ─────────────────────────────────────────────────────────
 
 /**
@@ -577,28 +529,20 @@ function buildSessionSummaryEmbed(
  * 呼び出し元が reply / update を済ませた後に呼ぶこと。
  */
 async function spinAndReply(
-  interaction: ChatInputCommandInteraction | ButtonInteraction,
+  interaction: ChatInputCommandInteraction,
   bet: number,
 ): Promise<void> {
   const { guildId } = interaction;
   if (!guildId || !interaction.guild) return;
   const userId = interaction.user.id;
-  const key = sessionKey(guildId, userId);
-
   const [, { currencyName }, slotSettings] = await Promise.all([
     getOrCreateWallet(guildId, userId),
     getGuildSettings(guildId),
     getSlotSettings(guildId),
   ]);
 
-  // セッションがなければ新規作成（スラッシュコマンド初回）
-  if (!activeSessions.has(key)) {
-    activeSessions.set(key, { totals: emptyCasinoResultTotals(), currencyName });
-  }
-
   const playStart = await tryStartCasinoPlay(guildId, userId, "slot", bet);
   if (!playStart.ok && playStart.reason === "daily_limit_reached") {
-    activeSessions.delete(key);
     await interaction.editReply({
       content: dailyLimitReachedMessage("slot", playStart.limit),
       embeds: [],
@@ -607,19 +551,11 @@ async function spinAndReply(
     return;
   }
   if (!playStart.ok) {
-    // 残高不足 → セッション終了してサマリー表示
-    const session = activeSessions.get(key);
-    activeSessions.delete(key);
-    const embeds: EmbedBuilder[] = [
-      new EmbedBuilder()
-        .setTitle("🎰 スロット 3×3")
-        .setDescription("❌ 残高が不足しています。")
-        .setColor(0xed4245),
-    ];
-    if (session && session.totals.games > 0) {
-      embeds.push(buildSessionSummaryEmbed(session.totals, session.currencyName));
-    }
-    await interaction.editReply({ content: "", embeds, components: [] });
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle("🎰 スロット 3×3").setDescription("❌ 残高が不足しています。").setColor(0xed4245)],
+      content: "",
+      components: [],
+    });
     return;
   }
   const afterDeduct = { balance: playStart.balance };
@@ -650,22 +586,11 @@ async function spinAndReply(
     );
   }
 
-  // セッション累計を更新
-  const session = activeSessions.get(key)!;
-  session.totals = addCasinoRound(session.totals, bet, payout);
-
+  const totals = addCasinoRound(emptyCasinoResultTotals(), bet, payout);
   const { content, embed } = buildResult(
-    grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta, session.totals,
+    grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta, totals,
   );
-  const buttons = buildActionRow(userId, bet);
-  if (interaction instanceof ButtonInteraction) {
-    await session?.publicMessage?.edit({ content, embeds: [embed], files: [], components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [buttons] });
-  } else {
-    const msg = await interaction.editReply({ content, embeds: [embed], components: [] });
-    session.publicMessage = msg as Message;
-    await interaction.followUp({ components: [buttons], flags: MessageFlags.Ephemeral });
-  }
+  await interaction.editReply({ content, embeds: [embed], components: [] });
 
   // ─── ジャックポット（5ライン全当選）通知 ─────────────────────────────────
   if (wins === 5 && slotSettings.jackpotChannelId) {
@@ -698,15 +623,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const bet = interaction.options.getInteger("bet", true);
   const { guildId } = interaction;
   if (!guildId) return;
-  const userId = interaction.user.id;
-
   const { currencyName } = await getGuildSettings(guildId);
-
-  // セッションをリセット（新規プレイ）
-  activeSessions.set(sessionKey(guildId, userId), {
-    totals: emptyCasinoResultTotals(),
-    currencyName,
-  });
 
   await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
   await new Promise((res) => setTimeout(res, 1300));
@@ -714,82 +631,6 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 }
 
 // ─── Button handlers ──────────────────────────────────────────────────────────
-
-function parseSlotButtonPayload(customId: string, prefix: string): { ownerId: string; bet: number } | null {
-  const payload = customId.slice(prefix.length);
-  const colonIdx = payload.indexOf(":");
-  if (colonIdx === -1) return null;
-  const ownerId = payload.slice(0, colonIdx);
-  const bet = Number(payload.slice(colonIdx + 1));
-  if (!Number.isFinite(bet)) return null;
-  return { ownerId, bet };
-}
-
-export async function handleSlotPlayAgainBtn(interaction: ButtonInteraction): Promise<void> {
-  const parsed = parseSlotButtonPayload(interaction.customId, SLOT_REPLAY_PREFIX);
-  if (!parsed) { await interaction.deferUpdate(); return; }
-  const { ownerId, bet } = parsed;
-
-  if (interaction.user.id !== ownerId) {
-    await interaction.reply({ content: "❌ このボタンはコマンドを実行した本人のみ使用できます。", flags: MessageFlags.Ephemeral });
-    return;
-  }
-  if (bet < MIN_BET || bet > MAX_BET) { await interaction.deferUpdate(); return; }
-
-  const { guildId } = interaction;
-  if (!guildId) { await interaction.deferUpdate(); return; }
-
-  const key = sessionKey(guildId, ownerId);
-  if (processingReplays.has(key)) {
-    await interaction.deferUpdate();
-    return;
-  }
-  processingReplays.add(key);
-
-  const { currencyName } = await getGuildSettings(guildId);
-  try {
-    const session = activeSessions.get(key);
-    await interaction.deferUpdate();
-    await session?.publicMessage?.edit({ embeds: [buildSpinningEmbed(bet, currencyName)], content: "", components: [] });
-    await new Promise((res) => setTimeout(res, 1300));
-    await spinAndReply(interaction, bet);
-  } finally {
-    processingReplays.delete(key);
-  }
-}
-
-export async function handleSlotQuitBtn(interaction: ButtonInteraction): Promise<void> {
-  const parsed = parseSlotButtonPayload(interaction.customId, SLOT_QUIT_PREFIX);
-  if (!parsed) { await interaction.deferUpdate(); return; }
-  const { ownerId } = parsed;
-
-  if (interaction.user.id !== ownerId) {
-    await interaction.reply({ content: "❌ このボタンはコマンドを実行した本人のみ使用できます。", flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  const { guildId } = interaction;
-  if (!guildId) { await interaction.deferUpdate(); return; }
-
-  const key = sessionKey(guildId, interaction.user.id);
-  if (processingReplays.has(key)) {
-    await interaction.reply({ content: "🔄 リプレイ処理中です。少し待ってください。", flags: MessageFlags.Ephemeral });
-    return;
-  }
-  const session = activeSessions.get(key);
-  activeSessions.delete(key);
-
-  if (!session || session.totals.games === 0) {
-    await interaction.update({ components: [] });
-    return;
-  }
-
-  await interaction.update({
-    components: [],
-    embeds: [buildSessionSummaryEmbed(session.totals, session.currencyName)],
-    content: "",
-  });
-}
 
 export async function handleSlotWinRateBtn(interaction: ButtonInteraction): Promise<void> {
   const { guildId, guild } = interaction;

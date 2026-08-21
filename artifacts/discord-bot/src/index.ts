@@ -3,17 +3,11 @@ import { initRouletteGifCache } from "./lib/rouletteWheel";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
 import {
-  handleSlotPlayAgainBtn,
-  SLOT_REPLAY_PREFIX,
-  handleSlotQuitBtn,
-  SLOT_QUIT_PREFIX,
   handleSlotWinRateBtn,
   SLOT_WIN_RATE_PREFIX,
 } from "./commands/slot";
 import {
-  handleBaccaratDrawBtn,   BACCARAT_DRAW_PREFIX,
-  handleBaccaratReplayBtn, BACCARAT_REPLAY_PREFIX,
-  handleBaccaratQuitBtn,   BACCARAT_QUIT_PREFIX,
+  handleBaccaratDrawBtn, BACCARAT_DRAW_PREFIX,
 } from "./commands/baccarat";
 
 import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
@@ -1667,16 +1661,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (interaction.isButton() && interaction.customId.startsWith(BACCARAT_REPLAY_PREFIX)) {
-      await handleBaccaratReplayBtn(interaction);
-      return;
-    }
-
-    if (interaction.isButton() && interaction.customId.startsWith(BACCARAT_QUIT_PREFIX)) {
-      await handleBaccaratQuitBtn(interaction);
-      return;
-    }
-
     if (interaction.isButton() && interaction.customId.startsWith(HL_PREFIX)) {
       await handleHighlowButton(interaction);
       return;
@@ -1702,16 +1686,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(SHOP_BUY_PREFIX)) {
       await handleShopBuyButton(interaction);
-      return;
-    }
-
-    if (interaction.isButton() && interaction.customId.startsWith(SLOT_REPLAY_PREFIX)) {
-      await handleSlotPlayAgainBtn(interaction);
-      return;
-    }
-
-    if (interaction.isButton() && interaction.customId.startsWith(SLOT_QUIT_PREFIX)) {
-      await handleSlotQuitBtn(interaction);
       return;
     }
 

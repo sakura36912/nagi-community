@@ -324,7 +324,7 @@ async function buildResultEmbed(
         { name: "受け取り予定",   value: `**${newWin.toLocaleString()}** ${game.currencyName}`, inline: true },
         { name: "収支（予定）",   value: `${sign}**${netDelta.toLocaleString()}** ${game.currencyName}`, inline: true },
       )
-      .setFooter({ text: "受け取るか、続けるかを選んでください" });
+      .setFooter({ text: "正解！賭け金に対してペイアウトが確定しました" });
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
     return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
   } else if (result === "draw") {
@@ -338,7 +338,7 @@ async function buildResultEmbed(
         { name: "賭け金",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
         { name: "収支",         value: "このラウンドは変動なし", inline: true },
       )
-      .setFooter({ text: "賭け金はそのままです。「もう一度プレイ」で次の予想へ進みます" });
+      .setFooter({ text: "引き分け — 同じカードから予想を続けます" });
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
     return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
   } else {
@@ -368,18 +368,6 @@ function buildGuessButtons(): ActionRowBuilder<ButtonBuilder> {
   );
 }
 
-export function buildContinueButtons(): ActionRowBuilder<ButtonBuilder> {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId("hl:continue").setLabel("続ける").setEmoji("🔄").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("hl:collect").setLabel("受け取る").setEmoji("💰").setStyle(ButtonStyle.Success),
-  );
-}
-
-export function buildDrawReplayButton(): ActionRowBuilder<ButtonBuilder> {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId("hl:continue").setLabel("もう一度プレイ").setEmoji("🔄").setStyle(ButtonStyle.Primary),
-  );
-}
 
 // ─── /highlow play ────────────────────────────────────────────────────────────
 
@@ -525,7 +513,7 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
       game.processing  = false;
       activeGames.set(key, game);
       await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-      await interaction.editReply({ embeds: [], files: [], content: "", components: [buildDrawReplayButton()] });
+      await interaction.editReply({ embeds: [], files: [], content: "", components: [buildGuessButtons()] });
       return;
     }
 
@@ -544,54 +532,17 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
       return;
     }
 
-    // 正解 → 結果表示（ゲーム状態は buildResultEmbed の後に更新）
+    // 正解 → 自動収益確定・ゲーム終了
     const { embeds, files } = await buildResultEmbed(game, nextCard, "win");
     game.streak++;
-    game.currentWin  = Math.floor(game.currentWin * PAYOUT_MULTIPLIER);
-    game.currentCard = nextCard;
-    game.deck        = newDeck;
-    game.processing  = false;
-    activeGames.set(key, game);
-
-    await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [buildContinueButtons()] });
-
-  // ─── COLLECT ──────────────────────────────────────────────────────────────
-
-  } else if (action === "collect") {
-    game.processing = true;
+    game.currentWin = Math.floor(game.currentWin * PAYOUT_MULTIPLIER);
     activeGames.delete(key);
-
     await creditAmount(guildId, user.id, game.currentWin);
-    const netDelta     = game.currentWin - game.originalBet;
+    const netDelta = game.currentWin - game.originalBet;
     await recordTransaction(guildId, user.id, netDelta, `ハイアンドロー勝利（賭け: ${game.originalBet}）`).catch(() => {});
 
-    const totals = addCasinoRound(emptyCasinoResultTotals(), game.originalBet, game.currentWin);
-    const embed = new EmbedBuilder()
-      .setTitle("🃏 ハイアンドロー — 💰 受け取り")
-      .setColor(COLOR_WIN)
-      .addFields(
-        { name: "連続正解",   value: `**${game.streak}** 回`, inline: true },
-        ...buildCasinoResultFields(totals, game.currencyName),
-      );
-
-    await interaction.deferUpdate();
-    await game.publicMessage?.edit({ content: "", embeds: [embed], files: [], components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
-
-  // ─── CONTINUE ─────────────────────────────────────────────────────────────
-
-  } else if (action === "continue") {
-    game.processing = true;
-    activeGames.set(key, game);
-    await interaction.deferUpdate();
-
-    game.processing = false;
-    activeGames.set(key, game);
-
-    const { embeds, files } = await buildGameEmbed(game);
     await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [buildGuessButtons()] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
   }
 }
 
