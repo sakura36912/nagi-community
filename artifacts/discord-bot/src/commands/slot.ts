@@ -702,7 +702,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     currencyName,
   });
 
-  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
+  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)], flags: MessageFlags.Ephemeral });
   await new Promise((res) => setTimeout(res, 1300));
   await spinAndReply(interaction, bet);
 }

@@ -385,7 +385,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const { guildId } = interaction;
   if (!guildId) return;
 
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const userId = interaction.user.id;
   const bet    = interaction.options.getInteger("bet", true);

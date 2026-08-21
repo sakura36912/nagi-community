@@ -462,10 +462,10 @@ function buildButtons(): ActionRowBuilder<ButtonBuilder> {
   );
 }
 
-function buildResultButtons(): ActionRowBuilder<ButtonBuilder> {
+function buildResultButtons(userId: string): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId("bj:replay").setLabel("もう一度").setEmoji("🔄").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("bj:quit").setLabel("終了").setEmoji("✋").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bj:replay:${userId}`).setLabel("もう一度").setEmoji("🔄").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`bj:quit:${userId}`).setLabel("終了").setEmoji("✋").setStyle(ButtonStyle.Secondary),
   );
 }
 
@@ -540,7 +540,7 @@ async function finishGame(
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
   await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
   const { embeds, files } = await buildResultEmbed(game, outcome, totals);
-  await interaction.editReply({ content: "", embeds, files, components: [buildResultButtons()] });
+  await interaction.editReply({ content: "", embeds, files, components: [buildResultButtons(userId)] });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -551,9 +551,19 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   const key    = gameKey(guildId, user.id);
   const action = interaction.customId.slice(BJ_PREFIX.length);
+  // 結果画面ボタンは "replay:{userId}" / "quit:{userId}" の形式
+  const colonIdx = action.indexOf(":");
+  const verb     = colonIdx === -1 ? action : action.slice(0, colonIdx);
+  const ownerId  = colonIdx === -1 ? null    : action.slice(colonIdx + 1);
+
+  // 他人の結果画面ボタンを弾く
+  if (ownerId !== null && ownerId !== user.id) {
+    await interaction.reply({ content: "このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
+    return;
+  }
 
   // ─── replay / quit は activeGames にゲームがない状態で呼ばれる ───────────────
-  if (action === "replay") {
+  if (verb === "replay") {
     if (activeGames.has(key)) {
       await interaction.update({ components: [] });
       return;
@@ -626,7 +636,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     return;
   }
 
-  if (action === "quit") {
+  if (verb === "quit") {
     if (processingReplay.has(key)) {
       await interaction.reply({ content: "🔄 リプレイ処理中です。少し待ってください。", flags: MessageFlags.Ephemeral });
       return;
@@ -649,7 +659,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
           }, pr.currencyName),
           { name: "プレイ回数", value: `${pr.sessionGames} 回`,                                          inline: true },
         );
-      await interaction.followUp({ embeds: [embed] });
+      await interaction.followUp({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
     return;
   }
@@ -680,7 +690,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   await interaction.deferUpdate();
 
-  if (action === "hit") {
+  if (verb === "hit") {
     // 処理中フラグを立てて即 Map に反映（二重押し防止）
     game.processing = true;
     activeGames.set(key, game);
@@ -706,14 +716,14 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     const { embeds, files } = await buildGameEmbed(game, true);
     await interaction.editReply({ content: "", embeds, files, components: [buildButtons()] });
 
-  } else if (action === "stand") {
+  } else if (verb === "stand") {
     game.processing = true;
     activeGames.set(key, game);
     const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
     await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
     await finishGame(interaction, dealerPlay(game));
 
-  } else if (action === "quit") {
+  } else if (verb === "quit") {
     pendingReplay.delete(key);
     await interaction.update({ components: [] });
   }
@@ -736,7 +746,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   pendingReplay.delete(key);
 
   // DB 処理が 3 秒を超える可能性があるため、先に defer して Discord タイムアウトを防ぐ
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const [, settings, rawCardImages] = await Promise.all([
     getOrCreateWallet(guildId, userId),

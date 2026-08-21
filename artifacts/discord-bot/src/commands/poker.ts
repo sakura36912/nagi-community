@@ -367,10 +367,10 @@ async function buildResultContent(
   };
 }
 
-function buildResultButtons(): ActionRowBuilder<ButtonBuilder> {
+function buildResultButtons(userId: string): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId("poker:replay").setLabel("もう一度").setEmoji("🔄").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("poker:quit").setLabel("終了").setEmoji("✋").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`poker:replay:${userId}`).setLabel("もう一度").setEmoji("🔄").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`poker:quit:${userId}`).setLabel("終了").setEmoji("✋").setStyle(ButtonStyle.Secondary),
   );
 }
 
@@ -426,7 +426,7 @@ async function finishGame(
     expiresAt: Date.now() + GAME_TTL_MS,
   });
   const { embeds, files } = await buildResultContent(game, handRank, netDelta, totals);
-  await interaction.editReply({ embeds, files, components: [buildResultButtons()] });
+  await interaction.editReply({ embeds, files, components: [buildResultButtons(userId)] });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -437,8 +437,18 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
 
   const key = gameKey(guildId, user.id);
   const action = interaction.customId.slice(POKER_PREFIX.length);
+  // 結果画面ボタンは "replay:{userId}" / "quit:{userId}" の形式
+  const colonIdx = action.indexOf(":");
+  const verb     = colonIdx === -1 ? action : action.slice(0, colonIdx);
+  const ownerId  = colonIdx === -1 ? null    : action.slice(colonIdx + 1);
 
-  if (action === "replay") {
+  // 他人の結果画面ボタンを弾く
+  if (ownerId !== null && ownerId !== user.id) {
+    await interaction.reply({ content: "このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  if (verb === "replay") {
     if (activeGames.has(key)) {
       await interaction.update({ components: [] });
       return;
@@ -501,7 +511,7 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
     return;
   }
 
-  if (action === "quit") {
+  if (verb === "quit") {
     if (processingReplays.has(key)) {
       await interaction.reply({ content: "🔄 リプレイ処理中です。少し待ってください。", flags: MessageFlags.Ephemeral });
       return;
@@ -510,7 +520,7 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
     pendingReplays.delete(key);
     await interaction.update({ components: [] });
     if (replay) {
-      await interaction.followUp({ embeds: [buildSessionSummaryEmbed(replay.totals, replay.currencyName)] });
+      await interaction.followUp({ embeds: [buildSessionSummaryEmbed(replay.totals, replay.currencyName)], flags: MessageFlags.Ephemeral });
     }
     return;
   }
@@ -588,7 +598,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   // 古い結果メッセージのリプレイでは、新しく始めるゲームを上書きできないようにする。
   pendingReplays.delete(key);
 
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const [, settings, cardPathsRaw] = await Promise.all([
     getOrCreateWallet(guildId, userId),

@@ -565,7 +565,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const betOn = interaction.options.getString("on", true) as BetOn;
 
   try {
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const [, settings, cardPaths] = await Promise.all([
     getOrCreateWallet(guildId, userId),
