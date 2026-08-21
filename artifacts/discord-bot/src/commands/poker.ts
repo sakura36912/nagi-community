@@ -18,7 +18,7 @@ import {
   EmbedBuilder,
   MessageFlags,
   SlashCommandBuilder,
-  type ButtonInteraction,
+  ButtonInteraction,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
@@ -426,7 +426,13 @@ async function finishGame(
     expiresAt: Date.now() + GAME_TTL_MS,
   });
   const { embeds, files } = await buildResultContent(game, handRank, netDelta, totals);
-  await interaction.editReply({ embeds, files, components: [buildResultButtons(userId)] });
+  await interaction.editReply({ embeds, files, components: [] });
+  const resultBtns = buildResultButtons(userId);
+  if (interaction instanceof ButtonInteraction) {
+    await interaction.message.edit({ components: [resultBtns] });
+  } else {
+    await interaction.followUp({ components: [resultBtns], flags: MessageFlags.Ephemeral });
+  }
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -507,7 +513,8 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
     processingReplays.delete(key);
 
     const { embeds, files, components } = await buildDealContent(game);
-    await interaction.editReply({ embeds, files, components });
+    await interaction.editReply({ embeds, files, components: [] });
+    await interaction.message.edit({ components });
     return;
   }
 
@@ -554,7 +561,8 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
       game.held[idx] = !game.held[idx];
       activeGames.set(key, game);
       const { embeds, files, components } = await buildDealContent(game);
-      await interaction.editReply({ embeds, files, components });
+      await interaction.editReply({ embeds, files, components: [] });
+      await interaction.message.edit({ components });
     }
     return;
   }
@@ -598,7 +606,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   // 古い結果メッセージのリプレイでは、新しく始めるゲームを上書きできないようにする。
   pendingReplays.delete(key);
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   const [, settings, cardPathsRaw] = await Promise.all([
     getOrCreateWallet(guildId, userId),
@@ -673,7 +681,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   activeGames.set(key, game);
 
   const { embeds, files, components } = await buildDealContent(game);
-  await interaction.editReply({ embeds, files, components });
+  await interaction.editReply({ embeds, files, components: [] });
+  await interaction.followUp({ components, flags: MessageFlags.Ephemeral });
 }
 
 // ─── Command export ───────────────────────────────────────────────────────────

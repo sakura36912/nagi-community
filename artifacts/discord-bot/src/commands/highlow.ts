@@ -385,7 +385,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const { guildId } = interaction;
   if (!guildId) return;
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   const userId = interaction.user.id;
   const bet    = interaction.options.getInteger("bet", true);
@@ -447,7 +447,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   activeGames.set(key, game);
   const { embeds, files } = await buildGameEmbed(game);
-  await interaction.editReply({ embeds, files, components: [buildGuessButtons()] });
+  await interaction.editReply({ embeds, files, components: [] });
+  await interaction.followUp({ components: [buildGuessButtons()], flags: MessageFlags.Ephemeral });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -520,7 +521,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
       game.deck        = newDeck;
       game.processing  = false;
       activeGames.set(key, game);
-      await interaction.editReply({ content: "", embeds, files, components: [buildDrawReplayButton()] });
+      await interaction.editReply({ content: "", embeds, files, components: [] });
+      await interaction.message.edit({ components: [buildDrawReplayButton()] });
       return;
     }
 
@@ -535,6 +537,7 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         addCasinoRound(emptyCasinoResultTotals(), game.originalBet, 0),
       );
       await interaction.editReply({ content: "", embeds, files, components: [] });
+      await interaction.message.edit({ components: [] });
       return;
     }
 
@@ -547,7 +550,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     game.processing  = false;
     activeGames.set(key, game);
 
-    await interaction.editReply({ content: "", embeds, files, components: [buildContinueButtons()] });
+    await interaction.editReply({ content: "", embeds, files, components: [] });
+    await interaction.message.edit({ components: [buildContinueButtons()] });
 
   // ─── COLLECT ──────────────────────────────────────────────────────────────
 
@@ -568,7 +572,9 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         ...buildCasinoResultFields(totals, game.currencyName),
       );
 
-    await interaction.update({ content: "", embeds: [embed], files: [], components: [] });
+    await interaction.deferUpdate();
+    await interaction.editReply({ content: "", embeds: [embed], files: [], components: [] });
+    await interaction.message.edit({ components: [] });
 
   // ─── CONTINUE ─────────────────────────────────────────────────────────────
 
@@ -581,7 +587,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     activeGames.set(key, game);
 
     const { embeds, files } = await buildGameEmbed(game);
-    await interaction.editReply({ content: "", embeds, files, components: [buildGuessButtons()] });
+    await interaction.editReply({ content: "", embeds, files, components: [] });
+    await interaction.message.edit({ components: [buildGuessButtons()] });
   }
 }
 

@@ -18,7 +18,7 @@ import {
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  type ButtonInteraction,
+  ButtonInteraction,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
@@ -540,7 +540,13 @@ async function finishGame(
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
   await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
   const { embeds, files } = await buildResultEmbed(game, outcome, totals);
-  await interaction.editReply({ content: "", embeds, files, components: [buildResultButtons(userId)] });
+  await interaction.editReply({ content: "", embeds, files, components: [] });
+  const resultBtns = buildResultButtons(userId);
+  if (interaction instanceof ButtonInteraction) {
+    await interaction.message.edit({ components: [resultBtns] });
+  } else {
+    await interaction.followUp({ components: [resultBtns], flags: MessageFlags.Ephemeral });
+  }
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -632,7 +638,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     activeGames.set(key, newGame);
     processingReplay.delete(key);
     const { embeds, files } = await buildGameEmbed(newGame, true);
-    await interaction.editReply({ content: "", embeds, files, components: [buildButtons()] });
+    await interaction.editReply({ content: "", embeds, files, components: [] });
+    await interaction.message.edit({ components: [buildButtons()] });
     return;
   }
 
@@ -714,7 +721,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     activeGames.set(key, game);
 
     const { embeds, files } = await buildGameEmbed(game, true);
-    await interaction.editReply({ content: "", embeds, files, components: [buildButtons()] });
+    await interaction.editReply({ content: "", embeds, files, components: [] });
+    await interaction.message.edit({ components: [buildButtons()] });
 
   } else if (verb === "stand") {
     game.processing = true;
@@ -746,7 +754,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   pendingReplay.delete(key);
 
   // DB 処理が 3 秒を超える可能性があるため、先に defer して Discord タイムアウトを防ぐ
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   const [, settings, rawCardImages] = await Promise.all([
     getOrCreateWallet(guildId, userId),
@@ -814,7 +822,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   activeGames.set(key, game);
   const { embeds, files } = await buildGameEmbed(game, true);
-  await interaction.editReply({ embeds, files, components: [buildButtons()] });
+  await interaction.editReply({ embeds, files, components: [] });
+  await interaction.followUp({ components: [buildButtons()], flags: MessageFlags.Ephemeral });
 }
 
 // ─── /blackjack config suit ───────────────────────────────────────────────────

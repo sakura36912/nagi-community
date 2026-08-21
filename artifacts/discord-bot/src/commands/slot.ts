@@ -658,8 +658,14 @@ async function spinAndReply(
   await interaction.editReply({
     content,
     embeds: [embed],
-    components: [buildActionRow(userId, bet)],
+    components: [],
   });
+  const buttons = buildActionRow(userId, bet);
+  if (interaction instanceof ButtonInteraction) {
+    await interaction.message.edit({ components: [buttons] });
+  } else {
+    await interaction.followUp({ components: [buttons], flags: MessageFlags.Ephemeral });
+  }
 
   // ─── ジャックポット（5ライン全当選）通知 ─────────────────────────────────
   if (wins === 5 && slotSettings.jackpotChannelId) {
@@ -702,7 +708,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     currencyName,
   });
 
-  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)], flags: MessageFlags.Ephemeral });
+  await interaction.reply({ embeds: [buildSpinningEmbed(bet, currencyName)] });
   await new Promise((res) => setTimeout(res, 1300));
   await spinAndReply(interaction, bet);
 }

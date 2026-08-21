@@ -565,7 +565,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const betOn = interaction.options.getString("on", true) as BetOn;
 
   try {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   const [, settings, cardPaths] = await Promise.all([
     getOrCreateWallet(guildId, userId),
@@ -649,7 +649,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
       guildId, userId, bet, betOn, playerHand, bankerHand, deck,
       currencyName, suitEmojis, cardPaths,
     );
-    await interaction.editReply({ embeds, files, components: [buildBaccaratActionRow(guildId, userId, bet, betOn)] });
+    await interaction.editReply({ embeds, files, components: [] });
+    await interaction.followUp({ components: [buildBaccaratActionRow(guildId, userId, bet, betOn)], flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -661,7 +662,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   );
 
   // 同ユーザーの既存セッションがあればキャンセル
-  const msg = await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components });
+  const msg = await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components: [] });
+  await interaction.followUp({ components, flags: MessageFlags.Ephemeral });
 
   // DB に永続化（ボット再起動後もボタン操作を継続できるように）
   const expiresAt = new Date(Date.now() + 60_000);
@@ -790,7 +792,7 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
   await interaction.deferUpdate();
 
   // ボタンをすぐ無効化して連打を防ぐ
-  await interaction.editReply({
+  await interaction.message.edit({
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -809,7 +811,8 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
       gameData.currencyName, gameData.suitEmojis, gameData.cardPaths,
     );
     const replayRow = buildBaccaratActionRow(guildId, userId, gameData.bet, gameData.betOn);
-    await interaction.editReply({ embeds, files, components: [replayRow] });
+    await interaction.editReply({ embeds, files, components: [] });
+    await interaction.message.edit({ components: [replayRow] });
   } catch {
     await interaction.editReply({ content: "❌ エラーが発生しました。", components: [] }).catch(() => {});
   }
@@ -846,7 +849,7 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
   try {
   await interaction.deferUpdate();
   // ボタンを即時無効化
-  await interaction.editReply({
+  await interaction.message.edit({
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId("bac_r_dis").setLabel("🔄 処理中…").setStyle(ButtonStyle.Primary).setDisabled(true),
@@ -905,7 +908,8 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
       guildId, userId, bet, betOn, playerHand, bankerHand, deck,
       currencyName, suitEmojis, cardPaths,
     );
-    await interaction.editReply({ embeds, files, components: [buildBaccaratActionRow(guildId, userId, bet, betOn)] });
+    await interaction.editReply({ embeds, files, components: [] });
+    await interaction.message.edit({ components: [buildBaccaratActionRow(guildId, userId, bet, betOn)] });
     return;
   }
 
@@ -922,7 +926,8 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
     baccaratSessions.delete(key);
   }
 
-  const msg = await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components });
+  const msg = await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components: [] });
+  await interaction.message.edit({ components });
 
   const expiresAt = new Date(Date.now() + 60_000);
   await db.insert(baccaratSessionsTable).values({
@@ -996,7 +1001,7 @@ export async function handleBaccaratQuitBtn(interaction: ButtonInteraction): Pro
     ps?.totals ?? emptyCasinoResultTotals(),
     settings.currencyName,
   );
-  await interaction.editReply({ embeds: [summaryEmbed], files: [], components: [] });
+  await interaction.message.edit({ embeds: [summaryEmbed], files: [], components: [] });
 }
 
 // ─── Command export ───────────────────────────────────────────────────────────
