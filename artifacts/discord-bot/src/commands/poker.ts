@@ -19,6 +19,7 @@ import {
   MessageFlags,
   SlashCommandBuilder,
   ButtonInteraction,
+  Message,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
@@ -65,6 +66,7 @@ interface PokerGame {
   /** カード画像のバッファキャッシュ。キー: "rank:suit"、値: Buffer。 */
   cardBuffers: Map<string, Buffer>;
   sessionTotals: CasinoResultTotals;
+  publicMessage?: Message;
 }
 
 type HandRank =
@@ -133,6 +135,7 @@ interface PendingPokerReplay {
   cardPaths: Map<string, string>;
   totals: CasinoResultTotals;
   expiresAt: number;
+  publicMessage?: Message;
 }
 
 const pendingReplays = new Map<string, PendingPokerReplay>();
@@ -424,13 +427,15 @@ async function finishGame(
     cardPaths: game.cardPaths,
     totals,
     expiresAt: Date.now() + GAME_TTL_MS,
+    publicMessage: game.publicMessage,
   });
   const { embeds, files } = await buildResultContent(game, handRank, netDelta, totals);
-  await interaction.editReply({ embeds, files, components: [] });
   const resultBtns = buildResultButtons(userId);
   if (interaction instanceof ButtonInteraction) {
-    await interaction.message.edit({ components: [resultBtns] });
+    await game.publicMessage?.edit({ embeds, files, components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [resultBtns] });
   } else {
+    await interaction.editReply({ embeds, files, components: [] });
     await interaction.followUp({ components: [resultBtns], flags: MessageFlags.Ephemeral });
   }
 }
@@ -508,13 +513,14 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
       currencyName: replay.currencyName, expiresAt: Date.now() + GAME_TTL_MS,
       suitEmojis: replay.suitEmojis, cardPaths: replay.cardPaths, cardBuffers,
       sessionTotals: replay.totals,
+      publicMessage: replay.publicMessage,
     };
     activeGames.set(key, game);
     processingReplays.delete(key);
 
     const { embeds, files, components } = await buildDealContent(game);
-    await interaction.editReply({ embeds, files, components: [] });
-    await interaction.message.edit({ components });
+    await game.publicMessage?.edit({ embeds, files, components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components });
     return;
   }
 
@@ -561,8 +567,8 @@ export async function handlePokerButton(interaction: ButtonInteraction): Promise
       game.held[idx] = !game.held[idx];
       activeGames.set(key, game);
       const { embeds, files, components } = await buildDealContent(game);
-      await interaction.editReply({ embeds, files, components: [] });
-      await interaction.message.edit({ components });
+      await game.publicMessage?.edit({ embeds, files, components: [] });
+      await interaction.editReply({ embeds: [], files: [], content: "", components });
     }
     return;
   }
@@ -681,7 +687,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   activeGames.set(key, game);
 
   const { embeds, files, components } = await buildDealContent(game);
-  await interaction.editReply({ embeds, files, components: [] });
+  const msg = await interaction.editReply({ embeds, files, components: [] });
+  game.publicMessage = msg as Message;
   await interaction.followUp({ components, flags: MessageFlags.Ephemeral });
 }
 

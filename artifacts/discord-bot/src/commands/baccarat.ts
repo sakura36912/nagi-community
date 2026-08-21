@@ -697,8 +697,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
         session.playerHand, session.bankerHand, session.deck,
         session.currencyName, session.suitEmojis, session.cardPaths,
       );
-      const row = buildBaccaratActionRow(session.guildId, session.userId, session.bet, session.betOn);
-      await session.message.edit({ embeds: rEmbeds, files: rFiles, components: [row] });
+      await session.message.edit({ embeds: rEmbeds, files: rFiles, components: [] });
     } catch { /* non-fatal */ }
   }, 60_000);
 
@@ -791,8 +790,8 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
 
   await interaction.deferUpdate();
 
-  // ボタンをすぐ無効化して連打を防ぐ
-  await interaction.message.edit({
+  // ボタンをすぐ無効化して連打を防ぐ（エフェメラルは editReply で更新）
+  await interaction.editReply({
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -811,8 +810,12 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
       gameData.currencyName, gameData.suitEmojis, gameData.cardPaths,
     );
     const replayRow = buildBaccaratActionRow(guildId, userId, gameData.bet, gameData.betOn);
-    await interaction.editReply({ embeds, files, components: [] });
-    await interaction.message.edit({ components: [replayRow] });
+    if (memSession?.message) {
+      await memSession.message.edit({ embeds, files, components: [] });
+      await interaction.editReply({ embeds: [], files: [], content: "", components: [replayRow] });
+    } else {
+      await interaction.editReply({ embeds, files, components: [replayRow] });
+    }
   } catch {
     await interaction.editReply({ content: "❌ エラーが発生しました。", components: [] }).catch(() => {});
   }
@@ -848,8 +851,8 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
 
   try {
   await interaction.deferUpdate();
-  // ボタンを即時無効化
-  await interaction.message.edit({
+  // ボタンを即時無効化（エフェメラルは editReply で更新）
+  await interaction.editReply({
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId("bac_r_dis").setLabel("🔄 処理中…").setStyle(ButtonStyle.Primary).setDisabled(true),
@@ -903,13 +906,26 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
   const bankerHand: Card[] = [b1, b2];
   const suitEmojis = resolveSuitEmojis(settings);
 
+  // 既存セッションを先に取得（パブリックメッセージ参照が必要）
+  const existingSession = baccaratSessions.get(key);
+  if (existingSession) {
+    clearTimeout(existingSession.timeoutHandle);
+    baccaratSessions.delete(key);
+  }
+  const publicMsg = existingSession?.message;
+
   if (!willAnyDraw(playerHand, bankerHand)) {
     const { embeds, files } = await resolveAndPayout(
       guildId, userId, bet, betOn, playerHand, bankerHand, deck,
       currencyName, suitEmojis, cardPaths,
     );
-    await interaction.editReply({ embeds, files, components: [] });
-    await interaction.message.edit({ components: [buildBaccaratActionRow(guildId, userId, bet, betOn)] });
+    const replayRow = buildBaccaratActionRow(guildId, userId, bet, betOn);
+    if (publicMsg) {
+      await publicMsg.edit({ embeds, files, components: [] });
+      await interaction.editReply({ embeds: [], files: [], content: "", components: [replayRow] });
+    } else {
+      await interaction.editReply({ embeds, files, components: [replayRow] });
+    }
     return;
   }
 
@@ -920,14 +936,12 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
     playerHand, bankerHand, betOn, bet, currencyName, suitEmojis, dealCardBuffers, guildId, userId,
   );
 
-  const existingSession = baccaratSessions.get(key);
-  if (existingSession) {
-    clearTimeout(existingSession.timeoutHandle);
-    baccaratSessions.delete(key);
+  if (publicMsg) {
+    await publicMsg.edit({ embeds: dealEmbeds, files: dealFiles, components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components });
+  } else {
+    await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components });
   }
-
-  const msg = await interaction.editReply({ embeds: dealEmbeds, files: dealFiles, components: [] });
-  await interaction.message.edit({ components });
 
   const expiresAt = new Date(Date.now() + 60_000);
   await db.insert(baccaratSessionsTable).values({
@@ -959,8 +973,7 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
         session.playerHand, session.bankerHand, session.deck,
         session.currencyName, session.suitEmojis, session.cardPaths,
       );
-      const row = buildBaccaratActionRow(session.guildId, session.userId, session.bet, session.betOn);
-      await session.message.edit({ embeds: rEmbeds, files: rFiles, components: [row] });
+      await session.message.edit({ embeds: rEmbeds, files: rFiles, components: [] });
     } catch { /* non-fatal */ }
   }, 60_000);
 
@@ -968,7 +981,7 @@ export async function handleBaccaratReplayBtn(interaction: ButtonInteraction): P
     guildId, userId, bet, betOn,
     playerHand, bankerHand, deck,
     currencyName, suitEmojis, cardPaths,
-    message: msg as Message,
+    message: publicMsg as Message,
     timeoutHandle,
   };
   baccaratSessions.set(key, session);
@@ -1001,7 +1014,7 @@ export async function handleBaccaratQuitBtn(interaction: ButtonInteraction): Pro
     ps?.totals ?? emptyCasinoResultTotals(),
     settings.currencyName,
   );
-  await interaction.message.edit({ embeds: [summaryEmbed], files: [], components: [] });
+  await interaction.editReply({ embeds: [summaryEmbed], files: [], content: "", components: [] });
 }
 
 // ─── Command export ───────────────────────────────────────────────────────────

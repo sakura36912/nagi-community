@@ -15,7 +15,8 @@ import {
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  type ButtonInteraction,
+  ButtonInteraction,
+  Message,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { sql } from "drizzle-orm";
@@ -67,6 +68,7 @@ interface HLGame {
   processing: boolean;
   streak: number;
   winRate: number;
+  publicMessage?: Message;
 }
 
 type EmbedWithFiles = { embeds: EmbedBuilder[]; files: AttachmentBuilder[] };
@@ -447,7 +449,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   activeGames.set(key, game);
   const { embeds, files } = await buildGameEmbed(game);
-  await interaction.editReply({ embeds, files, components: [] });
+  const msg = await interaction.editReply({ embeds, files, components: [] });
+  game.publicMessage = msg as Message;
   await interaction.followUp({ components: [buildGuessButtons()], flags: MessageFlags.Ephemeral });
 }
 
@@ -521,8 +524,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
       game.deck        = newDeck;
       game.processing  = false;
       activeGames.set(key, game);
-      await interaction.editReply({ content: "", embeds, files, components: [] });
-      await interaction.message.edit({ components: [buildDrawReplayButton()] });
+      await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
+      await interaction.editReply({ embeds: [], files: [], content: "", components: [buildDrawReplayButton()] });
       return;
     }
 
@@ -536,8 +539,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         "lose",
         addCasinoRound(emptyCasinoResultTotals(), game.originalBet, 0),
       );
-      await interaction.editReply({ content: "", embeds, files, components: [] });
-      await interaction.message.edit({ components: [] });
+      await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
+      await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
       return;
     }
 
@@ -550,8 +553,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     game.processing  = false;
     activeGames.set(key, game);
 
-    await interaction.editReply({ content: "", embeds, files, components: [] });
-    await interaction.message.edit({ components: [buildContinueButtons()] });
+    await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [buildContinueButtons()] });
 
   // ─── COLLECT ──────────────────────────────────────────────────────────────
 
@@ -573,8 +576,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
       );
 
     await interaction.deferUpdate();
-    await interaction.editReply({ content: "", embeds: [embed], files: [], components: [] });
-    await interaction.message.edit({ components: [] });
+    await game.publicMessage?.edit({ content: "", embeds: [embed], files: [], components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
 
   // ─── CONTINUE ─────────────────────────────────────────────────────────────
 
@@ -587,8 +590,8 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     activeGames.set(key, game);
 
     const { embeds, files } = await buildGameEmbed(game);
-    await interaction.editReply({ content: "", embeds, files, components: [] });
-    await interaction.message.edit({ components: [buildGuessButtons()] });
+    await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [buildGuessButtons()] });
   }
 }
 

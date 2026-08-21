@@ -12,6 +12,7 @@ import {
   StickerFormatType,
   TextChannel,
   ChannelType,
+  Message,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
@@ -55,6 +56,7 @@ export const SLOT_WIN_RATE_PREFIX = "slot:win-rate:";
 interface SlotSession {
   totals: CasinoResultTotals;
   currencyName: string;
+  publicMessage?: Message;
 }
 
 const activeSessions = new Map<string, SlotSession>();
@@ -655,15 +657,13 @@ async function spinAndReply(
   const { content, embed } = buildResult(
     grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta, session.totals,
   );
-  await interaction.editReply({
-    content,
-    embeds: [embed],
-    components: [],
-  });
   const buttons = buildActionRow(userId, bet);
   if (interaction instanceof ButtonInteraction) {
-    await interaction.message.edit({ components: [buttons] });
+    await session?.publicMessage?.edit({ content, embeds: [embed], files: [], components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [buttons] });
   } else {
+    const msg = await interaction.editReply({ content, embeds: [embed], components: [] });
+    session.publicMessage = msg as Message;
     await interaction.followUp({ components: [buttons], flags: MessageFlags.Ephemeral });
   }
 
@@ -748,7 +748,9 @@ export async function handleSlotPlayAgainBtn(interaction: ButtonInteraction): Pr
 
   const { currencyName } = await getGuildSettings(guildId);
   try {
-    await interaction.update({ embeds: [buildSpinningEmbed(bet, currencyName)], components: [], content: "" });
+    const session = activeSessions.get(key);
+    await interaction.deferUpdate();
+    await session?.publicMessage?.edit({ embeds: [buildSpinningEmbed(bet, currencyName)], content: "", components: [] });
     await new Promise((res) => setTimeout(res, 1300));
     await spinAndReply(interaction, bet);
   } finally {

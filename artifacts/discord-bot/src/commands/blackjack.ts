@@ -19,6 +19,7 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
   ButtonInteraction,
+  Message,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
@@ -70,6 +71,8 @@ interface BJGame {
   cardBuffers: Map<string, Buffer>;
   /** true の間はボタン操作を受け付けない（ヒット処理中の二重押し防止） */
   processing: boolean;
+  /** パブリックゲーム状態メッセージの参照 */
+  publicMessage?: Message;
   /** セッション開始からこのゲーム開始時点までの累計収支 */
   sessionDeltaBefore: number;
   /** セッション開始からこのゲーム開始時点までの総賭け金 */
@@ -113,6 +116,7 @@ interface PendingReplay {
   sessionPayout: number;
   /** セッション内のゲーム回数 */
   sessionGames: number;
+  publicMessage?: Message;
 }
 const pendingReplay = new Map<string, PendingReplay>();
 /** replay ボタンの二重押し防止用 */
@@ -535,16 +539,18 @@ async function finishGame(
     sessionBet: totals.totalBet,
     sessionPayout: totals.totalPayout,
     sessionGames: totals.games,
+    publicMessage: game.publicMessage,
   });
 
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
   await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
   const { embeds, files } = await buildResultEmbed(game, outcome, totals);
-  await interaction.editReply({ content: "", embeds, files, components: [] });
   const resultBtns = buildResultButtons(userId);
   if (interaction instanceof ButtonInteraction) {
-    await interaction.message.edit({ components: [resultBtns] });
+    await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [resultBtns] });
   } else {
+    await interaction.editReply({ content: "", embeds, files, components: [] });
     await interaction.followUp({ components: [resultBtns], flags: MessageFlags.Ephemeral });
   }
 }
@@ -627,6 +633,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
       sessionBetBefore: pr.sessionBet,
       sessionPayoutBefore: pr.sessionPayout,
       sessionGamesBefore: pr.sessionGames,
+      publicMessage: pr.publicMessage,
     };
 
     if (isBlackjack(playerHand)) {
@@ -638,8 +645,8 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     activeGames.set(key, newGame);
     processingReplay.delete(key);
     const { embeds, files } = await buildGameEmbed(newGame, true);
-    await interaction.editReply({ content: "", embeds, files, components: [] });
-    await interaction.message.edit({ components: [buildButtons()] });
+    await newGame.publicMessage?.edit({ content: "", embeds, files, components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [buildButtons()] });
     return;
   }
 
@@ -704,7 +711,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
     // 現在の手札画像を維持したまま「更新中」を表示
     const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
-    await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
+    await game.publicMessage?.edit({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
 
     const [card, newDeck] = draw(game.deck);
     game.playerHand = [...game.playerHand, card];
@@ -721,14 +728,14 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     activeGames.set(key, game);
 
     const { embeds, files } = await buildGameEmbed(game, true);
-    await interaction.editReply({ content: "", embeds, files, components: [] });
-    await interaction.message.edit({ components: [buildButtons()] });
+    await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
+    await interaction.editReply({ embeds: [], files: [], content: "", components: [buildButtons()] });
 
   } else if (verb === "stand") {
     game.processing = true;
     activeGames.set(key, game);
     const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
-    await interaction.editReply({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
+    await game.publicMessage?.edit({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
     await finishGame(interaction, dealerPlay(game));
 
   } else if (verb === "quit") {
@@ -822,7 +829,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   activeGames.set(key, game);
   const { embeds, files } = await buildGameEmbed(game, true);
-  await interaction.editReply({ embeds, files, components: [] });
+  const msg = await interaction.editReply({ embeds, files, components: [] });
+  game.publicMessage = msg as Message;
   await interaction.followUp({ components: [buildButtons()], flags: MessageFlags.Ephemeral });
 }
 
