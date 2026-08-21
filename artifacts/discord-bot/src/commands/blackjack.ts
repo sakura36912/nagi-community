@@ -492,7 +492,7 @@ async function finishGame(
   const { embeds, files } = await buildResultEmbed(game, outcome, totals);
   if (interaction instanceof ButtonInteraction) {
     await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
+    await interaction.deleteReply().catch(() => {});
   } else {
     await interaction.editReply({ content: "", embeds, files, components: [] });
   }
@@ -522,12 +522,16 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   if (!game || game.expiresAt < Date.now()) {
     activeGames.delete(key);
-    await interaction.update({
-      content: "⏱️ ゲームがタイムアウトまたはリセットされました。`/blackjack play` で新しいゲームを始めてください。",
-      embeds: [],
-      files: [],
-      components: [],
-    });
+    try {
+      await interaction.update({
+        content: "⏱️ ゲームがタイムアウトまたはリセットされました。`/blackjack play` で新しいゲームを始めてください。",
+        embeds: [],
+        files: [],
+        components: [],
+      });
+    } catch {
+      await interaction.deferUpdate().catch(() => {});
+    }
     return;
   }
   if (game.userId !== user.id) {

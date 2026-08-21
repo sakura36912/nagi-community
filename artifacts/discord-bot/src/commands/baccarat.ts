@@ -704,6 +704,9 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
   processingBaccaratDraws.add(key);
 
   try {
+  // Discord は 3 秒以内に応答を必要とするため、DB 処理より前に acknowledge する
+  await interaction.deferUpdate();
+
   const memSession = baccaratSessions.get(key);
 
   // ゲームデータ（メモリ優先、なければ DB からリストア）
@@ -723,14 +726,14 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
       .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)));
 
     if (!row) {
-      await interaction.reply({ content: "❌ セッションが見つかりません。**/baccarat を再実行してください。**", flags: MessageFlags.Ephemeral });
+      await interaction.editReply({ content: "❌ セッションが見つかりません。**/baccarat を再実行してください。**", components: [] });
       return;
     }
     if (new Date() > row.expiresAt) {
       await db.delete(baccaratSessionsTable)
         .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)))
         .catch(() => {});
-      await interaction.reply({ content: "❌ セッションが期限切れです（60秒でタイムアウト）。", flags: MessageFlags.Ephemeral });
+      await interaction.editReply({ content: "❌ セッションが期限切れです（60秒でタイムアウト）。", components: [] });
       return;
     }
 
@@ -755,8 +758,6 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
     .where(and(eq(baccaratSessionsTable.guildId, guildId), eq(baccaratSessionsTable.userId, userId)))
     .catch(() => {});
 
-  await interaction.deferUpdate();
-
   // ボタンをすぐ無効化して連打を防ぐ（エフェメラルは editReply で更新）
   await interaction.editReply({
     components: [
@@ -778,7 +779,8 @@ export async function handleBaccaratDrawBtn(interaction: ButtonInteraction): Pro
     );
     if (memSession?.message) {
       await memSession.message.edit({ embeds, files, components: [] });
-      await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
+      // ゲーム終了後のエフェメラルボタンを削除（空メッセージ送信はエラーになるため）
+      await interaction.deleteReply().catch(() => {});
     } else {
       await interaction.editReply({ embeds, files, components: [] });
     }

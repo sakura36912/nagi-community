@@ -471,12 +471,17 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         ]
       : [];
 
-    await interaction.update({
-      content: timedOutGame ? "" : "⏱️ ゲームがタイムアウトまたはリセットされました。`/highlow play` で新しいゲームを始めてください。",
-      embeds,
-      files: [],
-      components: [],
-    });
+    try {
+      await interaction.update({
+        content: timedOutGame ? "" : "⏱️ ゲームがタイムアウトまたはリセットされました。`/highlow play` で新しいゲームを始めてください。",
+        embeds,
+        files: [],
+        components: [],
+      });
+    } catch {
+      // 既に削除済みのエフェメラルへの操作は無視
+      await interaction.deferUpdate().catch(() => {});
+    }
     return;
   }
   if (game.userId !== user.id) {
@@ -528,7 +533,7 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         addCasinoRound(emptyCasinoResultTotals(), game.originalBet, 0),
       );
       await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-      await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
+      await interaction.deleteReply().catch(() => {});
       return;
     }
 
@@ -542,7 +547,7 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     await recordTransaction(guildId, user.id, netDelta, `ハイアンドロー勝利（賭け: ${game.originalBet}）`).catch(() => {});
 
     await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
+    await interaction.deleteReply().catch(() => {});
   }
 }
 

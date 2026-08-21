@@ -402,7 +402,7 @@ async function finishGame(
   const { embeds, files } = await buildResultContent(game, handRank, netDelta, totals);
   if (interaction instanceof ButtonInteraction) {
     await game.publicMessage?.edit({ embeds, files, components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [] });
+    await interaction.deleteReply().catch(() => {});
   } else {
     await interaction.editReply({ embeds, files, components: [] });
   }
