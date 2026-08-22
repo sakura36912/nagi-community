@@ -1,7 +1,7 @@
 /**
  * /highlow — ハイアンドロー
  * 現在のカードより次のカードが高いか低いかを当てる。
- * 正解するたびに受け取り予定額が ×1.5 になる。
+ * 正解時は掛け金の 2.25 倍を返却し、引き分け時は掛け金を返却する。
  * ブラックジャックと同じカード画像・スート絵文字システムを使用。
  */
 
@@ -56,17 +56,14 @@ interface HLGame {
   guildId: string;
   userId: string;
   originalBet: number;   // 最初にウォレットから引いた額
-  currentWin: number;    // 現在の受け取り予定額
   currentCard: Card;
   deck: Card[];
   currencyName: string;
-  balance: number;
   expiresAt: number;
   suitEmojis: SuitEmojis;
   cardPaths: Map<string, string>;
   cardBuffers: Map<string, Buffer>;
   processing: boolean;
-  streak: number;
   winRate: number;
   publicMessage?: Message;
 }
@@ -79,8 +76,8 @@ const MIN_BET = 1000;
 const MAX_BET = 10_000;
 const GAME_TTL_MS = 5 * 60 * 1000;
 
-/** 正解ごとに受け取り予定額に掛けるペイアウト倍率 */
-const PAYOUT_MULTIPLIER = 1.5;
+/** 正解時に返却する、掛け金に対する総額の倍率 */
+const WIN_PAYOUT_MULTIPLIER = 2.25;
 export const DEFAULT_WIN_RATE = 50;
 
 const COLOR_NEUTRAL = 0x5865f2;
@@ -289,8 +286,7 @@ async function buildGameEmbed(game: HLGame): Promise<EmbedWithFiles> {
     .addFields(
       { name: "現在のカード", value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
       { name: "賭け金",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
-      { name: "連続正解",     value: `**${game.streak}** 回`, inline: true },
-      { name: "受け取り予定", value: `**${game.currentWin.toLocaleString()}** ${game.currencyName}`, inline: true },
+      { name: "正解時の配当", value: `**${Math.floor(game.originalBet * WIN_PAYOUT_MULTIPLIER).toLocaleString()}** ${game.currencyName}`, inline: true },
     )
     .setFooter({ text: "HIGH: 次が高い（A<2<…<10<J<Q<K）  LOW: 次が低い | 5分でタイムアウト" });
 
@@ -310,8 +306,8 @@ async function buildResultEmbed(
   const cardImage = await buildStripFromCards([game.currentCard, nextCard], game.cardBuffers, "result.png");
 
   if (result === "win") {
-    const newWin   = Math.floor(game.currentWin * PAYOUT_MULTIPLIER);
-    const netDelta = newWin - game.originalBet;
+    const payout   = Math.floor(game.originalBet * WIN_PAYOUT_MULTIPLIER);
+    const netDelta = payout - game.originalBet;
     const sign     = netDelta >= 0 ? "+" : "";
     const embed  = new EmbedBuilder()
       .setTitle("🃏 ハイアンドロー — ✅ 正解！")
@@ -320,8 +316,7 @@ async function buildResultEmbed(
         { name: "前のカード",     value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
         { name: "次のカード",     value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
         { name: "\u200B",         value: "\u200B", inline: true },
-        { name: "連続正解",       value: `**${game.streak + 1}** 回`, inline: true },
-        { name: "受け取り予定",   value: `**${newWin.toLocaleString()}** ${game.currencyName}`, inline: true },
+        { name: "受け取り額",     value: `**${payout.toLocaleString()}** ${game.currencyName}`, inline: true },
         { name: "収支（予定）",   value: `${sign}**${netDelta.toLocaleString()}** ${game.currencyName}`, inline: true },
       )
       .setFooter({ text: "正解！賭け金に対してペイアウトが確定しました" });
@@ -336,9 +331,9 @@ async function buildResultEmbed(
         { name: "次のカード", value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
         { name: "\u200B",     value: "\u200B", inline: true },
         { name: "賭け金",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
-        { name: "収支",         value: "このラウンドは変動なし", inline: true },
+         { name: "返却額",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
       )
-      .setFooter({ text: "引き分け — 同じカードから予想を続けます" });
+       .setFooter({ text: "引き分け — 掛け金を返却してゲーム終了" });
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
     return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
   } else {
@@ -412,8 +407,6 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     await interaction.editReply(`❌ 残高が不足しています。`);
     return;
   }
-  const afterDeduct = { balance: playStart.balance };
-
   const suitEmojis  = resolveSuitEmojis(settings);
   const deck        = buildShoe(6);
   const [firstCard, remainingDeck] = draw(deck);
@@ -423,15 +416,12 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const game: HLGame = {
     guildId, userId,
     originalBet: bet,
-    currentWin:  Math.floor(bet * PAYOUT_MULTIPLIER),
     currentCard: firstCard,
     deck: remainingDeck,
     currencyName: settings.currencyName,
-    balance: afterDeduct.balance,
     expiresAt: Date.now() + GAME_TTL_MS,
     suitEmojis, cardPaths, cardBuffers,
     processing: false,
-    streak: 0,
     winRate: settings.highlowWinRate ?? DEFAULT_WIN_RATE,
   };
 
@@ -461,7 +451,6 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
             .setTitle("⏱️ ハイアンドロー — タイムアウト")
             .setColor(COLOR_LOSE)
             .addFields(
-              { name: "連続正解",   value: `**${timedOutGame.streak}** 回`, inline: true },
               ...buildCasinoResultFields(
                 addCasinoRound(emptyCasinoResultTotals(), timedOutGame.originalBet, 0),
                 timedOutGame.currencyName,
@@ -505,20 +494,24 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     await interaction.deferUpdate();
 
     const currentValue         = hlCardValue(game.currentCard.rank);
-    const [nextCard, newDeck]  = drawForGuess(game.deck, currentValue, action, game.winRate);
+    const [nextCard]            = drawForGuess(game.deck, currentValue, action, game.winRate);
     const nextValue            = hlCardValue(nextCard.rank);
     const isDraw               = nextValue === currentValue;
     const won                  = !isDraw && (action === "high" ? nextValue > currentValue : nextValue < currentValue);
 
     if (isDraw) {
-      // 引き分け → カードを更新。賭け金は維持し、明示的なボタンから次の予想へ進む。
+      // 引き分け → 掛け金を返却して、このコマンドのゲームを終了する。
+      activeGames.delete(key);
       const { embeds, files } = await buildResultEmbed(game, nextCard, "draw");
-      game.currentCard = nextCard;
-      game.deck        = newDeck;
-      game.processing  = false;
-      activeGames.set(key, game);
+      await creditAmount(guildId, user.id, game.originalBet);
+      await recordTransaction(
+        guildId,
+        user.id,
+        0,
+        `ハイアンドロー引き分け（賭け: ${game.originalBet}）`,
+      ).catch(() => {});
       await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-      await interaction.editReply({ embeds: [], files: [], content: "", components: [buildGuessButtons()] });
+      await interaction.deleteReply().catch(() => {});
       return;
     }
 
@@ -539,11 +532,10 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
 
     // 正解 → 自動収益確定・ゲーム終了
     const { embeds, files } = await buildResultEmbed(game, nextCard, "win");
-    game.streak++;
-    game.currentWin = Math.floor(game.currentWin * PAYOUT_MULTIPLIER);
+    const payout = Math.floor(game.originalBet * WIN_PAYOUT_MULTIPLIER);
     activeGames.delete(key);
-    await creditAmount(guildId, user.id, game.currentWin);
-    const netDelta = game.currentWin - game.originalBet;
+    await creditAmount(guildId, user.id, payout);
+    const netDelta = payout - game.originalBet;
     await recordTransaction(guildId, user.id, netDelta, `ハイアンドロー勝利（賭け: ${game.originalBet}）`).catch(() => {});
 
     await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
