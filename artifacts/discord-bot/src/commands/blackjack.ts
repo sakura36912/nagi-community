@@ -430,10 +430,10 @@ async function buildResultEmbed(
 
 // ─── Buttons ──────────────────────────────────────────────────────────────────
 
-function buildButtons(): ActionRowBuilder<ButtonBuilder> {
+function buildButtons(userId: string): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId("bj:hit").setLabel("ヒット").setEmoji("🃏").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("bj:stand").setLabel("スタンド").setEmoji("🛑").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bj:hit:${userId}`).setLabel("ヒット").setEmoji("🃏").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`bj:stand:${userId}`).setLabel("スタンド").setEmoji("🛑").setStyle(ButtonStyle.Secondary),
   );
 }
 
@@ -492,7 +492,6 @@ async function finishGame(
   const { embeds, files } = await buildResultEmbed(game, outcome, totals);
   if (interaction instanceof ButtonInteraction) {
     await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-    await interaction.deleteReply().catch(() => {});
   } else {
     await interaction.editReply({ content: "", embeds, files, components: [] });
   }
@@ -506,13 +505,12 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
 
   const key    = gameKey(guildId, user.id);
   const action = interaction.customId.slice(BJ_PREFIX.length);
-  // 結果画面ボタンは "replay:{userId}" / "quit:{userId}" の形式
   const colonIdx = action.indexOf(":");
   const verb     = colonIdx === -1 ? action : action.slice(0, colonIdx);
   const ownerId  = colonIdx === -1 ? null    : action.slice(colonIdx + 1);
 
-  // 他人の結果画面ボタンを弾く
-  if (ownerId !== null && ownerId !== user.id) {
+  // 公開メッセージ上のボタンは、埋め込まれた所有者IDで保護する。
+  if (ownerId !== user.id) {
     await interaction.reply({ content: "このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
     return;
   }
@@ -571,8 +569,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     activeGames.set(key, game);
 
     const { embeds, files } = await buildGameEmbed(game, true);
-    await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-    await interaction.editReply({ embeds: [], files: [], content: "", components: [buildButtons()] });
+    await game.publicMessage?.edit({ content: "", embeds, files, components: [buildButtons(user.id)] });
 
   } else if (verb === "stand") {
     game.processing = true;
@@ -663,9 +660,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   activeGames.set(key, game);
   const { embeds, files } = await buildGameEmbed(game, true);
-  const msg = await interaction.editReply({ embeds, files, components: [] });
+  const msg = await interaction.editReply({ embeds, files, components: [buildButtons(userId)] });
   game.publicMessage = msg as Message;
-  await interaction.followUp({ components: [buildButtons()], flags: MessageFlags.Ephemeral });
 }
 
 // ─── /blackjack config suit ───────────────────────────────────────────────────

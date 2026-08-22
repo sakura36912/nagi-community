@@ -356,10 +356,10 @@ async function buildResultEmbed(
 
 // ─── Button builders ──────────────────────────────────────────────────────────
 
-function buildGuessButtons(): ActionRowBuilder<ButtonBuilder> {
+function buildGuessButtons(userId: string): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId("hl:high").setLabel("HIGH").setEmoji("⬆️").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("hl:low").setLabel("LOW").setEmoji("⬇️").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`hl:high:${userId}`).setLabel("HIGH").setEmoji("⬆️").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`hl:low:${userId}`).setLabel("LOW").setEmoji("⬇️").setStyle(ButtonStyle.Danger),
   );
 }
 
@@ -427,9 +427,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   activeGames.set(key, game);
   const { embeds, files } = await buildGameEmbed(game);
-  const msg = await interaction.editReply({ embeds, files, components: [] });
+  const msg = await interaction.editReply({ embeds, files, components: [buildGuessButtons(userId)] });
   game.publicMessage = msg as Message;
-  await interaction.followUp({ components: [buildGuessButtons()], flags: MessageFlags.Ephemeral });
 }
 
 // ─── Button handler ───────────────────────────────────────────────────────────
@@ -437,6 +436,15 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 export async function handleHighlowButton(interaction: ButtonInteraction): Promise<void> {
   const { guildId, user } = interaction;
   if (!guildId) return;
+
+  const actionParts = interaction.customId.slice(HL_PREFIX.length).split(":");
+  const action = actionParts[0];
+  const ownerId = actionParts[1] ?? null;
+  // 公開メッセージ上のボタンは、埋め込まれた所有者IDで保護する。
+  if (ownerId !== user.id) {
+    await interaction.reply({ content: "このゲームはあなたのものではありません。", flags: MessageFlags.Ephemeral });
+    return;
+  }
 
   const key  = gameKey(guildId, user.id);
   const game = activeGames.get(key);
@@ -482,8 +490,6 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     return;
   }
 
-  const action = interaction.customId.slice(HL_PREFIX.length);
-
   // ─── HIGH / LOW ───────────────────────────────────────────────────────────
 
   if (action === "high" || action === "low") {
@@ -511,7 +517,6 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         `ハイアンドロー引き分け（賭け: ${game.originalBet}）`,
       ).catch(() => {});
       await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-      await interaction.deleteReply().catch(() => {});
       return;
     }
 
@@ -526,7 +531,6 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         addCasinoRound(emptyCasinoResultTotals(), game.originalBet, 0),
       );
       await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-      await interaction.deleteReply().catch(() => {});
       return;
     }
 
@@ -539,7 +543,6 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     await recordTransaction(guildId, user.id, netDelta, `ハイアンドロー勝利（賭け: ${game.originalBet}）`).catch(() => {});
 
     await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-    await interaction.deleteReply().catch(() => {});
   }
 }
 
