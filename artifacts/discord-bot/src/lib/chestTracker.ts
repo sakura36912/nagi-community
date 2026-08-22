@@ -18,6 +18,15 @@ export const TAVERN_CHANNEL_NAMES = new Set(["大酒場🍺", "小酒場🍺"]);
 /** `${guildId}:${userId}` → 酒場への入室時刻 */
 const tavernJoinedAt = new Map<string, Date>();
 
+/**
+ * フラッシュ済みだが DB への加算がまだ完了していない秒数。
+ *
+ * flushAllTavernSessions は二重加算を避けるため先に joinedAt を更新する。
+ * DB の書き込みが完了するまでこの秒数を別管理し、読み取り時に含めることで
+ * 「メモリ上はリセット済み・DB上は未反映」という短い期間にも累積時間が減らないようにする。
+ */
+const pendingFlushSeconds = new Map<string, number>();
+
 function tavernKey(guildId: string, userId: string): string {
   return `${guildId}:${userId}`;
 }
@@ -89,6 +98,11 @@ export function getCurrentTavernSeconds(guildId: string, userId: string): number
   return Math.floor((Date.now() - joined.getTime()) / 1000);
 }
 
+/** DB へのフラッシュ処理中で、まだ DB の累積値に反映されていない秒数を返す。 */
+export function getPendingTavernSeconds(guildId: string, userId: string): number {
+  return pendingFlushSeconds.get(tavernKey(guildId, userId)) ?? 0;
+}
+
 /**
  * 現在酒場に在室している全ユーザーの累積時間を DB へ書き出す。
  * Bot 再起動時にメモリが消えて時間が失われるのを防ぐため、定期的に呼ぶこと。
@@ -104,8 +118,18 @@ export async function flushAllTavernSessions(): Promise<void> {
       if (seconds <= 0) return;
       // joinedAt を今の時刻にリセット（退出時に二重カウントされないよう）
       tavernJoinedAt.set(key, now);
+      pendingFlushSeconds.set(key, (pendingFlushSeconds.get(key) ?? 0) + seconds);
       const [guildId, userId] = key.split(":");
-      await addChestVcSeconds(guildId, userId, seconds);
+      try {
+        await addChestVcSeconds(guildId, userId, seconds);
+      } finally {
+        const pending = (pendingFlushSeconds.get(key) ?? 0) - seconds;
+        if (pending > 0) {
+          pendingFlushSeconds.set(key, pending);
+        } else {
+          pendingFlushSeconds.delete(key);
+        }
+      }
     }),
   );
 }

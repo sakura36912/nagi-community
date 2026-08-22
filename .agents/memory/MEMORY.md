@@ -1,1 +1,2 @@
 - [Sticky message dedup fix](sticky-dedup.md) — `message.author.bot` を使う。`client.user?.id` 比較は reconnect 時に null になりループが止まらない。
+- [Chest time flush consistency](chest-time-flush-consistency.md) — フラッシュ中の未反映秒数も宝箱の累積表示に含め、非同期DB書き込みによる後退を防ぐ。

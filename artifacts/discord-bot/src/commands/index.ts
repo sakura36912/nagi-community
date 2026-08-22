@@ -86,7 +86,7 @@ import {
   getGuildWalletUserIds,
 } from "../lib/economy";
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds, getChestBonusOpens, consumeChestBonusOpen, addChestBonusOpens } from "../lib/vcReward";
-import { getCurrentTavernSeconds, isTavernChannel, onTavernJoin, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
+import { getCurrentTavernSeconds, getPendingTavernSeconds, isTavernChannel, onTavernJoin, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
 import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import { upsertTimedRoleGrant, db, vcSessionLogsTable } from "@workspace/db";
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
@@ -2112,7 +2112,8 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
       }
 
       const currentSeconds = getCurrentTavernSeconds(interaction.guild.id, interaction.user.id);
-      // chest_vc_accum（10分ごとにフラッシュ）＋現在セッション中の秒数のみを使う。
+      const pendingSeconds = getPendingTavernSeconds(interaction.guild.id, interaction.user.id);
+      // chest_vc_accum（10分ごとにフラッシュ）＋DB反映待ちの秒数＋現在セッション中の秒数を使う。
       // vc_session_logs との MAX() は Flush 後に currentSeconds がリセットされると
       // totalSeconds が下がり elapsed が負になる問題を起こすため廃止。
       const [chestAccumSeconds, opensCount, lastOpenVcSeconds] = await Promise.all([
@@ -2120,7 +2121,7 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
         getTotalChestOpensCount(interaction.guild.id, interaction.user.id),
         getChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType),
       ]);
-      const totalSeconds = chestAccumSeconds + currentSeconds;
+      const totalSeconds = chestAccumSeconds + pendingSeconds + currentSeconds;
       totalSecondsAtOpen = totalSeconds;
       // lastOpenVcSeconds が totalSeconds より大きい場合は過去の計算方式の不整合。
       // elapsed を 0 として次回 1 時間滞在で開封できるよう正規化する。
