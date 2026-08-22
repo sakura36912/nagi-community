@@ -48,6 +48,33 @@ const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
 
 export const SLOT_WIN_RATE_PREFIX = "slot:win-rate:";
 
+/**
+ * パチスロ風の設定プリセット。
+ *
+ * winRate は「少なくとも1ライン当選する確率」で、現在の標準配当
+ * （1〜5ラインの純利益 +1/+5/+11/+19/+34倍）から画像の機械割帯に
+ * 近づくように設定している。設定変更ではこの値だけを変更し、配当倍率は変更しない。
+ */
+export const SLOT_SETTING_PROFILES = [
+  { setting: 1, winRate: 38, machineRate: "約97〜98%" },
+  { setting: 2, winRate: 39, machineRate: "約98〜99%" },
+  { setting: 3, winRate: 40, machineRate: "約100〜101%" },
+  { setting: 4, winRate: 41, machineRate: "約103〜105%" },
+  { setting: 5, winRate: 43, machineRate: "約106〜110%" },
+  { setting: 6, winRate: 44, machineRate: "約110〜115%" },
+] as const;
+
+type SlotSettingNumber = (typeof SLOT_SETTING_PROFILES)[number]["setting"];
+
+function getSlotSettingProfile(setting: number) {
+  return SLOT_SETTING_PROFILES.find((profile) => profile.setting === setting);
+}
+
+function getSlotSettingLabel(winRate: number | null): string {
+  const profile = SLOT_SETTING_PROFILES.find((candidate) => candidate.winRate === winRate);
+  return profile ? `設定${profile.setting}` : winRate === null ? "従来方式" : "個別設定";
+}
+
 // ─── Paylines: 3 horizontal rows + 2 diagonals ───────────────────────────────
 
 const PAYLINE_DEFS = [
@@ -372,9 +399,15 @@ function buildResult(
 
 function buildSetupEmbed(
   guild: Guild,
-  settings: { stickerIds: string[]; fixedEmojiIds: string[]; emojiWeights: Record<string, number>; payoutMultipliers: number[] },
+  settings: {
+    stickerIds: string[];
+    fixedEmojiIds: string[];
+    emojiWeights: Record<string, number>;
+    payoutMultipliers: number[];
+    winRate: number | null;
+  },
 ): EmbedBuilder {
-  const { stickerIds, fixedEmojiIds, emojiWeights, payoutMultipliers } = settings;
+  const { stickerIds, fixedEmojiIds, emojiWeights, payoutMultipliers, winRate } = settings;
   const multipliers = resolveMultipliers(payoutMultipliers);
 
   // ── Sticker mode ──────────────────────────────────────────────────────────
@@ -431,7 +464,8 @@ function buildSetupEmbed(
     .addFields(
       { name: "モード", value: mode, inline: true },
       { name: "絵柄数", value: `${symbolCount} 種類`, inline: true },
-      { name: "\u200b", value: "\u200b", inline: true },
+      { name: "現在の設定", value: getSlotSettingLabel(winRate), inline: true },
+      { name: "当選確率", value: winRate === null ? "従来方式" : `${winRate}%`, inline: true },
       { name: "絵柄と出現重み", value: symbolsValue || "*なし*" },
       { name: "各絵柄の出現確率", value: probLines },
       { name: "当選配当", value: payoutLines.join("\n") },
@@ -510,6 +544,7 @@ async function buildWinRateSetupEmbed(
     .setTitle("🎰 スロット — 当選確率設定")
     .setColor(0x5865f2)
     .addFields(
+      { name: "現在の設定", value: getSlotSettingLabel(settings.winRate), inline: true },
       { name: "当選確率", value: winRateText, inline: true },
       { name: "推定払い戻し率", value: `**${payoutRate.toFixed(1)}%**`, inline: true },
       { name: "\u200b", value: "\u200b", inline: true },
@@ -519,6 +554,29 @@ async function buildWinRateSetupEmbed(
       },
     )
     .setFooter({ text: "ボタンを押すと、次回スピンから当選確率が反映されます。" });
+}
+
+async function handleSetupSetting(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guild = interaction.guild!;
+  const setting = interaction.options.getInteger("setting", true) as SlotSettingNumber;
+  const profile = getSlotSettingProfile(setting);
+
+  if (!profile) {
+    await interaction.reply({ content: "❌ 設定は1〜6で指定してください。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const settings = await setSlotWinRate(guild.id, profile.winRate);
+  const embed = await buildWinRateSetupEmbed(guild, settings);
+  await interaction.editReply({
+    content: [
+      `✅ スロットを **設定${profile.setting}** に変更しました。`,
+      `当選確率: **${profile.winRate}%**（機械割の目安: **${profile.machineRate}**）`,
+      "配当倍率・絵柄設定は変更していません。",
+    ].join("\n"),
+    embeds: [embed],
+  });
 }
 
 // ─── Shared spin core ─────────────────────────────────────────────────────────
@@ -913,6 +971,27 @@ export const slotCommand: Command = {
         )
         .addSubcommand((sub) =>
           sub
+            .setName("setting")
+            .setDescription("スロット設定1〜6を選択します（当選確率のみ変更）")
+            .addIntegerOption((opt) =>
+              opt
+                .setName("setting")
+                .setDescription("設定番号（1〜6）")
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(6)
+                .addChoices(
+                  { name: "設定1（機械割目安 97〜98%）", value: 1 },
+                  { name: "設定2（機械割目安 98〜99%）", value: 2 },
+                  { name: "設定3（機械割目安 100〜101%）", value: 3 },
+                  { name: "設定4（機械割目安 103〜105%）", value: 4 },
+                  { name: "設定5（機械割目安 106〜110%）", value: 5 },
+                  { name: "設定6（機械割目安 110〜115%）", value: 6 },
+                ),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
             .setName("probability")
             .setDescription("ボタンで当選確率を設定し、払い戻し率を確認します"),
         )
@@ -953,6 +1032,7 @@ export const slotCommand: Command = {
       if (sub === "remove")           { await handleSetupRemove(interaction); return; }
       if (sub === "weight")           { await handleSetupWeight(interaction); return; }
       if (sub === "payout")           { await handleSetupPayout(interaction); return; }
+      if (sub === "setting")          { await handleSetupSetting(interaction); return; }
       if (sub === "probability")      { await handleSetupProbability(interaction); return; }
       if (sub === "list")             { await handleSetupList(interaction); return; }
       if (sub === "clear")            { await handleSetupClear(interaction); return; }

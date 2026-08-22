@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { evaluatePaylines, spinGridWithWinRate } from "../commands/slot.js";
+import {
+  evaluatePaylines,
+  SLOT_SETTING_PROFILES,
+  slotCommand,
+  spinGridWithWinRate,
+} from "../commands/slot.js";
 
 const pool = ["🍒", "🍋"];
 
@@ -42,5 +47,24 @@ describe("スロットの当選確率設定", () => {
 
     expect(wins / trials).toBeGreaterThan(0.32);
     expect(wins / trials).toBeLessThan(0.48);
+  });
+
+  it("設定1〜6は当選確率だけを段階的に変更する", () => {
+    expect(SLOT_SETTING_PROFILES.map((profile) => profile.setting)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(SLOT_SETTING_PROFILES.map((profile) => profile.winRate)).toEqual([38, 39, 40, 41, 43, 44]);
+  });
+
+  it("設定サブコマンドに1〜6の選択肢が登録されている", () => {
+    type CommandOption = {
+      name?: string;
+      options?: CommandOption[];
+      choices?: Array<{ value?: number }>;
+    };
+    const command = slotCommand.data.toJSON() as {
+      options?: CommandOption[];
+    };
+    const setup = command.options?.find((option) => option.name === "setup");
+    const setting = setup?.options?.find((option) => option.name === "setting");
+    expect(setting?.options?.[0]?.choices?.map((choice) => choice.value)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
