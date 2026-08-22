@@ -52,16 +52,16 @@ export const SLOT_WIN_RATE_PREFIX = "slot:win-rate:";
  * パチスロ風の設定プリセット。
  *
  * winRate は「少なくとも1ライン当選する確率」で、現在の標準配当
- * （1〜5ラインの純利益 +1/+5/+11/+19/+34倍）から画像の機械割帯に
+ * （1〜5ラインの純利益 +1/+5/+11/+19/+34倍）から指定された払い戻し率に
  * 近づくように設定している。設定変更ではこの値だけを変更し、配当倍率は変更しない。
  */
 export const SLOT_SETTING_PROFILES = [
-  { setting: 1, winRate: 38, machineRate: "約97〜98%" },
-  { setting: 2, winRate: 39, machineRate: "約98〜99%" },
-  { setting: 3, winRate: 40, machineRate: "約100〜101%" },
-  { setting: 4, winRate: 41, machineRate: "約103〜105%" },
-  { setting: 5, winRate: 43, machineRate: "約106〜110%" },
-  { setting: 6, winRate: 44, machineRate: "約110〜115%" },
+  { setting: 1, winRate: 35, payoutRate: 90 },
+  { setting: 2, winRate: 37, payoutRate: 93 },
+  { setting: 3, winRate: 38, payoutRate: 96 },
+  { setting: 4, winRate: 39, payoutRate: 99 },
+  { setting: 5, winRate: 41, payoutRate: 103 },
+  { setting: 6, winRate: 43, payoutRate: 108 },
 ] as const;
 
 type SlotSettingNumber = (typeof SLOT_SETTING_PROFILES)[number]["setting"];
@@ -572,7 +572,7 @@ async function handleSetupSetting(interaction: ChatInputCommandInteraction): Pro
   await interaction.editReply({
     content: [
       `✅ スロットを **設定${profile.setting}** に変更しました。`,
-      `当選確率: **${profile.winRate}%**（機械割の目安: **${profile.machineRate}**）`,
+      `当選確率: **${profile.winRate}%**（払い戻し率の基準: **${profile.payoutRate}%**）`,
       "配当倍率・絵柄設定は変更していません。",
     ].join("\n"),
     embeds: [embed],
@@ -981,12 +981,12 @@ export const slotCommand: Command = {
                 .setMinValue(1)
                 .setMaxValue(6)
                 .addChoices(
-                  { name: "設定1（機械割目安 97〜98%）", value: 1 },
-                  { name: "設定2（機械割目安 98〜99%）", value: 2 },
-                  { name: "設定3（機械割目安 100〜101%）", value: 3 },
-                  { name: "設定4（機械割目安 103〜105%）", value: 4 },
-                  { name: "設定5（機械割目安 106〜110%）", value: 5 },
-                  { name: "設定6（機械割目安 110〜115%）", value: 6 },
+                  { name: "設定1（払い戻し率 90%）", value: 1 },
+                  { name: "設定2（払い戻し率 93%）", value: 2 },
+                  { name: "設定3（払い戻し率 96%）", value: 3 },
+                  { name: "設定4（払い戻し率 99%）", value: 4 },
+                  { name: "設定5（払い戻し率 103%）", value: 5 },
+                  { name: "設定6（払い戻し率 108%）", value: 6 },
                 ),
             ),
         )

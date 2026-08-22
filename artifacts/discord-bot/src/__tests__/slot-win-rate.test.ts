@@ -51,7 +51,8 @@ describe("スロットの当選確率設定", () => {
 
   it("設定1〜6は当選確率だけを段階的に変更する", () => {
     expect(SLOT_SETTING_PROFILES.map((profile) => profile.setting)).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(SLOT_SETTING_PROFILES.map((profile) => profile.winRate)).toEqual([38, 39, 40, 41, 43, 44]);
+    expect(SLOT_SETTING_PROFILES.map((profile) => profile.winRate)).toEqual([35, 37, 38, 39, 41, 43]);
+    expect(SLOT_SETTING_PROFILES.map((profile) => profile.payoutRate)).toEqual([90, 93, 96, 99, 103, 108]);
   });
 
   it("設定サブコマンドに1〜6の選択肢が登録されている", () => {
