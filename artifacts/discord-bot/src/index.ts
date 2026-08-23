@@ -167,6 +167,28 @@ function dlog(msg: string) {
   }
 }
 
+function isRecoverableObjectStorageStreamError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ERR_STREAM_UNABLE_TO_PIPE"
+  );
+}
+
+// @replit/object-storage の依存先が Node 24 でまれにこの例外をイベント経由で
+// 投げることがある。個別の画像取得だけが失敗した状態なので、Bot 全体を停止せず
+// 次回の取得へ進める。他の未処理例外は壊れた状態で動作を継続しないよう終了する。
+process.on("uncaughtException", (err) => {
+  if (isRecoverableObjectStorageStreamError(err)) {
+    logger.error("[storage] Recoverable Object Storage stream error; keeping bot online", err);
+    return;
+  }
+
+  logger.error("[fatal] Uncaught exception; stopping bot", err);
+  process.exit(1);
+});
+
 dlog("=== bot starting ===");
 
 const token = process.env["DISCORD_BOT_TOKEN"];
@@ -420,9 +442,22 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
         await deactivateSheet(sheet.id).catch(() => null);
         continue;
       }
+      if (thread.isThread() && thread.archived) {
+        logger.warn(`[sheet-vc] sheet ${sheet.id} thread is archived — deactivating`);
+        await deactivateSheet(sheet.id).catch((err) =>
+          logger.error(`[sheet-vc] Failed to deactivate archived sheet ${sheet.id}`, err),
+        );
+        continue;
+      }
       if (!thread.isTextBased()) continue;
       const message = await thread.messages.fetch(sheet.messageId).catch(() => null);
-      if (!message) continue;
+      if (!message) {
+        logger.warn(`[sheet-vc] sheet ${sheet.id} starter message not found — deactivating`);
+        await deactivateSheet(sheet.id).catch((err) =>
+          logger.error(`[sheet-vc] Failed to deactivate sheet ${sheet.id}`, err),
+        );
+        continue;
+      }
 
       const targetUser = await bot.users.fetch(sheet.userId).catch(() => null);
       if (!targetUser) continue;
@@ -460,6 +495,13 @@ async function runSheetVcRefreshScheduler(bot: Client<true>): Promise<void> {
       await message.edit({ embeds: [embed] });
       logger.info(`[sheet-vc] Updated sheet ${sheet.id} for user ${sheet.userId}: ${vcSeconds}s`);
     } catch (err) {
+      if (err instanceof DiscordAPIError && err.code === 50083) {
+        logger.warn(`[sheet-vc] sheet ${sheet.id} was archived during refresh — deactivating`);
+        await deactivateSheet(sheet.id).catch((deactivateErr) =>
+          logger.error(`[sheet-vc] Failed to deactivate archived sheet ${sheet.id}`, deactivateErr),
+        );
+        continue;
+      }
       logger.error(`[sheet-vc] Failed to refresh sheet ${sheet.id}`, err);
     }
   }
