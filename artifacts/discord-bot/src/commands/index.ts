@@ -1266,6 +1266,7 @@ const CATEGORY_CHOICES = [
   { name: "🛒 ショップ",               value: "general" },
   { name: "⚔️ 隊別ショップ",          value: "group"   },
   { name: "🔒 高級船室ショップ",       value: "vc"      },
+  { name: "🏝️ オチテモータ島ショップ", value: "island" },
 ];
 
 interface ShopGroupConfig {
@@ -1279,6 +1280,7 @@ const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
   general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623 },
   group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c },
   vc:      { displayName: "高級船室ショップ",       emoji: "🔒", category: "vc",      color: 0x3498db },
+  island:  { displayName: "オチテモータ島ショップ", emoji: "🏝️", category: "island", color: 0x2ecc71 },
 };
 
 const shopCommand: Command = {
