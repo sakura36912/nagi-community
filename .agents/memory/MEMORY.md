@@ -2,3 +2,4 @@
 - [High-low payout rules](highlow-payout-rules.md) — 1ゲーム単位の固定配当と、引き分け時の掛け金返却を維持する。
 - [Casino control placement](casino-control-placement.md) — 公開Embedに所有者付きボタンを置き、操作位置の安定と本人限定操作を両立する。
 - [Slot setting profiles](slot-setting-profiles.md) — 設定ごとの機械割目安は、固定配当を変えずに当選確率へ換算して表現する。
+- [Beach transfer panel](beach-transfer-panel.md) — 砂浜のパネルのみ画面共有操作を隠し、通常のHubパネルの操作性は維持する。

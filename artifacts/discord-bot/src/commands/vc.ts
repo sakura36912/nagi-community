@@ -40,6 +40,7 @@ import {
 import { getGuildSettings, setVcWarnBeforeMinutes } from "../lib/economy";
 import { getTavernChannelNames } from "../lib/chestTracker";
 import { logger } from "../lib/logger";
+import { isBeachVoiceChannel } from "../lib/vcRewardEligibility";
 
 // ─── Hub VC panel constants ──────────────────────────────────────────────────
 
@@ -67,12 +68,21 @@ function isHubStreamEnabled(ch: GuildChannel, everyoneId: string): boolean {
   return !(ow?.deny.has(PermissionFlagsBits.Stream) ?? false);
 }
 
-export function buildHubVcPanelMessage(channelId: string, ownerId: string, streamEnabled: boolean) {
+export function buildHubVcPanelMessage(
+  channelId: string,
+  ownerId: string,
+  streamEnabled: boolean,
+  includeStreamControl = true,
+) {
   const embed = new EmbedBuilder()
     .setTitle("🚢 船室コントロールパネル")
     .setColor(0x5865f2)
     .setDescription(
-      `<@${ownerId}> の船室です。\n📺 画面共有: **${streamEnabled ? "ON ✅" : "OFF 🚫"}**`,
+      `<@${ownerId}> の船室です.${
+        includeStreamControl
+          ? `\n📺 画面共有: **${streamEnabled ? "ON ✅" : "OFF 🚫"}**`
+          : ""
+      }`,
     )
     .setFooter({ text: "船室オーナーのみ操作できます" });
 
@@ -82,12 +92,16 @@ export function buildHubVcPanelMessage(channelId: string, ownerId: string, strea
       .setLabel("VC名変更")
       .setStyle(ButtonStyle.Secondary)
       .setEmoji("✏️"),
-    new ButtonBuilder()
-      .setCustomId(hubPanelId(HUB_PANEL_BTN_STREAM, channelId, ownerId))
-      .setLabel(streamEnabled ? "画面共有: ON" : "画面共有: OFF")
-      .setStyle(streamEnabled ? ButtonStyle.Success : ButtonStyle.Secondary)
-      .setEmoji("📺"),
   );
+  if (includeStreamControl) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(hubPanelId(HUB_PANEL_BTN_STREAM, channelId, ownerId))
+        .setLabel(streamEnabled ? "画面共有: ON" : "画面共有: OFF")
+        .setStyle(streamEnabled ? ButtonStyle.Success : ButtonStyle.Secondary)
+        .setEmoji("📺"),
+    );
+  }
   return { embeds: [embed], components: [row] };
 }
 
@@ -656,11 +670,19 @@ export async function handlePanelOnlyHubTransfer(
     ?? await guild.channels.fetch(newState.channelId).catch(() => null);
   if (!vc || vc.type !== ChannelType.GuildVoice) return;
 
+  const sourceChannel = oldState.channel;
+  const isBeachTransfer =
+    hub.nameTemplate.trim() === "砂浜"
+    || isBeachVoiceChannel(sourceChannel?.name ?? "", sourceChannel?.parent?.name ?? null);
+
   // カテゴリの ViewChannel 権限を継承させるため @everyone への上書きは行わない。
   await vc
-    .send(buildHubVcPanelMessage(vc.id, member.id, true))
+    .send(buildHubVcPanelMessage(vc.id, member.id, true, !isBeachTransfer))
     .catch((err) => logger.error("[vcHub] panel_only: Failed to send panel", err));
-  logger.info(`[vcHub] panel_only: panel sent to channel=${vc.id} (from hub=${oldState.channelId})`);
+  logger.info(
+    `[vcHub] panel_only: panel sent to channel=${vc.id} ` +
+    `(from hub=${oldState.channelId}, streamControl=${!isBeachTransfer})`,
+  );
 }
 
 /**
