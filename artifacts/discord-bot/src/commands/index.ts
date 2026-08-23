@@ -459,6 +459,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       const member = await interaction.guild!.members.fetch(interaction.user.id);
       await member.roles.add(item.targetRoleId);
       roleGranted = true;
+      await logAdviceTicketPurchase(interaction.guild!, interaction.user.id, result.item, item.targetRoleId);
       // Role is now granted — don't refund if the reply itself fails.
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`)
         .catch((err) => logger.error("[shop] editReply failed after role grant (perm-role)", err));
@@ -590,6 +591,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
         const member = await interaction.guild!.members.fetch(interaction.user.id);
         await member.roles.add(item.targetRoleId);
         roleGranted = true;
+        await logAdviceTicketPurchase(interaction.guild!, interaction.user.id, result.item, item.targetRoleId);
         // Role granted — record group sale and reply best-effort.
         if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
         await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`)
@@ -696,6 +698,7 @@ async function applyShopPurchase(
     try {
       const member = await interaction.guild.members.fetch(interaction.user.id);
       await member.roles.add(item.targetRoleId);
+      await logAdviceTicketPurchase(interaction.guild, interaction.user.id, result.item, item.targetRoleId);
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
     } catch {
       await refundPurchase(interaction.guildId, interaction.user.id, result.item);
@@ -820,6 +823,7 @@ async function applyShopPurchase(
         const member = await interaction.guild.members.fetch(interaction.user.id);
         await member.roles.add(item.targetRoleId);
         roleGranted = true;
+        await logAdviceTicketPurchase(interaction.guild!, interaction.user.id, result.item, item.targetRoleId);
         // Role granted — record group sale and reply best-effort.
         if (item.category === "group") tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
         await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`)
@@ -1755,7 +1759,7 @@ import { pointconfigCommand } from "./pointconfig";
 import { pointCommand } from "./point";
 import { interviewCommand } from "./interview";
 import { stickyCommand } from "./sticky";
-import { adviceEndCommand } from "./advice";
+import { adviceEndCommand, adviceLogCommand, logAdviceTicketPurchase } from "./advice";
 import { clearCommand } from "./clear";
 
 // ─── VC コントロールパネル ────────────────────────────────────────────────────
@@ -3050,6 +3054,7 @@ export const commands: Command[] = [
   pointCommand,
   stickyCommand,
   adviceEndCommand,
+  adviceLogCommand,
   clearCommand,
   chestCommand,
   debitCommand,

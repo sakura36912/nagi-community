@@ -40,7 +40,7 @@ export const pointVcCategoryConfigsTable = pgTable(
     categoryId:     text("category_id").notNull(),
     pointsPerHour:  integer("points_per_hour").notNull().default(100),
   },
-  (t) => [unique().on(t.guildId, t.categoryId)],
+  (t) => [unique("point_vc_category_configs_guild_id_category_id_key").on(t.guildId, t.categoryId)],
 );
 export type PointVcCategoryConfig = typeof pointVcCategoryConfigsTable.$inferSelect;
 
@@ -71,7 +71,7 @@ export const pointRoleConfigsTable = pgTable(
     /** Points awarded per day the user holds this role. */
     pointsPerDay: integer("points_per_day").notNull().default(10),
   },
-  (t) => [unique().on(t.guildId, t.roleId)],
+  (t) => [unique("point_role_configs_guild_id_role_id_key").on(t.guildId, t.roleId)],
 );
 export type PointRoleConfig = typeof pointRoleConfigsTable.$inferSelect;
 

@@ -317,6 +317,13 @@ export async function setChestLogChannelId(
   return upsertGuildSetting(guildId, { chestLogChannelId });
 }
 
+export async function setAdviceLogChannelId(
+  guildId: string,
+  adviceLogChannelId: string | null,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, { adviceLogChannelId });
+}
+
 export async function createOrUpdateCurrency(
   guildId: string,
   currencyName: string,

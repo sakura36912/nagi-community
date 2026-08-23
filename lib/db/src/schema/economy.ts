@@ -31,6 +31,16 @@ export const guildSettingsTable = pgTable("guild_settings", {
 
   // Discord text channel ID where ban notifications are posted.
   banLogChannelId: text("ban_log_channel_id"),
+  // Discord text channel ID where return notifications are posted.
+  returnLogChannelId: text("return_log_channel_id"),
+  // Comma-separated role IDs excluded from return notifications.
+  returnLogExcludedRoleIds: text("return_log_excluded_role_ids"),
+  // Discord text channel ID where promotion notifications are posted.
+  promotionLogChannelId: text("promotion_log_channel_id"),
+  // Role ID watched for promotion notifications.
+  promotionWatchRoleId: text("promotion_watch_role_id"),
+  // Role ID allowed to post bounties.
+  bountyPosterRoleId: text("bounty_poster_role_id"),
   // Discord text channel ID where leave notifications are posted.
   leaveLogChannelId: text("leave_log_channel_id"),
 
@@ -48,6 +58,9 @@ export const guildSettingsTable = pgTable("guild_settings", {
   // Discord text channel ID where chest open results are logged.
   // NULL means no logging.
   chestLogChannelId: text("chest_log_channel_id"),
+  // Discord text channel ID where evaluation advice-ticket purchases are logged.
+  // NULL means no logging.
+  adviceLogChannelId: text("advice_log_channel_id"),
 
   // Blackjack suit custom emojis (Discord emoji strings, e.g. "<:spade:123>").
   // NULL means use the default Unicode emoji (♠️ ♥️ ♦️ ♣️).
@@ -176,10 +189,11 @@ export const transactionsTable = pgTable("transactions", {
   relatedUserId: text("related_user_id"),
   /**
    * Opaque idempotency key used by automated payouts (e.g. VC salary).
-   * When set, the row is unique on this key so duplicate event firings cannot
-   * produce a second credit.  NULL for all manually-created transactions.
+   * The partial unique index created by the database setup keeps non-NULL keys
+   * unique so duplicate event firings cannot produce a second credit. NULL for
+   * all manually-created transactions.
    */
-  sessionKey: text("session_key").unique(),
+  sessionKey: text("session_key"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -296,7 +310,7 @@ export const shopLicenseConfigTable = pgTable(
     licenseRoleId: text("license_role_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [unique().on(table.guildId, table.squadRoleId)],
+  (table) => [unique("shop_license_config_guild_id_squad_role_id_key").on(table.guildId, table.squadRoleId)],
 );
 
 export type ShopLicenseConfig = typeof shopLicenseConfigTable.$inferSelect;

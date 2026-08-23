@@ -152,7 +152,7 @@ export type CommunityVcSession = typeof communityVcSessionsTable.$inferSelect;
 export const communityTavernChannelsTable = pgTable("community_tavern_channels", {
   id: serial("id").primaryKey(),
   guildId: text("guild_id").notNull(),
-  channelId: text("channel_id").notNull().unique(),
+  channelId: text("channel_id").notNull().unique("community_tavern_channels_channel_id_key"),
   /** name_template of the hub that created this channel (e.g. 大酒場🍺) */
   hubName: text("hub_name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -377,7 +377,7 @@ export const communityPrebansTable = pgTable(
     addedBy: text("added_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [unique().on(table.guildId, table.userId)],
+  (table) => [unique("community_prebans_guild_id_user_id_key").on(table.guildId, table.userId)],
 );
 
 export type CommunityPreban = typeof communityPrebansTable.$inferSelect;

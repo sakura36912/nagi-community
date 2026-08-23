@@ -4,7 +4,7 @@ import { boolean, integer, pgTable, serial, text, timestamp } from "drizzle-orm/
 export const vcHubChannelsTable = pgTable("vc_hub_channels", {
   id: serial("id").primaryKey(),
   guildId: text("guild_id").notNull(),
-  hubChannelId: text("hub_channel_id").notNull().unique(),
+  hubChannelId: text("hub_channel_id").notNull().unique("vc_hub_channels_hub_channel_id_key"),
   /** 生成VCを置くカテゴリ (null = hub と同じカテゴリ) */
   categoryId: text("category_id"),
   /** チャンネル名テンプレート。{user} をメンバーの表示名で置換 */
@@ -28,7 +28,7 @@ export const vcHubSessionsTable = pgTable("vc_hub_sessions", {
   id: serial("id").primaryKey(),
   guildId: text("guild_id").notNull(),
   /** 生成されたVCチャンネルのID */
-  channelId: text("channel_id").notNull().unique(),
+  channelId: text("channel_id").notNull().unique("vc_hub_sessions_channel_id_key"),
   /** 生成をトリガーしたメンバーのID */
   ownerId: text("owner_id").notNull(),
   hubId: integer("hub_id")
