@@ -457,6 +457,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     let roleGranted = false;
     try {
       const member = await interaction.guild!.members.fetch(interaction.user.id);
+      markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
       await member.roles.add(item.targetRoleId);
       roleGranted = true;
       await logAdviceTicketPurchase(interaction.guild!, interaction.user.id, result.item, item.targetRoleId);
@@ -479,6 +480,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     if (item.targetRoleId) {
       try {
         const member = await interaction.guild!.members.fetch(interaction.user.id);
+        markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await member.roles.add(item.targetRoleId);
         const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         await upsertTimedRoleGrant(interaction.guildId, interaction.user.id, item.targetRoleId, EVAL_RESURFACE_EFFECT, expiresAt);
@@ -567,6 +569,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     if (!result.ok) { await interaction.editReply(result.reason); return; }
     if (item.targetRoleId) {
       try {
+        markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await memberForLicense.roles.add(item.targetRoleId);
         tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
         await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${item.targetRoleId}> が付与されました。`)
@@ -589,6 +592,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       let roleGranted = false;
       try {
         const member = await interaction.guild!.members.fetch(interaction.user.id);
+        markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await member.roles.add(item.targetRoleId);
         roleGranted = true;
         await logAdviceTicketPurchase(interaction.guild!, interaction.user.id, result.item, item.targetRoleId);
@@ -697,6 +701,7 @@ async function applyShopPurchase(
     if (!result.ok) { await interaction.editReply(result.reason); return; }
     try {
       const member = await interaction.guild.members.fetch(interaction.user.id);
+      markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
       await member.roles.add(item.targetRoleId);
       await logAdviceTicketPurchase(interaction.guild, interaction.user.id, result.item, item.targetRoleId);
       await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。`);
@@ -713,6 +718,7 @@ async function applyShopPurchase(
     if (item.targetRoleId) {
       try {
         const member = await interaction.guild.members.fetch(interaction.user.id);
+        markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await member.roles.add(item.targetRoleId);
         const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         await upsertTimedRoleGrant(interaction.guildId, interaction.user.id, item.targetRoleId, EVAL_RESURFACE_EFFECT, expiresAt);
@@ -800,6 +806,7 @@ async function applyShopPurchase(
     if (!result.ok) { await interaction.editReply(result.reason); return; }
     if (item.targetRoleId) {
       try {
+        markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await member.roles.add(item.targetRoleId);
         tryRecordGroupSale(interaction.guild!, interaction.guildId, interaction.user.id, result.item).catch(() => {});
         await interaction.editReply(`✅ **${result.item.name}**を購入しました！ショップ開業ロール <@&${item.targetRoleId}> が付与されました。`)
@@ -821,6 +828,7 @@ async function applyShopPurchase(
       let roleGranted = false;
       try {
         const member = await interaction.guild.members.fetch(interaction.user.id);
+        markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await member.roles.add(item.targetRoleId);
         roleGranted = true;
         await logAdviceTicketPurchase(interaction.guild!, interaction.user.id, result.item, item.targetRoleId);
@@ -1759,7 +1767,12 @@ import { pointconfigCommand } from "./pointconfig";
 import { pointCommand } from "./point";
 import { interviewCommand } from "./interview";
 import { stickyCommand } from "./sticky";
-import { adviceEndCommand, adviceLogCommand, logAdviceTicketPurchase } from "./advice";
+import {
+  adviceEndCommand,
+  adviceLogCommand,
+  logAdviceTicketPurchase,
+  markAdviceRoleGrantFromPurchase,
+} from "./advice";
 import { clearCommand } from "./clear";
 
 // ─── VC コントロールパネル ────────────────────────────────────────────────────

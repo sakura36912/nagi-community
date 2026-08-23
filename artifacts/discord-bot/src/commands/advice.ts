@@ -15,6 +15,46 @@ interface Command {
 
 export const ADVICE_ROLE_NAME = "評価員アドバイス券";
 const ALLOWED_ROLE_NAMES = ["航海士", "提督", "大提督"];
+const PENDING_PURCHASE_GRANT_TTL_MS = 30_000;
+const pendingPurchaseRoleGrants = new Map<string, number>();
+
+function pendingGrantKey(guildId: string, userId: string, roleId: string): string {
+  return `${guildId}:${userId}:${roleId}`;
+}
+
+/**
+ * Mark a shop role grant so the corresponding GuildMemberUpdate does not
+ * create a second log entry for the same purchase.
+ */
+export function markAdviceRoleGrantFromPurchase(
+  guildId: string,
+  userId: string,
+  roleId: string,
+): void {
+  const key = pendingGrantKey(guildId, userId, roleId);
+  const markedAt = Date.now();
+  pendingPurchaseRoleGrants.set(key, markedAt);
+
+  const cleanup = setTimeout(() => {
+    if (pendingPurchaseRoleGrants.get(key) === markedAt) {
+      pendingPurchaseRoleGrants.delete(key);
+    }
+  }, PENDING_PURCHASE_GRANT_TTL_MS);
+  cleanup.unref?.();
+}
+
+export function consumeAdviceRoleGrantFromPurchase(
+  guildId: string,
+  userId: string,
+  roleId: string,
+): boolean {
+  const key = pendingGrantKey(guildId, userId, roleId);
+  const markedAt = pendingPurchaseRoleGrants.get(key);
+  if (markedAt === undefined) return false;
+
+  pendingPurchaseRoleGrants.delete(key);
+  return Date.now() - markedAt <= PENDING_PURCHASE_GRANT_TTL_MS;
+}
 
 /**
  * アドバイス券の購入ログを指定チャンネルへ投稿する。
@@ -63,6 +103,53 @@ export async function logAdviceTicketPurchase(
     });
   } catch (err) {
     logger.warn("[advice-log] Failed to post advice ticket purchase log", err);
+  }
+}
+
+/**
+ * Log an advice-ticket role assignment that did not come from the shop
+ * purchase flow (for example, a manual Discord role grant or another bot).
+ */
+export async function logAdviceRoleGranted(
+  guild: Guild,
+  userId: string,
+  roleId: string,
+): Promise<void> {
+  try {
+    const role = guild.roles.cache.get(roleId)
+      ?? await guild.roles.fetch(roleId).catch(() => null);
+    if (!role || role.name !== ADVICE_ROLE_NAME) return;
+
+    const member = guild.members.cache.get(userId)
+      ?? await guild.members.fetch(userId).catch(() => null);
+    if (!member?.roles.cache.has(role.id)) return;
+
+    const settings = await getGuildSettings(guild.id);
+    if (!settings.adviceLogChannelId) return;
+
+    const logChannel = guild.channels.cache.get(settings.adviceLogChannelId)
+      ?? await guild.channels.fetch(settings.adviceLogChannelId).catch(() => null);
+    if (!logChannel?.isTextBased()) {
+      logger.warn(`[advice-log] Configured channel is not text-based: ${settings.adviceLogChannelId}`);
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("🎫 評価員アドバイス券ロール付与通知")
+      .setColor(0x57f287)
+      .addFields(
+        { name: "メンバー", value: `<@${userId}>`, inline: true },
+        { name: "付与ロール", value: `<@&${role.id}>`, inline: true },
+      )
+      .setTimestamp();
+
+    await logChannel.send({
+      content: `<@${userId}>`,
+      embeds: [embed],
+      allowedMentions: { users: [userId], roles: [] },
+    });
+  } catch (err) {
+    logger.warn("[advice-log] Failed to post advice role grant log", err);
   }
 }
 

@@ -14,6 +14,11 @@ import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
 import { handlePokerButton, POKER_PREFIX } from "./commands/poker";
 import { handleRouletteInteraction, ROULETTE_PREFIX } from "./commands/roulette";
 import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
+import {
+  ADVICE_ROLE_NAME,
+  consumeAdviceRoleGrantFromPurchase,
+  logAdviceRoleGranted,
+} from "./commands/advice";
 import { EmbedBuilder } from "discord.js";
 import {
   commands,
@@ -1275,6 +1280,18 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   }
 
   logger.info(`[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} addedRoles=[${addedRoleIds.join(",")}] partial=${oldMember.partial}`);
+
+  // Notify the advice log when the evaluation-advice role is granted outside
+  // the shop flow. Shop purchases already post a purchase log, so consume the
+  // marker created immediately before their role API call to avoid duplicates.
+  const adviceRoleId = addedRoleIds.find((roleId) =>
+    newMember.guild.roles.cache.get(roleId)?.name === ADVICE_ROLE_NAME,
+  );
+  if (adviceRoleId && !consumeAdviceRoleGrantFromPurchase(guildId, newMember.id, adviceRoleId)) {
+    logAdviceRoleGranted(newMember.guild, newMember.id, adviceRoleId).catch((err) =>
+      logger.warn(`[advice-log] Role grant notification failed for ${newMember.id}`, err),
+    );
+  }
 
   if (addedRoleIds.length === 0) return;
 
