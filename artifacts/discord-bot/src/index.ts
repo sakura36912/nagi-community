@@ -137,6 +137,7 @@ import {
   getGuildWalletUserIds,
   giveCurrency,
   isDueCalendarDay,
+  getJstDateKey,
   markRewardDistributed,
   seedDefaultShopItems,
   seedDefaultVcShopItems,
@@ -255,14 +256,10 @@ async function runRewardScheduler(): Promise<void> {
       let shiftTotalPaid = 0;
       if (rewardPerShift > 0) {
         // 集計期間: 前回給料日の翌日 〜 今日 (JST "YYYY-MM-DD")
-        const toDate   = now.toISOString().slice(0, 10);
+        const toDate   = getJstDateKey(now);
         const fromDate = settings.lastRewardAt
-          ? new Date(settings.lastRewardAt.getTime() + 24 * 60 * 60 * 1000)
-              .toISOString()
-              .slice(0, 10)
-          : new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000)
-              .toISOString()
-              .slice(0, 10);
+          ? getJstDateKey(new Date(settings.lastRewardAt.getTime() + 24 * 60 * 60 * 1000))
+          : getJstDateKey(new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000));
 
         const counts = await getShiftCountsByUser(guild.id, fromDate, toDate);
         for (const [userId, shiftCount] of counts) {
@@ -874,6 +871,10 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   // 起動直後に全シートを即時更新（名簿リンク等の変更を既存シートに即反映）
   runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Startup refresh error", err));
+
+  // 起動直後にも給与日を確認する。毎分の定期実行を待たず、Bot再起動後でも
+  // 給与日当日の支給を取りこぼさない。
+  runRewardScheduler().catch((err) => logger.error("[reward] Startup scheduler error", err));
 
   // 起動直後に全高級船室パネルを一括更新（メンバーリスト・期限・ボタンを現在の状態に同期）
   refreshAllVcPanels(readyClient).catch((err) => logger.error("[vc-panel-refresh] Startup panel refresh error", err));

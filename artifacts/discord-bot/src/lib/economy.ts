@@ -636,15 +636,42 @@ export async function setRewardDayOfMonth(guildId: string, day: number): Promise
   return upsertGuildSetting(guildId, { rewardDayOfMonth: day });
 }
 
-// Returns true when calendar-day mode is active and today is the configured
-// payout day AND we haven't already paid out this month.
+export function getJstDateParts(date: Date): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(date);
+
+  const values = new Map(
+    parts
+      .filter((part) => part.type === "year" || part.type === "month" || part.type === "day")
+      .map((part) => [part.type, Number(part.value)]),
+  );
+
+  return {
+    year: values.get("year")!,
+    month: values.get("month")!,
+    day: values.get("day")!,
+  };
+}
+
+export function getJstDateKey(date: Date): string {
+  const { year, month, day } = getJstDateParts(date);
+  return `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+}
+
+// Returns true when calendar-day mode is active and the current Japan date is
+// the configured payout day AND we haven't already paid out this Japan month.
 export function isDueCalendarDay(settings: GuildSettings, now: Date): boolean {
   if (settings.rewardDayOfMonth === null || settings.rewardDayOfMonth === undefined) {
     return false;
   }
 
   const targetDay = settings.rewardDayOfMonth;
-  const todayDay = now.getDate();
+  const today = getJstDateParts(now);
+  const todayDay = today.day;
   if (todayDay !== targetDay) {
     return false;
   }
@@ -655,7 +682,8 @@ export function isDueCalendarDay(settings: GuildSettings, now: Date): boolean {
   }
 
   // Already paid this calendar month?
-  return lastAt.getFullYear() !== now.getFullYear() || lastAt.getMonth() !== now.getMonth();
+  const last = getJstDateParts(lastAt);
+  return last.year !== today.year || last.month !== today.month;
 }
 
 export async function markRewardDistributed(guildId: string, at: Date): Promise<void> {

@@ -120,6 +120,8 @@ import {
   setRewardInterval,
   setRewardDayOfMonth,
   isDueCalendarDay,
+  getJstDateParts,
+  getJstDateKey,
 } from "../lib/economy.js";
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -356,7 +358,7 @@ describe("setRewardInterval / setRewardDayOfMonth — mutual exclusion", () => {
 
     // Switch to calendar-day mode — rewardDayOfMonth now takes priority.
     const today = new Date();
-    const todayDay = today.getDate();
+    const todayDay = getJstDateParts(today).day;
     const result = await setRewardDayOfMonth("guild-mutex-2", todayDay);
     expect(result.rewardDayOfMonth).toBe(todayDay);
 
@@ -396,12 +398,36 @@ describe("setRewardInterval / setRewardDayOfMonth — mutual exclusion", () => {
     // isDueCalendarDay returns true on the matching day and the scheduler must
     // consult it *before* any interval-mode logic.
     const today = new Date();
-    const todayDay = today.getDate();
+    const todayDay = getJstDateParts(today).day;
     const settingsOnPayDay = { ...result, rewardDayOfMonth: todayDay, lastRewardAt: null } as Parameters<typeof isDueCalendarDay>[0];
     expect(isDueCalendarDay(settingsOnPayDay, today)).toBe(true);
 
     // Conversely, a row with rewardDayOfMonth null falls through to interval mode.
     const settingsIntervalOnly = { ...result, rewardDayOfMonth: null, lastRewardAt: null } as Parameters<typeof isDueCalendarDay>[0];
     expect(isDueCalendarDay(settingsIntervalOnly, today)).toBe(false);
+  });
+});
+
+describe("calendar-day rewards use Japan Standard Time", () => {
+  it("becomes due at 00:00 JST, not 00:00 UTC", () => {
+    const settings = {
+      rewardDayOfMonth: 25,
+      lastRewardAt: null,
+    } as Parameters<typeof isDueCalendarDay>[0];
+
+    expect(isDueCalendarDay(settings, new Date("2026-08-24T14:59:59.000Z"))).toBe(false);
+    expect(isDueCalendarDay(settings, new Date("2026-08-24T15:00:00.000Z"))).toBe(true);
+    expect(getJstDateKey(new Date("2026-08-24T15:00:00.000Z"))).toBe("2026-08-25");
+  });
+
+  it("uses the Japan month when preventing duplicate monthly payouts", () => {
+    const settings = {
+      rewardDayOfMonth: 1,
+      lastRewardAt: new Date("2026-08-31T15:00:00.000Z"),
+    } as Parameters<typeof isDueCalendarDay>[0];
+
+    // lastRewardAt is 2026-09-01 00:00 JST, so this is already paid in
+    // the same Japan calendar month even though the UTC dates differ.
+    expect(isDueCalendarDay(settings, new Date("2026-09-01T00:00:00.000Z"))).toBe(false);
   });
 });
