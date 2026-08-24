@@ -122,6 +122,7 @@ import {
   isDueCalendarDay,
   getJstDateParts,
   getJstDateKey,
+  getExcludedUserIds,
 } from "../lib/economy.js";
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -429,5 +430,28 @@ describe("calendar-day rewards use Japan Standard Time", () => {
     // lastRewardAt is 2026-09-01 00:00 JST, so this is already paid in
     // the same Japan calendar month even though the UTC dates differ.
     expect(isDueCalendarDay(settings, new Date("2026-09-01T00:00:00.000Z"))).toBe(false);
+  });
+});
+
+describe("sub垢 members are excluded from role rewards", () => {
+  it("collects users who have any excluded role", () => {
+    const members = new Map([
+      ["member-with-sub", ["staff", "sub-role"]],
+      ["member-without-sub", ["staff"]],
+      ["member-with-other", ["other"]],
+    ]);
+
+    expect(getExcludedUserIds(members, new Set(["sub-role"]))).toEqual(
+      new Set(["member-with-sub"]),
+    );
+  });
+
+  it("does not exclude anyone when no matching role exists", () => {
+    const members = new Map([
+      ["member-a", ["staff"]],
+      ["member-b", ["other"]],
+    ]);
+
+    expect(getExcludedUserIds(members, new Set())).toEqual(new Set());
   });
 });

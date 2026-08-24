@@ -693,12 +693,29 @@ export async function markRewardDistributed(guildId: string, at: Date): Promise<
     .where(eq(guildSettingsTable.guildId, guildId));
 }
 
+export const SUB_ACCOUNT_ROLE_NAME = "sub垢";
+
+export function getExcludedUserIds(
+  members: Map<string, string[]>,
+  excludedRoleIds: ReadonlySet<string>,
+): Set<string> {
+  const excludedUserIds = new Set<string>();
+  for (const [userId, roleIds] of members) {
+    if (roleIds.some((roleId) => excludedRoleIds.has(roleId))) {
+      excludedUserIds.add(userId);
+    }
+  }
+  return excludedUserIds;
+}
+
 // Sums each member's applicable role-reward amounts and pays them out.
 // `members` maps userId -> the roleIds that member currently holds.
+// Users in `excludedUserIds` are skipped before calculating their role reward.
 export async function distributeRoleRewards(
   guildId: string,
   currencyName: string,
   members: Map<string, string[]>,
+  excludedUserIds: ReadonlySet<string> = new Set(),
 ): Promise<{ paidCount: number; totalPaid: number }> {
   const rewards = await listRoleRewards(guildId);
   if (rewards.length === 0) {
@@ -711,6 +728,10 @@ export async function distributeRoleRewards(
   let totalPaid = 0;
 
   for (const [userId, roleIds] of members) {
+    if (excludedUserIds.has(userId)) {
+      continue;
+    }
+
     const amount = roleIds.reduce((sum, roleId) => sum + (amountByRoleId.get(roleId) ?? 0), 0);
     if (amount <= 0) {
       continue;

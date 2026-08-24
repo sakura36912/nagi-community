@@ -83,6 +83,8 @@ import {
   getPrivateVcSessionByChannelId,
   getActivePrivateVcSessionsByGuild,
   distributeRoleRewards,
+  getExcludedUserIds,
+  SUB_ACCOUNT_ROLE_NAME,
   getGuildWalletUserIds,
 } from "../lib/economy";
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds, getChestBonusOpens, consumeChestBonusOpen, addChestBonusOpens } from "../lib/vcReward";
@@ -1711,11 +1713,18 @@ const rewardCommand: Command = {
         if (member.user.bot) continue;
         memberRoles.set(member.id, [...member.roles.cache.keys()]);
       }
+      const subAccountRoleIds = new Set(
+        [...guild.roles.cache.values()]
+          .filter((role) => role.name === SUB_ACCOUNT_ROLE_NAME)
+          .map((role) => role.id),
+      );
+      const excludedUserIds = getExcludedUserIds(memberRoles, subAccountRoleIds);
 
       const { paidCount, totalPaid } = await distributeRoleRewards(
         guildId,
         settings.currencyName,
         memberRoles,
+        excludedUserIds,
       );
 
       if (paidCount === 0) {

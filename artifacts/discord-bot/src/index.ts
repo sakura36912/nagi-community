@@ -139,6 +139,8 @@ import {
   isDueCalendarDay,
   getJstDateKey,
   markRewardDistributed,
+  getExcludedUserIds,
+  SUB_ACCOUNT_ROLE_NAME,
   seedDefaultShopItems,
   seedDefaultVcShopItems,
   getEvalSheetSettings,
@@ -242,11 +244,18 @@ async function runRewardScheduler(): Promise<void> {
         if (member.user.bot) continue;
         memberRoles.set(member.id, [...member.roles.cache.keys()]);
       }
+      const subAccountRoleIds = new Set(
+        [...guild.roles.cache.values()]
+          .filter((role) => role.name === SUB_ACCOUNT_ROLE_NAME)
+          .map((role) => role.id),
+      );
+      const excludedUserIds = getExcludedUserIds(memberRoles, subAccountRoleIds);
 
       const { paidCount, totalPaid } = await distributeRoleRewards(
         guild.id,
         settings.currencyName,
         memberRoles,
+        excludedUserIds,
       );
 
       // ── シフト出勤報酬 ───────────────────────────────────────────────────────
