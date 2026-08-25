@@ -348,7 +348,6 @@ const ISLAND_VC_ACCESS_ROLE_NAMES = ["追放者", "軍師", "訓練官", "見習
 
 async function resolveIslandVcSettings(
   guild: Guild,
-  evalResurfaceRoleId?: string | null,
 ): Promise<{ categoryId: string | null; accessRoleIds: string[] }> {
   const islandCategory = guild.channels.cache.find(
     (channel) =>
@@ -363,7 +362,9 @@ async function resolveIslandVcSettings(
   const accessRoleIds = guild.roles.cache
     .filter((role) => ISLAND_VC_ACCESS_ROLE_NAMES.includes(role.name))
     .map((role) => role.id);
-  if (evalResurfaceRoleId) accessRoleIds.push(evalResurfaceRoleId);
+  const evalResurfaceItem = (await listShopItems(guild.id))
+    .find((shopItem) => shopItem.effectType === EVAL_RESURFACE_EFFECT && shopItem.targetRoleId);
+  if (evalResurfaceItem?.targetRoleId) accessRoleIds.push(evalResurfaceItem.targetRoleId);
 
   return {
     categoryId: islandCategory?.id ?? null,
@@ -444,7 +445,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
     const islandSettings = item.category === "island"
-      ? await resolveIslandVcSettings(interaction.guild!, item.targetRoleId)
+      ? await resolveIslandVcSettings(interaction.guild!)
       : { categoryId: null, accessRoleIds: [] };
     const result = await purchaseAndCreatePrivateVc(
       interaction.guild!,
@@ -709,7 +710,7 @@ async function applyShopPurchase(
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild.members.fetch(interaction.user.id);
     const islandSettings = item.category === "island"
-      ? await resolveIslandVcSettings(interaction.guild, item.targetRoleId)
+      ? await resolveIslandVcSettings(interaction.guild)
       : { categoryId: null, accessRoleIds: [] };
     const result = await purchaseAndCreatePrivateVc(
       interaction.guild,
