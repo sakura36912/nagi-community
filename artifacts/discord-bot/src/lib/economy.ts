@@ -37,6 +37,9 @@ export const DAILY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 // Shop item effect types recognized by the bot.
 export const NICKNAME_CHANGE_EFFECT = "nickname_change";
 export const PRIVATE_VC_EFFECT    = "private_vc";      // permanent (no expiry)
+export const PRIVATE_VC_3H_EFFECT = "private_vc_3h";
+export const PRIVATE_VC_6H_EFFECT = "private_vc_6h";
+export const PRIVATE_VC_9H_EFFECT = "private_vc_9h";
 export const VC_RENAME_EFFECT     = "vc_rename";       // rename existing private VC, no duration
 export const PRIVATE_VC_1D_EFFECT = "private_vc_1d";
 export const PRIVATE_VC_3D_EFFECT = "private_vc_3d";
@@ -52,6 +55,9 @@ export const SHOP_LICENSE_EFFECT   = "shop_license";    // assign squad-specific
 
 // Duration in milliseconds for each timed VC effect type.
 export const TIMED_VC_DURATIONS: Record<string, number> = {
+  [PRIVATE_VC_3H_EFFECT]: 3  * 60 * 60 * 1000,
+  [PRIVATE_VC_6H_EFFECT]: 6  * 60 * 60 * 1000,
+  [PRIVATE_VC_9H_EFFECT]: 9  * 60 * 60 * 1000,
   [PRIVATE_VC_1D_EFFECT]: 1  * 24 * 60 * 60 * 1000,
   [PRIVATE_VC_3D_EFFECT]: 3  * 24 * 60 * 60 * 1000,
   [PRIVATE_VC_1W_EFFECT]: 7  * 24 * 60 * 60 * 1000,
