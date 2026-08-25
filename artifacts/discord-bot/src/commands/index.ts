@@ -82,6 +82,8 @@ import {
   setRewardDayOfMonth,
   setRewardInterval,
   setRoleReward,
+  setMonthlyRoleDebit,
+  clearMonthlyRoleDebit,
   transfer,
   getPrivateVcSessionByChannelId,
   getActivePrivateVcSessionsByGuild,
@@ -3009,6 +3011,59 @@ const debitCommand: Command = {
   },
 };
 
+const monthlyDebitCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("月額引き落とし")
+    .setDescription("指定ロールのメンバーから毎月25日に引き落とす設定（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) =>
+      sub
+        .setName("set")
+        .setDescription("毎月の引き落とし対象ロールと金額を設定")
+        .addRoleOption((opt) => opt.setName("role").setDescription("対象ロール").setRequired(true))
+        .addIntegerOption((opt) =>
+          opt.setName("amount").setDescription("毎月引き落とす金額").setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) => sub.setName("remove").setDescription("毎月の引き落とし設定を解除"))
+    .addSubcommand((sub) => sub.setName("list").setDescription("毎月の引き落とし設定を表示")),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    if (!requireManageGuild(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理者のみ使用できます。", ephemeral: true });
+      return;
+    }
+
+    const sub = interaction.options.getSubcommand();
+    if (sub === "remove") {
+      await clearMonthlyRoleDebit(guildId);
+      await interaction.reply("毎月のロール引き落とし設定を解除しました。");
+      return;
+    }
+
+    const settings = await getGuildSettings(guildId);
+    if (sub === "list") {
+      if (!settings.monthlyDebitRoleId || !settings.monthlyDebitAmount) {
+        await interaction.reply("毎月のロール引き落としは設定されていません。");
+        return;
+      }
+      await interaction.reply({
+        content: `## 月額引き落とし設定\n対象: <@&${settings.monthlyDebitRoleId}>\n金額: **${settings.monthlyDebitAmount.toLocaleString()}${settings.currencyName}**\n実行日: **毎月25日 00:00（日本時間）**`,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    const role = interaction.options.getRole("role", true);
+    const amount = interaction.options.getInteger("amount", true);
+    await setMonthlyRoleDebit(guildId, role.id, amount);
+    await interaction.reply(
+      `<@&${role.id}> の月額引き落としを **${amount.toLocaleString()}${settings.currencyName}** に設定しました。毎月25日00:00（日本時間）に実行します。`,
+    );
+  },
+};
+
 const balanceRankingCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("残高ランキング")
@@ -3092,5 +3147,6 @@ export const commands: Command[] = [
   clearCommand,
   chestCommand,
   debitCommand,
+  monthlyDebitCommand,
   balanceRankingCommand,
 ];

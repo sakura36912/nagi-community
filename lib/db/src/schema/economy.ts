@@ -22,6 +22,11 @@ export const guildSettingsTable = pgTable("guild_settings", {
   rewardDayOfMonth: integer("reward_day_of_month"),
   // When role-based auto-rewards were last distributed for this guild.
   lastRewardAt: timestamp("last_reward_at", { withTimezone: true }),
+  // Monthly debit rule: members with this role are charged this amount on the
+  // 25th of each Japan calendar month.
+  monthlyDebitRoleId: text("monthly_debit_role_id"),
+  monthlyDebitAmount: integer("monthly_debit_amount"),
+  lastMonthlyDebitAt: timestamp("last_monthly_debit_at", { withTimezone: true }),
   // Discord category channel ID where private VCs (vcshop) are created.
   vcCategoryId: text("vc_category_id"),
   // Discord category channel ID where 裏フリールーム VCs (urashop) are created.

@@ -139,6 +139,9 @@ import {
   isDueCalendarDay,
   getJstDateKey,
   markRewardDistributed,
+  isDueMonthlyRoleDebit,
+  markMonthlyRoleDebitProcessed,
+  distributeMonthlyRoleDebit,
   getExcludedUserIds,
   SUB_ACCOUNT_ROLE_NAME,
   seedDefaultShopItems,
@@ -228,6 +231,28 @@ async function runRewardScheduler(): Promise<void> {
   for (const guild of client.guilds.cache.values()) {
     try {
       const settings = await getGuildSettings(guild.id);
+
+      if (isDueMonthlyRoleDebit(settings, now)) {
+        await guild.members.fetch();
+        const memberRoles = new Map<string, string[]>();
+        for (const member of guild.members.cache.values()) {
+          if (member.user.bot) continue;
+          memberRoles.set(member.id, [...member.roles.cache.keys()]);
+        }
+
+        const debit = await distributeMonthlyRoleDebit(
+          guild.id,
+          settings.currencyName,
+          memberRoles,
+          settings.monthlyDebitRoleId!,
+          settings.monthlyDebitAmount!,
+        );
+        await markMonthlyRoleDebitProcessed(guild.id, now);
+        logger.info(
+          `[monthly-debit] ${guild.name}: charged ${debit.totalCharged}${settings.currencyName} ` +
+          `to ${debit.chargedCount} member(s); insufficient balance: ${debit.insufficientCount}.`,
+        );
+      }
 
       // Only calendar-day mode is supported.
       if (settings.rewardDayOfMonth === null || settings.rewardDayOfMonth === undefined) continue;

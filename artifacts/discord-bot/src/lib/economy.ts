@@ -691,6 +691,71 @@ export async function markRewardDistributed(guildId: string, at: Date): Promise<
     .where(eq(guildSettingsTable.guildId, guildId));
 }
 
+export async function setMonthlyRoleDebit(
+  guildId: string,
+  roleId: string,
+  amount: number,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, { monthlyDebitRoleId: roleId, monthlyDebitAmount: amount });
+}
+
+export async function clearMonthlyRoleDebit(guildId: string): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, {
+    monthlyDebitRoleId: null,
+    monthlyDebitAmount: null,
+    lastMonthlyDebitAt: null,
+  });
+}
+
+export function isDueMonthlyRoleDebit(settings: GuildSettings, now: Date): boolean {
+  if (!settings.monthlyDebitRoleId || !settings.monthlyDebitAmount || settings.monthlyDebitAmount <= 0) {
+    return false;
+  }
+  const today = getJstDateParts(now);
+  if (today.day !== 25) return false;
+  if (!settings.lastMonthlyDebitAt) return true;
+  const last = getJstDateParts(settings.lastMonthlyDebitAt);
+  return last.year !== today.year || last.month !== today.month;
+}
+
+export async function markMonthlyRoleDebitProcessed(guildId: string, at: Date): Promise<void> {
+  await db
+    .update(guildSettingsTable)
+    .set({ lastMonthlyDebitAt: at })
+    .where(eq(guildSettingsTable.guildId, guildId));
+}
+
+export async function distributeMonthlyRoleDebit(
+  guildId: string,
+  currencyName: string,
+  members: Map<string, string[]>,
+  roleId: string,
+  amount: number,
+): Promise<{ chargedCount: number; totalCharged: number; insufficientCount: number }> {
+  let chargedCount = 0;
+  let totalCharged = 0;
+  let insufficientCount = 0;
+
+  for (const [userId, roleIds] of members) {
+    if (!roleIds.includes(roleId)) continue;
+    const result = await giveCurrency(
+      guildId,
+      userId,
+      -amount,
+      currencyName,
+      "monthly-role-debit",
+    );
+    if (result.ok) {
+      chargedCount += 1;
+      totalCharged += amount;
+    } else {
+      insufficientCount += 1;
+    }
+  }
+
+  return { chargedCount, totalCharged, insufficientCount };
+}
+
 export const SUB_ACCOUNT_ROLE_NAME = "sub垢";
 
 export function getExcludedUserIds(
