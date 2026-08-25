@@ -294,16 +294,7 @@ async function purchaseAndCreatePrivateVc(
       userLimit: 0,
       ...(parentCategory ? { parent: parentCategory.id } : {}),
       permissionOverwrites: [
-        isIsland
-          ? {
-              id: guild.roles.everyone.id,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.Connect,
-                PermissionFlagsBits.Speak,
-              ],
-            }
-          : { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         {
           id: member.id,
           allow: [
@@ -318,7 +309,11 @@ async function purchaseAndCreatePrivateVc(
           .filter((roleId) => roleId !== guild.roles.everyone.id && roleId !== member.id)
           .map((roleId) => ({
             id: roleId,
-            allow: [PermissionFlagsBits.ViewChannel],
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.Connect,
+              PermissionFlagsBits.Speak,
+            ],
           })),
         // Bot 自身が ViewChannel を持たないとパネルを送信できないため明示追加
         ...(botId ? [{
@@ -1967,17 +1962,19 @@ export function buildVcPanelMessage(
     .setColor(0x5865f2)
     .setDescription(`<@${ownerId}> の${isIsland ? "フリールーム" : "高級船室"}です。\n${expText}${memberLine}`)
     .setFooter({ text: "VCオーナーのみ操作できます" });
-  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(vcPanelId(VC_PANEL_BTN_ADD, channelId, ownerId))
-      .setLabel("メンバーを追加")
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji("👤"),
-    new ButtonBuilder()
-      .setCustomId(vcPanelId(VC_PANEL_BTN_KICK, channelId, ownerId))
-      .setLabel("キック")
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji("👢"),
+  const row1Buttons = [
+    ...(isIsland ? [] : [
+      new ButtonBuilder()
+        .setCustomId(vcPanelId(VC_PANEL_BTN_ADD, channelId, ownerId))
+        .setLabel("メンバーを追加")
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji("👤"),
+      new ButtonBuilder()
+        .setCustomId(vcPanelId(VC_PANEL_BTN_KICK, channelId, ownerId))
+        .setLabel("キック")
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji("👢"),
+    ]),
     new ButtonBuilder()
       .setCustomId(vcPanelId(VC_PANEL_BTN_EXTEND, channelId, ownerId))
       .setLabel("期間延長")
@@ -1988,7 +1985,8 @@ export function buildVcPanelMessage(
       .setLabel("期限確認")
       .setStyle(ButtonStyle.Secondary)
       .setEmoji("📅"),
-  );
+  ];
+  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(...row1Buttons);
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(vcPanelId(VC_PANEL_BTN_RENAME, channelId, ownerId))
