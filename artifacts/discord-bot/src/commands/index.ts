@@ -39,13 +39,11 @@ import {
   VC_EXTEND_1D_EFFECT,
   EVAL_EXTEND_DAYS,
   EVAL_EXTEND_EFFECT,
-  EVAL_EXTEND_2W_EFFECT,
-  EVAL_EXTEND_1M_EFFECT,
   PERM_ROLE_EFFECT,
   EVAL_RESURFACE_EFFECT,
   SHOP_LICENSE_EFFECT,
   extendCommunitySheet,
-  getLatestEvalSheet,
+  hasUsedEvalExtension,
   addShopItem,
   createEvalSheet,
   getEvalSheetSettings,
@@ -427,10 +425,9 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
         return;
       }
     }
-    // ② 評価中ロールを持っている人は1回のみ購入可
-    const currentSheetForExt = await getLatestEvalSheet(interaction.guildId, interaction.user.id);
-    if ((currentSheetForExt?.extensionCount ?? 0) >= 1) {
-      await interaction.editReply("❌ 評価延長券は評価シート1枚につき1回しか購入できません。");
+    // ② サーバー内で一人1回のみ購入可（過去の評価シートも含む）
+    if (await hasUsedEvalExtension(interaction.guildId, interaction.user.id)) {
+      await interaction.editReply("❌ 評価シート延長券は1人1回しか購入できません。");
       return;
     }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);
@@ -676,9 +673,8 @@ async function applyShopPurchase(
         return;
       }
     }
-    const currentSheetForExt = await getLatestEvalSheet(interaction.guildId, interaction.user.id);
-    if ((currentSheetForExt?.extensionCount ?? 0) >= 1) {
-      await interaction.editReply("❌ 評価延長券は評価シート1枚につき1回しか購入できません。");
+    if (await hasUsedEvalExtension(interaction.guildId, interaction.user.id)) {
+      await interaction.editReply("❌ 評価シート延長券は1人1回しか購入できません。");
       return;
     }
     const result = await buyItem(interaction.guildId, interaction.user.id, itemId, settings.currencyName);

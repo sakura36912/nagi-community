@@ -54,6 +54,7 @@ vi.mock("../lib/economy.js", () => ({
   // ── Stub functions used by other handlers (not under test here) ───────────
   extendCommunitySheet:    vi.fn(),
   getLatestEvalSheet:      vi.fn(),
+  hasUsedEvalExtension:    vi.fn(),
   addShopItem:             vi.fn(),
   createEvalSheet:         vi.fn(),
   getEvalSheetSettings:    vi.fn(),

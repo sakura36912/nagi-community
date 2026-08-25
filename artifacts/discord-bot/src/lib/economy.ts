@@ -67,8 +67,6 @@ export const VC_EXTEND_DURATIONS: Record<string, number> = {
 /** Maps eval-extend effect type → number of days to add to endDate. */
 export const EVAL_EXTEND_DAYS: Record<string, number> = {
   [EVAL_EXTEND_EFFECT]:    7,
-  [EVAL_EXTEND_2W_EFFECT]: 14,
-  [EVAL_EXTEND_1M_EFFECT]: 30,
 };
 
 // Inserts the default general shop items for a guild if it has none yet.
@@ -1295,6 +1293,22 @@ export async function getLatestEvalSheet(guildId: string, userId: string): Promi
     .orderBy(desc(communitySheetsTable.createdAt))
     .limit(1);
   return row;
+}
+
+/** Returns whether this member has already used an evaluation-sheet extension. */
+export async function hasUsedEvalExtension(guildId: string, userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: communitySheetsTable.id })
+    .from(communitySheetsTable)
+    .where(
+      and(
+        eq(communitySheetsTable.guildId, guildId),
+        eq(communitySheetsTable.userId, userId),
+        gt(communitySheetsTable.extensionCount, 0),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
 }
 
 export async function deleteEvalSheet(id: number): Promise<void> {
