@@ -149,6 +149,13 @@ export const NICKNAME_MODAL_PREFIX = "shop:nickname-modal:";
 const NICKNAME_MODAL_INPUT_ID = "nickname";
 export const VC_RENAME_MODAL_PREFIX = "shop:vc-rename-modal:";
 const VC_RENAME_MODAL_INPUT_ID = "vc-new-name";
+const VC_PANEL_TITLE = "🔒 高級船室 コントロールパネル";
+const ISLAND_VC_PANEL_TITLE = "フリールームコントロールパネル";
+const LEGACY_VC_PANEL_TITLES = new Set([
+  "🔒 高級船室 コントロールパネル",
+  "🔒 非公開VC コントロールパネル",
+  ISLAND_VC_PANEL_TITLE,
+]);
 
 function buildNicknameModal(itemId: number): ModalBuilder {
   return new ModalBuilder()
@@ -255,6 +262,7 @@ async function purchaseAndCreatePrivateVc(
   durationMs?: number,
   vcCategoryId?: string | null,
   accessRoleIds: string[] = [],
+  isIsland = false,
 ): Promise<{ ok: true; item: ShopItem; channelId: string; expiresAt?: Date } | { ok: false; reason: string }> {
   const me = guild.members.me;
   if (!me?.permissions.has("ManageChannels")) {
@@ -269,7 +277,9 @@ async function purchaseAndCreatePrivateVc(
     const label = durationMs !== undefined
       ? (durationMs <= 24 * 60 * 60 * 1000 ? "1日" : durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月")
       : "";
-    const channelName = label ? `🔒 ${member.displayName}(${label})` : `🔒 ${member.displayName}`;
+    const channelName = label
+      ? `${isIsland ? "" : "🔒 "}${member.displayName}(${label})`
+      : `${isIsland ? "" : "🔒 "}${member.displayName}`;
 
     // Resolve the category from cache or fetch it so discord.js can set parent_id correctly.
     const parentCategory = vcCategoryId
@@ -284,7 +294,16 @@ async function purchaseAndCreatePrivateVc(
       userLimit: 0,
       ...(parentCategory ? { parent: parentCategory.id } : {}),
       permissionOverwrites: [
-        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        isIsland
+          ? {
+              id: guild.roles.everyone.id,
+              allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.Connect,
+                PermissionFlagsBits.Speak,
+              ],
+            }
+          : { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         {
           id: member.id,
           allow: [
@@ -314,7 +333,7 @@ async function purchaseAndCreatePrivateVc(
     });
 
     if (expiresAt) {
-      await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, "vc");
+      await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, isIsland ? "island" : "vc");
 
       // Register the schedule immediately so the pre-expiry warning DM fires
       // even if the user never renames the VC (renaming will upsert this row).
@@ -328,7 +347,7 @@ async function purchaseAndCreatePrivateVc(
 
     // ボイステキストにコントロールパネルを投稿（期限あり・無期限どちらでも）
     // memberIds=[] because the channel was just created — only the owner has access so far.
-    channel.send(buildVcPanelMessage(channel.id, member.id, expiresAt, []))
+    channel.send(buildVcPanelMessage(channel.id, member.id, expiresAt, [], undefined, isIsland))
       .catch((err) => logger.error("[privateVC] Failed to send VC panel to text", err));
 
     return { ok: true, item: result.item, channelId: channel.id, expiresAt };
@@ -455,6 +474,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       vcDuration,
       item.category === "island" ? islandSettings.categoryId : settings.vcCategoryId,
       islandSettings.accessRoleIds,
+      item.category === "island",
     );
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
@@ -592,11 +612,11 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
           const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
           const panelMsg = msgs.find(
             (m) => m.author.id === interaction.client.user?.id
-              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+              && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
           );
           if (panelMsg) {
             const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds));
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds, undefined, session.category === "island"));
           }
         }
       } catch (panelErr) {
@@ -720,6 +740,7 @@ async function applyShopPurchase(
       vcDuration,
       item.category === "island" ? islandSettings.categoryId : settings.vcCategoryId,
       islandSettings.accessRoleIds,
+      item.category === "island",
     );
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
@@ -844,11 +865,11 @@ async function applyShopPurchase(
           const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
           const panelMsg = msgs.find(
             (m) => m.author.id === interaction.client.user?.id
-              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+              && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
           );
           if (panelMsg) {
             const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds));
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds, undefined, session.category === "island"));
           }
         }
       } catch (panelErr) {
@@ -1548,10 +1569,10 @@ const shopCommand: Command = {
           const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
           const panelMsg = msgs.find(
             (m) => m.author.id === interaction.client.user?.id
-              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+              && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
           );
           if (panelMsg) {
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled));
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled, session.category === "island"));
           }
         }
       } catch (err) {
@@ -1594,10 +1615,10 @@ const shopCommand: Command = {
           const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
           const panelMsg = msgs.find(
             (m) => m.author.id === interaction.client.user?.id
-              && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+              && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
           );
           if (panelMsg) {
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled));
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled, session.category === "island"));
           }
         }
       } catch (err) {
@@ -1932,6 +1953,7 @@ export function buildVcPanelMessage(
   expiresAt?: Date,
   memberIds?: string[],
   streamEnabled?: boolean,
+  isIsland = false,
 ) {
   const ts = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
   const expText = ts
@@ -1941,9 +1963,9 @@ export function buildVcPanelMessage(
     ? `\n👥 アクセス中のメンバー: ${memberIds.length > 0 ? memberIds.map((id) => `<@${id}>`).join("、") : "メンバーなし"}`
     : "";
   const embed = new EmbedBuilder()
-    .setTitle("🔒 高級船室 コントロールパネル")
+    .setTitle(isIsland ? ISLAND_VC_PANEL_TITLE : VC_PANEL_TITLE)
     .setColor(0x5865f2)
-    .setDescription(`<@${ownerId}> の高級船室です。\n${expText}${memberLine}`)
+    .setDescription(`<@${ownerId}> の${isIsland ? "フリールーム" : "高級船室"}です。\n${expText}${memberLine}`)
     .setFooter({ text: "VCオーナーのみ操作できます" });
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -2417,11 +2439,11 @@ export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction
       const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
       const panelMsg = msgs.find(
         (m) => m.author.id === interaction.client.user?.id
-          && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+          && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnAdd));
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnAdd, session?.category === "island"));
       }
     }
   } catch (err) {
@@ -2457,11 +2479,11 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
       const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
       const panelMsg = msgs.find(
         (m) => m.author.id === interaction.client.user?.id
-          && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+          && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnKick));
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnKick, session?.category === "island"));
       }
     }
   } catch (err) {
@@ -2507,12 +2529,12 @@ export async function handleVcPanelExtendSel(interaction: StringSelectMenuIntera
       const msgs = await (textCh as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
       const panelMsg = msgs.find(
         (m) => m.author.id === interaction.client.user?.id
-          && m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+          && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
       );
       if (panelMsg) {
         const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
         const streamEnabledOnExtend = isPrivateVcStreamEnabled(textCh as import("discord.js").GuildChannel, ownerId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt, memberIds, streamEnabledOnExtend));
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt, memberIds, streamEnabledOnExtend, session.category === "island"));
       }
     }
   } catch { /* best-effort */ }
@@ -2649,8 +2671,8 @@ export async function handleVcRefreshPanels(interaction: ChatInputCommandInterac
       // 旧タイトル「非公開VC コントロールパネル」も含めてマッチ（移行後に新タイトルへ上書き）
       const isPanel = (m: import("discord.js").Message) =>
         m.author.id === botId && (
-          m.embeds[0]?.title === "🔒 高級船室 コントロールパネル" ||
-          m.embeds[0]?.title === "🔒 非公開VC コントロールパネル"
+          LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "") ||
+          m.embeds[0]?.title === VC_PANEL_TITLE
         );
       const oldMsgs = await textCh.messages.fetch({ limit: 10, after: "0" });
       const recentMsgs = await textCh.messages.fetch({ limit: 50 });
@@ -2658,7 +2680,7 @@ export async function handleVcRefreshPanels(interaction: ChatInputCommandInterac
       if (!panelMsg) { skipped++; continue; }
       const memberIds = getVcAccessMemberIds(textCh, session.userId, interaction.client.user?.id);
       const streamEnabled = isPrivateVcStreamEnabled(textCh, session.userId);
-      await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt, memberIds, streamEnabled));
+      await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt, memberIds, streamEnabled, session.category === "island"));
       updated++;
     } catch (err) {
       logger.warn(`[vc-refresh] Failed to refresh panel for channel ${session.channelId}`, err);
@@ -2691,8 +2713,8 @@ export async function refreshAllVcPanels(discordClient: import("discord.js").Cli
           // 旧タイトル「非公開VC コントロールパネル」も含めてマッチ（移行後に新タイトルへ上書き）
           const isPanel = (m: import("discord.js").Message) =>
             m.author.id === botId && (
-              m.embeds[0]?.title === "🔒 高級船室 コントロールパネル" ||
-              m.embeds[0]?.title === "🔒 非公開VC コントロールパネル"
+              LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "") ||
+              m.embeds[0]?.title === VC_PANEL_TITLE
             );
           // パネルは通常チャンネル作成直後（最古付近）に投稿される。
           // 再投稿されて中間〜末尾にある場合も拾えるよう2パスで検索する。
@@ -2702,7 +2724,7 @@ export async function refreshAllVcPanels(discordClient: import("discord.js").Cli
           if (!panelMsg) { skipped++; continue; }
           const memberIds = getVcAccessMemberIds(textCh, session.userId, discordClient.user?.id);
           const streamEnabled = isPrivateVcStreamEnabled(textCh, session.userId);
-          await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt ?? undefined, memberIds, streamEnabled));
+          await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt ?? undefined, memberIds, streamEnabled, session.category === "island"));
           updated++;
         } catch (err) {
           logger.warn(`[vc-panel-refresh] Failed to refresh panel for channel ${session.channelId}`, err);
@@ -2758,7 +2780,7 @@ export async function handleVcPanelStreamBtn(interaction: ButtonInteraction): Pr
       const panelMsg = msgs.find(
         (m) =>
           m.author.id === interaction.client.user?.id &&
-          m.embeds[0]?.title === "🔒 高級船室 コントロールパネル",
+          (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId).catch(() => null);
@@ -2768,7 +2790,7 @@ export async function handleVcPanelStreamBtn(interaction: ButtonInteraction): Pr
           interaction.client.user?.id,
         );
         await panelMsg.edit(
-          buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, refreshedMemberIds, newState),
+          buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, refreshedMemberIds, newState, session?.category === "island"),
         );
       }
     }
