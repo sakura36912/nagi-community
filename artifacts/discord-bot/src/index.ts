@@ -225,6 +225,8 @@ const client = new Client({
 
 // Checks every minute whether any guild's reward day has arrived and
 // distributes role-based rewards (salary) if so.
+const monthlyDebitRunningGuilds = new Set<string>();
+
 async function runRewardScheduler(): Promise<void> {
   const now = new Date();
 
@@ -233,25 +235,32 @@ async function runRewardScheduler(): Promise<void> {
       const settings = await getGuildSettings(guild.id);
 
       if (isDueMonthlyRoleDebit(settings, now)) {
-        await guild.members.fetch();
-        const memberRoles = new Map<string, string[]>();
-        for (const member of guild.members.cache.values()) {
-          if (member.user.bot) continue;
-          memberRoles.set(member.id, [...member.roles.cache.keys()]);
-        }
+        if (!monthlyDebitRunningGuilds.has(guild.id)) {
+          monthlyDebitRunningGuilds.add(guild.id);
+          try {
+            await guild.members.fetch();
+            const memberRoles = new Map<string, string[]>();
+            for (const member of guild.members.cache.values()) {
+              if (member.user.bot) continue;
+              memberRoles.set(member.id, [...member.roles.cache.keys()]);
+            }
 
-        const debit = await distributeMonthlyRoleDebit(
-          guild.id,
-          settings.currencyName,
-          memberRoles,
-          settings.monthlyDebitRoleId!,
-          settings.monthlyDebitAmount!,
-        );
-        await markMonthlyRoleDebitProcessed(guild.id, now);
-        logger.info(
-          `[monthly-debit] ${guild.name}: charged ${debit.totalCharged}${settings.currencyName} ` +
-          `to ${debit.chargedCount} member(s); insufficient balance: ${debit.insufficientCount}.`,
-        );
+            const debit = await distributeMonthlyRoleDebit(
+              guild.id,
+              settings.currencyName,
+              memberRoles,
+              settings.monthlyDebitRoleId!,
+              settings.monthlyDebitAmount!,
+            );
+            await markMonthlyRoleDebitProcessed(guild.id, now);
+            logger.info(
+              `[monthly-debit] ${guild.name}: charged ${debit.totalCharged}${settings.currencyName} ` +
+              `to ${debit.chargedCount} member(s); insufficient balance: ${debit.insufficientCount}.`,
+            );
+          } finally {
+            monthlyDebitRunningGuilds.delete(guild.id);
+          }
+        }
       }
 
       // Only calendar-day mode is supported.
