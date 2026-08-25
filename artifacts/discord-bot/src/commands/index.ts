@@ -254,6 +254,7 @@ async function purchaseAndCreatePrivateVc(
   currencyName: string,
   durationMs?: number,
   vcCategoryId?: string | null,
+  accessRoleIds: string[] = [],
 ): Promise<{ ok: true; item: ShopItem; channelId: string; expiresAt?: Date } | { ok: false; reason: string }> {
   const me = guild.members.me;
   if (!me?.permissions.has("ManageChannels")) {
@@ -294,6 +295,12 @@ async function purchaseAndCreatePrivateVc(
             PermissionFlagsBits.AttachFiles,
           ],
         },
+        ...accessRoleIds
+          .filter((roleId) => roleId !== guild.roles.everyone.id && roleId !== member.id)
+          .map((roleId) => ({
+            id: roleId,
+            allow: [PermissionFlagsBits.ViewChannel],
+          })),
         // Bot 自身が ViewChannel を持たないとパネルを送信できないため明示追加
         ...(botId ? [{
           id: botId,
@@ -334,6 +341,34 @@ async function purchaseAndCreatePrivateVc(
     }
     return { ok: false, reason: "VCの作成に失敗したため、購入を取り消し、返金しました。" };
   }
+}
+
+const ISLAND_CATEGORY_NAMES = new Set(["オチテモータ島", "🏝️ オチテモータ島"]);
+const ISLAND_VC_ACCESS_ROLE_NAMES = ["追放者", "軍師", "訓練官", "見習い訓練官"];
+
+async function resolveIslandVcSettings(
+  guild: Guild,
+  evalResurfaceRoleId?: string | null,
+): Promise<{ categoryId: string | null; accessRoleIds: string[] }> {
+  const islandCategory = guild.channels.cache.find(
+    (channel) =>
+      channel.type === ChannelType.GuildCategory
+      && ISLAND_CATEGORY_NAMES.has(channel.name),
+  ) ?? (await guild.channels.fetch()).find(
+    (channel) =>
+      channel?.type === ChannelType.GuildCategory
+      && ISLAND_CATEGORY_NAMES.has(channel.name),
+  );
+
+  const accessRoleIds = guild.roles.cache
+    .filter((role) => ISLAND_VC_ACCESS_ROLE_NAMES.includes(role.name))
+    .map((role) => role.id);
+  if (evalResurfaceRoleId) accessRoleIds.push(evalResurfaceRoleId);
+
+  return {
+    categoryId: islandCategory?.id ?? null,
+    accessRoleIds: [...new Set(accessRoleIds)],
+  };
 }
 
 
@@ -408,7 +443,18 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
-    const result = await purchaseAndCreatePrivateVc(interaction.guild!, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
+    const islandSettings = item.category === "island"
+      ? await resolveIslandVcSettings(interaction.guild!, item.targetRoleId)
+      : { categoryId: null, accessRoleIds: [] };
+    const result = await purchaseAndCreatePrivateVc(
+      interaction.guild!,
+      member,
+      itemId,
+      settings.currencyName,
+      vcDuration,
+      item.category === "island" ? islandSettings.categoryId : settings.vcCategoryId,
+      islandSettings.accessRoleIds,
+    );
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
@@ -662,7 +708,18 @@ async function applyShopPurchase(
   const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    const result = await purchaseAndCreatePrivateVc(interaction.guild, member, itemId, settings.currencyName, vcDuration, settings.vcCategoryId);
+    const islandSettings = item.category === "island"
+      ? await resolveIslandVcSettings(interaction.guild, item.targetRoleId)
+      : { categoryId: null, accessRoleIds: [] };
+    const result = await purchaseAndCreatePrivateVc(
+      interaction.guild,
+      member,
+      itemId,
+      settings.currencyName,
+      vcDuration,
+      item.category === "island" ? islandSettings.categoryId : settings.vcCategoryId,
+      islandSettings.accessRoleIds,
+    );
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
