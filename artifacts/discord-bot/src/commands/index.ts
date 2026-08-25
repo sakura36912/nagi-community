@@ -275,7 +275,9 @@ async function purchaseAndCreatePrivateVc(
   try {
     const expiresAt = durationMs !== undefined ? new Date(Date.now() + durationMs) : undefined;
     const label = durationMs !== undefined
-      ? (durationMs <= 24 * 60 * 60 * 1000 ? "1日" : durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月")
+      ? isIsland
+        ? `${durationMs / (60 * 60 * 1000)}時間`
+        : (durationMs <= 24 * 60 * 60 * 1000 ? "1日" : durationMs <= 7 * 24 * 60 * 60 * 1000 ? "1週間" : "1ヶ月")
       : "";
     const channelName = label
       ? `${isIsland ? "" : "🔒 "}${member.displayName}(${label})`
