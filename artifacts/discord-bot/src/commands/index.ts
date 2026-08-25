@@ -39,6 +39,8 @@ import {
   VC_EXTEND_1D_EFFECT,
   EVAL_EXTEND_DAYS,
   EVAL_EXTEND_EFFECT,
+  EVAL_EXTEND_2W_EFFECT,
+  EVAL_EXTEND_1M_EFFECT,
   PERM_ROLE_EFFECT,
   EVAL_RESURFACE_EFFECT,
   SHOP_LICENSE_EFFECT,
@@ -413,6 +415,10 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   }
 
   // Eval-sheet extension券: buy first, then extend the community eval sheet.
+  if (item.effectType === EVAL_EXTEND_2W_EFFECT || item.effectType === EVAL_EXTEND_1M_EFFECT) {
+    await interaction.editReply("❌ 評価シート延長は1週間のみ利用できます。");
+    return;
+  }
   const extendDays = EVAL_EXTEND_DAYS[item.effectType ?? ""];
   if (extendDays !== undefined) {
     // ① 評価中ロールを持っていない人は購入不可
@@ -662,6 +668,10 @@ async function applyShopPurchase(
     return;
   }
 
+  if (item.effectType === EVAL_EXTEND_2W_EFFECT || item.effectType === EVAL_EXTEND_1M_EFFECT) {
+    await interaction.editReply("❌ 評価シート延長は1週間のみ利用できます。");
+    return;
+  }
   const extendDays = EVAL_EXTEND_DAYS[item.effectType ?? ""];
   if (extendDays !== undefined) {
     const sheetSettingsForExt = await getEvalSheetSettings(interaction.guildId);
@@ -1256,8 +1266,6 @@ const COMBINED_EFFECT_CHOICES: EffectChoice[] = [
   { name: "オチテモータ島浮上券",        value: EVAL_RESURFACE_EFFECT    },
   { name: "個人ショップ開業券",          value: SHOP_LICENSE_EFFECT      },
   { name: "評価シート延長（1週間）",      value: EVAL_EXTEND_EFFECT        },
-  { name: "評価シート延長（2週間）",      value: EVAL_EXTEND_2W_EFFECT     },
-  { name: "評価シート延長（1ヶ月）",      value: EVAL_EXTEND_1M_EFFECT     },
   { name: "高級船室（1日）",            value: PRIVATE_VC_1D_EFFECT     },
   { name: "高級船室（3日）",            value: PRIVATE_VC_3D_EFFECT     },
   { name: "高級船室（1週間）",          value: PRIVATE_VC_1W_EFFECT     },
