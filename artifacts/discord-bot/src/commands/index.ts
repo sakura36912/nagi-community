@@ -378,7 +378,7 @@ async function resolveIslandVcSettings(
   const accessRoleIds = guild.roles.cache
     .filter((role) => ISLAND_VC_ACCESS_ROLE_NAMES.includes(role.name))
     .map((role) => role.id);
-  const evalResurfaceItem = (await listShopItems(guild.id))
+  const evalResurfaceItem = (await listShopItems(guild.id, "island"))
     .find((shopItem) => shopItem.effectType === EVAL_RESURFACE_EFFECT && shopItem.targetRoleId);
   if (evalResurfaceItem?.targetRoleId) accessRoleIds.push(evalResurfaceItem.targetRoleId);
 
