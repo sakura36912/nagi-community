@@ -74,17 +74,18 @@ export function buildHubVcPanelMessage(
   streamEnabled: boolean,
   includeStreamControl = true,
 ) {
+  const isBeachTransferPanel = !includeStreamControl;
   const embed = new EmbedBuilder()
-    .setTitle("🚢 船室コントロールパネル")
+    .setTitle(isBeachTransferPanel ? "🏖️ 砂浜コントロールパネル" : "🚢 船室コントロールパネル")
     .setColor(0x5865f2)
     .setDescription(
-      `<@${ownerId}> の船室です.${
+      `<@${ownerId}> の${isBeachTransferPanel ? "砂浜" : "船室"}です.${
         includeStreamControl
           ? `\n📺 画面共有: **${streamEnabled ? "ON ✅" : "OFF 🚫"}**`
           : ""
       }`,
     )
-    .setFooter({ text: "船室オーナーのみ操作できます" });
+    .setFooter({ text: `${isBeachTransferPanel ? "砂浜" : "船室"}オーナーのみ操作できます` });
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()

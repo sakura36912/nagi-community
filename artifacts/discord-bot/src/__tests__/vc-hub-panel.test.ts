@@ -16,6 +16,7 @@ describe("Hub VCインチャットパネル", () => {
 
     expect(row.components).toHaveLength(1);
     expect((row.components[0]!.toJSON() as { label?: string }).label).toBe("VC名変更");
+    expect(message.embeds[0]!.toJSON().title).toBe("🏖️ 砂浜コントロールパネル");
     expect(message.embeds[0]!.toJSON().description).not.toContain("画面共有");
   });
 });
