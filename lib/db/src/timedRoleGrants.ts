@@ -56,3 +56,15 @@ export async function deleteTimedRoleGrantByUser(
       ),
     );
 }
+
+/** 特定ギルドの特定ロールに紐づく期限付き付与レコードを全件削除 */
+export async function deleteTimedRoleGrantsByRole(guildId: string, roleId: string) {
+  await db
+    .delete(timedRoleGrantsTable)
+    .where(
+      and(
+        eq(timedRoleGrantsTable.guildId, guildId),
+        eq(timedRoleGrantsTable.roleId, roleId),
+      ),
+    );
+}

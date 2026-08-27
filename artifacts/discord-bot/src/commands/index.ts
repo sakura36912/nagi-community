@@ -100,7 +100,7 @@ import { getCurrentTavernSeconds, getPendingTavernSeconds, isTavernChannel, onTa
 import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import {
   upsertTimedRoleGrant,
-  deleteTimedRoleGrantByUser,
+  deleteTimedRoleGrantsByRole,
   db,
   vcSessionLogsTable,
 } from "@workspace/db";
@@ -3158,17 +3158,14 @@ const monthlyDebitCommand: Command = {
 const timedRoleCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("期間限定ロール")
-    .setDescription("指定したメンバーへ期限付きでロールを付与します（管理者専用）")
+    .setDescription("指定ロールを持つメンバーから指定期間後にロールを外します（管理者専用）")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
         .setName("付与")
-        .setDescription("指定期間だけロールを付与します")
-        .addUserOption((opt) =>
-          opt.setName("対象").setDescription("ロールを付与するメンバー").setRequired(true),
-        )
+        .setDescription("現在のロール保持者を指定期間後に自動解除します")
         .addRoleOption((opt) =>
-          opt.setName("ロール").setDescription("付与するロール").setRequired(true),
+          opt.setName("ロール").setDescription("期間限定にするロール").setRequired(true),
         )
         .addIntegerOption((opt) =>
           opt.setName("期間").setDescription("付与期間").setRequired(true).setMinValue(1).setMaxValue(8760),
@@ -3187,12 +3184,9 @@ const timedRoleCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("解除")
-        .setDescription("期限を待たずにロールを解除します")
-        .addUserOption((opt) =>
-          opt.setName("対象").setDescription("ロールを解除するメンバー").setRequired(true),
-        )
+        .setDescription("指定ロールの自動解除予約を取り消します")
         .addRoleOption((opt) =>
-          opt.setName("ロール").setDescription("解除するロール").setRequired(true),
+          opt.setName("ロール").setDescription("予約を取り消すロール").setRequired(true),
         ),
     ),
 
@@ -3204,31 +3198,19 @@ const timedRoleCommand: Command = {
     }
 
     const sub = interaction.options.getSubcommand();
-    const targetUser = interaction.options.getUser("対象", true);
     const role = interaction.options.getRole("ロール", true);
-    if (targetUser.bot) {
-      await interaction.reply({ content: "Botを対象にはできません。", ephemeral: true });
-      return;
-    }
     if (role.id === interaction.guild!.roles.everyone.id) {
       await interaction.reply({ content: "Everyoneロールは対象にできません。", ephemeral: true });
       return;
     }
 
-    const member = await interaction.guild!.members.fetch(targetUser.id).catch(() => null);
-    if (!member) {
-      await interaction.reply({ content: "対象メンバーがサーバーに見つかりません。", ephemeral: true });
-      return;
-    }
-
     if (sub === "解除") {
       try {
-        await member.roles.remove(role.id, "管理者による期限付きロール解除");
-        await deleteTimedRoleGrantByUser(guildId, targetUser.id, role.id);
-        await interaction.reply(`✅ <@${targetUser.id}> の <@&${role.id}> を解除しました。`);
+        await deleteTimedRoleGrantsByRole(guildId, role.id);
+        await interaction.reply(`✅ <@&${role.id}> の自動解除予約を取り消しました。`);
       } catch (err) {
-        logger.error(`[timed-role] Failed to remove role guild=${guildId} user=${targetUser.id} role=${role.id}`, err);
-        await interaction.reply({ content: "❌ ロールの解除に失敗しました。Botのロール階層と権限を確認してください。", ephemeral: true });
+        logger.error(`[timed-role] Failed to cancel role expiry guild=${guildId} role=${role.id}`, err);
+        await interaction.reply({ content: "❌ 自動解除予約の取り消しに失敗しました。", ephemeral: true });
       }
       return;
     }
@@ -3237,23 +3219,20 @@ const timedRoleCommand: Command = {
     const unit = interaction.options.getString("単位", true);
     const durationMs = duration * (unit === "days" ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000);
     const expiresAt = new Date(Date.now() + durationMs);
-    const alreadyHadRole = member.roles.cache.has(role.id);
 
     try {
-      await member.roles.add(role.id, `管理者による期限付きロール付与（${duration}${unit === "days" ? "日" : "時間"}）`);
-      await upsertTimedRoleGrant(guildId, targetUser.id, role.id, "admin_timed_role", expiresAt);
+      const members = await interaction.guild!.members.fetch();
+      const holders = members.filter((member) => !member.user.bot && member.roles.cache.has(role.id));
+      for (const member of holders.values()) {
+        await upsertTimedRoleGrant(guildId, member.id, role.id, "admin_timed_role", expiresAt);
+      }
       const expiresTs = Math.floor(expiresAt.getTime() / 1000);
       await interaction.reply(
-        `✅ <@${targetUser.id}> に <@&${role.id}> を付与しました。\n期限: <t:${expiresTs}:F>（<t:${expiresTs}:R>）`,
+        `✅ <@&${role.id}> の保持者 **${holders.size}人**を対象に、自動解除を設定しました。\n期限: <t:${expiresTs}:F>（<t:${expiresTs}:R>）`,
       );
     } catch (err) {
-      if (!alreadyHadRole) {
-        await member.roles.remove(role.id, "期限付きロール登録失敗によるロール復元").catch((removeErr) =>
-          logger.error(`[timed-role] Failed to roll back role guild=${guildId} user=${targetUser.id} role=${role.id}`, removeErr),
-        );
-      }
-      logger.error(`[timed-role] Failed to grant role guild=${guildId} user=${targetUser.id} role=${role.id}`, err);
-      await interaction.reply({ content: "❌ 期限付きロールの設定に失敗しました。Botのロール階層と権限を確認してください。", ephemeral: true });
+      logger.error(`[timed-role] Failed to schedule role expiry guild=${guildId} role=${role.id}`, err);
+      await interaction.reply({ content: "❌ 期限付きロールの設定に失敗しました。", ephemeral: true });
     }
   },
 };
