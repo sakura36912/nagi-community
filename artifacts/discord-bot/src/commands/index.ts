@@ -320,6 +320,7 @@ async function purchaseAndCreatePrivateVc(
               PermissionFlagsBits.ViewChannel,
               PermissionFlagsBits.Connect,
               PermissionFlagsBits.Speak,
+              PermissionFlagsBits.SendMessages,
             ],
           })),
         // Bot 自身が ViewChannel を持たないとパネルを送信できないため明示追加
@@ -2708,12 +2709,25 @@ export async function refreshAllVcPanels(discordClient: import("discord.js").Cli
   for (const guild of discordClient.guilds.cache.values()) {
     try {
       const sessions = await getActivePrivateVcSessionsByGuild(guild.id);
+      const islandSettings = sessions.some((session) => session.category === "island")
+        ? await resolveIslandVcSettings(guild)
+        : null;
       for (const session of sessions) {
         try {
           const ch = guild.channels.cache.get(session.channelId)
             ?? await guild.channels.fetch(session.channelId).catch(() => null);
           if (!ch || !("messages" in ch)) { skipped++; continue; }
           const textCh = ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel;
+          if (session.category === "island" && islandSettings) {
+            for (const roleId of islandSettings.accessRoleIds) {
+              await textCh.permissionOverwrites.edit(roleId, {
+                ViewChannel: true,
+                Connect: true,
+                Speak: true,
+                SendMessages: true,
+              });
+            }
+          }
           const botId = discordClient.user?.id;
           // 旧タイトル「非公開VC コントロールパネル」も含めてマッチ（移行後に新タイトルへ上書き）
           const isPanel = (m: import("discord.js").Message) =>
