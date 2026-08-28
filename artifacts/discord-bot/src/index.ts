@@ -1727,14 +1727,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           );
           const hasRestrictedRole = !isExempt && (hasIslandRole || hasExpelledRole);
           const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow"]);
-          const allowedForExpelled = new Set(["送金", "残高確認"]);
+          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow"]);
           const allowedCommands = hasIslandRole && !hasExpelledRole
             ? allowedForIsland
             : allowedForExpelled;
           if (hasRestrictedRole && !allowedCommands.has(interaction.commandName)) {
             const allowedText = hasIslandRole && !hasExpelledRole
               ? "`/送金`、`/残高確認`、`/slot play`、`/blackjack`、`/baccarat`、`/highlow`"
-              : "`/送金` と `/残高確認`";
+              : "`/送金`、`/残高確認`、`/slot`、`/blackjack`、`/highlow`";
             await interaction.reply({ content: `このロールでは ${allowedText} のみ使用できます。`, ephemeral: true });
             return;
           }
