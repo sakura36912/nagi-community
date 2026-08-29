@@ -37,6 +37,7 @@ export const SHIFT_LIST_NAV_PREFIX   = "shift:list:nav:";   // shift:list:nav:{w
 
 /** 選択肢として表示する時刻一覧 */
 const SHIFT_TIME_OPTIONS = ["21:00", "22:00", "23:00"];
+const GATEKEEPER_ROLE_NAME = "守門卿";
 
 // ─── In-memory submit sessions ────────────────────────────────────────────────
 
@@ -61,6 +62,13 @@ function cleanExpiredSessions(): void {
   for (const [k, v] of submitSessions) {
     if (v.expiresAt < now) submitSessions.delete(k);
   }
+}
+
+async function hasGatekeeperRole(interaction: ChatInputCommandInteraction | ButtonInteraction): Promise<boolean> {
+  if (!interaction.guild) return false;
+  const member = interaction.guild.members.cache.get(interaction.user.id)
+    ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  return member?.roles.cache.some((role) => role.name === GATEKEEPER_ROLE_NAME) ?? false;
 }
 
 // ─── Date / time helpers ──────────────────────────────────────────────────────
@@ -677,21 +685,12 @@ export const shiftCommand: Command = {
 
     // ── /shift list ───────────────────────────────────────────────────────────
     if (sub === "list") {
-      // ロール制限チェック
-      const listSettings = await getShiftSettings(guildId);
-      const listAllowedRoles = listSettings?.listRoleIds ?? [];
-      if (listAllowedRoles.length > 0 && !isAdmin) {
-        const memberRoles = interaction.member && "roles" in interaction.member
-          ? (interaction.member.roles as { cache: Map<string, unknown> }).cache
-          : null;
-        const hasListRole = memberRoles ? listAllowedRoles.some((id: string) => memberRoles.has(id)) : false;
-        if (!hasListRole) {
-          await interaction.reply({
-            content: "❌ このコマンドは指定されたロールのメンバーのみ使用できます。",
-            ephemeral: true,
-          });
-          return;
-        }
+      if (!(await hasGatekeeperRole(interaction))) {
+        await interaction.reply({
+          content: "❌ `/shift list` は守門卿ロールのメンバーのみ使用できます。",
+          ephemeral: true,
+        });
+        return;
       }
 
       await interaction.deferReply();
@@ -740,8 +739,8 @@ export const shiftCommand: Command = {
 
     // ── /shift panel ──────────────────────────────────────────────────────────
     if (sub === "panel") {
-      if (!isAdmin) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+      if (!(await hasGatekeeperRole(interaction))) {
+        await interaction.reply({ content: "❌ `/shift panel` は守門卿ロールのメンバーのみ使用できます。", ephemeral: true });
         return;
       }
       if (!interaction.channel?.isTextBased()) {
@@ -1119,6 +1118,13 @@ export async function handleShiftListNav(interaction: ButtonInteraction): Promis
   const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+  if (!(await hasGatekeeperRole(interaction))) {
+    await interaction.reply({
+      content: "❌ シフト一覧の操作は守門卿ロールのメンバーのみ可能です。",
+      ephemeral: true,
+    });
     return;
   }
 
