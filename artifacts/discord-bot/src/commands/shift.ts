@@ -64,7 +64,10 @@ function cleanExpiredSessions(): void {
   }
 }
 
-async function hasGatekeeperRole(interaction: ChatInputCommandInteraction | ButtonInteraction): Promise<boolean> {
+async function hasGatekeeperOrAdmin(
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
+): Promise<boolean> {
+  if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return true;
   if (!interaction.guild) return false;
   const member = interaction.guild.members.cache.get(interaction.user.id)
     ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
@@ -685,9 +688,9 @@ export const shiftCommand: Command = {
 
     // ── /shift list ───────────────────────────────────────────────────────────
     if (sub === "list") {
-      if (!(await hasGatekeeperRole(interaction))) {
+      if (!(await hasGatekeeperOrAdmin(interaction))) {
         await interaction.reply({
-          content: "❌ `/shift list` は守門卿ロールのメンバーのみ使用できます。",
+          content: "❌ `/shift list` は守門卿ロールまたは管理者のみ使用できます。",
           ephemeral: true,
         });
         return;
@@ -739,8 +742,8 @@ export const shiftCommand: Command = {
 
     // ── /shift panel ──────────────────────────────────────────────────────────
     if (sub === "panel") {
-      if (!(await hasGatekeeperRole(interaction))) {
-        await interaction.reply({ content: "❌ `/shift panel` は守門卿ロールのメンバーのみ使用できます。", ephemeral: true });
+      if (!(await hasGatekeeperOrAdmin(interaction))) {
+        await interaction.reply({ content: "❌ `/shift panel` は守門卿ロールまたは管理者のみ使用できます。", ephemeral: true });
         return;
       }
       if (!interaction.channel?.isTextBased()) {
@@ -1120,9 +1123,9 @@ export async function handleShiftListNav(interaction: ButtonInteraction): Promis
     await interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
     return;
   }
-  if (!(await hasGatekeeperRole(interaction))) {
+  if (!(await hasGatekeeperOrAdmin(interaction))) {
     await interaction.reply({
-      content: "❌ シフト一覧の操作は守門卿ロールのメンバーのみ可能です。",
+      content: "❌ シフト一覧の操作は守門卿ロールまたは管理者のみ可能です。",
       ephemeral: true,
     });
     return;
