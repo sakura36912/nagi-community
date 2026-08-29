@@ -10,7 +10,8 @@
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.ts",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.ts",
-    "migrate:vc-reward-session-key": "pnpm tsx migrate-vc-reward-session-key.ts"
+    "migrate:vc-reward-session-key": "pnpm tsx migrate-vc-reward-session-key.ts",
+    "migrate:rejoin-log-role-history": "pnpm --filter @workspace/discord-bot exec tsx ../../lib/db/migrate-rejoin-log-role-history.ts"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

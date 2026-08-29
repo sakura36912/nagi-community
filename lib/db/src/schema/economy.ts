@@ -4,6 +4,7 @@ import {
   integer,
   serial,
   timestamp,
+  boolean,
   primaryKey,
   unique,
 } from "drizzle-orm/pg-core";
@@ -95,6 +96,11 @@ export const memberJoinHistoryTable = pgTable("member_join_history", {
   userId:   text("user_id").notNull(),
   joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   leftAt:   timestamp("left_at",   { withTimezone: true }),
+  // Nullable for legacy rows created before exit-time role tracking was added.
+  leftWithWaitingRole:    boolean("left_with_waiting_role"),
+  leftWithPostIslandRole: boolean("left_with_post_island_role"),
+  // JSON array of role names captured at the time of exit.
+  leftRoleSnapshot: text("left_role_snapshot"),
 });
 export type MemberJoinHistory = typeof memberJoinHistoryTable.$inferSelect;
 

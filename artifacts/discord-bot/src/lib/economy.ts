@@ -285,26 +285,116 @@ export async function recordMemberJoin(guildId: string, userId: string): Promise
   await db.insert(memberJoinHistoryTable).values({ guildId, userId });
 }
 
-/** 最新の未退出レコードに left_at をセットする。 */
-export async function recordMemberLeave(guildId: string, userId: string): Promise<void> {
-  await db.execute(
+export interface MemberLeaveRoleSnapshot {
+  hasWaitingRole: boolean;
+  hasPostIslandRole: boolean;
+  roleNames: string[];
+}
+
+/** 最新の未退出レコードに退出時刻とロール状態をセットする。 */
+export async function recordMemberLeave(
+  guildId: string,
+  userId: string,
+  snapshot: MemberLeaveRoleSnapshot,
+): Promise<void> {
+  const roleSnapshot = JSON.stringify(snapshot.roleNames);
+  const updated = await db.execute(
     sql`UPDATE member_join_history
-        SET left_at = now()
+        SET left_at = now(),
+            left_with_waiting_role = ${snapshot.hasWaitingRole},
+            left_with_post_island_role = ${snapshot.hasPostIslandRole},
+            left_role_snapshot = ${roleSnapshot}
         WHERE id = (
           SELECT id FROM member_join_history
           WHERE guild_id = ${guildId} AND user_id = ${userId} AND left_at IS NULL
           ORDER BY joined_at DESC LIMIT 1
-        )`,
+        )
+        RETURNING id`,
   );
+
+  // If the bot started after a member had already joined, there may be no
+  // open join row. Preserve this departure so the current exit is still
+  // counted and future logs have a persistent baseline.
+  if (updated.rows.length === 0) {
+    await db.execute(
+      sql`INSERT INTO member_join_history
+          (guild_id, user_id, joined_at, left_at,
+           left_with_waiting_role, left_with_post_island_role, left_role_snapshot)
+          VALUES (
+            ${guildId}, ${userId}, now(), now(),
+            ${snapshot.hasWaitingRole}, ${snapshot.hasPostIslandRole}, ${roleSnapshot}
+          )`,
+    );
+  }
 }
 
-/** 過去の退出済み参加回数（＝出戻り回数）を返す。 */
+export interface RejoinLogStats {
+  waitingExitCount: number;
+  postIslandExitCount: number;
+  latestPostIslandRoles: string[];
+}
+
+/** 今回の退出を含むロール別退出回数と最新ロール状態を返す。 */
+export async function getRejoinLogStats(
+  guildId: string,
+  userId: string,
+): Promise<RejoinLogStats> {
+  const result = await db.execute(
+    sql`SELECT
+          COUNT(*) FILTER (
+            WHERE left_at IS NOT NULL AND left_with_waiting_role = true
+          )::int AS waiting_exit_count,
+          COUNT(*) FILTER (
+            WHERE left_at IS NOT NULL AND left_with_post_island_role = true
+          )::int AS post_island_exit_count,
+          (
+            SELECT left_role_snapshot
+            FROM member_join_history
+            WHERE guild_id = ${guildId}
+              AND user_id = ${userId}
+              AND left_at IS NOT NULL
+              AND left_with_post_island_role = true
+              AND left_role_snapshot IS NOT NULL
+            ORDER BY left_at DESC
+            LIMIT 1
+          ) AS latest_post_island_roles
+        FROM member_join_history
+        WHERE guild_id = ${guildId} AND user_id = ${userId}`,
+  );
+  const row = result.rows[0] as {
+    waiting_exit_count: number | string | null;
+    post_island_exit_count: number | string | null;
+    latest_post_island_roles: string | null;
+  } | undefined;
+
+  let latestPostIslandRoles: string[] = [];
+  if (row?.latest_post_island_roles) {
+    try {
+      const parsed: unknown = JSON.parse(row.latest_post_island_roles);
+      if (Array.isArray(parsed)) {
+        latestPostIslandRoles = parsed.filter(
+          (name): name is string => typeof name === "string" && name.length > 0,
+        );
+      }
+    } catch {
+      // Treat malformed legacy data as an unavailable snapshot.
+    }
+  }
+
+  return {
+    waitingExitCount: Number(row?.waiting_exit_count ?? 0),
+    postIslandExitCount: Number(row?.post_island_exit_count ?? 0),
+    latestPostIslandRoles,
+  };
+}
+
+/** 退出済み参加履歴の総数を返す。 */
 export async function countPastJoins(guildId: string, userId: string): Promise<number> {
   const result = await db.execute(
     sql`SELECT COUNT(*)::int AS cnt FROM member_join_history
         WHERE guild_id = ${guildId} AND user_id = ${userId} AND left_at IS NOT NULL`,
   );
-  return Number((result.rows[0] as { cnt: number }).cnt);
+  return Number((result.rows[0] as { cnt: number | string } | undefined)?.cnt ?? 0);
 }
 
 export async function setBanLogChannelId(
