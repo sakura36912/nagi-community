@@ -1,4 +1,12 @@
-import { pgTable, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
+import {
+  integer,
+  pgTable,
+  primaryKey,
+  serial,
+  text,
+  timestamp,
+  unique,
+} from "drizzle-orm/pg-core";
 
 /** ショップアイテム購入で付与された期限付きロールを管理するテーブル */
 export const timedRoleGrantsTable = pgTable(
@@ -17,3 +25,21 @@ export const timedRoleGrantsTable = pgTable(
 );
 
 export type TimedRoleGrant = typeof timedRoleGrantsTable.$inferSelect;
+
+/** 管理者が設定した、ロール付与時点から始まる自動解除期間 */
+export const timedRoleConfigsTable = pgTable(
+  "timed_role_configs",
+  {
+    guildId: text("guild_id").notNull(),
+    roleId: text("role_id").notNull(),
+    durationSeconds: integer("duration_seconds").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [primaryKey({ columns: [t.guildId, t.roleId] })],
+);
+
+export type TimedRoleConfig = typeof timedRoleConfigsTable.$inferSelect;

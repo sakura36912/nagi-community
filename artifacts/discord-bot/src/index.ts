@@ -163,7 +163,21 @@ import {
   findWallet,
 } from "./lib/economy";
 import { buildDepartureRoleSnapshot, buildRejoinLogText } from "./lib/rejoinLog";
-import { getEvalSheetConfigsForRoles, getExpiredTimedRoleGrants, deleteTimedRoleGrant, pool, checkSchemaDrift, baccaratSessionsTable, stickyMessagesTable, db } from "@workspace/db";
+import {
+  getEvalSheetConfigsForRoles,
+  getExpiredTimedRoleGrants,
+  deleteTimedRoleGrant,
+  pool,
+  checkSchemaDrift,
+  baccaratSessionsTable,
+  stickyMessagesTable,
+  db,
+} from "@workspace/db";
+import {
+  consumeTimedRoleGrantFromPurchase,
+  scheduleConfiguredTimedRoles,
+  scheduleConfiguredTimedRolesIfMissing,
+} from "./lib/timedRoleAssignments";
 import { lt } from "drizzle-orm";
 
 import { appendFileSync } from "fs";
@@ -347,6 +361,7 @@ async function runTimedRoleExpiryScheduler(): Promise<void> {
   const now = new Date();
   const expired = await getExpiredTimedRoleGrants(now);
   for (const grant of expired) {
+    let shouldDeleteGrant = false;
     try {
       const guild = client.guilds.cache.get(grant.guildId);
       if (guild) {
@@ -355,14 +370,20 @@ async function runTimedRoleExpiryScheduler(): Promise<void> {
         if (member) {
           await member.roles.remove(grant.roleId, "期限付きロール付与の期限切れ");
           logger.info(`[role-expiry] Removed role ${grant.roleId} from ${grant.userId} in ${grant.guildId}`);
+          shouldDeleteGrant = true;
+        } else {
+          // The member is no longer in the guild, so there is nothing left to remove.
+          shouldDeleteGrant = true;
         }
       }
     } catch (err) {
       logger.error(`[role-expiry] Failed to remove role ${grant.roleId} from ${grant.userId}`, err);
     }
-    await deleteTimedRoleGrant(grant.id).catch((err) =>
-      logger.error(`[role-expiry] Failed to delete grant record ${grant.id}`, err),
-    );
+    if (shouldDeleteGrant) {
+      await deleteTimedRoleGrant(grant.id).catch((err) =>
+        logger.error(`[role-expiry] Failed to delete grant record ${grant.id}`, err),
+      );
+    }
   }
 }
 
@@ -1343,6 +1364,28 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       logger.warn(
         `[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} — oldMember is partial and no role snapshot exists; skipping to avoid spurious sheet creation`,
       );
+      if (!newMember.user.bot) {
+        const currentRoleIds = [...newMember.roles.cache.keys()].filter(
+          (roleId) => !consumeTimedRoleGrantFromPurchase(guildId, newMember.id, roleId),
+        );
+        try {
+          const scheduledCount = await scheduleConfiguredTimedRolesIfMissing(
+            guildId,
+            newMember.id,
+            currentRoleIds,
+          );
+          if (scheduledCount > 0) {
+            logger.info(
+              `[timed-role] Recovered ${scheduledCount} missing role expiry record(s) from partial update for user=${newMember.id} guild=${guildId}`,
+            );
+          }
+        } catch (err) {
+          logger.error(
+            `[timed-role] Failed to recover role expiry from partial update for user=${newMember.id} guild=${guildId}`,
+            err,
+          );
+        }
+      }
       // 次回のイベントで正確な差分が取れるよう現在のロールを記録しておく
       memberRoleSnapshots.set(snapshotKey, new Set(newMember.roles.cache.keys()));
       return;
@@ -1379,6 +1422,30 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     logAdviceRoleGranted(newMember.guild, newMember.id, adviceRoleId).catch((err) =>
       logger.warn(`[advice-log] Role grant notification failed for ${newMember.id}`, err),
     );
+  }
+
+  // 管理者が期間設定したロールは、実際に付与された時点から個別期限を開始する。
+  if (addedRoleIds.length > 0 && !newMember.user.bot) {
+    try {
+      const configuredRoleIds = addedRoleIds.filter(
+        (roleId) => !consumeTimedRoleGrantFromPurchase(guildId, newMember.id, roleId),
+      );
+      const scheduledCount = await scheduleConfiguredTimedRoles(
+        guildId,
+        newMember.id,
+        configuredRoleIds,
+      );
+      if (scheduledCount > 0) {
+        logger.info(
+          `[timed-role] Scheduled ${scheduledCount} role expiry record(s) for user=${newMember.id} guild=${guildId}`,
+        );
+      }
+    } catch (err) {
+      logger.error(
+        `[timed-role] Failed to schedule newly granted role(s) for user=${newMember.id} guild=${guildId}`,
+        err,
+      );
+    }
   }
 
   if (addedRoleIds.length === 0) return;

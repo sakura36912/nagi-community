@@ -97,10 +97,16 @@ import {
 } from "../lib/economy";
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds, getChestBonusOpens, consumeChestBonusOpen, addChestBonusOpens } from "../lib/vcReward";
 import { getCurrentTavernSeconds, getPendingTavernSeconds, isTavernChannel, onTavernJoin, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
+import {
+  clearTimedRoleGrantFromPurchase,
+  markTimedRoleGrantFromPurchase,
+} from "../lib/timedRoleAssignments";
 import { setChestTavernChannelNames, setChestLogChannelId } from "../lib/economy";
 import {
+  ADMIN_TIMED_ROLE_EFFECT,
+  deleteTimedRoleConfigAndGrants,
   upsertTimedRoleGrant,
-  deleteTimedRoleGrantsByRole,
+  upsertTimedRoleConfig,
   db,
   vcSessionLogsTable,
 } from "@workspace/db";
@@ -564,12 +570,14 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       try {
         const member = await interaction.guild!.members.fetch(interaction.user.id);
         markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
+        markTimedRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await member.roles.add(item.targetRoleId);
         const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         await upsertTimedRoleGrant(interaction.guildId, interaction.user.id, item.targetRoleId, EVAL_RESURFACE_EFFECT, expiresAt);
         const expTs = Math.floor(expiresAt.getTime() / 1000);
         await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。（<t:${expTs}:F> に自動解除）`);
       } catch {
+        clearTimedRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await refundPurchase(interaction.guildId, interaction.user.id, result.item);
         await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
       }
@@ -817,12 +825,14 @@ async function applyShopPurchase(
       try {
         const member = await interaction.guild.members.fetch(interaction.user.id);
         markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
+        markTimedRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await member.roles.add(item.targetRoleId);
         const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         await upsertTimedRoleGrant(interaction.guildId, interaction.user.id, item.targetRoleId, EVAL_RESURFACE_EFFECT, expiresAt);
         const expTs = Math.floor(expiresAt.getTime() / 1000);
         await interaction.editReply(`✅ **${result.item.name}**を購入しました！ロール <@&${item.targetRoleId}> が付与されました。（<t:${expTs}:F> に自動解除）`);
       } catch {
+        clearTimedRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
         await refundPurchase(interaction.guildId, interaction.user.id, result.item);
         await interaction.editReply("❌ ロールの付与に失敗しました。購入を取り消し、返金しました。");
       }
@@ -3220,8 +3230,8 @@ const timedRoleCommand: Command = {
 
     if (sub === "解除") {
       try {
-        await deleteTimedRoleGrantsByRole(guildId, role.id);
-        await interaction.reply(`✅ <@&${role.id}> の自動解除予約を取り消しました。`);
+        await deleteTimedRoleConfigAndGrants(guildId, role.id);
+        await interaction.reply(`✅ <@&${role.id}> の自動解除設定と未実行の予約を取り消しました。`);
       } catch (err) {
         logger.error(`[timed-role] Failed to cancel role expiry guild=${guildId} role=${role.id}`, err);
         await interaction.reply({ content: "❌ 自動解除予約の取り消しに失敗しました。", ephemeral: true });
@@ -3231,18 +3241,30 @@ const timedRoleCommand: Command = {
 
     const duration = interaction.options.getInteger("期間", true);
     const unit = interaction.options.getString("単位", true);
-    const durationMs = duration * (unit === "days" ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000);
-    const expiresAt = new Date(Date.now() + durationMs);
+    const durationSeconds = duration * (unit === "days" ? 24 * 60 * 60 : 60 * 60);
+    const configuredAt = new Date();
+    const expiresAt = new Date(configuredAt.getTime() + durationSeconds * 1000);
 
     try {
+      await upsertTimedRoleConfig(guildId, role.id, durationSeconds);
       const members = await interaction.guild!.members.fetch();
       const holders = members.filter((member) => !member.user.bot && member.roles.cache.has(role.id));
-      for (const member of holders.values()) {
-        await upsertTimedRoleGrant(guildId, member.id, role.id, "admin_timed_role", expiresAt);
-      }
+      await Promise.all(
+        [...holders.values()].map((member) =>
+          upsertTimedRoleGrant(
+            guildId,
+            member.id,
+            role.id,
+            ADMIN_TIMED_ROLE_EFFECT,
+            expiresAt,
+          ),
+        ),
+      );
       const expiresTs = Math.floor(expiresAt.getTime() / 1000);
       await interaction.reply(
-        `✅ <@&${role.id}> の保持者 **${holders.size}人**を対象に、自動解除を設定しました。\n期限: <t:${expiresTs}:F>（<t:${expiresTs}:R>）`,
+        `✅ <@&${role.id}> の自動解除期間を設定しました。\n`
+        + `現在の保持者 **${holders.size}人**の期限: <t:${expiresTs}:F>（<t:${expiresTs}:R>）\n`
+        + "今後このロールが付与されたメンバーは、付与時点から同じ期間後に自動解除されます。",
       );
     } catch (err) {
       logger.error(`[timed-role] Failed to schedule role expiry guild=${guildId} role=${role.id}`, err);
