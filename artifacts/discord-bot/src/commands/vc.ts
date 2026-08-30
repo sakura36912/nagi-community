@@ -15,6 +15,7 @@ import {
   ModalBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  SlashCommandSubcommandBuilder,
   TextInputBuilder,
   TextInputStyle,
   type ButtonInteraction,
@@ -212,6 +213,56 @@ export async function handleHubStreamBtn(interaction: ButtonInteraction): Promis
 
 // ─── /vc command ────────────────────────────────────────────────────────────
 
+function addHubRegistrationOptions(sub: SlashCommandSubcommandBuilder) {
+  return sub
+    .addChannelOption((opt) =>
+      opt
+        .setName("channel")
+        .setDescription("トリガーにするVCチャンネル")
+        .addChannelTypes(ChannelType.GuildVoice)
+        .setRequired(true),
+    )
+    .addChannelOption((opt) =>
+      opt
+        .setName("category")
+        .setDescription("生成VCを置くカテゴリ（省略するとトリガーと同じカテゴリ）")
+        .addChannelTypes(ChannelType.GuildCategory)
+        .setRequired(false),
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName("name_template")
+        .setDescription(
+          "生成VCの名前テンプレート。{user} がメンバー名に置換されます（例: {user}のVC）",
+        )
+        .setMaxLength(90)
+        .setRequired(false),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("user_limit")
+        .setDescription("生成VCの人数制限（1〜99。省略すると制限なし）")
+        .setMinValue(1)
+        .setMaxValue(99)
+        .setRequired(false),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("salary_rate")
+        .setDescription("この Hub の生成VCでの時給（コイン/時間）。省略すると分給なし")
+        .setMinValue(1)
+        .setRequired(false),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("salary_min_minutes")
+        .setDescription("分給発生の最低滞在時間（分、デフォルト: 1）")
+        .setMinValue(1)
+        .setMaxValue(1440)
+        .setRequired(false),
+    );
+}
+
 export const vcCommand = {
   data: new SlashCommandBuilder()
     .setName("vc")
@@ -240,58 +291,38 @@ export const vcCommand = {
     )
     // ── hub-add ───────────────────────────────────────────────────────────
     .addSubcommand((sub) =>
-      sub
-        .setName("hub-add")
-        .setDescription(
-          "入ると自動でVCを作成・転送するトリガーチャンネルを登録します",
+      addHubRegistrationOptions(
+        sub
+          .setName("hub-add")
+          .setDescription("入ると自動でVCを作成・転送するトリガーチャンネルを登録します"),
+      ),
+    )
+    // ── hub add/remove/list (nested form) ────────────────────────────────
+    .addSubcommandGroup((group) =>
+      group
+        .setName("hub")
+        .setDescription("Hubチャンネルを管理します")
+        .addSubcommand((sub) =>
+          addHubRegistrationOptions(
+            sub
+              .setName("add")
+              .setDescription("入ると自動でVCを作成・転送するトリガーチャンネルを登録します"),
+          ),
         )
-        .addChannelOption((opt) =>
-          opt
-            .setName("channel")
-            .setDescription("トリガーにするVCチャンネル")
-            .addChannelTypes(ChannelType.GuildVoice)
-            .setRequired(true),
+        .addSubcommand((sub) =>
+          sub
+            .setName("remove")
+            .setDescription("Hubチャンネル登録を解除します")
+            .addChannelOption((opt) =>
+              opt
+                .setName("channel")
+                .setDescription("解除するVCチャンネル")
+                .addChannelTypes(ChannelType.GuildVoice)
+                .setRequired(true),
+            ),
         )
-        .addChannelOption((opt) =>
-          opt
-            .setName("category")
-            .setDescription(
-              "生成VCを置くカテゴリ（省略するとトリガーと同じカテゴリ）",
-            )
-            .addChannelTypes(ChannelType.GuildCategory)
-            .setRequired(false),
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName("name_template")
-            .setDescription(
-              "生成VCの名前テンプレート。{user} がメンバー名に置換されます（例: {user}のVC）",
-            )
-            .setMaxLength(90)
-            .setRequired(false),
-        )
-        .addIntegerOption((opt) =>
-          opt
-            .setName("user_limit")
-            .setDescription("生成VCの人数制限（1〜99。省略すると制限なし）")
-            .setMinValue(1)
-            .setMaxValue(99)
-            .setRequired(false),
-        )
-        .addIntegerOption((opt) =>
-          opt
-            .setName("salary_rate")
-            .setDescription("この Hub の生成VCでの時給（コイン/時間）。省略すると分給なし")
-            .setMinValue(1)
-            .setRequired(false),
-        )
-        .addIntegerOption((opt) =>
-          opt
-            .setName("salary_min_minutes")
-            .setDescription("分給発生の最低滞在時間（分、デフォルト: 1）")
-            .setMinValue(1)
-            .setMaxValue(1440)
-            .setRequired(false),
+        .addSubcommand((sub) =>
+          sub.setName("list").setDescription("登録済みのHubチャンネル一覧を表示します"),
         ),
     )
     // ── hub-remove ────────────────────────────────────────────────────────
@@ -361,6 +392,11 @@ export const vcCommand = {
 
     const group = interaction.options.getSubcommandGroup(false);
     const sub   = interaction.options.getSubcommand();
+    const hubSub = group === "hub"
+      ? sub
+      : sub.startsWith("hub-")
+        ? sub.slice("hub-".length)
+        : null;
 
     // ── rename ────────────────────────────────────────────────────────────
     if (sub === "rename") {
@@ -444,7 +480,7 @@ export const vcCommand = {
     }
 
     // ── hub-add ───────────────────────────────────────────────────────────
-    if (sub === "hub-add") {
+    if (hubSub === "add") {
       const channel         = interaction.options.getChannel("channel", true);
       const categoryOpt     = interaction.options.getChannel("category");
       const templateOpt     = interaction.options.getString("name_template");
@@ -481,7 +517,7 @@ export const vcCommand = {
     }
 
     // ── hub-remove ────────────────────────────────────────────────────────
-    if (sub === "hub-remove") {
+    if (hubSub === "remove") {
       const channel = interaction.options.getChannel("channel", true);
       const removed = await removeHubChannel(interaction.guildId, channel.id);
       if (!removed) {
@@ -502,12 +538,12 @@ export const vcCommand = {
     // (handled in src/index.ts before execute() to avoid circular imports)
 
     // ── hub-list ──────────────────────────────────────────────────────────
-    if (sub === "hub-list") {
+    if (hubSub === "list") {
       const hubs = await getHubChannels(interaction.guildId);
       if (hubs.length === 0) {
         await interaction.reply({
           content:
-            "Hub チャンネルはまだ登録されていません。`/vc hub-add` で追加できます。",
+            "Hub チャンネルはまだ登録されていません。`/vc hub add` で追加できます。",
           ephemeral: true,
         });
         return;
