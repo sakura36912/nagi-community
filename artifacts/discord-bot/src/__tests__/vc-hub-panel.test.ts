@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildHubVcPanelMessage, vcCommand } from "../commands/vc.js";
+import { shiftCommand } from "../commands/shift.js";
 
 describe("Hub VCインチャットパネル", () => {
   it("通常のHubでは画面共有コントロールを表示する", () => {
@@ -30,5 +31,12 @@ describe("Hub VCインチャットパネル", () => {
       expect.arrayContaining(["add", "remove", "list"]),
     );
     expect(definition.options?.some((option) => option.name === "hub-add")).toBe(true);
+  });
+
+  it("shiftコマンドをDiscordの候補に表示する", () => {
+    const definition = shiftCommand.data.toJSON() as {
+      default_member_permissions?: string | null;
+    };
+    expect(definition.default_member_permissions).toBe("0");
   });
 });

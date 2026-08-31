@@ -489,6 +489,9 @@ export const shiftCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("shift")
     .setDescription("シフト管理")
+    // Discord側のコマンド候補には表示し、list/panel は実行時に
+    // 守門卿または管理者だけを許可する。
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("remove")
