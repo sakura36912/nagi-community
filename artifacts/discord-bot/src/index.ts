@@ -51,6 +51,7 @@ import {
   VC_PANEL_SEL_ADD,
   VC_PANEL_SEL_KICK,
   VC_PANEL_SEL_EXTEND,
+  VC_PANEL_ADD_PAGE,
   VC_PANEL_BTN_RENAME,
   VC_PANEL_BTN_STREAM,
   CHEST_OPEN_BTN_ID,
@@ -58,6 +59,7 @@ import {
   VC_PANEL_SEL_RENAME,
   VC_PANEL_RENAME_MODAL,
   handleVcPanelAddBtn,
+  handleVcPanelAddPage,
   handleVcPanelKickBtn,
   handleVcPanelExtendBtn,
   handleVcPanelExpiryBtn,
@@ -1929,6 +1931,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_ADD)) {
       await handleVcPanelAddBtn(interaction); return;
     }
+    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_ADD_PAGE)) {
+      await handleVcPanelAddPage(interaction); return;
+    }
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_KICK)) {
       await handleVcPanelKickBtn(interaction); return;
     }
@@ -1938,7 +1943,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_EXPIRY)) {
       await handleVcPanelExpiryBtn(interaction); return;
     }
-    if (interaction.isUserSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_ADD)) {
+    if (
+      (interaction.isStringSelectMenu() || interaction.isUserSelectMenu())
+      && interaction.customId.startsWith(VC_PANEL_SEL_ADD)
+    ) {
       await handleVcPanelAddSel(interaction); return;
     }
     if (interaction.isUserSelectMenu() && interaction.customId.startsWith(VC_PANEL_SEL_KICK)) {

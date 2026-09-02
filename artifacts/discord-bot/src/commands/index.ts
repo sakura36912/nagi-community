@@ -1983,6 +1983,9 @@ export const VC_PANEL_SEL_EXTEND   = "vc:panel:exts:";
 export const VC_PANEL_SEL_RENAME   = "vc:panel:rsel:";
 // modal: "vc:panel:rnm:{channelId}:{ownerId}:{itemId}"
 export const VC_PANEL_RENAME_MODAL = "vc:panel:rnm:";
+export const VC_PANEL_ADD_PAGE     = "vc:panel:add-page:";
+const VC_PANEL_ADD_PAGE_SIZE = 25;
+const VC_PANEL_BLOCKED_ADD_ROLE_NAME = "追放者";
 
 /** custom ID のペイロードを "{channelId}:{ownerId}" 形式でエンコード */
 export function vcPanelId(prefix: string, channelId: string, ownerId: string) {
@@ -1993,6 +1996,43 @@ export function parseVcPanelId(prefix: string, customId: string): { channelId: s
   const payload = customId.slice(prefix.length);
   const sep = payload.lastIndexOf(":");
   return { channelId: payload.slice(0, sep), ownerId: payload.slice(sep + 1) };
+}
+
+function parseVcPanelPagedId(
+  prefix: string,
+  customId: string,
+): { channelId: string; ownerId: string; page: number } {
+  const payload = customId.slice(prefix.length);
+  const parts = payload.split(":");
+  const pageToken = parts.at(-1);
+  if (parts.length < 3 || !/^\d+$/.test(pageToken ?? "")) {
+    const legacy = parseVcPanelId(prefix, customId);
+    return { ...legacy, page: 0 };
+  }
+  const page = Number(parts.pop() ?? 0);
+  const ownerId = parts.pop() ?? "";
+  return {
+    channelId: parts.join(":"),
+    ownerId,
+    page: Number.isInteger(page) && page >= 0 ? page : 0,
+  };
+}
+
+export function isBlockedFromLuxuryVcAdd(roleNames: Iterable<string>): boolean {
+  return [...roleNames].some((roleName) => roleName === VC_PANEL_BLOCKED_ADD_ROLE_NAME);
+}
+
+function getLuxuryVcAddableMembers(
+  members: Iterable<GuildMember>,
+  ownerId: string,
+): GuildMember[] {
+  return [...members]
+    .filter((member) =>
+      !member.user.bot
+      && member.id !== ownerId
+      && !isBlockedFromLuxuryVcAdd(member.roles.cache.map((role) => role.name)),
+    )
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, "ja"));
 }
 
 /**
@@ -2098,15 +2138,92 @@ function checkOwner(
   return true;
 }
 
+async function buildLuxuryVcAddSelector(
+  guild: Guild,
+  channelId: string,
+  ownerId: string,
+  requestedPage: number,
+): Promise<{
+  content: string;
+  components: Array<
+    ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
+  >;
+}> {
+  await guild.members.fetch();
+  const members = getLuxuryVcAddableMembers(guild.members.cache.values(), ownerId);
+  const pageCount = Math.max(1, Math.ceil(members.length / VC_PANEL_ADD_PAGE_SIZE));
+  const page = Math.min(Math.max(requestedPage, 0), pageCount - 1);
+  const pageMembers = members.slice(
+    page * VC_PANEL_ADD_PAGE_SIZE,
+    (page + 1) * VC_PANEL_ADD_PAGE_SIZE,
+  );
+  if (pageMembers.length === 0) {
+    return {
+      content: "❌ 追加可能なメンバーがいません（追放者ロール保持者は対象外です）。",
+      components: [],
+    };
+  }
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`${VC_PANEL_SEL_ADD}${channelId}:${ownerId}:${page}`)
+    .setPlaceholder("追加するメンバーを選択")
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      pageMembers.map((member) =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(member.displayName.slice(0, 100))
+          .setValue(member.id)
+          .setDescription(`@${member.user.username}`.slice(0, 100)),
+      ),
+    );
+
+  const components: Array<
+    ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
+  > = [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
+  ];
+  if (pageCount > 1) {
+    const navigation = new ActionRowBuilder<ButtonBuilder>();
+    if (page > 0) {
+      navigation.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${VC_PANEL_ADD_PAGE}${channelId}:${ownerId}:${page - 1}`)
+          .setLabel("前のページ")
+          .setStyle(ButtonStyle.Secondary),
+      );
+    }
+    if (page < pageCount - 1) {
+      navigation.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${VC_PANEL_ADD_PAGE}${channelId}:${ownerId}:${page + 1}`)
+          .setLabel("次のページ")
+          .setStyle(ButtonStyle.Secondary),
+      );
+    }
+    components.push(navigation);
+  }
+
+  return {
+    content: `追加するメンバーを選んでください（${page + 1}/${pageCount}）：`,
+    components,
+  };
+}
+
 export async function handleVcPanelAddBtn(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) return;
   const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_ADD, interaction.customId);
   if (!checkOwner(interaction, ownerId)) return;
-  const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
-    new UserSelectMenuBuilder()
-      .setCustomId(vcPanelId(VC_PANEL_SEL_ADD, channelId, ownerId))
-      .setPlaceholder("追加するメンバーを選択"),
-  );
-  await interaction.reply({ content: "追加するメンバーを選んでください：", components: [row], ephemeral: true });
+  const selector = await buildLuxuryVcAddSelector(interaction.guild, channelId, ownerId, 0);
+  await interaction.reply({ ...selector, ephemeral: true });
+}
+
+export async function handleVcPanelAddPage(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId, page } = parseVcPanelPagedId(VC_PANEL_ADD_PAGE, interaction.customId);
+  if (!checkOwner(interaction, ownerId)) return;
+  const selector = await buildLuxuryVcAddSelector(interaction.guild, channelId, ownerId, page);
+  await interaction.update(selector);
 }
 
 export async function handleVcPanelKickBtn(interaction: ButtonInteraction): Promise<void> {
@@ -2495,13 +2612,24 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   ]);
 }
 
-export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction): Promise<void> {
+export async function handleVcPanelAddSel(
+  interaction: StringSelectMenuInteraction | UserSelectMenuInteraction,
+): Promise<void> {
   if (!interaction.guild) return;
-  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_SEL_ADD, interaction.customId);
+  const { channelId, ownerId } = parseVcPanelPagedId(VC_PANEL_SEL_ADD, interaction.customId);
   if (!checkOwner(interaction, ownerId)) return;
   const targetId = interaction.values[0];
   if (!targetId) { await interaction.reply({ content: "❌ ユーザーが選択されていません。", ephemeral: true }); return; }
   if (targetId === interaction.user.id) { await interaction.reply({ content: "❌ 自分自身を追加することはできません。", ephemeral: true }); return; }
+  const targetMember = await interaction.guild.members.fetch(targetId).catch(() => null);
+  if (!targetMember) {
+    await interaction.reply({ content: "❌ メンバーが見つかりませんでした。", ephemeral: true });
+    return;
+  }
+  if (isBlockedFromLuxuryVcAdd(targetMember.roles.cache.map((role) => role.name))) {
+    await interaction.reply({ content: "❌ 追放者ロール保持者は高級船室へ追加できません。", ephemeral: true });
+    return;
+  }
   const ch = interaction.guild.channels.cache.get(channelId)
     ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
   if (!ch || !("permissionOverwrites" in ch)) {

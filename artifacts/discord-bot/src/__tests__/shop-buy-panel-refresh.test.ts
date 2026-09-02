@@ -145,6 +145,7 @@ import {
   getPrivateVcRoomCategory,
   handleShopBuyButton,
   handleShopSelectMenu,
+  isBlockedFromLuxuryVcAdd,
   isFreeRoomCategory,
   SHOP_BUY_PREFIX,
   SHOP_SELECT_ID,
@@ -163,6 +164,11 @@ const EXPIRES_AT  = new Date("2099-07-01T12:00:00Z");
 const EXTENDED_AT = new Date("2099-07-02T12:00:00Z");
 
 describe("private VC panel category separation", () => {
+  it("blocks members with the 追放者 role from luxury-room additions", () => {
+    expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "追放者"])).toBe(true);
+    expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "本船員"])).toBe(false);
+  });
+
   it("grants free-room access to the island-resurface role", () => {
     expect(collectFreeRoomAccessRoleIds([
       { id: "captain", name: "追放者" },
