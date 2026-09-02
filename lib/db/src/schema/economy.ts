@@ -247,7 +247,7 @@ export const privateVcSessionsTable = pgTable("private_vc_sessions", {
   guildId: text("guild_id").notNull(),
   channelId: text("channel_id").notNull().unique(),
   userId: text("user_id").notNull(),
-  /** Shop category that created this session ("vc" | "ura"). Used to decide cleanup actions. */
+  /** Shop category that created this session ("vc" | "island" | "ura"). Used to decide panel and cleanup behavior. */
   category: text("category").notNull().default("vc"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -168,6 +168,34 @@ const LEGACY_VC_PANEL_TITLES = new Set([
   ISLAND_VC_PANEL_TITLE,
 ]);
 
+/**
+ * private_vc_sessions.category values used by the two generations of the
+ * free-room shop. "ura" is kept for existing shop items and sessions.
+ */
+export type PrivateVcRoomCategory = "vc" | "island" | "ura";
+
+export function getPrivateVcRoomCategory(category: string | null | undefined): PrivateVcRoomCategory {
+  if (category === "island" || category === "ura") return category;
+  return "vc";
+}
+
+export function isFreeRoomCategory(category: string | null | undefined): boolean {
+  return category === "island" || category === "ura";
+}
+
+/** Legacy 裏フリールーム購入者用の共通アクセスチャンネル権限。 */
+async function grantUraChannelAccess(guild: Guild, userId: string, channelId: string): Promise<void> {
+  try {
+    const channel = guild.channels.cache.get(channelId)
+      ?? await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || !("permissionOverwrites" in channel)) return;
+    await channel.permissionOverwrites.edit(userId, { ViewChannel: true });
+    logger.info(`[ura] Granted ViewChannel on ${channelId} to user ${userId}`);
+  } catch (err) {
+    logger.error(`[ura] Failed to grant channel access to ${userId}`, err);
+  }
+}
+
 function buildNicknameModal(itemId: number): ModalBuilder {
   return new ModalBuilder()
     .setCustomId(`${NICKNAME_MODAL_PREFIX}${itemId}`)
@@ -273,7 +301,8 @@ async function purchaseAndCreatePrivateVc(
   durationMs?: number,
   vcCategoryId?: string | null,
   accessRoleIds: string[] = [],
-  isIsland = false,
+  roomCategory: PrivateVcRoomCategory = "vc",
+  accessChannelId?: string | null,
 ): Promise<{ ok: true; item: ShopItem; channelId: string; expiresAt?: Date } | { ok: false; reason: string }> {
   const me = guild.members.me;
   if (!me?.permissions.has("ManageChannels")) {
@@ -284,6 +313,8 @@ async function purchaseAndCreatePrivateVc(
   if (!result.ok) return result;
 
   try {
+    const isFreeRoom = isFreeRoomCategory(roomCategory);
+    const isIsland = roomCategory === "island";
     const expiresAt = durationMs !== undefined ? new Date(Date.now() + durationMs) : undefined;
     const label = durationMs !== undefined
       ? isIsland
@@ -342,7 +373,10 @@ async function purchaseAndCreatePrivateVc(
     });
 
     if (expiresAt) {
-      await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, isIsland ? "island" : "vc");
+      await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, roomCategory);
+      if (roomCategory === "ura" && accessChannelId) {
+        await grantUraChannelAccess(guild, member.id, accessChannelId);
+      }
 
       // Register the schedule immediately so the pre-expiry warning DM fires
       // even if the user never renames the VC (renaming will upsert this row).
@@ -356,7 +390,7 @@ async function purchaseAndCreatePrivateVc(
 
     // ボイステキストにコントロールパネルを投稿（期限あり・無期限どちらでも）
     // memberIds=[] because the channel was just created — only the owner has access so far.
-    channel.send(buildVcPanelMessage(channel.id, member.id, expiresAt, [], undefined, isIsland))
+    channel.send(buildVcPanelMessage(channel.id, member.id, expiresAt, [], undefined, isFreeRoom))
       .catch((err) => logger.error("[privateVC] Failed to send VC panel to text", err));
 
     return { ok: true, item: result.item, channelId: channel.id, expiresAt };
@@ -472,23 +506,31 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
-    const islandSettings = item.category === "island"
+    const roomCategory = getPrivateVcRoomCategory(item.category);
+    const islandSettings = roomCategory === "island"
       ? await resolveIslandVcSettings(interaction.guild!)
       : { categoryId: null, accessRoleIds: [] };
+    const roomCategoryId = roomCategory === "island"
+      ? islandSettings.categoryId
+      : roomCategory === "ura"
+        ? settings.uraCategoryId
+        : settings.vcCategoryId;
     const result = await purchaseAndCreatePrivateVc(
       interaction.guild!,
       member,
       itemId,
       settings.currencyName,
       vcDuration,
-      item.category === "island" ? islandSettings.categoryId : settings.vcCategoryId,
-      islandSettings.accessRoleIds,
-      item.category === "island",
+      roomCategoryId,
+      roomCategory === "island" ? islandSettings.accessRoleIds : [],
+      roomCategory,
+      roomCategory === "ura" ? settings.uraChannelId : null,
     );
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
-      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の高級船室: <#${result.channelId}>${expiry}`);
+      const roomLabel = isFreeRoomCategory(roomCategory) ? "フリールーム" : "高級船室";
+      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の${roomLabel}: <#${result.channelId}>${expiry}`);
     } else {
       await interaction.editReply(result.reason);
     }
@@ -627,7 +669,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
           );
           if (panelMsg) {
             const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds, undefined, session.category === "island"));
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds, undefined, isFreeRoomCategory(session.category)));
           }
         }
       } catch (panelErr) {
@@ -740,23 +782,31 @@ async function applyShopPurchase(
   const vcDuration = TIMED_VC_DURATIONS[item.effectType ?? ""];
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    const islandSettings = item.category === "island"
+    const roomCategory = getPrivateVcRoomCategory(item.category);
+    const islandSettings = roomCategory === "island"
       ? await resolveIslandVcSettings(interaction.guild)
       : { categoryId: null, accessRoleIds: [] };
+    const roomCategoryId = roomCategory === "island"
+      ? islandSettings.categoryId
+      : roomCategory === "ura"
+        ? settings.uraCategoryId
+        : settings.vcCategoryId;
     const result = await purchaseAndCreatePrivateVc(
       interaction.guild,
       member,
       itemId,
       settings.currencyName,
       vcDuration,
-      item.category === "island" ? islandSettings.categoryId : settings.vcCategoryId,
-      islandSettings.accessRoleIds,
-      item.category === "island",
+      roomCategoryId,
+      roomCategory === "island" ? islandSettings.accessRoleIds : [],
+      roomCategory,
+      roomCategory === "ura" ? settings.uraChannelId : null,
     );
     if (result.ok) {
       const ts = result.expiresAt ? Math.floor(result.expiresAt.getTime() / 1000) : null;
       const expiry = ts ? `\n期限: <t:${ts}:F>（<t:${ts}:R>に自動削除）` : "";
-      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の高級船室: <#${result.channelId}>${expiry}`);
+      const roomLabel = isFreeRoomCategory(roomCategory) ? "フリールーム" : "高級船室";
+      await interaction.editReply(`**${result.item.name}**を購入しました! あなた専用の${roomLabel}: <#${result.channelId}>${expiry}`);
     } else {
       await interaction.editReply(result.reason);
     }
@@ -882,7 +932,7 @@ async function applyShopPurchase(
           );
           if (panelMsg) {
             const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds, undefined, session.category === "island"));
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, updated.expiresAt, memberIds, undefined, isFreeRoomCategory(session.category)));
           }
         }
       } catch (panelErr) {
@@ -1585,7 +1635,7 @@ const shopCommand: Command = {
               && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
           );
           if (panelMsg) {
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled, session.category === "island"));
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled, isFreeRoomCategory(session.category)));
           }
         }
       } catch (err) {
@@ -1631,7 +1681,7 @@ const shopCommand: Command = {
               && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
           );
           if (panelMsg) {
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled, session.category === "island"));
+            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled, isFreeRoomCategory(session.category)));
           }
         }
       } catch (err) {
@@ -2459,7 +2509,7 @@ export async function handleVcPanelAddSel(interaction: UserSelectMenuInteraction
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnAdd, session?.category === "island"));
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnAdd, isFreeRoomCategory(session?.category)));
       }
     }
   } catch (err) {
@@ -2499,7 +2549,7 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
       );
       if (panelMsg) {
         const session = await getPrivateVcSessionByChannelId(channelId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnKick, session?.category === "island"));
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnKick, isFreeRoomCategory(session?.category)));
       }
     }
   } catch (err) {
@@ -2550,7 +2600,7 @@ export async function handleVcPanelExtendSel(interaction: StringSelectMenuIntera
       if (panelMsg) {
         const memberIds = getVcAccessMemberIds(textCh as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
         const streamEnabledOnExtend = isPrivateVcStreamEnabled(textCh as import("discord.js").GuildChannel, ownerId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt, memberIds, streamEnabledOnExtend, session.category === "island"));
+        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, updated.expiresAt, memberIds, streamEnabledOnExtend, isFreeRoomCategory(session.category)));
       }
     }
   } catch { /* best-effort */ }
@@ -2696,7 +2746,7 @@ export async function handleVcRefreshPanels(interaction: ChatInputCommandInterac
       if (!panelMsg) { skipped++; continue; }
       const memberIds = getVcAccessMemberIds(textCh, session.userId, interaction.client.user?.id);
       const streamEnabled = isPrivateVcStreamEnabled(textCh, session.userId);
-      await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt, memberIds, streamEnabled, session.category === "island"));
+      await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt, memberIds, streamEnabled, isFreeRoomCategory(session.category)));
       updated++;
     } catch (err) {
       logger.warn(`[vc-refresh] Failed to refresh panel for channel ${session.channelId}`, err);
@@ -2753,7 +2803,7 @@ export async function refreshAllVcPanels(discordClient: import("discord.js").Cli
           if (!panelMsg) { skipped++; continue; }
           const memberIds = getVcAccessMemberIds(textCh, session.userId, discordClient.user?.id);
           const streamEnabled = isPrivateVcStreamEnabled(textCh, session.userId);
-          await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt ?? undefined, memberIds, streamEnabled, session.category === "island"));
+          await panelMsg.edit(buildVcPanelMessage(session.channelId, session.userId, session.expiresAt ?? undefined, memberIds, streamEnabled, isFreeRoomCategory(session.category)));
           updated++;
         } catch (err) {
           logger.warn(`[vc-panel-refresh] Failed to refresh panel for channel ${session.channelId}`, err);
@@ -2819,7 +2869,7 @@ export async function handleVcPanelStreamBtn(interaction: ButtonInteraction): Pr
           interaction.client.user?.id,
         );
         await panelMsg.edit(
-          buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, refreshedMemberIds, newState, session?.category === "island"),
+          buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, refreshedMemberIds, newState, isFreeRoomCategory(session?.category)),
         );
       }
     }

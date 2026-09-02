@@ -139,7 +139,15 @@ vi.mock("@workspace/db", () => ({
 }));
 
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
-import { handleShopBuyButton, handleShopSelectMenu, SHOP_BUY_PREFIX, SHOP_SELECT_ID } from "../commands/index.js";
+import {
+  buildVcPanelMessage,
+  getPrivateVcRoomCategory,
+  handleShopBuyButton,
+  handleShopSelectMenu,
+  isFreeRoomCategory,
+  SHOP_BUY_PREFIX,
+  SHOP_SELECT_ID,
+} from "../commands/index.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const GUILD_ID    = "guild-001";
@@ -152,6 +160,38 @@ const ONE_DAY_MS  = 24 * 60 * 60 * 1000;
 
 const EXPIRES_AT  = new Date("2099-07-01T12:00:00Z");
 const EXTENDED_AT = new Date("2099-07-02T12:00:00Z");
+
+describe("private VC panel category separation", () => {
+  it("keeps both current and legacy free-room categories out of the luxury-room classification", () => {
+    expect(getPrivateVcRoomCategory("island")).toBe("island");
+    expect(getPrivateVcRoomCategory("ura")).toBe("ura");
+    expect(getPrivateVcRoomCategory("vc")).toBe("vc");
+    expect(getPrivateVcRoomCategory("unknown")).toBe("vc");
+
+    expect(isFreeRoomCategory("island")).toBe(true);
+    expect(isFreeRoomCategory("ura")).toBe(true);
+    expect(isFreeRoomCategory("vc")).toBe(false);
+  });
+
+  it("renders distinct panel titles and luxury-only member controls", () => {
+    const freeRoomPanel = buildVcPanelMessage("channel-free", "owner", undefined, [], false, true);
+    const luxuryPanel = buildVcPanelMessage("channel-luxury", "owner", undefined, [], false, false);
+
+    expect(freeRoomPanel.embeds[0]?.data.title).toBe("フリールームコントロールパネル");
+    expect(luxuryPanel.embeds[0]?.data.title).toBe("🔒 高級船室 コントロールパネル");
+
+    const freeButtonIds = freeRoomPanel.components.flatMap((row) =>
+      row.components.map((component) => (component.data as { custom_id?: string }).custom_id),
+    );
+    const luxuryButtonIds = luxuryPanel.components.flatMap((row) =>
+      row.components.map((component) => (component.data as { custom_id?: string }).custom_id),
+    );
+    expect(freeButtonIds.some((id) => id?.includes(":add:"))).toBe(false);
+    expect(freeButtonIds.some((id) => id?.includes(":kick:"))).toBe(false);
+    expect(luxuryButtonIds.some((id) => id?.includes(":add:"))).toBe(true);
+    expect(luxuryButtonIds.some((id) => id?.includes(":kick:"))).toBe(true);
+  });
+});
 
 function makeSession() {
   return {

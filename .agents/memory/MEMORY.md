@@ -9,3 +9,4 @@
 - [Sub-account salary exclusion](sub-account-salary-exclusion.md) — 「sub垢」ロール保有者は定期給与と手動給与の両方から除外する。
 - [Eval sheet extension limit](eval-sheet-extension-limit.md) — 評価シート延長は1週間のみ、サーバー内で1人1回までにする。
 - [Monthly role debit](monthly-role-debit.md) — 指定ロールへの月額引き落としは毎月25日0:00 JSTに1回だけ実行する。
+- [Private VC panel categories](private-vc-panel-category.md) — 旧`ura`と現行`island`はフリールームとして扱い、高級船室`vc`と混同しない。
