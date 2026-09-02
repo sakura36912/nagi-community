@@ -408,8 +408,23 @@ async function purchaseAndCreatePrivateVc(
 
 const ISLAND_CATEGORY_NAMES = new Set(["オチテモータ島", "🏝️ オチテモータ島"]);
 const ISLAND_VC_ACCESS_ROLE_NAMES = ["追放者", "軍師", "訓練官", "見習い訓練官"];
+const ISLAND_RESURFACE_ROLE_NAME = "オチテモータ島浮上券";
 
-async function resolveIslandVcSettings(
+export function collectFreeRoomAccessRoleIds(
+  roles: Iterable<{ id: string; name: string }>,
+  resurfaceRoleId?: string | null,
+): string[] {
+  const accessRoleIds = [...roles]
+    .filter((role) =>
+      ISLAND_VC_ACCESS_ROLE_NAMES.includes(role.name)
+      || role.name === ISLAND_RESURFACE_ROLE_NAME,
+    )
+    .map((role) => role.id);
+  if (resurfaceRoleId) accessRoleIds.push(resurfaceRoleId);
+  return [...new Set(accessRoleIds)];
+}
+
+async function resolveFreeRoomSettings(
   guild: Guild,
 ): Promise<{ categoryId: string | null; accessRoleIds: string[] }> {
   const islandCategory = guild.channels.cache.find(
@@ -422,16 +437,16 @@ async function resolveIslandVcSettings(
       && ISLAND_CATEGORY_NAMES.has(channel.name),
   );
 
-  const accessRoleIds = guild.roles.cache
-    .filter((role) => ISLAND_VC_ACCESS_ROLE_NAMES.includes(role.name))
-    .map((role) => role.id);
   const evalResurfaceItem = (await listShopItems(guild.id, "island"))
     .find((shopItem) => shopItem.effectType === EVAL_RESURFACE_EFFECT && shopItem.targetRoleId);
-  if (evalResurfaceItem?.targetRoleId) accessRoleIds.push(evalResurfaceItem.targetRoleId);
+  const accessRoleIds = collectFreeRoomAccessRoleIds(
+    guild.roles.cache.values(),
+    evalResurfaceItem?.targetRoleId,
+  );
 
   return {
     categoryId: islandCategory?.id ?? null,
-    accessRoleIds: [...new Set(accessRoleIds)],
+    accessRoleIds,
   };
 }
 
@@ -508,11 +523,11 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild!.members.fetch(interaction.user.id);
     const roomCategory = getPrivateVcRoomCategory(item.category);
-    const islandSettings = roomCategory === "island"
-      ? await resolveIslandVcSettings(interaction.guild!)
+    const freeRoomSettings = isFreeRoomCategory(roomCategory)
+      ? await resolveFreeRoomSettings(interaction.guild!)
       : { categoryId: null, accessRoleIds: [] };
     const roomCategoryId = roomCategory === "island"
-      ? islandSettings.categoryId
+      ? freeRoomSettings.categoryId
       : roomCategory === "ura"
         ? settings.uraCategoryId
         : settings.vcCategoryId;
@@ -523,7 +538,7 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
       settings.currencyName,
       vcDuration,
       roomCategoryId,
-      roomCategory === "island" ? islandSettings.accessRoleIds : [],
+      isFreeRoomCategory(roomCategory) ? freeRoomSettings.accessRoleIds : [],
       roomCategory,
       roomCategory === "ura" ? settings.uraChannelId : null,
     );
@@ -784,11 +799,11 @@ async function applyShopPurchase(
   if (item.effectType === PRIVATE_VC_EFFECT || vcDuration !== undefined) {
     const member = await interaction.guild.members.fetch(interaction.user.id);
     const roomCategory = getPrivateVcRoomCategory(item.category);
-    const islandSettings = roomCategory === "island"
-      ? await resolveIslandVcSettings(interaction.guild)
+    const freeRoomSettings = isFreeRoomCategory(roomCategory)
+      ? await resolveFreeRoomSettings(interaction.guild)
       : { categoryId: null, accessRoleIds: [] };
     const roomCategoryId = roomCategory === "island"
-      ? islandSettings.categoryId
+      ? freeRoomSettings.categoryId
       : roomCategory === "ura"
         ? settings.uraCategoryId
         : settings.vcCategoryId;
@@ -799,7 +814,7 @@ async function applyShopPurchase(
       settings.currencyName,
       vcDuration,
       roomCategoryId,
-      roomCategory === "island" ? islandSettings.accessRoleIds : [],
+      isFreeRoomCategory(roomCategory) ? freeRoomSettings.accessRoleIds : [],
       roomCategory,
       roomCategory === "ura" ? settings.uraChannelId : null,
     );
@@ -2770,8 +2785,8 @@ export async function refreshAllVcPanels(discordClient: import("discord.js").Cli
   for (const guild of discordClient.guilds.cache.values()) {
     try {
       const sessions = await getActivePrivateVcSessionsByGuild(guild.id);
-      const islandSettings = sessions.some((session) => session.category === "island")
-        ? await resolveIslandVcSettings(guild)
+      const freeRoomSettings = sessions.some((session) => isFreeRoomCategory(session.category))
+        ? await resolveFreeRoomSettings(guild)
         : null;
       for (const session of sessions) {
         try {
@@ -2779,8 +2794,8 @@ export async function refreshAllVcPanels(discordClient: import("discord.js").Cli
             ?? await guild.channels.fetch(session.channelId).catch(() => null);
           if (!ch || !("messages" in ch)) { skipped++; continue; }
           const textCh = ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel;
-          if (session.category === "island" && islandSettings) {
-            for (const roleId of islandSettings.accessRoleIds) {
+          if (isFreeRoomCategory(session.category) && freeRoomSettings) {
+            for (const roleId of freeRoomSettings.accessRoleIds) {
               await textCh.permissionOverwrites.edit(roleId, {
                 ViewChannel: true,
                 Connect: true,

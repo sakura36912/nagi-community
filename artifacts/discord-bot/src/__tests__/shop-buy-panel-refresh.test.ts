@@ -141,6 +141,7 @@ vi.mock("@workspace/db", () => ({
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 import {
   buildVcPanelMessage,
+  collectFreeRoomAccessRoleIds,
   getPrivateVcRoomCategory,
   handleShopBuyButton,
   handleShopSelectMenu,
@@ -162,6 +163,19 @@ const EXPIRES_AT  = new Date("2099-07-01T12:00:00Z");
 const EXTENDED_AT = new Date("2099-07-02T12:00:00Z");
 
 describe("private VC panel category separation", () => {
+  it("grants free-room access to the island-resurface role", () => {
+    expect(collectFreeRoomAccessRoleIds([
+      { id: "captain", name: "追放者" },
+      { id: "resurface", name: "オチテモータ島浮上券" },
+      { id: "member", name: "一般メンバー" },
+    ])).toEqual(["captain", "resurface"]);
+
+    expect(collectFreeRoomAccessRoleIds(
+      [{ id: "captain", name: "追放者" }],
+      "configured-resurface-role",
+    )).toEqual(["captain", "configured-resurface-role"]);
+  });
+
   it("keeps both current and legacy free-room categories out of the luxury-room classification", () => {
     expect(getPrivateVcRoomCategory("island")).toBe("island");
     expect(getPrivateVcRoomCategory("ura")).toBe("ura");
