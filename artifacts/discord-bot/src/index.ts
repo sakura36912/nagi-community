@@ -104,6 +104,7 @@ import { handleVcLogMove } from "./lib/vcLogMove";
 import { sendVcNotifyJoin, sendVcNotifyLeave } from "./lib/vcNotify";
 import { handleVcLogJoin } from "./lib/vcLogJoin";
 import { isBeachVoiceChannel } from "./lib/vcRewardEligibility";
+import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/calendar";
 
 import { logger } from "./lib/logger";
 import {
@@ -941,6 +942,9 @@ client.once(Events.ClientReady, async (readyClient) => {
   // 起動直後にも給与日を確認する。毎分の定期実行を待たず、Bot再起動後でも
   // 給与日当日の支給を取りこぼさない。
   runRewardScheduler().catch((err) => logger.error("[reward] Startup scheduler error", err));
+  runCalendarReminderScheduler(readyClient).catch((err) =>
+    logger.error("[calendar] Startup reminder scheduler error", err),
+  );
 
   // 起動直後に全高級船室パネルを一括更新（メンバーリスト・期限・ボタンを現在の状態に同期）
   refreshAllVcPanels(readyClient).catch((err) => logger.error("[vc-panel-refresh] Startup panel refresh error", err));
@@ -961,6 +965,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     runTimedRoleExpiryScheduler().catch((err) => logger.error("[role-expiry] Scheduler error", err));
     runSheetReminderScheduler(readyClient).catch((err) => logger.error("[sheet-reminder] Scheduler error", err));
     runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Scheduler error", err));
+    runCalendarReminderScheduler(readyClient).catch((err) => logger.error("[calendar] Scheduler error", err));
   }, 60 * 1000);
 
   // Daily role-tenure point distribution — run once every 24 h
@@ -1883,6 +1888,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isStringSelectMenu() && interaction.customId === GUIDE_SELECT_ID) {
       await handleGuideSelect(interaction);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith("calendar:")) {
+      await handleCalendarButton(interaction);
       return;
     }
 

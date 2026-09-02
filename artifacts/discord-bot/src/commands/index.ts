@@ -111,6 +111,7 @@ import {
   vcSessionLogsTable,
 } from "@workspace/db";
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
+import { calendarCommand } from "./calendar";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -3409,4 +3410,5 @@ export const commands: Command[] = [
   monthlyDebitCommand,
   timedRoleCommand,
   balanceRankingCommand,
+  calendarCommand,
 ];
