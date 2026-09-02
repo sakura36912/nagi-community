@@ -7,3 +7,19 @@ uri = "file://preview_chest.html"
 type = "text"
 title = "限定ロール当選通知　プレビュー"
 description = "Discord embed の表示イメージ"
+logical_id = "0c4ea32c-1f31-4aaa-ad13-c55d8f757f29"
+content_type = "text/html"
+
+[[outputs]]
+id = "YbIEWc4FVhWJrRb6ADTC7"
+uri = "file://.agents/outputs/gathapin36912-balances-one-hour-ago.csv"
+type = "table"
+title = "gathapin36912 所持金一覧（1時間前）"
+description = "全193ユーザー分。1時間前の残高、現在残高、その後の増減を収録しています。"
+logical_id = "261db535-0c0d-4cba-b819-23c38e4f25d3"
+content_hash = "sha256:396560727cbf519b266459d259036bfd5f25afb51f095bce4114e0307ee32363"
+size = 12967
+mtime_ms = 1788372153968
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:732dbe0e-285a-4a24-a3ca-38fce0bb2581/261db535-0c0d-4cba-b819-23c38e4f25d3/84633547-0cc9-4786-9b42-b9ce082f2fec"
+storage_version_token = "1788372155666493"
+content_type = "text/csv"
