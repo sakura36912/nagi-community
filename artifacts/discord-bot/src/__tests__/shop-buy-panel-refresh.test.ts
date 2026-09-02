@@ -179,6 +179,8 @@ describe("private VC panel category separation", () => {
 
     expect(freeRoomPanel.embeds[0]?.data.title).toBe("フリールームコントロールパネル");
     expect(luxuryPanel.embeds[0]?.data.title).toBe("🔒 高級船室 コントロールパネル");
+    expect(freeRoomPanel.embeds[0]?.data.description).not.toContain("アクセス中のメンバー");
+    expect(luxuryPanel.embeds[0]?.data.description).toContain("アクセス中のメンバー");
 
     const freeButtonIds = freeRoomPanel.components.flatMap((row) =>
       row.components.map((component) => (component.data as { custom_id?: string }).custom_id),

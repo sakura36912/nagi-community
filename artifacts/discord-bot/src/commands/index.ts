@@ -2016,22 +2016,22 @@ export function buildVcPanelMessage(
   expiresAt?: Date,
   memberIds?: string[],
   streamEnabled?: boolean,
-  isIsland = false,
+  isFreeRoom = false,
 ) {
   const ts = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
   const expText = ts
     ? `⏳ 期限: <t:${ts}:F>（<t:${ts}:R>）`
     : "⏳ 期限: 無期限";
-  const memberLine = memberIds !== undefined
+  const memberLine = !isFreeRoom && memberIds !== undefined
     ? `\n👥 アクセス中のメンバー: ${memberIds.length > 0 ? memberIds.map((id) => `<@${id}>`).join("、") : "メンバーなし"}`
     : "";
   const embed = new EmbedBuilder()
-    .setTitle(isIsland ? ISLAND_VC_PANEL_TITLE : VC_PANEL_TITLE)
+    .setTitle(isFreeRoom ? ISLAND_VC_PANEL_TITLE : VC_PANEL_TITLE)
     .setColor(0x5865f2)
-    .setDescription(`<@${ownerId}> の${isIsland ? "フリールーム" : "高級船室"}です。\n${expText}${memberLine}`)
+    .setDescription(`<@${ownerId}> の${isFreeRoom ? "フリールーム" : "高級船室"}です。\n${expText}${memberLine}`)
     .setFooter({ text: "VCオーナーのみ操作できます" });
   const row1Buttons = [
-    ...(isIsland ? [] : [
+    ...(isFreeRoom ? [] : [
       new ButtonBuilder()
         .setCustomId(vcPanelId(VC_PANEL_BTN_ADD, channelId, ownerId))
         .setLabel("メンバーを追加")
