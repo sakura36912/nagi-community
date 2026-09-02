@@ -23,3 +23,17 @@ mtime_ms = 1788372153968
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:732dbe0e-285a-4a24-a3ca-38fce0bb2581/261db535-0c0d-4cba-b819-23c38e4f25d3/84633547-0cc9-4786-9b42-b9ce082f2fec"
 storage_version_token = "1788372155666493"
 content_type = "text/csv"
+
+[[outputs]]
+id = "MD355hoOzPodIE0H7e0Yo"
+uri = "file://.agents/outputs/gathapin36912-balances-one-hour-ago-nicknames.csv"
+type = "table"
+title = "gathapin36912 所持金一覧（ニックネーム表示）"
+description = "全193ユーザー分。サーバー内ニックネームを使用し、未設定時はユーザー名を表示しています。"
+logical_id = "b06f92af-577c-4511-923a-73680ebb7719"
+content_hash = "sha256:287b006149889255035079abf1563542815e39a187c5db5b15224a8a57bf650d"
+size = 8257
+mtime_ms = 1788372364563
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:732dbe0e-285a-4a24-a3ca-38fce0bb2581/b06f92af-577c-4511-923a-73680ebb7719/3041a3b9-d966-4303-afed-622ca7960f71"
+storage_version_token = "1788372366381058"
+content_type = "text/csv"
