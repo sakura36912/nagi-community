@@ -144,6 +144,7 @@ vi.mock("@workspace/db", () => ({
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 import {
   buildVcPanelMessage,
+  buildLuxuryVcKickSelector,
   collectFreeRoomAccessRoleIds,
   commands,
   getPrivateVcRoomCategory,
@@ -463,6 +464,108 @@ describe("private VC kick", () => {
       .resolves.toEqual({ ok: true });
     expect(deleteOverwrite).toHaveBeenCalledWith(USER_ID);
     expect(disconnect).toHaveBeenCalledOnce();
+  });
+});
+
+describe("private VC kick selector", () => {
+  function makeSelectorContext(accessIds: string[]) {
+    const accessOverwrites = [
+      { id: USER_ID, type: 1, allow: { has: () => true } },
+      { id: BOT_ID, type: 1, allow: { has: () => true } },
+      ...accessIds.map((id) => ({ id, type: 1, allow: { has: () => true } })),
+    ];
+    const channel = {
+      id: CHANNEL_ID,
+      permissionOverwrites: { cache: accessOverwrites },
+    };
+    const members = new Map(
+      accessIds.map((id) => [
+        id,
+        { id, user: { bot: false, username: `user-${id}` }, displayName: `Member ${id}` },
+      ]),
+    );
+    const guild = {
+      channels: {
+        cache: new Map([[CHANNEL_ID, channel]]),
+        fetch: vi.fn(),
+      },
+      members: {
+        fetch: vi.fn((id: string) => Promise.resolve(members.get(id) ?? null)),
+      },
+    };
+    return { channel, guild };
+  }
+
+  it("shows only explicit access members and excludes the owner and bot", async () => {
+    const { guild } = makeSelectorContext(["member-a", "member-b"]);
+
+    const selector = await buildLuxuryVcKickSelector(
+      guild as never,
+      CHANNEL_ID,
+      USER_ID,
+      BOT_ID,
+      0,
+    );
+    const menu = selector.components[0].toJSON().components[0] as {
+      options: Array<{ value: string }>;
+    };
+
+    expect(selector.content).toContain("1/1");
+    expect(menu.options.map((option) => option.value)).toEqual(["member-a", "member-b"]);
+    expect(menu.options).not.toContainEqual(expect.objectContaining({ value: USER_ID }));
+    expect(menu.options).not.toContainEqual(expect.objectContaining({ value: BOT_ID }));
+  });
+
+  it("paginates access members in groups of 25", async () => {
+    const accessIds = Array.from({ length: 26 }, (_, index) => `member-${index}`);
+    const { guild } = makeSelectorContext(accessIds);
+
+    const firstPage = await buildLuxuryVcKickSelector(
+      guild as never,
+      CHANNEL_ID,
+      USER_ID,
+      BOT_ID,
+      0,
+    );
+    const secondPage = await buildLuxuryVcKickSelector(
+      guild as never,
+      CHANNEL_ID,
+      USER_ID,
+      BOT_ID,
+      1,
+    );
+
+    expect(firstPage.content).toContain("1/2");
+    expect(firstPage.components).toHaveLength(2);
+    expect(firstPage.components[1].toJSON().components).toHaveLength(1);
+    expect(secondPage.content).toContain("2/2");
+    expect(secondPage.components[1].toJSON().components[0]).toMatchObject({
+      label: "前のページ",
+    });
+    const firstMenu = firstPage.components[0].toJSON().components[0] as {
+      options: Array<{ value: string }>;
+    };
+    const secondMenu = secondPage.components[0].toJSON().components[0] as {
+      options: Array<{ value: string }>;
+    };
+    expect(firstMenu.options).toHaveLength(25);
+    expect(secondMenu.options).toHaveLength(1);
+    expect(secondMenu.options[0]?.value).toBe("member-9");
+  });
+
+  it("shows a clear empty state when no access member remains", async () => {
+    const { guild } = makeSelectorContext([]);
+
+    const selector = await buildLuxuryVcKickSelector(
+      guild as never,
+      CHANNEL_ID,
+      USER_ID,
+      BOT_ID,
+      0,
+    );
+
+    expect(selector.content).toContain("アクセス権を持つメンバーはいません");
+    expect(selector.components).toEqual([]);
   });
 });
 

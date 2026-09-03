@@ -14,7 +14,6 @@ import {
   StringSelectMenuOptionBuilder,
   TextInputBuilder,
   TextInputStyle,
-  UserSelectMenuBuilder,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type GuildMember,
@@ -1999,7 +1998,9 @@ export const VC_PANEL_SEL_RENAME   = "vc:panel:rsel:";
 // modal: "vc:panel:rnm:{channelId}:{ownerId}:{itemId}"
 export const VC_PANEL_RENAME_MODAL = "vc:panel:rnm:";
 export const VC_PANEL_ADD_PAGE     = "vc:panel:add-page:";
+export const VC_PANEL_KICK_PAGE    = "vc:panel:kick-page:";
 const VC_PANEL_ADD_PAGE_SIZE = 25;
+const VC_PANEL_KICK_PAGE_SIZE = 25;
 export const LUXURY_VC_ADD_ROLE_NAMES = ["本船員", "漂流者", "新入り"] as const;
 
 /** custom ID のペイロードを "{channelId}:{ownerId}" 形式でエンコード */
@@ -2315,15 +2316,123 @@ export async function handleVcPanelAddPage(interaction: ButtonInteraction): Prom
   await interaction.update(selector);
 }
 
+export async function buildLuxuryVcKickSelector(
+  guild: Guild,
+  channelId: string,
+  ownerId: string,
+  botId: string | undefined,
+  requestedPage: number,
+): Promise<{
+  content: string;
+  components: Array<
+    ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
+  >;
+}> {
+  const channel = guild.channels.cache.get(channelId)
+    ?? await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel || !("permissionOverwrites" in channel)) {
+    return { content: "❌ VCチャンネルが見つかりませんでした。", components: [] };
+  }
+
+  const memberIds = getVcAccessMemberIds(
+    channel as import("discord.js").GuildChannel,
+    ownerId,
+    botId,
+  );
+  const members = (await Promise.all(
+    memberIds.map((id) => guild.members.fetch(id).catch(() => null)),
+  ))
+    .filter((member): member is GuildMember => member !== null && !member.user.bot)
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, "ja"));
+
+  const pageCount = Math.max(1, Math.ceil(members.length / VC_PANEL_KICK_PAGE_SIZE));
+  const page = Math.min(Math.max(requestedPage, 0), pageCount - 1);
+  const pageMembers = members.slice(
+    page * VC_PANEL_KICK_PAGE_SIZE,
+    (page + 1) * VC_PANEL_KICK_PAGE_SIZE,
+  );
+  if (pageMembers.length === 0) {
+    return {
+      content: "ℹ️ 現在、高級船室へのアクセス権を持つメンバーはいません。",
+      components: [],
+    };
+  }
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`${VC_PANEL_SEL_KICK}${channelId}:${ownerId}:${page}`)
+    .setPlaceholder("キックするメンバーを選択")
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      pageMembers.map((member) =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(member.displayName.slice(0, 100))
+          .setValue(member.id)
+          .setDescription(`@${member.user.username}`.slice(0, 100)),
+      ),
+    );
+
+  const components: Array<
+    ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
+  > = [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
+  ];
+  if (pageCount > 1) {
+    const navigation = new ActionRowBuilder<ButtonBuilder>();
+    if (page > 0) {
+      navigation.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${VC_PANEL_KICK_PAGE}${channelId}:${ownerId}:${page - 1}`)
+          .setLabel("前のページ")
+          .setStyle(ButtonStyle.Secondary),
+      );
+    }
+    if (page < pageCount - 1) {
+      navigation.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${VC_PANEL_KICK_PAGE}${channelId}:${ownerId}:${page + 1}`)
+          .setLabel("次のページ")
+          .setStyle(ButtonStyle.Secondary),
+      );
+    }
+    components.push(navigation);
+  }
+
+  return {
+    content: `キックするメンバーを選んでください（${page + 1}/${pageCount}）：`,
+    components,
+  };
+}
+
 export async function handleVcPanelKickBtn(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) return;
   const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_KICK, interaction.customId);
   if (!checkOwner(interaction, ownerId)) return;
-  const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
-    new UserSelectMenuBuilder()
-      .setCustomId(vcPanelId(VC_PANEL_SEL_KICK, channelId, ownerId))
-      .setPlaceholder("キックするメンバーを選択"),
+  const selector = await buildLuxuryVcKickSelector(
+    interaction.guild,
+    channelId,
+    ownerId,
+    interaction.client.user?.id,
+    0,
   );
-  await interaction.reply({ content: "キックするメンバーを選んでください：", components: [row], ephemeral: true });
+  await interaction.reply({ ...selector, ephemeral: true });
+}
+
+export async function handleVcPanelKickPage(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guild) return;
+  const { channelId, ownerId, page } = parseVcPanelPagedId(
+    VC_PANEL_KICK_PAGE,
+    interaction.customId,
+  );
+  if (!checkOwner(interaction, ownerId)) return;
+  const selector = await buildLuxuryVcKickSelector(
+    interaction.guild,
+    channelId,
+    ownerId,
+    interaction.client.user?.id,
+    page,
+  );
+  await interaction.update(selector);
 }
 
 export async function handleVcPanelExtendBtn(interaction: ButtonInteraction): Promise<void> {
@@ -2753,9 +2862,11 @@ export async function handleVcPanelAddSel(
   }
 }
 
-export async function handleVcPanelKickSel(interaction: UserSelectMenuInteraction): Promise<void> {
+export async function handleVcPanelKickSel(
+  interaction: StringSelectMenuInteraction | UserSelectMenuInteraction,
+): Promise<void> {
   if (!interaction.guild) return;
-  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_SEL_KICK, interaction.customId);
+  const { channelId, ownerId } = parseVcPanelPagedId(VC_PANEL_SEL_KICK, interaction.customId);
   if (!checkOwner(interaction, ownerId)) return;
   const targetId = interaction.values[0];
   if (!targetId) { await interaction.reply({ content: "❌ ユーザーが選択されていません。", ephemeral: true }); return; }
@@ -2764,6 +2875,18 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
     ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
   if (!ch || !("permissionOverwrites" in ch)) {
     await interaction.reply({ content: "❌ VCチャンネルが見つかりませんでした。", ephemeral: true }); return;
+  }
+  const accessMemberIds = getVcAccessMemberIds(
+    ch as import("discord.js").GuildChannel,
+    ownerId,
+    interaction.client.user?.id,
+  );
+  if (!accessMemberIds.includes(targetId)) {
+    await interaction.reply({
+      content: "❌ このメンバーは現在、高級船室へのアクセス権を持っていません。",
+      ephemeral: true,
+    });
+    return;
   }
   const kickResult = await kickPrivateVcMember(
     interaction.guild,
