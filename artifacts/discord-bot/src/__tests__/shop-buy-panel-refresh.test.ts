@@ -371,6 +371,68 @@ describe("private VC panel category separation", () => {
     ]);
   });
 
+  it("filters add candidates by server nickname without including other roles", async () => {
+    const members = new Map([
+      [
+        "matching-member",
+        {
+          id: "matching-member",
+          user: { bot: false, username: "matching-member" },
+          displayName: "船員さくら",
+          roles: { cache: [{ name: "本船員" }] },
+        },
+      ],
+      [
+        "nonmatching-member",
+        {
+          id: "nonmatching-member",
+          user: { bot: false, username: "nonmatching-member" },
+          displayName: "別の名前",
+          roles: { cache: [{ name: "漂流者" }] },
+        },
+      ],
+      [
+        "wrong-role",
+        {
+          id: "wrong-role",
+          user: { bot: false, username: "wrong-role" },
+          displayName: "船員さくら分隊",
+          roles: { cache: [{ name: "一般メンバー" }] },
+        },
+      ],
+    ]);
+    const guild = { members: { fetch: vi.fn().mockResolvedValue(members) } };
+
+    const selector = await buildLuxuryVcAddSelector(
+      guild as never,
+      CHANNEL_ID,
+      USER_ID,
+      0,
+      "さくら",
+    );
+    const menu = selector.components[0].toJSON().components[0] as {
+      options: Array<{ value: string }>;
+    };
+
+    expect(menu.options.map((option) => option.value)).toEqual(["matching-member"]);
+    expect(selector.content).toContain("「さくら」の検索結果");
+  });
+
+  it("shows a searchable empty state when the nickname has no match", async () => {
+    const guild = { members: { fetch: vi.fn().mockResolvedValue(new Map()) } };
+
+    const selector = await buildLuxuryVcAddSelector(
+      guild as never,
+      CHANNEL_ID,
+      USER_ID,
+      0,
+      "存在しない名前",
+    );
+
+    expect(selector.content).toContain("一致する追加対象がいません");
+    expect(selector.components).toHaveLength(1);
+  });
+
   it("grants free-room access to the island-resurface role", () => {
     expect(collectFreeRoomAccessRoleIds([
       { id: "captain", name: "追放者" },
