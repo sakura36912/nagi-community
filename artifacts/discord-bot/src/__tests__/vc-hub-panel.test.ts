@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildHubVcPanelMessage, vcCommand } from "../commands/vc.js";
+import { buildHubVcPanelMessage, isBeachTransferHub, vcCommand } from "../commands/vc.js";
 import { shiftCommand } from "../commands/shift.js";
 
 describe("Hub VCインチャットパネル", () => {
@@ -19,6 +19,12 @@ describe("Hub VCインチャットパネル", () => {
     expect((row.components[0]!.toJSON() as { label?: string }).label).toBe("VC名変更");
     expect(message.embeds[0]!.toJSON().title).toBe("🏖️ 砂浜コントロールパネル");
     expect(message.embeds[0]!.toJSON().description).not.toContain("画面共有");
+  });
+
+  it("砂浜の名前またはカテゴリから砂浜パネルを判定する", () => {
+    expect(isBeachTransferHub("砂浜")).toBe(true);
+    expect(isBeachTransferHub("募集", "砂浜")).toBe(true);
+    expect(isBeachTransferHub("募集", "通常VC")).toBe(false);
   });
 
   it("ネスト形式の /vc hub add と従来の /vc hub-add を登録する", () => {

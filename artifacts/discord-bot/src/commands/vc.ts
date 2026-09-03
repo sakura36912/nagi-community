@@ -107,6 +107,22 @@ export function buildHubVcPanelMessage(
   return { embeds: [embed], components: [row] };
 }
 
+export function isBeachTransferHub(
+  ...channelNames: Array<string | null | undefined>
+): boolean {
+  return channelNames.some((name) => name?.trim() === "砂浜");
+}
+
+async function getParentChannelName(
+  guild: VoiceState["guild"],
+  channel: { parentId?: string | null } | null,
+): Promise<string | null> {
+  if (!channel?.parentId) return null;
+  const parent = guild.channels.cache.get(channel.parentId)
+    ?? await guild.channels.fetch(channel.parentId).catch(() => null);
+  return parent?.name ?? null;
+}
+
 function checkHubOwner(
   interaction: ButtonInteraction | ModalSubmitInteraction,
   ownerId: string,
@@ -707,18 +723,46 @@ export async function handlePanelOnlyHubTransfer(
     ?? await guild.channels.fetch(newState.channelId).catch(() => null);
   if (!vc || vc.type !== ChannelType.GuildVoice) return;
 
-  const sourceChannel = oldState.channel;
+  const sourceChannel = oldState.channel
+    ?? await guild.channels.fetch(hub.hubChannelId).catch(() => null);
+  const [sourceParentName, targetParentName] = await Promise.all([
+    getParentChannelName(guild, sourceChannel),
+    getParentChannelName(guild, vc),
+  ]);
   const isBeachTransfer =
-    hub.nameTemplate.trim() === "砂浜"
-    || isBeachVoiceChannel(sourceChannel?.name ?? "", sourceChannel?.parent?.name ?? null);
+    isBeachTransferHub(
+      hub.nameTemplate,
+      sourceChannel?.name,
+      sourceParentName,
+      vc.name,
+      targetParentName,
+    )
+    || isBeachVoiceChannel(sourceChannel?.name ?? "", sourceParentName);
 
   // カテゴリの ViewChannel 権限を継承させるため @everyone への上書きは行わない。
-  await vc
-    .send(buildHubVcPanelMessage(vc.id, member.id, true, !isBeachTransfer))
-    .catch((err) => logger.error("[vcHub] panel_only: Failed to send panel", err));
+  const panel = buildHubVcPanelMessage(vc.id, member.id, true, !isBeachTransfer);
+  try {
+    const botId = newState.client.user?.id;
+    const messages = await vc.messages.fetch({ limit: 50 });
+    const existingPanel = messages.find(
+      (message) =>
+        (!botId || message.author.id === botId)
+        && (
+          message.embeds[0]?.title === "🚢 船室コントロールパネル"
+          || message.embeds[0]?.title === "🏖️ 砂浜コントロールパネル"
+        ),
+    );
+    if (existingPanel) {
+      await existingPanel.edit(panel);
+    } else {
+      await vc.send(panel);
+    }
+  } catch (err) {
+    logger.error("[vcHub] panel_only: Failed to send or update panel", err);
+  }
   logger.info(
     `[vcHub] panel_only: panel sent to channel=${vc.id} ` +
-    `(from hub=${oldState.channelId}, streamControl=${!isBeachTransfer})`,
+    `(from hub=${oldState.channelId}, beach=${isBeachTransfer}, streamControl=${!isBeachTransfer})`,
   );
 }
 
