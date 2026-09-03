@@ -144,12 +144,12 @@ vi.mock("@workspace/db", () => ({
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 import {
   buildVcPanelMessage,
-  buildLuxuryVcAddSelector,
   buildLuxuryVcKickSelector,
   collectFreeRoomAccessRoleIds,
   commands,
   getPrivateVcRoomCategory,
   handleShopBuyButton,
+  handleVcPanelAddBtn,
   handleShopSelectMenu,
   isBlockedFromLuxuryVcAdd,
   isEligibleForLuxuryVcAdd,
@@ -323,114 +323,26 @@ describe("private VC panel category separation", () => {
     expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "本船員"])).toBe(false);
   });
 
-  it("includes offline members with an allowed role in the add selector", async () => {
-    const offlineMembers = new Map([
-      [
-        "offline-captain",
-        {
-          id: "offline-captain",
-          user: { bot: false, username: "offline-captain" },
-          displayName: "Offline Captain",
-          presence: null,
-          roles: { cache: [{ name: "本船員" }] },
-        },
-      ],
-      [
-        "offline-newcomer",
-        {
-          id: "offline-newcomer",
-          user: { bot: false, username: "offline-newcomer" },
-          displayName: "Offline Newcomer",
-          presence: null,
-          roles: { cache: [{ name: "新入り" }] },
-        },
-      ],
-      [
-        "ordinary-member",
-        {
-          id: "ordinary-member",
-          user: { bot: false, username: "ordinary-member" },
-          displayName: "Ordinary Member",
-          presence: null,
-          roles: { cache: [{ name: "一般メンバー" }] },
-        },
-      ],
-    ]);
-    const fetchMembers = vi.fn().mockResolvedValue(offlineMembers);
-    const guild = { members: { fetch: fetchMembers } };
-
-    const selector = await buildLuxuryVcAddSelector(guild as never, CHANNEL_ID, USER_ID, 0);
-    const menu = selector.components[0].toJSON().components[0] as {
-      options: Array<{ value: string }>;
+  it("opens a native searchable member selector without pagination", async () => {
+    const interaction = {
+      guild: { id: GUILD_ID },
+      user: { id: USER_ID },
+      client: { user: { id: BOT_ID } },
+      customId: `vc:panel:add:${CHANNEL_ID}:${USER_ID}`,
+      reply: vi.fn().mockResolvedValue(undefined),
     };
 
-    expect(fetchMembers).toHaveBeenCalledWith({ withPresences: false });
-    expect(menu.options.map((option) => option.value)).toEqual([
-      "offline-captain",
-      "offline-newcomer",
-    ]);
-  });
+    await handleVcPanelAddBtn(interaction as never);
 
-  it("filters add candidates by server nickname without including other roles", async () => {
-    const members = new Map([
-      [
-        "matching-member",
-        {
-          id: "matching-member",
-          user: { bot: false, username: "matching-member" },
-          displayName: "船員さくら",
-          roles: { cache: [{ name: "本船員" }] },
-        },
-      ],
-      [
-        "nonmatching-member",
-        {
-          id: "nonmatching-member",
-          user: { bot: false, username: "nonmatching-member" },
-          displayName: "別の名前",
-          roles: { cache: [{ name: "漂流者" }] },
-        },
-      ],
-      [
-        "wrong-role",
-        {
-          id: "wrong-role",
-          user: { bot: false, username: "wrong-role" },
-          displayName: "船員さくら分隊",
-          roles: { cache: [{ name: "一般メンバー" }] },
-        },
-      ],
-    ]);
-    const guild = { members: { fetch: vi.fn().mockResolvedValue(members) } };
-
-    const selector = await buildLuxuryVcAddSelector(
-      guild as never,
-      CHANNEL_ID,
-      USER_ID,
-      0,
-      "さくら",
-    );
-    const menu = selector.components[0].toJSON().components[0] as {
-      options: Array<{ value: string }>;
-    };
-
-    expect(menu.options.map((option) => option.value)).toEqual(["matching-member"]);
-    expect(selector.content).toContain("「さくら」の検索結果");
-  });
-
-  it("shows a searchable empty state when the nickname has no match", async () => {
-    const guild = { members: { fetch: vi.fn().mockResolvedValue(new Map()) } };
-
-    const selector = await buildLuxuryVcAddSelector(
-      guild as never,
-      CHANNEL_ID,
-      USER_ID,
-      0,
-      "存在しない名前",
-    );
-
-    expect(selector.content).toContain("一致する追加対象がいません");
-    expect(selector.components).toHaveLength(1);
+    const reply = interaction.reply.mock.calls[0]?.[0];
+    expect(reply.content).toContain("ニックネームで検索できます");
+    expect(reply.components).toHaveLength(1);
+    expect(reply.components[0].components[0].toJSON()).toMatchObject({
+      type: 5,
+      custom_id: `vc:panel:adds:${CHANNEL_ID}:${USER_ID}`,
+      min_values: 1,
+      max_values: 1,
+    });
   });
 
   it("grants free-room access to the island-resurface role", () => {

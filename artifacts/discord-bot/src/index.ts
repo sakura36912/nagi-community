@@ -51,9 +51,6 @@ import {
   VC_PANEL_SEL_ADD,
   VC_PANEL_SEL_KICK,
   VC_PANEL_SEL_EXTEND,
-  VC_PANEL_ADD_PAGE,
-  VC_PANEL_ADD_SEARCH,
-  VC_PANEL_ADD_SEARCH_MODAL,
   VC_PANEL_KICK_PAGE,
   VC_PANEL_BTN_RENAME,
   VC_PANEL_BTN_STREAM,
@@ -62,9 +59,6 @@ import {
   VC_PANEL_SEL_RENAME,
   VC_PANEL_RENAME_MODAL,
   handleVcPanelAddBtn,
-  handleVcPanelAddPage,
-  handleVcPanelAddSearchBtn,
-  handleVcPanelAddSearchModal,
   handleVcPanelKickBtn,
   handleVcPanelKickPage,
   handleVcPanelExtendBtn,
@@ -1937,12 +1931,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_BTN_ADD)) {
       await handleVcPanelAddBtn(interaction); return;
     }
-    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_ADD_PAGE)) {
-      await handleVcPanelAddPage(interaction); return;
-    }
-    if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_ADD_SEARCH)) {
-      await handleVcPanelAddSearchBtn(interaction); return;
-    }
     if (interaction.isButton() && interaction.customId.startsWith(VC_PANEL_KICK_PAGE)) {
       await handleVcPanelKickPage(interaction); return;
     }
@@ -1984,9 +1972,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith(VC_PANEL_RENAME_MODAL)) {
       await handleVcPanelRenameModal(interaction); return;
-    }
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(VC_PANEL_ADD_SEARCH_MODAL)) {
-      await handleVcPanelAddSearchModal(interaction); return;
     }
 
     // ─── Hub VC panel ────────────────────────────────────────────────────────

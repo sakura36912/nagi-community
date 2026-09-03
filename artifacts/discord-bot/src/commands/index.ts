@@ -14,6 +14,7 @@ import {
   StringSelectMenuOptionBuilder,
   TextInputBuilder,
   TextInputStyle,
+  UserSelectMenuBuilder,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type GuildMember,
@@ -1997,15 +1998,9 @@ export const VC_PANEL_SEL_EXTEND   = "vc:panel:exts:";
 export const VC_PANEL_SEL_RENAME   = "vc:panel:rsel:";
 // modal: "vc:panel:rnm:{channelId}:{ownerId}:{itemId}"
 export const VC_PANEL_RENAME_MODAL = "vc:panel:rnm:";
-export const VC_PANEL_ADD_PAGE     = "vc:panel:add-page:";
-export const VC_PANEL_ADD_SEARCH   = "vc:panel:add-search:";
-export const VC_PANEL_ADD_SEARCH_MODAL = "vc:panel:add-search-modal:";
 export const VC_PANEL_KICK_PAGE    = "vc:panel:kick-page:";
-const VC_PANEL_ADD_PAGE_SIZE = 25;
 const VC_PANEL_KICK_PAGE_SIZE = 25;
 export const LUXURY_VC_ADD_ROLE_NAMES = ["本船員", "漂流者", "新入り"] as const;
-const luxuryVcAddSearches = new Map<string, { query: string; expiresAt: number }>();
-const LUXURY_VC_ADD_SEARCH_TTL_MS = 10 * 60 * 1000;
 
 /** custom ID のペイロードを "{channelId}:{ownerId}" 形式でエンコード */
 export function vcPanelId(prefix: string, channelId: string, ownerId: string) {
@@ -2036,31 +2031,6 @@ function parseVcPanelPagedId(
     ownerId,
     page: Number.isInteger(page) && page >= 0 ? page : 0,
   };
-}
-
-function luxuryVcAddSearchKey(channelId: string, ownerId: string): string {
-  return `${channelId}:${ownerId}`;
-}
-
-function setLuxuryVcAddSearch(channelId: string, ownerId: string, query: string): void {
-  luxuryVcAddSearches.set(luxuryVcAddSearchKey(channelId, ownerId), {
-    query,
-    expiresAt: Date.now() + LUXURY_VC_ADD_SEARCH_TTL_MS,
-  });
-}
-
-function getLuxuryVcAddSearch(channelId: string, ownerId: string): string {
-  const key = luxuryVcAddSearchKey(channelId, ownerId);
-  const search = luxuryVcAddSearches.get(key);
-  if (!search || search.expiresAt <= Date.now()) {
-    luxuryVcAddSearches.delete(key);
-    return "";
-  }
-  return search.query;
-}
-
-function clearLuxuryVcAddSearch(channelId: string, ownerId: string): void {
-  luxuryVcAddSearches.delete(luxuryVcAddSearchKey(channelId, ownerId));
 }
 
 export function isBlockedFromLuxuryVcAdd(roleNames: Iterable<string>): boolean {
@@ -2139,19 +2109,6 @@ export async function kickPrivateVcMember(
   }
 
   return { ok: true };
-}
-
-function getLuxuryVcAddableMembers(
-  members: Iterable<GuildMember>,
-  ownerId: string,
-): GuildMember[] {
-  return [...members]
-    .filter((member) =>
-      !member.user.bot
-      && member.id !== ownerId
-      && isEligibleForLuxuryVcAdd(member.roles.cache.map((role) => role.name)),
-    )
-    .sort((a, b) => a.displayName.localeCompare(b.displayName, "ja"));
 }
 
 /**
@@ -2262,152 +2219,21 @@ function checkOwner(
   return true;
 }
 
-export async function buildLuxuryVcAddSelector(
-  guild: Guild,
-  channelId: string,
-  ownerId: string,
-  requestedPage: number,
-  searchQuery = "",
-): Promise<{
-  content: string;
-  components: Array<
-    ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
-  >;
-}> {
-  // Fetch the complete guild member list rather than relying on the current
-  // cache/presence state, so offline members with an allowed role are included.
-  const fetchedMembers = await guild.members.fetch({ withPresences: false });
-  const normalizedQuery = searchQuery.trim().toLocaleLowerCase("ja-JP");
-  const members = getLuxuryVcAddableMembers(fetchedMembers.values(), ownerId)
-    .filter((member) =>
-      normalizedQuery.length === 0
-      || member.displayName.toLocaleLowerCase("ja-JP").includes(normalizedQuery),
-    );
-  const pageCount = Math.max(1, Math.ceil(members.length / VC_PANEL_ADD_PAGE_SIZE));
-  const page = Math.min(Math.max(requestedPage, 0), pageCount - 1);
-  const pageMembers = members.slice(
-    page * VC_PANEL_ADD_PAGE_SIZE,
-    (page + 1) * VC_PANEL_ADD_PAGE_SIZE,
-  );
-  const searchButtonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(vcPanelId(VC_PANEL_ADD_SEARCH, channelId, ownerId))
-      .setLabel("ニックネームで検索")
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji("🔎"),
-  );
-  if (pageMembers.length === 0) {
-    return {
-      content: normalizedQuery
-        ? `❌ 「${searchQuery.trim()}」に一致する追加対象がいません。別のニックネームで検索してください。`
-        : `❌ 追加可能なメンバーがいません（${LUXURY_VC_ADD_ROLE_NAMES.join("・")}ロール保持者のみ対象です）。`,
-      components: normalizedQuery ? [searchButtonRow] : [],
-    };
-  }
-
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`${VC_PANEL_SEL_ADD}${channelId}:${ownerId}:${page}`)
-    .setPlaceholder("追加するメンバーを選択")
-    .setMinValues(1)
-    .setMaxValues(1)
-    .addOptions(
-      pageMembers.map((member) =>
-        new StringSelectMenuOptionBuilder()
-          .setLabel(member.displayName.slice(0, 100))
-          .setValue(member.id)
-          .setDescription(`@${member.user.username}`.slice(0, 100)),
-      ),
-    );
-
-  const components: Array<
-    ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
-  > = [
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
-    searchButtonRow,
-  ];
-  if (pageCount > 1) {
-    const navigation = new ActionRowBuilder<ButtonBuilder>();
-    if (page > 0) {
-      navigation.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`${VC_PANEL_ADD_PAGE}${channelId}:${ownerId}:${page - 1}`)
-          .setLabel("前のページ")
-          .setStyle(ButtonStyle.Secondary),
-      );
-    }
-    if (page < pageCount - 1) {
-      navigation.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`${VC_PANEL_ADD_PAGE}${channelId}:${ownerId}:${page + 1}`)
-          .setLabel("次のページ")
-          .setStyle(ButtonStyle.Secondary),
-      );
-    }
-    components.push(navigation);
-  }
-
-  return {
-    content: normalizedQuery
-      ? `「${searchQuery.trim()}」の検索結果から追加するメンバーを選んでください（${page + 1}/${pageCount}）：`
-      : `追加するメンバーを選んでください（${page + 1}/${pageCount}）：`,
-    components,
-  };
-}
-
 export async function handleVcPanelAddBtn(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guild) return;
   const { channelId, ownerId } = parseVcPanelId(VC_PANEL_BTN_ADD, interaction.customId);
   if (!checkOwner(interaction, ownerId)) return;
-  clearLuxuryVcAddSearch(channelId, ownerId);
-  const selector = await buildLuxuryVcAddSelector(interaction.guild, channelId, ownerId, 0);
-  await interaction.reply({ ...selector, ephemeral: true });
-}
-
-export async function handleVcPanelAddPage(interaction: ButtonInteraction): Promise<void> {
-  if (!interaction.guild) return;
-  const { channelId, ownerId, page } = parseVcPanelPagedId(VC_PANEL_ADD_PAGE, interaction.customId);
-  if (!checkOwner(interaction, ownerId)) return;
-  const selector = await buildLuxuryVcAddSelector(
-    interaction.guild,
-    channelId,
-    ownerId,
-    page,
-    getLuxuryVcAddSearch(channelId, ownerId),
-  );
-  await interaction.update(selector);
-}
-
-export async function handleVcPanelAddSearchBtn(interaction: ButtonInteraction): Promise<void> {
-  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_ADD_SEARCH, interaction.customId);
-  if (!checkOwner(interaction, ownerId)) return;
-  const input = new TextInputBuilder()
-    .setCustomId("nickname")
-    .setLabel("サーバーニックネーム")
-    .setPlaceholder("ニックネームの一部を入力")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(false)
-    .setMaxLength(32);
-  const modal = new ModalBuilder()
-    .setCustomId(vcPanelId(VC_PANEL_ADD_SEARCH_MODAL, channelId, ownerId))
-    .setTitle("高級船室の追加対象を検索")
-    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
-  await interaction.showModal(modal);
-}
-
-export async function handleVcPanelAddSearchModal(interaction: ModalSubmitInteraction): Promise<void> {
-  if (!interaction.guild) return;
-  const { channelId, ownerId } = parseVcPanelId(VC_PANEL_ADD_SEARCH_MODAL, interaction.customId);
-  if (!checkOwner(interaction, ownerId)) return;
-  const query = interaction.fields.getTextInputValue("nickname").trim();
-  setLuxuryVcAddSearch(channelId, ownerId, query);
-  const selector = await buildLuxuryVcAddSelector(
-    interaction.guild,
-    channelId,
-    ownerId,
-    0,
-    query,
-  );
-  await interaction.reply({ ...selector, ephemeral: true });
+  const select = new UserSelectMenuBuilder()
+    .setCustomId(vcPanelId(VC_PANEL_SEL_ADD, channelId, ownerId))
+    .setPlaceholder("追加するメンバーを選択")
+    .setMinValues(1)
+    .setMaxValues(1);
+  const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(select);
+  await interaction.reply({
+    content: "追加するメンバーを選んでください（ニックネームで検索できます）：",
+    components: [row],
+    ephemeral: true,
+  });
 }
 
 export async function buildLuxuryVcKickSelector(
