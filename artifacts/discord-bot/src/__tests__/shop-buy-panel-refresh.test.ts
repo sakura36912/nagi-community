@@ -155,6 +155,7 @@ import {
   isEligibleForLuxuryVcAdd,
   isFreeRoomCategory,
   kickPrivateVcMember,
+  refreshPrivateVcPanelMessage,
   SHOP_BUY_PREFIX,
   SHOP_SELECT_ID,
 } from "../commands/index.js";
@@ -607,6 +608,93 @@ describe("private VC kick selector", () => {
 
     expect(selector.content).toContain("アクセス権を持つメンバーはいません");
     expect(selector.components).toEqual([]);
+  });
+});
+
+describe("private VC access-list refresh", () => {
+  function makeAccessOverwrite(id: string) {
+    return {
+      id,
+      type: 1,
+      allow: { has: (permission: bigint) => permission === PermissionFlagsBits.ViewChannel },
+    };
+  }
+
+  function makeMessageCollection(message?: {
+    author: { id: string };
+    embeds: Array<{ title: string }>;
+    edit: ReturnType<typeof vi.fn>;
+  }) {
+    return {
+      find: (predicate: (candidate: typeof message) => boolean) =>
+        message && predicate(message) ? message : undefined,
+    };
+  }
+
+  it("adds the changed member even before the overwrite cache catches up and finds an old panel", async () => {
+    const editPanel = vi.fn().mockResolvedValue(undefined);
+    const oldPanel = {
+      author: { id: BOT_ID },
+      embeds: [{ title: "🔒 高級船室 コントロールパネル" }],
+      edit: editPanel,
+    };
+    const fetchMessages = vi.fn().mockResolvedValue(makeMessageCollection(oldPanel));
+    const channel = {
+      id: CHANNEL_ID,
+      permissionOverwrites: {
+        cache: [makeAccessOverwrite("existing-member")],
+      },
+      messages: { fetch: fetchMessages },
+    };
+
+    await expect(refreshPrivateVcPanelMessage(channel as never, {
+      channelId: CHANNEL_ID,
+      ownerId: USER_ID,
+      botId: BOT_ID,
+      addedMemberId: "new-member",
+      streamEnabled: false,
+      category: "vc",
+    })).resolves.toBe(true);
+
+    expect(fetchMessages).toHaveBeenCalledWith({ limit: 10, after: "0" });
+    expect(fetchMessages).toHaveBeenCalledOnce();
+    const description = editPanel.mock.calls[0]?.[0].embeds[0].data.description;
+    expect(description).toContain("<@existing-member>");
+    expect(description).toContain("<@new-member>");
+  });
+
+  it("removes the changed member even while the overwrite remains in cache", async () => {
+    const editPanel = vi.fn().mockResolvedValue(undefined);
+    const panel = {
+      author: { id: BOT_ID },
+      embeds: [{ title: "🔒 高級船室 コントロールパネル" }],
+      edit: editPanel,
+    };
+    const channel = {
+      id: CHANNEL_ID,
+      permissionOverwrites: {
+        cache: [
+          makeAccessOverwrite("remaining-member"),
+          makeAccessOverwrite("removed-member"),
+        ],
+      },
+      messages: {
+        fetch: vi.fn().mockResolvedValue(makeMessageCollection(panel)),
+      },
+    };
+
+    await refreshPrivateVcPanelMessage(channel as never, {
+      channelId: CHANNEL_ID,
+      ownerId: USER_ID,
+      botId: BOT_ID,
+      removedMemberId: "removed-member",
+      streamEnabled: false,
+      category: "vc",
+    });
+
+    const description = editPanel.mock.calls[0]?.[0].embeds[0].data.description;
+    expect(description).toContain("<@remaining-member>");
+    expect(description).not.toContain("<@removed-member>");
   });
 });
 

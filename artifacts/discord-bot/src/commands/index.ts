@@ -1654,16 +1654,17 @@ const shopCommand: Command = {
       // パネルのメンバーリストをリアルタイム更新（best-effort）
       try {
         if ("messages" in ch) {
-          const streamEnabled = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, interaction.user.id);
-          const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id);
-          const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
-          const panelMsg = msgs.find(
-            (m) => m.author.id === interaction.client.user?.id
-              && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
+          await refreshPrivateVcPanelMessage(
+            ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel,
+            {
+              channelId: session.channelId,
+              ownerId: interaction.user.id,
+              botId: interaction.client.user?.id,
+              expiresAt: session.expiresAt,
+              category: session.category,
+              addedMemberId: targetUser.id,
+            },
           );
-          if (panelMsg) {
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled, isFreeRoomCategory(session.category)));
-          }
         }
       } catch (err) {
         logger.warn(`[vc-invite] Failed to refresh panel for channel ${session.channelId}`, err);
@@ -1702,18 +1703,17 @@ const shopCommand: Command = {
       // パネルのメンバーリストをリアルタイム更新（best-effort）
       try {
         if ("messages" in ch) {
-          const streamEnabled = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, interaction.user.id);
-          // permissionOverwrites.delete() のキャッシュ反映を待たず、kicked ユーザーを明示的に除外する
-          const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, interaction.user.id, interaction.client.user?.id)
-            .filter((id) => id !== targetUser.id);
-          const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
-          const panelMsg = msgs.find(
-            (m) => m.author.id === interaction.client.user?.id
-              && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
+          await refreshPrivateVcPanelMessage(
+            ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel,
+            {
+              channelId: session.channelId,
+              ownerId: interaction.user.id,
+              botId: interaction.client.user?.id,
+              expiresAt: session.expiresAt,
+              category: session.category,
+              removedMemberId: targetUser.id,
+            },
           );
-          if (panelMsg) {
-            await panelMsg.edit(buildVcPanelMessage(session.channelId, interaction.user.id, session.expiresAt ?? undefined, memberIds, streamEnabled, isFreeRoomCategory(session.category)));
-          }
         }
       } catch (err) {
         logger.warn(`[vc-kick] Failed to refresh panel for channel ${session.channelId}`, err);
@@ -2140,6 +2140,65 @@ function isPrivateVcStreamEnabled(ch: import("discord.js").GuildChannel, ownerId
   if (!("permissionOverwrites" in ch)) return false;
   const ow = ch.permissionOverwrites.cache.get(ownerId);
   return ow?.allow.has(PermissionFlagsBits.Stream) ?? false;
+}
+
+interface RefreshPrivateVcPanelOptions {
+  channelId: string;
+  ownerId: string;
+  botId: string | undefined;
+  expiresAt?: Date | null;
+  category?: string | null;
+  addedMemberId?: string;
+  removedMemberId?: string;
+  streamEnabled?: boolean;
+}
+
+/**
+ * 権限変更直後はDiscordの上書きキャッシュが古い場合があるため、変更対象を
+ * 表示用一覧へ明示反映する。パネルが古いメッセージになっていても見つける。
+ */
+export async function refreshPrivateVcPanelMessage(
+  channel: import("discord.js").TextBasedChannel & import("discord.js").GuildChannel,
+  options: RefreshPrivateVcPanelOptions,
+): Promise<boolean> {
+  let memberIds = getVcAccessMemberIds(channel, options.ownerId, options.botId);
+  if (options.addedMemberId && !memberIds.includes(options.addedMemberId)) {
+    memberIds = [...memberIds, options.addedMemberId];
+  }
+  if (options.removedMemberId) {
+    memberIds = memberIds.filter((id) => id !== options.removedMemberId);
+  }
+
+  const isPanel = (message: import("discord.js").Message) =>
+    message.author.id === options.botId
+    && (
+      message.embeds[0]?.title === VC_PANEL_TITLE
+      || LEGACY_VC_PANEL_TITLES.has(message.embeds[0]?.title ?? "")
+    );
+  const oldestMessages = await channel.messages.fetch({ limit: 10, after: "0" });
+  let panelMessage = oldestMessages.find(isPanel);
+  if (!panelMessage) {
+    const recentMessages = await channel.messages.fetch({ limit: 50 });
+    panelMessage = recentMessages.find(isPanel);
+  }
+  if (!panelMessage) {
+    logger.warn(`[vc-panel] Control panel not found in channel ${options.channelId}`);
+    return false;
+  }
+
+  const streamEnabled = options.streamEnabled
+    ?? isPrivateVcStreamEnabled(channel, options.ownerId);
+  await panelMessage.edit(
+    buildVcPanelMessage(
+      options.channelId,
+      options.ownerId,
+      options.expiresAt ?? undefined,
+      memberIds,
+      streamEnabled,
+      isFreeRoomCategory(options.category),
+    ),
+  );
+  return true;
 }
 
 export function buildVcPanelMessage(
@@ -2765,17 +2824,20 @@ export async function handleVcPanelAddSel(
   await interaction.reply({ content: `✅ <@${targetId}> をVCに追加しました。`, ephemeral: true });
   // Refresh the panel so the new member appears in the access list (best-effort).
   try {
-    const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id);
     if ("messages" in ch) {
-      const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
-      const panelMsg = msgs.find(
-        (m) => m.author.id === interaction.client.user?.id
-          && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
+      const session = await getPrivateVcSessionByChannelId(channelId);
+      await refreshPrivateVcPanelMessage(
+        ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel,
+        {
+          channelId,
+          ownerId,
+          botId: interaction.client.user?.id,
+          expiresAt: session?.expiresAt,
+          category: session?.category,
+          addedMemberId: targetId,
+          streamEnabled: streamEnabledOnAdd,
+        },
       );
-      if (panelMsg) {
-        const session = await getPrivateVcSessionByChannelId(channelId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnAdd, isFreeRoomCategory(session?.category)));
-      }
     }
   } catch (err) {
     logger.error(`[vc-panel] Failed to refresh panel after add for channel ${channelId}`, err);
@@ -2820,20 +2882,19 @@ export async function handleVcPanelKickSel(
   await interaction.reply({ content: `✅ <@${targetId}> をキックしました。`, ephemeral: true });
   // Refresh the panel so the removed member disappears from the access list (best-effort).
   try {
-    // permissionOverwrites.delete() のキャッシュ反映を待たず、kicked ユーザーを明示的に除外する
-    const memberIds = getVcAccessMemberIds(ch as import("discord.js").GuildChannel, ownerId, interaction.client.user?.id)
-      .filter((id) => id !== targetId);
-    const streamEnabledOnKick = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, ownerId);
     if ("messages" in ch) {
-      const msgs = await (ch as import("discord.js").TextBasedChannel).messages.fetch({ limit: 20 });
-      const panelMsg = msgs.find(
-        (m) => m.author.id === interaction.client.user?.id
-          && (m.embeds[0]?.title === VC_PANEL_TITLE || LEGACY_VC_PANEL_TITLES.has(m.embeds[0]?.title ?? "")),
+      const session = await getPrivateVcSessionByChannelId(channelId);
+      await refreshPrivateVcPanelMessage(
+        ch as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel,
+        {
+          channelId,
+          ownerId,
+          botId: interaction.client.user?.id,
+          expiresAt: session?.expiresAt,
+          category: session?.category,
+          removedMemberId: targetId,
+        },
       );
-      if (panelMsg) {
-        const session = await getPrivateVcSessionByChannelId(channelId);
-        await panelMsg.edit(buildVcPanelMessage(channelId, ownerId, session?.expiresAt ?? undefined, memberIds, streamEnabledOnKick, isFreeRoomCategory(session?.category)));
-      }
     }
   } catch (err) {
     logger.error(`[vc-panel] Failed to refresh panel after kick for channel ${channelId}`, err);
