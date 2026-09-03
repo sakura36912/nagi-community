@@ -2229,7 +2229,7 @@ function checkOwner(
   return true;
 }
 
-async function buildLuxuryVcAddSelector(
+export async function buildLuxuryVcAddSelector(
   guild: Guild,
   channelId: string,
   ownerId: string,
@@ -2240,8 +2240,10 @@ async function buildLuxuryVcAddSelector(
     ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
   >;
 }> {
-  await guild.members.fetch();
-  const members = getLuxuryVcAddableMembers(guild.members.cache.values(), ownerId);
+  // Fetch the complete guild member list rather than relying on the current
+  // cache/presence state, so offline members with an allowed role are included.
+  const fetchedMembers = await guild.members.fetch({ withPresences: false });
+  const members = getLuxuryVcAddableMembers(fetchedMembers.values(), ownerId);
   const pageCount = Math.max(1, Math.ceil(members.length / VC_PANEL_ADD_PAGE_SIZE));
   const page = Math.min(Math.max(requestedPage, 0), pageCount - 1);
   const pageMembers = members.slice(

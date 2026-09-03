@@ -144,6 +144,7 @@ vi.mock("@workspace/db", () => ({
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 import {
   buildVcPanelMessage,
+  buildLuxuryVcAddSelector,
   buildLuxuryVcKickSelector,
   collectFreeRoomAccessRoleIds,
   commands,
@@ -320,6 +321,54 @@ describe("private VC panel category separation", () => {
 
     expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "追放者"])).toBe(true);
     expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "本船員"])).toBe(false);
+  });
+
+  it("includes offline members with an allowed role in the add selector", async () => {
+    const offlineMembers = new Map([
+      [
+        "offline-captain",
+        {
+          id: "offline-captain",
+          user: { bot: false, username: "offline-captain" },
+          displayName: "Offline Captain",
+          presence: null,
+          roles: { cache: [{ name: "本船員" }] },
+        },
+      ],
+      [
+        "offline-newcomer",
+        {
+          id: "offline-newcomer",
+          user: { bot: false, username: "offline-newcomer" },
+          displayName: "Offline Newcomer",
+          presence: null,
+          roles: { cache: [{ name: "新入り" }] },
+        },
+      ],
+      [
+        "ordinary-member",
+        {
+          id: "ordinary-member",
+          user: { bot: false, username: "ordinary-member" },
+          displayName: "Ordinary Member",
+          presence: null,
+          roles: { cache: [{ name: "一般メンバー" }] },
+        },
+      ],
+    ]);
+    const fetchMembers = vi.fn().mockResolvedValue(offlineMembers);
+    const guild = { members: { fetch: fetchMembers } };
+
+    const selector = await buildLuxuryVcAddSelector(guild as never, CHANNEL_ID, USER_ID, 0);
+    const menu = selector.components[0].toJSON().components[0] as {
+      options: Array<{ value: string }>;
+    };
+
+    expect(fetchMembers).toHaveBeenCalledWith({ withPresences: false });
+    expect(menu.options.map((option) => option.value)).toEqual([
+      "offline-captain",
+      "offline-newcomer",
+    ]);
   });
 
   it("grants free-room access to the island-resurface role", () => {
