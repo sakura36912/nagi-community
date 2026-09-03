@@ -767,6 +767,53 @@ export async function handlePanelOnlyHubTransfer(
 }
 
 /**
+ * 起動時に、すでに砂浜VCへ投稿されている旧船室パネルを移行する。
+ * panel-only Hubはセッション行を持たないため、砂浜VCを直接検索する。
+ */
+export async function refreshExistingBeachHubPanels(
+  discordClient: import("discord.js").Client,
+): Promise<void> {
+  let updated = 0;
+  let skipped = 0;
+
+  for (const guild of discordClient.guilds.cache.values()) {
+    const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    for (const channel of channels.values()) {
+      if (!channel || channel.type !== ChannelType.GuildVoice) continue;
+
+      try {
+        const parentName = await getParentChannelName(guild, channel);
+        if (!isBeachTransferHub(channel.name, parentName)) continue;
+
+        const messages = await channel.messages.fetch({ limit: 50 });
+        const botId = discordClient.user?.id;
+        const panelMessage = messages.find(
+          (message) =>
+            (!botId || message.author.id === botId)
+            && message.embeds[0]?.title === "🚢 船室コントロールパネル",
+        );
+        if (!panelMessage) continue;
+
+        const ownerId = panelMessage.embeds[0]?.description?.match(/<@!?(\d+)>/)?.[1];
+        if (!ownerId) {
+          skipped++;
+          logger.warn(`[vcHub] beach panel migration skipped: owner not found channel=${channel.id}`);
+          continue;
+        }
+
+        await panelMessage.edit(buildHubVcPanelMessage(channel.id, ownerId, true, false));
+        updated++;
+      } catch (err) {
+        skipped++;
+        logger.warn(`[vcHub] beach panel migration failed channel=${channel.id}`, err);
+      }
+    }
+  }
+
+  logger.info(`[vcHub] beach panel migration complete: updated=${updated} skipped=${skipped}`);
+}
+
+/**
  * メンバーが Hub によって生成されたVCを離れたとき:
  *   チャンネルが空になっていれば自動削除する
  */

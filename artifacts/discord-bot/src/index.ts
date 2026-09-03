@@ -78,6 +78,7 @@ import {
   handleHubJoin,
   handleHubLeave,
   handlePanelOnlyHubTransfer,
+  refreshExistingBeachHubPanels,
   HUB_PANEL_BTN_RENAME,
   HUB_PANEL_BTN_STREAM,
   HUB_PANEL_RENAME_MODAL,
@@ -951,6 +952,10 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   // 起動直後に全高級船室パネルを一括更新（メンバーリスト・期限・ボタンを現在の状態に同期）
   refreshAllVcPanels(readyClient).catch((err) => logger.error("[vc-panel-refresh] Startup panel refresh error", err));
+  // 既存の砂浜パネルに残っている旧「船室」表示を移行
+  refreshExistingBeachHubPanels(readyClient).catch((err) =>
+    logger.error("[vcHub] Startup beach panel migration error", err),
+  );
 
   // 10分ごとのバックグラウンドタスク
   setInterval(() => {
