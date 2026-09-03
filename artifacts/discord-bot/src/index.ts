@@ -108,6 +108,10 @@ import { sendVcNotifyJoin, sendVcNotifyLeave } from "./lib/vcNotify";
 import { handleVcLogJoin } from "./lib/vcLogJoin";
 import { isBeachVoiceChannel } from "./lib/vcRewardEligibility";
 import { enqueueVcRewardEvent } from "./lib/vcRewardEventQueue";
+import {
+  reconcileVcRewardPresenceRows,
+  type ActiveRewardVoiceState,
+} from "./lib/vcRewardPresenceReconciliation";
 import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/calendar";
 
 import { logger } from "./lib/logger";
@@ -871,16 +875,50 @@ client.once(Events.ClientReady, async (readyClient) => {
     }
   }, 5_000);
 
-  // Clear stale vc_presence rows left over from a previous bot session.
-  // We cannot recover exact join times after a restart, so we simply discard
-  // them to prevent phantom payouts on the next leave event.
-  getAllVcPresences()
-    .then(async (rows) => {
-      if (rows.length === 0) return;
-      await Promise.all(rows.map((r) => clearVcPresence(r.guildId, r.userId)));
-      logger.info(`[vcsalary] Cleared ${rows.length} stale presence record(s) on startup`);
-    })
-    .catch((err) => logger.error("[vcsalary] Failed to clear stale presences", err));
+  // DB上の報酬計測と、Discord上で実際に接続中の状態を同期する。
+  // 接続中の既存行はjoinedAtを残し、Bot再起動をまたいだ滞在時間を維持する。
+  (async () => {
+    const existingRows = await getAllVcPresences();
+    const trackedByChannel = new Map<string, Promise<boolean>>();
+    const candidates = [...readyClient.guilds.cache.values()].flatMap((guild) =>
+      [...guild.voiceStates.cache.values()]
+        .filter((voiceState) =>
+          voiceState.channelId != null
+          && voiceState.channelId !== guild.afkChannelId
+          && !voiceState.member?.user.bot,
+        )
+        .map((voiceState) => ({ guild, voiceState })),
+    );
+
+    const activeStates = (await Promise.all(
+      candidates.map(async ({ guild, voiceState }): Promise<ActiveRewardVoiceState | null> => {
+        const channelId = voiceState.channelId!;
+        const cacheKey = `${guild.id}:${channelId}`;
+        let trackedPromise = trackedByChannel.get(cacheKey);
+        if (!trackedPromise) {
+          trackedPromise = (async () => {
+            const hubSalary = await getHubSalaryForChannel(channelId);
+            if (hubSalary) return true;
+            const settings = await getVcRewardSettings(guild.id);
+            return settings.ratePerHour > 0 && await isEligibleChannel(guild, channelId);
+          })();
+          trackedByChannel.set(cacheKey, trackedPromise);
+        }
+        if (!await trackedPromise) return null;
+        return { guildId: guild.id, userId: voiceState.id, channelId };
+      }),
+    )).filter((state): state is ActiveRewardVoiceState => state != null);
+
+    const result = await reconcileVcRewardPresenceRows(existingRows, activeStates, {
+      clear: clearVcPresence,
+      move: updateVcPresenceChannel,
+      seed: recordVcJoin,
+    });
+    logger.info(
+      `[vcsalary] Startup presence sync: preserved=${result.preserved} ` +
+      `moved=${result.moved} cleared=${result.cleared} seeded=${result.seeded}`,
+    );
+  })().catch((err) => logger.error("[vcsalary] Failed to sync startup presences", err));
 
   // Remove vc_schedules rows for guilds the bot is no longer a member of.
   // When the bot is removed from a guild its schedule rows are never cleaned
