@@ -2187,7 +2187,8 @@ export function buildVcPanelMessage(
         .setCustomId(vcPanelId(VC_PANEL_BTN_KICK, channelId, ownerId))
         .setLabel("キック")
         .setStyle(ButtonStyle.Danger)
-        .setEmoji("👢"),
+        .setEmoji("👢")
+        .setDisabled(memberIds !== undefined && memberIds.length === 0),
     ]),
     new ButtonBuilder()
       .setCustomId(vcPanelId(VC_PANEL_BTN_EXTEND, channelId, ownerId))

@@ -349,6 +349,14 @@ describe("private VC panel category separation", () => {
   it("renders distinct panel titles and luxury-only member controls", () => {
     const freeRoomPanel = buildVcPanelMessage("channel-free", "owner", undefined, [], false, true);
     const luxuryPanel = buildVcPanelMessage("channel-luxury", "owner", undefined, [], false, false);
+    const populatedLuxuryPanel = buildVcPanelMessage(
+      "channel-luxury",
+      "owner",
+      undefined,
+      ["member-a"],
+      false,
+      false,
+    );
 
     expect(freeRoomPanel.embeds[0]?.data.title).toBe("フリールームコントロールパネル");
     expect(luxuryPanel.embeds[0]?.data.title).toBe("🔒 高級船室 コントロールパネル");
@@ -365,6 +373,16 @@ describe("private VC panel category separation", () => {
     expect(freeButtonIds.some((id) => id?.includes(":kick:"))).toBe(false);
     expect(luxuryButtonIds.some((id) => id?.includes(":add:"))).toBe(true);
     expect(luxuryButtonIds.some((id) => id?.includes(":kick:"))).toBe(true);
+    expect(
+      luxuryPanel.components[0]?.components.find(
+        (component) => (component.data as { label?: string }).label === "キック",
+      )?.data.disabled,
+    ).toBe(true);
+    expect(
+      populatedLuxuryPanel.components[0]?.components.find(
+        (component) => (component.data as { label?: string }).label === "キック",
+      )?.data.disabled,
+    ).toBe(false);
   });
 });
 
