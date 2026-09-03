@@ -9,6 +9,7 @@
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
+import { PermissionFlagsBits } from "discord.js";
 
 // ─── Hoist mocks ─────────────────────────────────────────────────────────────
 const mocks = vi.hoisted(() => ({
@@ -151,6 +152,7 @@ import {
   isBlockedFromLuxuryVcAdd,
   isEligibleForLuxuryVcAdd,
   isFreeRoomCategory,
+  kickPrivateVcMember,
   SHOP_BUY_PREFIX,
   SHOP_SELECT_ID,
 } from "../commands/index.js";
@@ -362,6 +364,105 @@ describe("private VC panel category separation", () => {
     expect(freeButtonIds.some((id) => id?.includes(":kick:"))).toBe(false);
     expect(luxuryButtonIds.some((id) => id?.includes(":add:"))).toBe(true);
     expect(luxuryButtonIds.some((id) => id?.includes(":kick:"))).toBe(true);
+  });
+});
+
+describe("private VC kick", () => {
+  function makeKickContext(options?: {
+    connected?: boolean;
+    manageChannels?: boolean;
+    moveMembers?: boolean;
+    deleteError?: Error;
+    disconnectError?: Error;
+  }) {
+    const disconnect = options?.disconnectError
+      ? vi.fn().mockRejectedValue(options.disconnectError)
+      : vi.fn().mockResolvedValue(undefined);
+    const member = {
+      voice: {
+        channelId: options?.connected === false ? null : CHANNEL_ID,
+        disconnect,
+      },
+    };
+    const guild = {
+      id: GUILD_ID,
+      members: {
+        me: { id: BOT_ID },
+        fetch: vi.fn().mockResolvedValue(member),
+      },
+    };
+    const deleteOverwrite = options?.deleteError
+      ? vi.fn().mockRejectedValue(options.deleteError)
+      : vi.fn().mockResolvedValue(undefined);
+    const channel = {
+      id: CHANNEL_ID,
+      permissionsFor: vi.fn().mockReturnValue({
+        has: (permission: bigint) => {
+          if (permission === PermissionFlagsBits.ManageChannels) {
+            return options?.manageChannels !== false;
+          }
+          if (permission === PermissionFlagsBits.MoveMembers) {
+            return options?.moveMembers !== false;
+          }
+          return false;
+        },
+      }),
+      permissionOverwrites: { delete: deleteOverwrite },
+    };
+    return { channel, deleteOverwrite, disconnect, guild };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not claim success when MoveMembers is missing for a connected member", async () => {
+    const { channel, deleteOverwrite, disconnect, guild } = makeKickContext({ moveMembers: false });
+
+    const result = await kickPrivateVcMember(guild as never, channel as never, USER_ID);
+
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.message).toContain("メンバーを移動");
+    expect(deleteOverwrite).not.toHaveBeenCalled();
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(mocks.loggerWarn).toHaveBeenCalledOnce();
+  });
+
+  it("reports permission-overwrite deletion failures", async () => {
+    const { channel, deleteOverwrite, disconnect, guild } = makeKickContext({
+      connected: false,
+      deleteError: new Error("Missing Permissions"),
+    });
+
+    const result = await kickPrivateVcMember(guild as never, channel as never, USER_ID);
+
+    expect(result).toMatchObject({ ok: false });
+    expect(deleteOverwrite).toHaveBeenCalledWith(USER_ID);
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(mocks.loggerError).toHaveBeenCalledOnce();
+  });
+
+  it("reports voice disconnect failures after access was removed", async () => {
+    const { channel, deleteOverwrite, disconnect, guild } = makeKickContext({
+      disconnectError: new Error("Missing Permissions"),
+    });
+
+    const result = await kickPrivateVcMember(guild as never, channel as never, USER_ID);
+
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.message).toContain("アクセス権は取り消しました");
+    expect(deleteOverwrite).toHaveBeenCalledWith(USER_ID);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(mocks.loggerError).toHaveBeenCalledOnce();
+  });
+
+  it("succeeds only after access removal and required voice disconnect both succeed", async () => {
+    const { channel, deleteOverwrite, disconnect, guild } = makeKickContext();
+
+    await expect(kickPrivateVcMember(guild as never, channel as never, USER_ID))
+      .resolves.toEqual({ ok: true });
+    expect(deleteOverwrite).toHaveBeenCalledWith(USER_ID);
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 });
 

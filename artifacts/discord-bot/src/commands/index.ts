@@ -1630,6 +1630,17 @@ const shopCommand: Command = {
         await interaction.editReply("❌ 自分自身を招待することはできません。");
         return;
       }
+      const targetMember = await interaction.guild!.members.fetch(targetUser.id).catch(() => null);
+      if (!targetMember) {
+        await interaction.editReply("❌ メンバーが見つかりませんでした。");
+        return;
+      }
+      if (!isEligibleForLuxuryVcAdd(targetMember.roles.cache.map((role) => role.name))) {
+        await interaction.editReply(
+          `❌ ${LUXURY_VC_ADD_ROLE_NAMES.join("・")}のいずれかのロールを持つメンバーのみ高級船室へ追加できます。`,
+        );
+        return;
+      }
       const ch = interaction.guild!.channels.cache.get(session.channelId)
         ?? await interaction.guild!.channels.fetch(session.channelId).catch(() => null);
       if (!ch || !("permissionOverwrites" in ch)) {
@@ -1678,11 +1689,15 @@ const shopCommand: Command = {
         await interaction.editReply("❌ VCチャンネルが見つかりませんでした。");
         return;
       }
-      await ch.permissionOverwrites.delete(targetUser.id);
-      try {
-        const kicked = await interaction.guild!.members.fetch(targetUser.id);
-        if (kicked.voice.channelId === session.channelId) await kicked.voice.disconnect();
-      } catch { /* non-fatal */ }
+      const kickResult = await kickPrivateVcMember(
+        interaction.guild!,
+        ch as import("discord.js").GuildChannel,
+        targetUser.id,
+      );
+      if (!kickResult.ok) {
+        await interaction.editReply(kickResult.message);
+        return;
+      }
       await interaction.editReply(`✅ <@${targetUser.id}> のアクセスを取り消しました。`);
       // パネルのメンバーリストをリアルタイム更新（best-effort）
       try {
@@ -2025,6 +2040,75 @@ export function isBlockedFromLuxuryVcAdd(roleNames: Iterable<string>): boolean {
 export function isEligibleForLuxuryVcAdd(roleNames: Iterable<string>): boolean {
   const names = new Set(roleNames);
   return LUXURY_VC_ADD_ROLE_NAMES.some((roleName) => names.has(roleName));
+}
+
+type PrivateVcKickResult =
+  | { ok: true }
+  | { ok: false; message: string };
+
+/**
+ * Remove a member's explicit room access and disconnect them if they are
+ * currently in the room. Both slash-command and panel kicks use this path so
+ * they cannot report success after Discord rejected either operation.
+ */
+export async function kickPrivateVcMember(
+  guild: Guild,
+  channel: import("discord.js").GuildChannel,
+  targetId: string,
+): Promise<PrivateVcKickResult> {
+  const botMember = guild.members.me;
+  const botPermissions = botMember ? channel.permissionsFor(botMember) : null;
+  if (!botPermissions?.has(PermissionFlagsBits.ManageChannels)) {
+    logger.warn(`[vc-kick] Missing ManageChannels in channel ${channel.id}`);
+    return {
+      ok: false,
+      message: "❌ Botに「チャンネルの管理」権限がないため、アクセス権を取り消せません。",
+    };
+  }
+
+  let targetMember: GuildMember;
+  try {
+    targetMember = await guild.members.fetch(targetId);
+  } catch (err) {
+    logger.error(`[vc-kick] Failed to fetch member ${targetId} in guild ${guild.id}`, err);
+    return {
+      ok: false,
+      message: "❌ 対象メンバーの状態を確認できなかったため、キックを実行できませんでした。",
+    };
+  }
+
+  const needsDisconnect = targetMember.voice.channelId === channel.id;
+  if (needsDisconnect && !botPermissions.has(PermissionFlagsBits.MoveMembers)) {
+    logger.warn(`[vc-kick] Missing MoveMembers in channel ${channel.id} for member ${targetId}`);
+    return {
+      ok: false,
+      message: "❌ Botに「メンバーを移動」権限がないため、VCから切断できません。Botの権限を確認してください。",
+    };
+  }
+
+  try {
+    await channel.permissionOverwrites.delete(targetId);
+  } catch (err) {
+    logger.error(`[vc-kick] Failed to remove channel access for member ${targetId} in channel ${channel.id}`, err);
+    return {
+      ok: false,
+      message: "❌ 高級船室のアクセス権を取り消せませんでした。Botの「チャンネルの管理」権限を確認してください。",
+    };
+  }
+
+  if (needsDisconnect) {
+    try {
+      await targetMember.voice.disconnect();
+    } catch (err) {
+      logger.error(`[vc-kick] Access removed but voice disconnect failed for member ${targetId} in channel ${channel.id}`, err);
+      return {
+        ok: false,
+        message: "⚠️ アクセス権は取り消しましたが、VCからの切断に失敗しました。Botの「メンバーを移動」権限を確認してください。",
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 function getLuxuryVcAddableMembers(
@@ -2681,11 +2765,15 @@ export async function handleVcPanelKickSel(interaction: UserSelectMenuInteractio
   if (!ch || !("permissionOverwrites" in ch)) {
     await interaction.reply({ content: "❌ VCチャンネルが見つかりませんでした。", ephemeral: true }); return;
   }
-  await ch.permissionOverwrites.delete(targetId);
-  try {
-    const member = await interaction.guild.members.fetch(targetId);
-    if (member.voice.channelId === channelId) await member.voice.disconnect();
-  } catch { /* non-fatal */ }
+  const kickResult = await kickPrivateVcMember(
+    interaction.guild,
+    ch as import("discord.js").GuildChannel,
+    targetId,
+  );
+  if (!kickResult.ok) {
+    await interaction.reply({ content: kickResult.message, ephemeral: true });
+    return;
+  }
   await interaction.reply({ content: `✅ <@${targetId}> をキックしました。`, ephemeral: true });
   // Refresh the panel so the removed member disappears from the access list (best-effort).
   try {
