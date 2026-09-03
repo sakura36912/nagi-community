@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   getGuildSettings:           vi.fn(),
   getActivePrivateVcSession:  vi.fn(),
   buyItem:                    vi.fn(),
+  addShopItem:                vi.fn(),
+  listShopItems:              vi.fn(),
   extendPrivateVcSession:     vi.fn(),
   refundPurchase:             vi.fn(),
   extendOrRepairVcSchedule:   vi.fn(),
@@ -30,6 +32,8 @@ vi.mock("../lib/economy.js", () => ({
   getGuildSettings:          mocks.getGuildSettings,
   getActivePrivateVcSession: mocks.getActivePrivateVcSession,
   buyItem:                   mocks.buyItem,
+  addShopItem:               mocks.addShopItem,
+  listShopItems:             mocks.listShopItems,
   extendPrivateVcSession:    mocks.extendPrivateVcSession,
   // ── Constants ────────────────────────────────────────────────────────────
   VC_EXTEND_DURATIONS:       { vc_extend_1d: 86_400_000 },
@@ -57,7 +61,6 @@ vi.mock("../lib/economy.js", () => ({
   extendCommunitySheet:      vi.fn(),
   getLatestEvalSheet:        vi.fn(),
   hasUsedEvalExtension:      vi.fn(),
-  addShopItem:               vi.fn(),
   createEvalSheet:           vi.fn(),
   getEvalSheetSettings:      vi.fn(),
   getSheetVcSeconds:         vi.fn(),
@@ -80,7 +83,6 @@ vi.mock("../lib/economy.js", () => ({
   giveCurrency:              vi.fn(),
   listInventory:             vi.fn(),
   listRoleRewards:           vi.fn(),
-  listShopItems:             vi.fn(),
   listSquadTreasuries:       vi.fn(),
   refundPurchase:            mocks.refundPurchase,
   removeRoleReward:          vi.fn(),
@@ -142,6 +144,7 @@ vi.mock("@workspace/db", () => ({
 import {
   buildVcPanelMessage,
   collectFreeRoomAccessRoleIds,
+  commands,
   getPrivateVcRoomCategory,
   handleShopBuyButton,
   handleShopSelectMenu,
@@ -162,6 +165,146 @@ const ONE_DAY_MS  = 24 * 60 * 60 * 1000;
 
 const EXPIRES_AT  = new Date("2099-07-01T12:00:00Z");
 const EXTENDED_AT = new Date("2099-07-02T12:00:00Z");
+
+describe("island shop category", () => {
+  const shopCommand = commands.find((command) => command.data.name === "shop")!;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers the island category for list, add, and panel", () => {
+    const definition = shopCommand.data.toJSON() as {
+      options?: Array<{
+        name?: string;
+        options?: Array<{
+          name?: string;
+          choices?: Array<{ name?: string; value?: string }>;
+        }>;
+      }>;
+    };
+
+    for (const subcommandName of ["list", "add", "panel"]) {
+      const subcommand = definition.options?.find((option) => option.name === subcommandName);
+      const categoryOption = subcommand?.options?.find((option) => option.name === "category");
+      expect(categoryOption?.choices).toContainEqual({
+        name: "🏝️ オチテモータ島ショップ",
+        value: "island",
+      });
+    }
+  });
+
+  it("passes the island category to listShopItems for /shop list", async () => {
+    const item = {
+      id: ITEM_ID,
+      guildId: GUILD_ID,
+      name: "島の商品",
+      description: "島限定",
+      price: 500,
+      effectType: null,
+      category: "island",
+      targetRoleId: null,
+      sortOrder: 0,
+    };
+    mocks.listShopItems.mockResolvedValue([item]);
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+
+    const interaction = {
+      guildId: GUILD_ID,
+      options: {
+        getSubcommand: () => "list",
+        getString: () => "island",
+      },
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await shopCommand.execute(interaction as never);
+
+    expect(mocks.listShopItems).toHaveBeenCalledWith(GUILD_ID, "island");
+    expect(interaction.reply).toHaveBeenCalledOnce();
+    expect(interaction.reply.mock.calls[0][0].embeds[0].data.title)
+      .toBe("🏝️ オチテモータ島ショップ");
+  });
+
+  it("stores island items with the island category for /shop add", async () => {
+    const item = {
+      id: ITEM_ID,
+      guildId: GUILD_ID,
+      name: "島の商品",
+      description: "島限定",
+      price: 500,
+      effectType: null,
+      category: "island",
+      targetRoleId: null,
+      sortOrder: 0,
+    };
+    mocks.addShopItem.mockResolvedValue(item);
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+
+    const interaction = {
+      guildId: GUILD_ID,
+      memberPermissions: { has: () => true },
+      options: {
+        getSubcommand: () => "add",
+        getString: (name: string) => ({
+          category: "island",
+          name: "島の商品",
+          description: "島限定",
+          effect: null,
+        })[name] ?? null,
+        getInteger: () => 500,
+        getRole: () => null,
+      },
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await shopCommand.execute(interaction as never);
+
+    expect(mocks.addShopItem).toHaveBeenCalledWith(
+      GUILD_ID,
+      "島の商品",
+      500,
+      "島限定",
+      null,
+      "island",
+      null,
+    );
+  });
+
+  it("posts an island-only panel for /shop panel", async () => {
+    const item = {
+      id: ITEM_ID,
+      guildId: GUILD_ID,
+      name: "島の商品",
+      description: "島限定",
+      price: 500,
+      effectType: null,
+      category: "island",
+      targetRoleId: null,
+      sortOrder: 0,
+    };
+    mocks.listShopItems.mockResolvedValue([item]);
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+
+    const interaction = {
+      guildId: GUILD_ID,
+      memberPermissions: { has: () => true },
+      options: {
+        getSubcommand: () => "panel",
+        getString: () => "island",
+      },
+      channel: { send: vi.fn().mockResolvedValue(undefined) },
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await shopCommand.execute(interaction as never);
+
+    expect(mocks.listShopItems).toHaveBeenCalledWith(GUILD_ID, "island");
+    expect(interaction.channel.send).toHaveBeenCalledOnce();
+    expect(interaction.channel.send.mock.calls[0][0].embeds[0].data.title)
+      .toBe("🏝️ オチテモータ島ショップ");
+  });
+});
 
 describe("private VC panel category separation", () => {
   it("blocks members with the 追放者 role from luxury-room additions", () => {
