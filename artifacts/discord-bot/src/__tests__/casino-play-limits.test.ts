@@ -94,4 +94,32 @@ describe("casino daily play limits", () => {
 
     expect(results.every((result) => result.ok)).toBe(true);
   });
+
+  it("restores unlimited play after an administrator clears a finite cap", async () => {
+    await setBalance(100);
+    await setCasinoPlayLimit(guildId, "poker", 1);
+
+    expect(await tryStartCasinoPlay(guildId, userId, "poker", 10))
+      .toMatchObject({ ok: true, used: 1, limit: 1 });
+    expect(await tryStartCasinoPlay(guildId, userId, "poker", 10))
+      .toMatchObject({ ok: false, reason: "daily_limit_reached" });
+
+    await setCasinoPlayLimit(guildId, "poker", null);
+    expect(await tryStartCasinoPlay(guildId, userId, "poker", 10))
+      .toMatchObject({ ok: true, used: null, limit: null });
+  });
+
+  it("starts a fresh count after midnight in Japan", async () => {
+    await setBalance(100);
+    await setCasinoPlayLimit(guildId, "slot", 1);
+    const beforeMidnight = new Date("2026-08-20T14:59:59.999Z");
+    const afterMidnight = new Date("2026-08-20T15:00:00.000Z");
+
+    expect(await tryStartCasinoPlay(guildId, userId, "slot", 10, beforeMidnight))
+      .toMatchObject({ ok: true, used: 1, limit: 1 });
+    expect(await tryStartCasinoPlay(guildId, userId, "slot", 10, beforeMidnight))
+      .toMatchObject({ ok: false, reason: "daily_limit_reached" });
+    expect(await tryStartCasinoPlay(guildId, userId, "slot", 10, afterMidnight))
+      .toMatchObject({ ok: true, used: 1, limit: 1 });
+  });
 });

@@ -102,8 +102,9 @@ export async function tryStartCasinoPlay(
   userId: string,
   game: CasinoLimitedGame,
   bet: number,
+  now = new Date(),
 ): Promise<StartCasinoPlayResult> {
-  const date = jstDateString();
+  const date = jstDateString(now);
 
   return db.transaction(async (tx) => {
     const [configuredLimit] = await tx
