@@ -26,9 +26,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
 import {
-  addCasinoRound,
+  addCasinoSessionRound,
   buildCasinoResultFields,
-  emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
 import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
@@ -398,7 +397,7 @@ async function finishGame(
 
   activeGames.delete(gameKey(guildId, userId));
 
-  const totals = addCasinoRound(emptyCasinoResultTotals(), bet, payout);
+  const totals = addCasinoSessionRound("poker", guildId, userId, bet, payout, netDelta);
   const { embeds, files } = await buildResultContent(game, handRank, netDelta, totals);
   if (interaction instanceof ButtonInteraction) {
     await game.publicMessage?.edit({ embeds, files, components: [] });

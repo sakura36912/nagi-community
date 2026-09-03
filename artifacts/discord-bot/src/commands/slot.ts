@@ -17,9 +17,9 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
 import {
-  addCasinoRound,
+  addCasinoSessionRound,
   buildCasinoResultFields,
-  emptyCasinoResultTotals,
+  CASINO_NET_LEDGER_MARKER,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
 import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
@@ -639,12 +639,12 @@ async function spinAndReply(
     await recordTransaction(
       guildId, userId, netDelta,
       wins > 0
-        ? `スロット${wins}ライン当選（賭け: ${bet}）`
-        : `スロットハズレ（賭け: ${bet}）`,
+        ? `スロット${wins}ライン当選（賭け: ${bet}）${CASINO_NET_LEDGER_MARKER}`
+        : `スロットハズレ（賭け: ${bet}）${CASINO_NET_LEDGER_MARKER}`,
     );
   }
 
-  const totals = addCasinoRound(emptyCasinoResultTotals(), bet, payout);
+  const totals = addCasinoSessionRound("slot", guildId, userId, bet, payout, netDelta);
   const { content, embed } = buildResult(
     grid, paylines, wins, netDelta, finalBalance, bet, currencyName, meta, totals,
   );

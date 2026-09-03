@@ -26,9 +26,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
 import { getGuildSettings, recordTransaction, getOrCreateWallet, setBjSuitEmoji } from "../lib/economy";
 import {
-  addCasinoRound,
+  addCasinoSessionRound,
   buildCasinoResultFields,
-  emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
 import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
@@ -485,7 +484,7 @@ async function finishGame(
   const key = gameKey(guildId, userId);
   activeGames.delete(key);
 
-  const totals = addCasinoRound(emptyCasinoResultTotals(), bet, payout);
+  const totals = addCasinoSessionRound("blackjack", guildId, userId, bet, payout, netDelta);
 
   // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
   await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);

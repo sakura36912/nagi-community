@@ -28,9 +28,8 @@ import {
   setHighlowWinRate,
 } from "../lib/economy";
 import {
-  addCasinoRound,
+  addCasinoSessionRound,
   buildCasinoResultFields,
-  emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
 import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
@@ -299,16 +298,13 @@ async function buildResultEmbed(
   game: HLGame,
   nextCard: Card,
   result: "win" | "lose" | "draw",
-  totals?: CasinoResultTotals,
+  totals: CasinoResultTotals,
 ): Promise<EmbedWithFiles> {
   const e = game.suitEmojis;
   await cacheCardBuffer(nextCard, game.cardPaths, game.cardBuffers);
   const cardImage = await buildStripFromCards([game.currentCard, nextCard], game.cardBuffers, "result.png");
 
   if (result === "win") {
-    const payout   = Math.floor(game.originalBet * WIN_PAYOUT_MULTIPLIER);
-    const netDelta = payout - game.originalBet;
-    const sign     = netDelta >= 0 ? "+" : "";
     const embed  = new EmbedBuilder()
       .setTitle("🃏 ハイアンドロー — ✅ 正解！")
       .setColor(COLOR_WIN)
@@ -316,8 +312,7 @@ async function buildResultEmbed(
         { name: "前のカード",     value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
         { name: "次のカード",     value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
         { name: "\u200B",         value: "\u200B", inline: true },
-        { name: "受け取り額",     value: `**${payout.toLocaleString()}** ${game.currencyName}`, inline: true },
-        { name: "収支（予定）",   value: `${sign}**${netDelta.toLocaleString()}** ${game.currencyName}`, inline: true },
+        ...buildCasinoResultFields(totals, game.currencyName),
       )
       .setFooter({ text: "正解！賭け金に対してペイアウトが確定しました" });
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
@@ -330,8 +325,7 @@ async function buildResultEmbed(
         { name: "前のカード", value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
         { name: "次のカード", value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
         { name: "\u200B",     value: "\u200B", inline: true },
-        { name: "賭け金",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
-         { name: "返却額",       value: `**${game.originalBet.toLocaleString()}** ${game.currencyName}`, inline: true },
+        ...buildCasinoResultFields(totals, game.currencyName),
       )
        .setFooter({ text: "引き分け — 掛け金を返却してゲーム終了" });
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
@@ -344,10 +338,7 @@ async function buildResultEmbed(
         { name: "前のカード", value: `${formatCard(game.currentCard, e)}　**${hlCardValue(game.currentCard.rank)}**`, inline: true },
         { name: "次のカード", value: `${formatCard(nextCard, e)}　**${hlCardValue(nextCard.rank)}**`, inline: true },
         { name: "\u200B",     value: "\u200B", inline: true },
-        ...buildCasinoResultFields(
-          totals ?? addCasinoRound(emptyCasinoResultTotals(), game.originalBet, 0),
-          game.currencyName,
-        ),
+        ...buildCasinoResultFields(totals, game.currencyName),
       );
     if (cardImage) embed.setImage(`attachment://${cardImage.filename}`);
     return { embeds: [embed], files: cardImage ? [cardImage.attachment] : [] };
@@ -460,7 +451,14 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
             .setColor(COLOR_LOSE)
             .addFields(
               ...buildCasinoResultFields(
-                addCasinoRound(emptyCasinoResultTotals(), timedOutGame.originalBet, 0),
+                addCasinoSessionRound(
+                  "highlow",
+                  timedOutGame.guildId,
+                  timedOutGame.userId,
+                  timedOutGame.originalBet,
+                  0,
+                  -timedOutGame.originalBet,
+                ),
                 timedOutGame.currencyName,
               ),
             )
@@ -508,7 +506,6 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
     if (isDraw) {
       // 引き分け → 掛け金を返却して、このコマンドのゲームを終了する。
       activeGames.delete(key);
-      const { embeds, files } = await buildResultEmbed(game, nextCard, "draw");
       await creditAmount(guildId, user.id, game.originalBet);
       await recordTransaction(
         guildId,
@@ -516,6 +513,10 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
         0,
         `ハイアンドロー引き分け（賭け: ${game.originalBet}）`,
       ).catch(() => {});
+      const totals = addCasinoSessionRound(
+        "highlow", guildId, user.id, game.originalBet, game.originalBet, 0,
+      );
+      const { embeds, files } = await buildResultEmbed(game, nextCard, "draw", totals);
       await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
       return;
     }
@@ -524,23 +525,29 @@ export async function handleHighlowButton(interaction: ButtonInteraction): Promi
       // 不正解 → ゲーム終了
       activeGames.delete(key);
       await recordTransaction(guildId, user.id, -game.originalBet, `ハイアンドロー敗北（賭け: ${game.originalBet}）`).catch(() => {});
+      const totals = addCasinoSessionRound(
+        "highlow", guildId, user.id, game.originalBet, 0, -game.originalBet,
+      );
       const { embeds, files } = await buildResultEmbed(
         game,
         nextCard,
         "lose",
-        addCasinoRound(emptyCasinoResultTotals(), game.originalBet, 0),
+        totals,
       );
       await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
       return;
     }
 
     // 正解 → 自動収益確定・ゲーム終了
-    const { embeds, files } = await buildResultEmbed(game, nextCard, "win");
     const payout = Math.floor(game.originalBet * WIN_PAYOUT_MULTIPLIER);
     activeGames.delete(key);
     await creditAmount(guildId, user.id, payout);
     const netDelta = payout - game.originalBet;
     await recordTransaction(guildId, user.id, netDelta, `ハイアンドロー勝利（賭け: ${game.originalBet}）`).catch(() => {});
+    const totals = addCasinoSessionRound(
+      "highlow", guildId, user.id, game.originalBet, payout, netDelta,
+    );
+    const { embeds, files } = await buildResultEmbed(game, nextCard, "win", totals);
 
     await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
   }

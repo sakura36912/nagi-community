@@ -26,6 +26,7 @@ import {
   setCasinoPlayLimit,
   type CasinoLimitedGame,
 } from "../lib/casinoPlayLimits";
+import { resolveCasinoLedgerAmounts } from "../lib/casinoResult";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -56,16 +57,11 @@ function extractBet(reason: string): number {
 /**
  * ゲーム別集計をトランザクションログから取得する。
  *
- * 【スロットと他ゲームの ledger 差異】
- *   - BJ / ポーカー / ルーレット:
- *       deductBet で賭け金を引き、勝ち時は creditAmount(bet + winnings) で返す。
- *       recordTransaction に記録する amount = winnings（純利益）。
- *       → payout = bet + amount、net = amount
- *   - スロット:
- *       deductBet で賭け金を引き、勝ち時は creditWinnings(bet * multiplier) のみ返す
- *       （元本は別途戻さない）。
- *       recordTransaction に記録する amount = bet * multiplier（総受取額）。
- *       → payout = amount、net = amount - bet
+ * 全ゲームで賭け金を先に控除し、取引履歴の amount には純利益を記録する。
+ * 払い出しは結果画面と同じ符号付き表示に揃える。
+ *   - 勝ち: 実際の入金額（賭け金 + 純利益）
+ *   - 引き分け: 返却された賭け金
+ *   - 負け: マイナスの賭け金
  */
 async function fetchCasinoStats(
   guildId: string,
@@ -103,7 +99,7 @@ async function fetchCasinoStats(
   };
 
   for (const row of rows) {
-    const bet    = extractBet(row.reason);
+    const bet = extractBet(row.reason);
     const amount = row.amount;
     const isWin  = amount > 0;
 
@@ -116,32 +112,7 @@ async function fetchCasinoStats(
     else if (row.reason.startsWith("バカラ"))         key = "baccarat";
     else continue;
 
-    // ゲームごとの ledger 仕様の差異を吸収する
-    //
-    // スロット:
-    //   deductBet で賭け金引き、勝ち時 creditWinnings(bet * multiplier) のみ返す。
-    //   amount = bet * multiplier（総受取額）
-    //   → payout = amount, net = amount - bet
-    //
-    // BJ / ポーカー / ルーレット:
-    //   deductBet で賭け金引き、勝ち時 creditAmount(bet + winnings) を返す。
-    //   amount = winnings（純利益）または 0（BJ引き分け）
-    //   → 勝ち: payout = bet + amount, net = amount
-    //   → 引き分け(amount=0): payout = bet（賭け金が戻る）, net = 0
-    //   → 負け: payout = 0, net = amount
-    let payout: number;
-    let net: number;
-    if (key === "slot") {
-      payout = isWin ? amount : 0;
-      net    = isWin ? amount - bet : amount;
-    } else if (amount === 0) {
-      // BJ 引き分け: 賭け金が戻り、純損益はゼロ
-      payout = bet;
-      net    = 0;
-    } else {
-      payout = isWin ? bet + amount : 0;
-      net    = amount;
-    }
+    const { payout, net } = resolveCasinoLedgerAmounts(key, amount, bet, row.reason);
 
     const s = stats[key];
     s.plays++;
@@ -371,7 +342,7 @@ async function fetchPeriodBreakdown(
   const totalUser = new Map<string, number>();
 
   for (const row of rows) {
-    const bet    = extractBet(row.reason);
+    const bet = extractBet(row.reason);
     const amount = row.amount;
 
     let key: GameKey;
@@ -383,14 +354,7 @@ async function fetchPeriodBreakdown(
     else if (row.reason.startsWith("バカラ"))         key = "baccarat";
     else continue;
 
-    let net: number;
-    if (key === "slot") {
-      net = amount > 0 ? amount - bet : amount;
-    } else if (amount === 0) {
-      net = 0; // BJ 引き分け
-    } else {
-      net = amount;
-    }
+    const { net } = resolveCasinoLedgerAmounts(key, amount, bet, row.reason);
 
     const gm = byGameUser[key];
     gm.set(row.userId, (gm.get(row.userId) ?? 0) + net);

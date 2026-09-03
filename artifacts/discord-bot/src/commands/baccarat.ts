@@ -31,9 +31,8 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import { db, walletsTable, baccaratSessionsTable } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet, recordTransaction } from "../lib/economy";
 import {
-  addCasinoRound,
+  addCasinoSessionRound,
   buildCasinoResultFields,
-  emptyCasinoResultTotals,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
 import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
@@ -503,7 +502,7 @@ async function resolveAndPayout(
 
   await recordTransaction(guildId, userId, netDelta, reason).catch(() => {});
 
-  const totals = addCasinoRound(emptyCasinoResultTotals(), bet, payout);
+  const totals = addCasinoSessionRound("baccarat", guildId, userId, bet, payout, netDelta);
 
   const { embeds, files } = await buildResultEmbeds(
     finalPlayer, finalBanker, gameResult, betOn, bet, netDelta, currencyName, suitEmojis, cardBuffers, totals,
