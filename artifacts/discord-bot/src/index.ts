@@ -106,6 +106,7 @@ import { handleVcLogMove } from "./lib/vcLogMove";
 import { sendVcNotifyJoin, sendVcNotifyLeave } from "./lib/vcNotify";
 import { handleVcLogJoin } from "./lib/vcLogJoin";
 import { isBeachVoiceChannel } from "./lib/vcRewardEligibility";
+import { enqueueVcRewardEvent } from "./lib/vcRewardEventQueue";
 import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/calendar";
 
 import { logger } from "./lib/logger";
@@ -1055,9 +1056,11 @@ async function isEligibleChannel(
     return false;
   }
 
-  const parentName = channel.parentId
-    ? guild.channels.cache.get(channel.parentId)?.name
+  const parentChannel = channel.parentId
+    ? guild.channels.cache.get(channel.parentId)
+      ?? await guild.channels.fetch(channel.parentId).catch(() => null)
     : null;
+  const parentName = parentChannel?.name ?? null;
   return isBeachVoiceChannel(channel.name, parentName);
 }
 
@@ -1158,7 +1161,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
     await Promise.all([
       // Reward tracking (hub salary takes priority over general eligibility)
-      (async () => {
+      enqueueVcRewardEvent(guild.id, userId, async () => {
         try {
           const hubSalary = await getHubSalaryForChannel(newState.channelId!);
           if (hubSalary) {
@@ -1172,7 +1175,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         } catch (err) {
           logger.error(`[vcsalary] recordVcJoin error for ${userId}`, err);
         }
-      })(),
+      }),
       // Point VC tracking
       (async () => {
         try {
@@ -1207,7 +1210,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     await onTavernLeave(guild.id, userId);
     await Promise.all([
       // Reward payout (use hub salary if the channel was a hub-salary VC)
-      (async () => {
+      enqueueVcRewardEvent(guild.id, userId, async () => {
         const presence = await clearVcPresence(guild.id, userId).catch((err) => {
           logger.error(`[vcsalary] clearVcPresence error for ${userId}`, err);
           return undefined;
@@ -1216,7 +1219,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           const hubSalary = await getHubSalaryForChannel(presence.channelId);
           await handleVcLeave(guild, userId, presence.joinedAt, hubSalary ?? undefined);
         }
-      })(),
+      }),
       // Point VC settlement
       settlePointVcSession(guild.id, userId).catch((err) =>
         logger.error(`[points] settlePointVcSession error for ${userId}`, err),
@@ -1258,7 +1261,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     // 酒場→酒場 の移動は起こり得ないため else は不要
     await Promise.all([
       // Reward tracking – hub salary and/or category eligibility may have changed
-      (async () => {
+      enqueueVcRewardEvent(guild.id, userId, async () => {
         try {
           const [oldHubSalary, newHubSalary, settings] = await Promise.all([
             getHubSalaryForChannel(oldState.channelId!),
@@ -1287,7 +1290,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         } catch (err) {
           logger.error(`[vcsalary] channel-move handling error for ${userId}`, err);
         }
-      })(),
+      }),
       // Point VC tracking – category may have changed
       (async () => {
         try {
