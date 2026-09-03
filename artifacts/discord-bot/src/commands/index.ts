@@ -2550,6 +2550,31 @@ const CHEST_ROLE_SHINNIRI  = "新入り";
 const CHEST_ROLE_HONSENNIN = "本船員";
 const CHEST_INTERVAL_SEC   = 3600; // 1時間ごとに1回
 
+/**
+ * 開封に必要な酒場VC時間の進捗を計算する。
+ * lastOpenVcSeconds は「最後に開けた時点」ではなく、消費済み時間の
+ * チェックポイントとして扱い、開封時には1時間分だけ進める。
+ */
+export function getChestOpenProgress(
+  totalSeconds: number,
+  lastOpenVcSeconds: number,
+  intervalSeconds = CHEST_INTERVAL_SEC,
+): {
+  elapsedSeconds: number;
+  remainingSeconds: number;
+  canOpen: boolean;
+  nextCheckpointSeconds: number;
+} {
+  const normalizedLastOpen = Math.min(Math.max(0, lastOpenVcSeconds), totalSeconds);
+  const elapsedSeconds = Math.max(0, totalSeconds - normalizedLastOpen);
+  return {
+    elapsedSeconds,
+    remainingSeconds: Math.max(0, intervalSeconds - elapsedSeconds),
+    canOpen: elapsedSeconds >= intervalSeconds,
+    nextCheckpointSeconds: normalizedLastOpen + intervalSeconds,
+  };
+}
+
 export async function handleChestOpenBtn(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guild) return;
 
@@ -2591,7 +2616,7 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
   // totalSeconds = 全期間の累積DB秒数 + 現在セッション中の秒数
   // elapsedSinceLastOpen = totalSeconds - 前回開封時のtotalSeconds
   // elapsedSinceLastOpen >= CHEST_INTERVAL_SEC で開封可能
-  let totalSecondsAtOpen = 0;
+  let nextCheckpointSeconds = 0;
   let usedBonusOpen = false;
   if (!isAdmin) {
     // ── ボーナス開封チェック ──────────────────────────────────────────────────
@@ -2624,13 +2649,15 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
         getChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType),
       ]);
       const totalSeconds = chestAccumSeconds + pendingSeconds + currentSeconds;
-      totalSecondsAtOpen = totalSeconds;
-      // lastOpenVcSeconds が totalSeconds より大きい場合は過去の計算方式の不整合。
-      // elapsed を 0 として次回 1 時間滞在で開封できるよう正規化する。
-      const elapsed = Math.max(0, totalSeconds - lastOpenVcSeconds);
+      const progress = getChestOpenProgress(totalSeconds, lastOpenVcSeconds);
+      const elapsed = progress.elapsedSeconds;
+      // 次回開封時は累計時間をリセットせず、消費した1時間分だけ進める。
+      // 例: 1時間30分で開封した場合、チェックポイントは1時間となり、
+      // 残り30分は次回へ繰り越される。
+      nextCheckpointSeconds = progress.nextCheckpointSeconds;
 
       if (elapsed < CHEST_INTERVAL_SEC) {
-        const remaining = Math.ceil((CHEST_INTERVAL_SEC - elapsed) / 60);
+        const remaining = Math.ceil(progress.remainingSeconds / 60);
         const elapsedMin = Math.floor(elapsed / 60);
         const neededMin = Math.ceil(CHEST_INTERVAL_SEC / 60);
         const progressLine = `（累計酒場VC時間: ${elapsedMin}分 / ${neededMin}分）`;
@@ -2655,7 +2682,7 @@ export async function handleChestOpenBtn(interaction: ButtonInteraction): Promis
       incrementChestOpensToday(interaction.guild.id, interaction.user.id),
     ];
     if (!usedBonusOpen) {
-      recordOps.push(setChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType, totalSecondsAtOpen));
+      recordOps.push(setChestLastOpenVcSeconds(interaction.guild.id, interaction.user.id, chestType, nextCheckpointSeconds));
     }
     await Promise.all(recordOps);
   }

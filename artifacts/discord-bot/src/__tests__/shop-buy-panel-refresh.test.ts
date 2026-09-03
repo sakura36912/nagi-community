@@ -147,6 +147,7 @@ import {
   buildLuxuryVcKickSelector,
   collectFreeRoomAccessRoleIds,
   commands,
+  getChestOpenProgress,
   getPrivateVcRoomCategory,
   handleShopBuyButton,
   handleVcPanelAddBtn,
@@ -171,6 +172,26 @@ const ONE_DAY_MS  = 24 * 60 * 60 * 1000;
 
 const EXPIRES_AT  = new Date("2099-07-01T12:00:00Z");
 const EXTENDED_AT = new Date("2099-07-02T12:00:00Z");
+
+describe("treasure chest hourly carry-over", () => {
+  it("carries over 30 minutes after opening at 1 hour 30 minutes", () => {
+    const progress = getChestOpenProgress(90 * 60, 0);
+
+    expect(progress.canOpen).toBe(true);
+    expect(progress.nextCheckpointSeconds).toBe(60 * 60);
+    expect(progress.elapsedSeconds - 60 * 60).toBe(30 * 60);
+  });
+
+  it("keeps 1 hour 30 minutes available after opening once at 2 hours 30 minutes", () => {
+    const firstOpen = getChestOpenProgress(150 * 60, 0);
+    const secondOpen = getChestOpenProgress(150 * 60, firstOpen.nextCheckpointSeconds);
+
+    expect(firstOpen.nextCheckpointSeconds).toBe(60 * 60);
+    expect(secondOpen.canOpen).toBe(true);
+    expect(secondOpen.elapsedSeconds).toBe(90 * 60);
+    expect(secondOpen.nextCheckpointSeconds).toBe(2 * 60 * 60);
+  });
+});
 
 describe("island shop category", () => {
   const shopCommand = commands.find((command) => command.data.name === "shop")!;
