@@ -1985,7 +1985,7 @@ export const VC_PANEL_SEL_RENAME   = "vc:panel:rsel:";
 export const VC_PANEL_RENAME_MODAL = "vc:panel:rnm:";
 export const VC_PANEL_ADD_PAGE     = "vc:panel:add-page:";
 const VC_PANEL_ADD_PAGE_SIZE = 25;
-const VC_PANEL_BLOCKED_ADD_ROLE_NAME = "追放者";
+export const LUXURY_VC_ADD_ROLE_NAMES = ["本船員", "漂流者", "新入り"] as const;
 
 /** custom ID のペイロードを "{channelId}:{ownerId}" 形式でエンコード */
 export function vcPanelId(prefix: string, channelId: string, ownerId: string) {
@@ -2019,7 +2019,12 @@ function parseVcPanelPagedId(
 }
 
 export function isBlockedFromLuxuryVcAdd(roleNames: Iterable<string>): boolean {
-  return [...roleNames].some((roleName) => roleName === VC_PANEL_BLOCKED_ADD_ROLE_NAME);
+  return !isEligibleForLuxuryVcAdd(roleNames);
+}
+
+export function isEligibleForLuxuryVcAdd(roleNames: Iterable<string>): boolean {
+  const names = new Set(roleNames);
+  return LUXURY_VC_ADD_ROLE_NAMES.some((roleName) => names.has(roleName));
 }
 
 function getLuxuryVcAddableMembers(
@@ -2030,7 +2035,7 @@ function getLuxuryVcAddableMembers(
     .filter((member) =>
       !member.user.bot
       && member.id !== ownerId
-      && !isBlockedFromLuxuryVcAdd(member.roles.cache.map((role) => role.name)),
+      && isEligibleForLuxuryVcAdd(member.roles.cache.map((role) => role.name)),
     )
     .sort((a, b) => a.displayName.localeCompare(b.displayName, "ja"));
 }
@@ -2159,7 +2164,7 @@ async function buildLuxuryVcAddSelector(
   );
   if (pageMembers.length === 0) {
     return {
-      content: "❌ 追加可能なメンバーがいません（追放者ロール保持者は対象外です）。",
+      content: `❌ 追加可能なメンバーがいません（${LUXURY_VC_ADD_ROLE_NAMES.join("・")}ロール保持者のみ対象です）。`,
       components: [],
     };
   }
@@ -2626,8 +2631,11 @@ export async function handleVcPanelAddSel(
     await interaction.reply({ content: "❌ メンバーが見つかりませんでした。", ephemeral: true });
     return;
   }
-  if (isBlockedFromLuxuryVcAdd(targetMember.roles.cache.map((role) => role.name))) {
-    await interaction.reply({ content: "❌ 追放者ロール保持者は高級船室へ追加できません。", ephemeral: true });
+  if (!isEligibleForLuxuryVcAdd(targetMember.roles.cache.map((role) => role.name))) {
+    await interaction.reply({
+      content: `❌ ${LUXURY_VC_ADD_ROLE_NAMES.join("・")}のいずれかのロールを持つメンバーのみ高級船室へ追加できます。`,
+      ephemeral: true,
+    });
     return;
   }
   const ch = interaction.guild.channels.cache.get(channelId)

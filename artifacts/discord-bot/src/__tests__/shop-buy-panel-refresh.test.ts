@@ -149,6 +149,7 @@ import {
   handleShopBuyButton,
   handleShopSelectMenu,
   isBlockedFromLuxuryVcAdd,
+  isEligibleForLuxuryVcAdd,
   isFreeRoomCategory,
   SHOP_BUY_PREFIX,
   SHOP_SELECT_ID,
@@ -307,7 +308,13 @@ describe("island shop category", () => {
 });
 
 describe("private VC panel category separation", () => {
-  it("blocks members with the 追放者 role from luxury-room additions", () => {
+  it("limits luxury-room additions to 本船員・漂流者・新入り", () => {
+    expect(isEligibleForLuxuryVcAdd(["一般メンバー", "本船員"])).toBe(true);
+    expect(isEligibleForLuxuryVcAdd(["一般メンバー", "漂流者"])).toBe(true);
+    expect(isEligibleForLuxuryVcAdd(["一般メンバー", "新入り"])).toBe(true);
+    expect(isEligibleForLuxuryVcAdd(["一般メンバー"])).toBe(false);
+    expect(isEligibleForLuxuryVcAdd(["追放者"])).toBe(false);
+
     expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "追放者"])).toBe(true);
     expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "本船員"])).toBe(false);
   });
