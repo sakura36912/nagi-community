@@ -151,6 +151,7 @@ import {
   getPrivateVcRoomCategory,
   handleShopBuyButton,
   handleVcPanelAddBtn,
+  hasLuxuryVcBlockedRole,
   handleShopSelectMenu,
   isBlockedFromLuxuryVcAdd,
   isEligibleForLuxuryVcAdd,
@@ -340,9 +341,13 @@ describe("private VC panel category separation", () => {
     expect(isEligibleForLuxuryVcAdd(["一般メンバー", "新入り"])).toBe(true);
     expect(isEligibleForLuxuryVcAdd(["一般メンバー"])).toBe(false);
     expect(isEligibleForLuxuryVcAdd(["追放者"])).toBe(false);
+    expect(isEligibleForLuxuryVcAdd(["本船員", "追放者"])).toBe(false);
+    expect(isEligibleForLuxuryVcAdd(["漂流者", "追放者"])).toBe(false);
 
     expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "追放者"])).toBe(true);
     expect(isBlockedFromLuxuryVcAdd(["一般メンバー", "本船員"])).toBe(false);
+    expect(hasLuxuryVcBlockedRole(["本船員", "追放者"])).toBe(true);
+    expect(hasLuxuryVcBlockedRole(["本船員"])).toBe(false);
   });
 
   it("opens a native searchable member selector without pagination", async () => {

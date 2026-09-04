@@ -73,6 +73,9 @@ import {
   handleVcPanelExtendSel,
   handleVcPanelRenameSel,
   handleVcPanelRenameModal,
+  enforceExpelledLuxuryVcAccess,
+  enforceAllExpelledLuxuryVcAccess,
+  hasLuxuryVcBlockedRole,
 } from "./commands";
 import {
   handleHubJoin,
@@ -989,6 +992,9 @@ client.once(Events.ClientReady, async (readyClient) => {
   );
 
   // 起動直後に全高級船室パネルを一括更新（メンバーリスト・期限・ボタンを現在の状態に同期）
+  enforceAllExpelledLuxuryVcAccess(readyClient)
+    .then((count) => logger.info(`[vc-expelled] Startup sweep complete: revoked=${count}`))
+    .catch((err) => logger.error("[vc-expelled] Startup sweep failed", err));
   refreshAllVcPanels(readyClient).catch((err) => logger.error("[vc-panel-refresh] Startup panel refresh error", err));
   // 既存の砂浜パネルに残っている旧「船室」表示を移行
   refreshExistingBeachHubPanels(readyClient).catch((err) =>
@@ -1179,6 +1185,26 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const userId = newState.member?.id ?? oldState.member?.id;
   if (!userId) return;
   if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
+
+  // 追放者は高級船室へ入室できない。古い明示権限が残っていても即時に
+  // 権限を削除して切断する（フリールームや砂浜は対象外）。
+  if (
+    newState.channelId
+    && newState.member
+    && hasLuxuryVcBlockedRole(newState.member.roles.cache.map((role) => role.name))
+  ) {
+    const revoked = await enforceExpelledLuxuryVcAccess(
+      newState.member,
+      newState.channelId,
+    ).catch((err) => {
+      logger.error(
+        `[vc-expelled] Voice entry enforcement failed user=${userId} channel=${newState.channelId}`,
+        err,
+      );
+      return 0;
+    });
+    if (revoked > 0) return;
+  }
 
   const guild = newState.guild;
   const afkChannelId = guild.afkChannelId;
@@ -1405,6 +1431,17 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const guildId = newMember.guild.id;
   const snapshotKey = `${guildId}:${newMember.id}`;
+
+  // 追放者ロールが付いた時点で、既存の高級船室アクセス権をすべて削除する。
+  // partialイベントでも現在のロール状態だけで安全に判定できるため先に実行する。
+  if (
+    !newMember.user.bot
+    && hasLuxuryVcBlockedRole(newMember.roles.cache.map((role) => role.name))
+  ) {
+    enforceExpelledLuxuryVcAccess(newMember).catch((err) =>
+      logger.error(`[vc-expelled] Role enforcement failed user=${newMember.id}`, err),
+    );
+  }
 
   // oldMember が partial（キャッシュ未保持）のとき、Discord の REST fetch は
   // 更新後の状態を返すため差分計算には使えない。代わりにイベントごとに管理する

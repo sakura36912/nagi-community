@@ -23,7 +23,7 @@ import {
   type UserSelectMenuInteraction,
 } from "discord.js";
 import type { ShopItem } from "@workspace/db";
-import type { Guild } from "discord.js";
+import type { Client, Guild } from "discord.js";
 import { logger } from "../lib/logger";
 import {
   DEFAULT_DAILY_AMOUNT,
@@ -1635,7 +1635,12 @@ const shopCommand: Command = {
         await interaction.editReply("❌ メンバーが見つかりませんでした。");
         return;
       }
-      if (!isEligibleForLuxuryVcAdd(targetMember.roles.cache.map((role) => role.name))) {
+      const targetRoleNames = targetMember.roles.cache.map((role) => role.name);
+      if (hasLuxuryVcBlockedRole(targetRoleNames)) {
+        await interaction.editReply("❌ 追放者ロールを持つメンバーは高級船室に追加できません。");
+        return;
+      }
+      if (!isEligibleForLuxuryVcAdd(targetRoleNames)) {
         await interaction.editReply(
           `❌ ${LUXURY_VC_ADD_ROLE_NAMES.join("・")}のいずれかのロールを持つメンバーのみ高級船室へ追加できます。`,
         );
@@ -2001,6 +2006,7 @@ export const VC_PANEL_RENAME_MODAL = "vc:panel:rnm:";
 export const VC_PANEL_KICK_PAGE    = "vc:panel:kick-page:";
 const VC_PANEL_KICK_PAGE_SIZE = 25;
 export const LUXURY_VC_ADD_ROLE_NAMES = ["本船員", "漂流者", "新入り"] as const;
+export const LUXURY_VC_BLOCKED_ROLE_NAMES = ["追放者"] as const;
 
 /** custom ID のペイロードを "{channelId}:{ownerId}" 形式でエンコード */
 export function vcPanelId(prefix: string, channelId: string, ownerId: string) {
@@ -2037,9 +2043,15 @@ export function isBlockedFromLuxuryVcAdd(roleNames: Iterable<string>): boolean {
   return !isEligibleForLuxuryVcAdd(roleNames);
 }
 
+export function hasLuxuryVcBlockedRole(roleNames: Iterable<string>): boolean {
+  const names = new Set(roleNames);
+  return LUXURY_VC_BLOCKED_ROLE_NAMES.some((roleName) => names.has(roleName));
+}
+
 export function isEligibleForLuxuryVcAdd(roleNames: Iterable<string>): boolean {
   const names = new Set(roleNames);
-  return LUXURY_VC_ADD_ROLE_NAMES.some((roleName) => names.has(roleName));
+  return !hasLuxuryVcBlockedRole(names)
+    && LUXURY_VC_ADD_ROLE_NAMES.some((roleName) => names.has(roleName));
 }
 
 type PrivateVcKickResult =
@@ -2109,6 +2121,111 @@ export async function kickPrivateVcMember(
   }
 
   return { ok: true };
+}
+
+async function getLuxuryVcChannels(
+  guild: Guild,
+  onlyChannelId?: string,
+): Promise<import("discord.js").GuildChannel[]> {
+  const settings = await getGuildSettings(guild.id);
+  const sessions = await getActivePrivateVcSessionsByGuild(guild.id);
+  const luxurySessionChannelIds = new Set(
+    sessions.filter((session) => getPrivateVcRoomCategory(session.category) === "vc")
+      .map((session) => session.channelId),
+  );
+
+  const candidateIds = onlyChannelId
+    ? [onlyChannelId]
+    : [
+        ...luxurySessionChannelIds,
+        ...guild.channels.cache
+          .filter((channel) => channel.parentId === settings.vcCategoryId)
+          .map((channel) => channel.id),
+      ];
+
+  const channels = await Promise.all(
+    [...new Set(candidateIds)].map(async (channelId) => {
+      const channel = guild.channels.cache.get(channelId)
+        ?? await guild.channels.fetch(channelId).catch(() => null);
+      if (!channel || !("permissionOverwrites" in channel)) return null;
+
+      const session = sessions.find((candidate) => candidate.channelId === channelId);
+      if (session) {
+        return getPrivateVcRoomCategory(session.category) === "vc" ? channel : null;
+      }
+      return settings.vcCategoryId && channel.parentId === settings.vcCategoryId
+        ? channel
+        : null;
+    }),
+  );
+
+  return channels.filter(
+    (channel) => channel !== null,
+  ) as import("discord.js").GuildChannel[];
+}
+
+/**
+ * 追放者が持つ高級船室の明示アクセス権を削除し、入室中なら切断する。
+ * onlyChannelId 指定時はVoiceStateUpdate用、未指定時はロール付与時用。
+ */
+export async function enforceExpelledLuxuryVcAccess(
+  member: GuildMember,
+  onlyChannelId?: string,
+): Promise<number> {
+  if (!hasLuxuryVcBlockedRole(member.roles.cache.map((role) => role.name))) return 0;
+
+  const channels = await getLuxuryVcChannels(member.guild, onlyChannelId);
+  let revoked = 0;
+  for (const channel of channels) {
+    const overwrite = channel.permissionOverwrites.cache.get(member.id);
+    const hasExplicitAccess = overwrite?.allow.has(PermissionFlagsBits.ViewChannel) ?? false;
+    const isConnected = member.voice.channelId === channel.id;
+    if (!hasExplicitAccess && !isConnected) continue;
+
+    const result = await kickPrivateVcMember(member.guild, channel, member.id);
+    if (!result.ok) {
+      logger.error(
+        `[vc-expelled] Failed to revoke luxury VC access user=${member.id} channel=${channel.id}: ${result.message}`,
+      );
+      continue;
+    }
+    revoked++;
+    logger.info(
+      `[vc-expelled] Revoked luxury VC access user=${member.id} channel=${channel.id}`,
+    );
+  }
+  return revoked;
+}
+
+/** Bot起動時に、既存の高級船室アクセス権から追放者を除去する。 */
+export async function enforceAllExpelledLuxuryVcAccess(client: Client): Promise<number> {
+  let revoked = 0;
+  for (const guild of client.guilds.cache.values()) {
+    const channels = await getLuxuryVcChannels(guild);
+    const memberIds = new Set<string>();
+    for (const channel of channels) {
+      channel.permissionOverwrites.cache.forEach((overwrite) => {
+        if (
+          overwrite.type === 1
+          && overwrite.allow.has(PermissionFlagsBits.ViewChannel)
+          && overwrite.id !== client.user?.id
+        ) {
+          memberIds.add(overwrite.id);
+        }
+      });
+      if ("members" in channel) {
+        channel.members.forEach((member) => memberIds.add(member.id));
+      }
+    }
+
+    for (const memberId of memberIds) {
+      const member = guild.members.cache.get(memberId)
+        ?? await guild.members.fetch(memberId).catch(() => null);
+      if (!member) continue;
+      revoked += await enforceExpelledLuxuryVcAccess(member);
+    }
+  }
+  return revoked;
 }
 
 /**
@@ -2830,7 +2947,15 @@ export async function handleVcPanelAddSel(
     await interaction.reply({ content: "❌ メンバーが見つかりませんでした。", ephemeral: true });
     return;
   }
-  if (!isEligibleForLuxuryVcAdd(targetMember.roles.cache.map((role) => role.name))) {
+  const targetRoleNames = targetMember.roles.cache.map((role) => role.name);
+  if (hasLuxuryVcBlockedRole(targetRoleNames)) {
+    await interaction.reply({
+      content: "❌ 追放者ロールを持つメンバーは高級船室に追加できません。",
+      ephemeral: true,
+    });
+    return;
+  }
+  if (!isEligibleForLuxuryVcAdd(targetRoleNames)) {
     await interaction.reply({
       content: `❌ ${LUXURY_VC_ADD_ROLE_NAMES.join("・")}のいずれかのロールを持つメンバーのみ高級船室へ追加できます。`,
       ephemeral: true,
