@@ -37,3 +37,17 @@ mtime_ms = 1788372364563
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:732dbe0e-285a-4a24-a3ca-38fce0bb2581/b06f92af-577c-4511-923a-73680ebb7719/3041a3b9-d966-4303-afed-622ca7960f71"
 storage_version_token = "1788372366381058"
 content_type = "text/csv"
+
+[[outputs]]
+id = "3pHj3zwaRsImvX1iRlpbq"
+uri = "file://.agents/outputs/leonid-currency-transactions.csv"
+type = "table"
+title = "地獄の執行者・レオニード：通貨取引履歴（全101件）"
+description = "凪-Nagi- サーバーの通貨取引履歴。日時は日本時間、増減額・取引後残高・理由を収録しています。"
+logical_id = "a0b0137c-72ee-40f7-93b1-365f3879bba8"
+content_hash = "sha256:27a5866a900beee0f3067fd723f880b5cecd84ace765df8b5f7d20c0daa59e5e"
+size = 9589
+mtime_ms = 1788600842820
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:732dbe0e-285a-4a24-a3ca-38fce0bb2581/a0b0137c-72ee-40f7-93b1-365f3879bba8/4a10303e-2abb-425a-a5e6-c9f4a7f22a20"
+storage_version_token = "1788600849488030"
+content_type = "text/csv"
