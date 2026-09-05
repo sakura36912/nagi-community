@@ -223,6 +223,19 @@ process.on("uncaughtException", (err) => {
   process.exit(1);
 });
 
+process.on("unhandledRejection", (reason) => {
+  logger.error("[fatal] Unhandled promise rejection; stopping bot", reason);
+  process.exit(1);
+});
+
+process.on("SIGTERM", () => {
+  logger.warn("[process] Received SIGTERM; workflow is stopping the bot");
+});
+
+process.on("SIGINT", () => {
+  logger.warn("[process] Received SIGINT; workflow is stopping the bot");
+});
+
 dlog("=== bot starting ===");
 
 const token = process.env["DISCORD_BOT_TOKEN"];
@@ -249,6 +262,32 @@ const client = new Client({
     GatewayIntentBits.GuildEmojisAndStickers, // required for emoji cache (slot setup)
     GatewayIntentBits.GuildModeration,        // required for guildBanAdd
   ],
+});
+
+client.on(Events.Error, (err) => {
+  logger.error("[discord] Client error", err);
+});
+
+client.on(Events.Warn, (message) => {
+  logger.warn(`[discord] ${message}`);
+});
+
+client.on(Events.ShardDisconnect, (closeEvent, shardId) => {
+  logger.error(
+    `[discord] Shard disconnected shard=${shardId} code=${closeEvent.code} reason=${closeEvent.reason || "(none)"}`,
+  );
+});
+
+client.on(Events.ShardReconnecting, (shardId) => {
+  logger.warn(`[discord] Shard reconnecting shard=${shardId}`);
+});
+
+client.on(Events.ShardResume, (shardId, replayedEvents) => {
+  logger.info(`[discord] Shard resumed shard=${shardId} replayedEvents=${replayedEvents}`);
+});
+
+client.on(Events.Invalidated, () => {
+  logger.error("[discord] Session invalidated; Discord requires a fresh login");
 });
 
 // Checks every minute whether any guild's reward day has arrived and
