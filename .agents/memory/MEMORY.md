@@ -11,3 +11,4 @@
 - [Monthly role debit](monthly-role-debit.md) — 指定ロールへの月額引き落としは毎月25日0:00 JSTに1回だけ実行する。
 - [Private VC panel categories](private-vc-panel-category.md) — 旧`ura`と現行`island`はフリールームとして扱い、高級船室`vc`と混同しない。
 - [gathapin36912 calendar](calendar-feature.md) — Discord内の予定告知・参加表明・通知として実装し、日時は日本時間で扱う。
+- [Workflow signal handling](workflow-signal-handling.md) — SIGTERM/SIGINTを監視する場合も必ず終了し、再起動後のBot二重稼働を防ぐ。

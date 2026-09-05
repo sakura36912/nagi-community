@@ -228,12 +228,14 @@ process.on("unhandledRejection", (reason) => {
   process.exit(1);
 });
 
-process.on("SIGTERM", () => {
+process.once("SIGTERM", () => {
   logger.warn("[process] Received SIGTERM; workflow is stopping the bot");
+  process.exit(0);
 });
 
-process.on("SIGINT", () => {
+process.once("SIGINT", () => {
   logger.warn("[process] Received SIGINT; workflow is stopping the bot");
+  process.exit(0);
 });
 
 dlog("=== bot starting ===");
