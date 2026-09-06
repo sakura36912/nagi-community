@@ -129,6 +129,57 @@ function formatOutcome(outcome: ChinchiroOutcome | null): string {
   return `${attempts}\n**${outcome.label}**`;
 }
 
+export interface ChinchiroDisplayNames {
+  challenger: string;
+  opponent: string;
+}
+
+type ChinchiroNameSource = {
+  displayName?: string | null;
+  user?: {
+    globalName?: string | null;
+    username?: string | null;
+  };
+  globalName?: string | null;
+  username?: string | null;
+};
+
+export function getChinchiroDisplayName(
+  source: ChinchiroNameSource | null | undefined,
+): string {
+  const user = source?.user ?? source;
+  return source?.displayName?.trim()
+    || user?.globalName?.trim()
+    || user?.username?.trim()
+    || "参加者";
+}
+
+async function resolveChinchiroDisplayName(
+  interaction: ButtonInteraction | ChatInputCommandInteraction,
+  userId: string,
+): Promise<string> {
+  const guild = interaction.guild;
+  const member = guild
+    ? guild.members.cache.get(userId)
+      ?? await guild.members.fetch(userId).catch(() => null)
+    : null;
+  if (member) return getChinchiroDisplayName(member);
+
+  const user = await interaction.client.users.fetch(userId).catch(() => null);
+  return getChinchiroDisplayName(user);
+}
+
+async function resolveChinchiroDisplayNames(
+  interaction: ButtonInteraction | ChatInputCommandInteraction,
+  game: ChinchiroGame,
+): Promise<ChinchiroDisplayNames> {
+  const [challenger, opponent] = await Promise.all([
+    resolveChinchiroDisplayName(interaction, game.challengerId),
+    resolveChinchiroDisplayName(interaction, game.opponentId),
+  ]);
+  return { challenger, opponent };
+}
+
 function challengeComponents(id: number): ActionRowBuilder<ButtonBuilder>[] {
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -158,12 +209,15 @@ function rollComponents(id: number): ActionRowBuilder<ButtonBuilder>[] {
   ];
 }
 
-function buildChallengeEmbed(game: ChinchiroGame): EmbedBuilder {
+export function buildChallengeEmbed(
+  game: ChinchiroGame,
+  names: ChinchiroDisplayNames,
+): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle("🎲 対人チンチロ — 挑戦状")
     .setColor(COLOR_NEUTRAL)
     .setDescription(
-      `<@${game.challengerId}> が <@${game.opponentId}> に勝負を挑みました！`,
+      `**${names.challenger}** が **${names.opponent}** に勝負を挑みました！`,
     )
     .addFields(
       {
@@ -181,19 +235,22 @@ function buildChallengeEmbed(game: ChinchiroGame): EmbedBuilder {
     .setTimestamp();
 }
 
-function buildActiveEmbed(game: ChinchiroGame): EmbedBuilder {
+export function buildActiveEmbed(
+  game: ChinchiroGame,
+  names: ChinchiroDisplayNames,
+): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle("🎲 対人チンチロ — 勝負開始")
     .setColor(COLOR_NEUTRAL)
     .setDescription("両者とも「サイコロを振る」を押してください。役が出なければ最大3回まで自動で振ります。")
     .addFields(
       {
-        name: `挑戦者 <@${game.challengerId}>`,
+        name: `挑戦者 ${names.challenger}`,
         value: formatOutcome(parseOutcome(game.challengerRoll)),
         inline: true,
       },
       {
-        name: `対戦相手 <@${game.opponentId}>`,
+        name: `対戦相手 ${names.opponent}`,
         value: formatOutcome(parseOutcome(game.opponentRoll)),
         inline: true,
       },
@@ -205,14 +262,17 @@ function buildActiveEmbed(game: ChinchiroGame): EmbedBuilder {
     .setFooter({ text: "強さ: ピンゾロ > アラシ > シゴロ > 6〜1の目 > 目なし > ヒフミ" });
 }
 
-interface Settlement {
+export interface Settlement {
   game: ChinchiroGame;
   challengerOutcome: ChinchiroOutcome;
   opponentOutcome: ChinchiroOutcome;
   winnerId: string | null;
 }
 
-function buildResultEmbed(result: Settlement): EmbedBuilder {
+export function buildResultEmbed(
+  result: Settlement,
+  names: ChinchiroDisplayNames,
+): EmbedBuilder {
   const { game, challengerOutcome, opponentOutcome, winnerId } = result;
   const isDraw = winnerId === null;
   return new EmbedBuilder()
@@ -221,16 +281,16 @@ function buildResultEmbed(result: Settlement): EmbedBuilder {
     .setDescription(
       isDraw
         ? `同じ強さのため、両者に **${game.bet.toLocaleString()}** ${game.currencyName} を返金しました。`
-        : `🏆 <@${winnerId}> の勝利！\n**${(game.bet * 2).toLocaleString()}** ${game.currencyName} を獲得しました。`,
+        : `🏆 **${winnerId === game.challengerId ? names.challenger : names.opponent}** の勝利！\n**${(game.bet * 2).toLocaleString()}** ${game.currencyName} を獲得しました。`,
     )
     .addFields(
       {
-        name: `挑戦者 <@${game.challengerId}>`,
+        name: `挑戦者 ${names.challenger}`,
         value: formatOutcome(challengerOutcome),
         inline: true,
       },
       {
-        name: `対戦相手 <@${game.opponentId}>`,
+        name: `対戦相手 ${names.opponent}`,
         value: formatOutcome(opponentOutcome),
         inline: true,
       },
@@ -546,9 +606,10 @@ async function handleAccept(interaction: ButtonInteraction, game: ChinchiroGame)
     await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
     return;
   }
+  const names = await resolveChinchiroDisplayNames(interaction, result.game);
   await interaction.message.edit({
     content: "",
-    embeds: [buildActiveEmbed(result.game)],
+    embeds: [buildActiveEmbed(result.game, names)],
     components: rollComponents(result.game.id),
     allowedMentions: { parse: [] },
   });
@@ -571,13 +632,14 @@ async function handleDecline(interaction: ButtonInteraction, game: ChinchiroGame
     });
     return;
   }
+  const challengerName = await resolveChinchiroDisplayName(interaction, closed.challengerId);
   await interaction.message.edit({
     content: "",
     embeds: [
       new EmbedBuilder()
         .setTitle("🎲 対人チンチロ — キャンセル")
         .setColor(COLOR_CANCEL)
-        .setDescription(`勝負はキャンセルされ、<@${closed.challengerId}> に賭け金を返金しました。`),
+        .setDescription(`勝負はキャンセルされ、**${challengerName}** に賭け金を返金しました。`),
     ],
     components: [],
     allowedMentions: { parse: [] },
@@ -612,18 +674,20 @@ async function handleRoll(interaction: ButtonInteraction, game: ChinchiroGame): 
       });
       return;
     }
+    const names = await resolveChinchiroDisplayNames(interaction, settlement.game);
     await interaction.message.edit({
       content: "",
-      embeds: [buildResultEmbed(settlement)],
+      embeds: [buildResultEmbed(settlement, names)],
       components: [],
       allowedMentions: { parse: [] },
     });
     return;
   }
 
+  const names = await resolveChinchiroDisplayNames(interaction, updated);
   await interaction.message.edit({
     content: "",
-    embeds: [buildActiveEmbed(updated)],
+    embeds: [buildActiveEmbed(updated, names)],
     components: rollComponents(updated.id),
     allowedMentions: { parse: [] },
   });
@@ -715,9 +779,10 @@ async function handleChallenge(interaction: ChatInputCommandInteraction): Promis
   }
 
   try {
+    const names = await resolveChinchiroDisplayNames(interaction, created.game);
     const message = await interaction.editReply({
       content: `<@${opponent.id}> 対人チンチロの挑戦が届いています。`,
-      embeds: [buildChallengeEmbed(created.game)],
+      embeds: [buildChallengeEmbed(created.game, names)],
       components: challengeComponents(created.game.id),
       allowedMentions: { users: [opponent.id] },
     });
