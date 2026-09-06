@@ -1,5 +1,5 @@
 import {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags,
+  ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags,
   ModalBuilder, SlashCommandBuilder, TextInputBuilder, TextInputStyle,
   PermissionFlagsBits, ChannelType, escapeMarkdown,
   type Client, type Guild, type VoiceState,
@@ -12,6 +12,9 @@ import {
 } from "@workspace/db";
 import { getGuildSettings } from "../lib/economy";
 import { rollChinchiroHand, type ChinchiroOutcome } from "./chinchiro";
+import { getChinchiroDiceImages } from "../lib/chinchiroDiceImages";
+import { downloadImageAsBuffer } from "../lib/gcsStorage";
+import Jimp from "jimp";
 
 export const MULTIPLAYER_CHINCHIRO_PREFIX = "chinchiro-mp:";
 const RECRUIT_MS = 5 * 60_000, BET_MS = 2 * 60_000, TURN_MS = 60_000;
@@ -209,6 +212,36 @@ function panel(t: ChinchiroTable, ps: ChinchiroTablePlayer[]) {
   ...(resultText ? [{ name: "ラウンド結果（予定）", value: resultText.slice(0, 1024), inline: false }] : []))
     .setFooter({ text: t.status === "recruiting" ? "募集期限 5分。開始には同じ設定VCの2人以上が必要です。" : "親はラウンドごとにランダムです。" });
 }
+
+/** Render configured dice faces for the current result. Missing faces deliberately
+ * return null so the existing Unicode dice fallback remains in the embed. */
+async function resultImage(t: ChinchiroTable): Promise<AttachmentBuilder | null> {
+  if (!t.results) return null;
+  const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
+  const paths = await getChinchiroDiceImages(t.guildId);
+  const strips: Jimp[] = [];
+  for (const pair of result.pairs) {
+    for (const roll of [pair.parent, pair.child]) {
+      const buffers = await Promise.all(roll.dice.map((face) => {
+        const path = paths.get(face);
+        return path ? downloadImageAsBuffer(path) : null;
+      }));
+      if (buffers.some((buffer) => !buffer)) return null;
+      const images = await Promise.all(buffers.map((buffer) => Jimp.read(buffer!)));
+      const height = 128;
+      const scaled = images.map((image) => image.resize(Math.max(1, Math.round(image.bitmap.width * height / image.bitmap.height)), height));
+      const strip = new Jimp(scaled.reduce((sum, image) => sum + image.bitmap.width, 0), height, 0xffffffff);
+      let x = 0;
+      for (const image of scaled) { strip.composite(image, x, 0); x += image.bitmap.width; }
+      strips.push(strip);
+    }
+  }
+  if (!strips.length) return null;
+  const canvas = new Jimp(strips.reduce((sum, strip) => sum + strip.bitmap.width, 0), 128, 0xffffffff);
+  let x = 0;
+  for (const strip of strips) { canvas.composite(strip, x, 0); x += strip.bitmap.width; }
+  return new AttachmentBuilder(await canvas.getBufferAsync(Jimp.MIME_PNG), { name: `chinchiro-result-${t.id}-${t.round}.png` });
+}
 function statusLabel(status: string): string {
   return {
     recruiting: "募集中",
@@ -230,7 +263,13 @@ async function refreshPanelForGuild(guild: Guild, t: ChinchiroTable) {
   const channel = await guild.channels.fetch(t.channelId).catch(() => null);
   if (!channel?.isTextBased() || !("messages" in channel)) return;
   const message = await channel.messages.fetch(t.messageId).catch(() => null);
-  if (message) await message.edit({ embeds: [panel(t, await players(t.id))], components: components(t) });
+  if (message) {
+    const image = await resultImage(t);
+    await message.edit({
+      embeds: [panel(t, await players(t.id)).setImage(image ? `attachment://${image.name}` : null)],
+      components: components(t), files: image ? [image] : [],
+    });
+  }
 }
 async function refreshStoredPanel(interaction: ChatInputCommandInteraction, t: ChinchiroTable) {
   if (interaction.guild) await refreshPanelForGuild(interaction.guild, t);
@@ -322,7 +361,12 @@ function appendRoundHistory(
 }
 async function redraw(interaction: ButtonInteraction | ModalSubmitInteraction, t: ChinchiroTable) {
   const ps = await players(t.id);
-  await interaction.message?.edit({ embeds: [panel(t, ps)], components: components(t), allowedMentions: { users: ps.map((p) => p.userId) } });
+  const image = await resultImage(t);
+  await interaction.message?.edit({
+    embeds: [panel(t, ps).setImage(image ? `attachment://${image.name}` : null)],
+    components: components(t), files: image ? [image] : [],
+    allowedMentions: { users: ps.map((p) => p.userId) },
+  });
 }
 export async function isConfiguredChinchiroVoice(
   guildId: string,
@@ -471,10 +515,11 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
     if (t.parentId === interaction.user.id && left.length) { const p = left[Math.floor(Math.random() * left.length)]!; [updated] = await db.update(chinchiroTablesTable).set({ parentId: p.userId }).where(eq(chinchiroTablesTable.id, id)).returning(); }
     await interaction.deferUpdate(); await redraw(interaction, updated ?? t); return;
   }
-  if (action === "close" && t.status === "recruiting" && (interaction.user.id === t.ownerId || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))) {
-    const [updated] = await db.update(chinchiroTablesTable).set({ status: "closed" }).where(eq(chinchiroTablesTable.id, id)).returning(); await interaction.deferUpdate(); await redraw(interaction, updated!); return;
-  }
-  if (action === "start" && t.status === "recruiting" && (interaction.user.id === t.ownerId || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))) {
+  // 「募集終了」は募集だけを締め切り、卓をBET入力へ進める。
+  // 卓そのものを終了する操作は、結果画面の「終了」または管理者の
+  // /chinchiro force-end に限定する。
+  if ((action === "close" || action === "start") && t.status === "recruiting" &&
+    (interaction.user.id === t.ownerId || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))) {
     const ps = await players(id);
     const members = await Promise.all(ps.map((p) => interaction.guild!.members.fetch(p.userId).catch(() => null)));
     const inVoice = await Promise.all(members.map((member) =>

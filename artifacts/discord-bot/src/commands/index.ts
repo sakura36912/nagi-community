@@ -112,6 +112,7 @@ import {
 } from "@workspace/db";
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { calendarCommand } from "./calendar";
+import { chinchiroDiceCommand } from "./chinchiroDice";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -3889,6 +3890,7 @@ export const commands: Command[] = [
   rouletteCommand,
   baccaratCommand,
   chinchiroCommand,
+  chinchiroDiceCommand,
   casinoCommand,
   bannotifyCommand,
   evalsheetCommand,

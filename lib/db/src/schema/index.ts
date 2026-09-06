@@ -35,4 +35,5 @@ export * from "./baccarat";
 export * from "./casinoPlayLimits";
 export * from "./chinchiro";
 export * from "./chinchiroMultiplayer";
+export * from "./chinchiroDice";
 
