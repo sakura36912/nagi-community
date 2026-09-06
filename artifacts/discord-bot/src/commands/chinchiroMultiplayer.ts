@@ -8,7 +8,7 @@ import {
 import { and, asc, eq, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
 import {
   chinchiroMultiplayerSettingsTable, chinchiroTablePlayersTable, chinchiroTablesTable,
-  db, type ChinchiroTable, type ChinchiroTablePlayer,
+  db, getHubChannelById, getHubSession, type ChinchiroTable, type ChinchiroTablePlayer,
 } from "@workspace/db";
 import { getGuildSettings } from "../lib/economy";
 import { rollChinchiroHand, type ChinchiroOutcome } from "./chinchiro";
@@ -324,8 +324,28 @@ async function redraw(interaction: ButtonInteraction | ModalSubmitInteraction, t
   const ps = await players(t.id);
   await interaction.message?.edit({ embeds: [panel(t, ps)], components: components(t), allowedMentions: { users: ps.map((p) => p.userId) } });
 }
-function inConfiguredVoice(interaction: ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction, voiceId: string | null) {
-  return Boolean(voiceId && interaction.guild?.members.cache.get(interaction.user.id)?.voice.channelId === voiceId);
+export async function isConfiguredChinchiroVoice(
+  guildId: string,
+  channelId: string | null,
+  configuredVoiceId: string | null,
+): Promise<boolean> {
+  if (!channelId || !configuredVoiceId) return false;
+  if (channelId === configuredVoiceId) return true;
+
+  // A VC Hub creates a new channel and records the source hub in
+  // vc_hub_sessions. Treat that generated VC as the configured VC too.
+  const session = await getHubSession(channelId).catch(() => null);
+  if (!session || session.guildId !== guildId) return false;
+  const hub = await getHubChannelById(session.hubId).catch(() => null);
+  return hub?.guildId === guildId && hub.hubChannelId === configuredVoiceId;
+}
+
+async function inConfiguredVoice(
+  interaction: ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction,
+  voiceId: string | null,
+): Promise<boolean> {
+  const channelId = interaction.guild?.members.cache.get(interaction.user.id)?.voice.channelId ?? null;
+  return isConfiguredChinchiroVoice(interaction.guildId ?? "", channelId, voiceId);
 }
 
 export const chinchiroRecruitCommand = {
@@ -385,7 +405,7 @@ export const chinchiroRecruitCommand = {
       await interaction.reply({ content: `<@${user.id}> を卓 #${target.id} から外しました。`, flags: MessageFlags.Ephemeral, allowedMentions: { users: [user.id] } }); return;
     }
     const config = await settings(interaction.guildId);
-    if (!inConfiguredVoice(interaction, config.voiceChannelId)) {
+    if (!await inConfiguredVoice(interaction, config.voiceChannelId)) {
       await interaction.reply({ content: "管理者が設定したボイスチャンネルに参加してから募集してください。", flags: MessageFlags.Ephemeral }); return;
     }
     const economy = await getGuildSettings(interaction.guildId);
@@ -424,7 +444,7 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
     await interaction.showModal(modal); return;
   }
   if (action === "join") {
-    if (t.status !== "recruiting" || !inConfiguredVoice(interaction, config.voiceChannelId)) { await interaction.reply({ content: "募集中で、設定VCにいる場合のみ参加できます。", flags: MessageFlags.Ephemeral }); return; }
+    if (t.status !== "recruiting" || !await inConfiguredVoice(interaction, config.voiceChannelId)) { await interaction.reply({ content: "募集中で、設定VCまたはそこからVC Hubで転送されたVCにいる場合のみ参加できます。", flags: MessageFlags.Ephemeral }); return; }
     const displayName = await resolvedDisplayName(interaction.guild!, interaction.user.id);
     const joined = await db.transaction(async (tx) => {
       await lockUsers(tx, t.guildId, [interaction.user.id]);
@@ -457,7 +477,10 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
   if (action === "start" && t.status === "recruiting" && (interaction.user.id === t.ownerId || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))) {
     const ps = await players(id);
     const members = await Promise.all(ps.map((p) => interaction.guild!.members.fetch(p.userId).catch(() => null)));
-    if (ps.length < 2 || members.some((member) => member?.voice.channelId !== config.voiceChannelId)) { await interaction.reply({ content: "2人以上全員が設定VCにいる必要があります。", flags: MessageFlags.Ephemeral }); return; }
+    const inVoice = await Promise.all(members.map((member) =>
+      isConfiguredChinchiroVoice(t.guildId, member?.voice.channelId ?? null, config.voiceChannelId),
+    ));
+    if (ps.length < 2 || inVoice.some((ok) => !ok)) { await interaction.reply({ content: "2人以上全員が設定VC、またはそこからVC Hubで転送されたVCにいる必要があります。", flags: MessageFlags.Ephemeral }); return; }
     const parent = ps[Math.floor(Math.random() * ps.length)]!;
     const transitioned = await db.transaction(async (tx) => {
       const conflicts = await tx.select({ userId: chinchiroTablePlayersTable.userId })
@@ -543,7 +566,7 @@ export async function handleMultiplayerChinchiroVoiceDeparture(oldState: VoiceSt
   const userId = oldState.member?.id;
   if (!userId || oldState.channelId === newState.channelId) return;
   const config = await settings(oldState.guild.id);
-  if (!config.voiceChannelId || oldState.channelId !== config.voiceChannelId) return;
+  if (!await isConfiguredChinchiroVoice(oldState.guild.id, oldState.channelId, config.voiceChannelId)) return;
   const open = await db.select().from(chinchiroTablesTable).where(and(
     eq(chinchiroTablesTable.guildId, oldState.guild.id),
     inArray(chinchiroTablesTable.status, ["recruiting", "betting", "rolling"]),
