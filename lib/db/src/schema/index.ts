@@ -33,4 +33,5 @@ export * from "./sticky";
 export * from "./timedRoleGrants";
 export * from "./baccarat";
 export * from "./casinoPlayLimits";
+export * from "./chinchiro";
 

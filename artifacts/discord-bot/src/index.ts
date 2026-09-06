@@ -12,6 +12,7 @@ import {
 
 import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
 import { handlePokerButton, POKER_PREFIX } from "./commands/poker";
+import { handleChinchiroButton, CHINCHIRO_PREFIX } from "./commands/chinchiro";
 import { handleRouletteInteraction, ROULETTE_PREFIX } from "./commands/roulette";
 import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
 import {
@@ -1941,15 +1942,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
             r.name === "追放者" && member.roles.cache.has(r.id),
           );
           const hasRestrictedRole = !isExempt && (hasIslandRole || hasExpelledRole);
-          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow"]);
-          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow"]);
+          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow", "chinchiro"]);
+          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow", "chinchiro"]);
           const allowedCommands = hasIslandRole && !hasExpelledRole
             ? allowedForIsland
             : allowedForExpelled;
           if (hasRestrictedRole && !allowedCommands.has(interaction.commandName)) {
             const allowedText = hasIslandRole && !hasExpelledRole
-              ? "`/送金`、`/残高確認`、`/slot play`、`/blackjack`、`/baccarat`、`/highlow`"
-              : "`/送金`、`/残高確認`、`/slot`、`/blackjack`、`/highlow`";
+              ? "`/送金`、`/残高確認`、`/slot play`、`/blackjack`、`/baccarat`、`/highlow`、`/chinchiro`"
+              : "`/送金`、`/残高確認`、`/slot`、`/blackjack`、`/highlow`、`/chinchiro`";
             await interaction.reply({ content: `このロールでは ${allowedText} のみ使用できます。`, ephemeral: true });
             return;
           }
@@ -1986,6 +1987,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(POKER_PREFIX)) {
       await handlePokerButton(interaction);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(CHINCHIRO_PREFIX)) {
+      await handleChinchiroButton(interaction);
       return;
     }
 

@@ -1964,6 +1964,7 @@ import { pokerCommand } from "./poker";
 import { rouletteCommand } from "./roulette";
 import { highlowCommand } from "./highlow";
 import { baccaratCommand } from "./baccarat";
+import { chinchiroCommand } from "./chinchiro";
 import { casinoCommand } from "./casino";
 import { bannotifyCommand } from "./bannotify";
 import { rolePanelCommand } from "./rolepanel";
@@ -3887,6 +3888,7 @@ export const commands: Command[] = [
   pokerCommand,
   rouletteCommand,
   baccaratCommand,
+  chinchiroCommand,
   casinoCommand,
   bannotifyCommand,
   evalsheetCommand,

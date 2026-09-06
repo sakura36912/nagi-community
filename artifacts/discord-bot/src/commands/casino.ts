@@ -34,7 +34,7 @@ const COLOR_NEUTRAL = 0x5865f2;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type GameKey = "blackjack" | "poker" | "roulette" | "slot" | "highlow" | "baccarat";
+type GameKey = "blackjack" | "poker" | "roulette" | "slot" | "highlow" | "baccarat" | "chinchiro";
 
 interface GameStats {
   plays:        number;
@@ -81,6 +81,7 @@ async function fetchCasinoStats(
           sql`${transactionsTable.reason} LIKE 'スロット%'`,
           sql`${transactionsTable.reason} LIKE 'ハイアンドロー%'`,
           sql`${transactionsTable.reason} LIKE 'バカラ%'`,
+          sql`${transactionsTable.reason} LIKE 'チンチロ%'`,
         ),
       ),
     );
@@ -96,6 +97,7 @@ async function fetchCasinoStats(
     slot:      empty(),
     highlow:   empty(),
     baccarat:  empty(),
+    chinchiro:  empty(),
   };
 
   for (const row of rows) {
@@ -110,6 +112,7 @@ async function fetchCasinoStats(
     else if (row.reason.startsWith("スロット"))       key = "slot";
     else if (row.reason.startsWith("ハイアンドロー")) key = "highlow";
     else if (row.reason.startsWith("バカラ"))         key = "baccarat";
+    else if (row.reason.startsWith("チンチロ"))       key = "chinchiro";
     else continue;
 
     const { payout, net } = resolveCasinoLedgerAmounts(key, amount, bet, row.reason);
@@ -252,6 +255,7 @@ async function handleStats(interaction: ChatInputCommandInteraction): Promise<vo
     slot:      "🎰 スロット",
     highlow:   "🃏 ハイアンドロー",
     baccarat:  "🎴 バカラ",
+    chinchiro:  "🎲 対人チンチロ",
   };
 
   const embed = new EmbedBuilder()
@@ -304,6 +308,7 @@ const GAME_LABELS_SHORT: Record<GameKey, string> = {
   slot:      "🎰 スロット",
   highlow:   "🃏 ハイロー",
   baccarat:  "🎴 バカラ",
+  chinchiro:  "🎲 チンチロ",
 };
 
 /**
@@ -324,6 +329,7 @@ async function fetchPeriodBreakdown(
       sql`${transactionsTable.reason} LIKE 'スロット%'`,
       sql`${transactionsTable.reason} LIKE 'ハイアンドロー%'`,
       sql`${transactionsTable.reason} LIKE 'バカラ%'`,
+      sql`${transactionsTable.reason} LIKE 'チンチロ%'`,
     ),
   ];
   if (since) conditions.push(gte(transactionsTable.createdAt, since));
@@ -337,6 +343,7 @@ async function fetchPeriodBreakdown(
   const byGameUser: Record<GameKey, Map<string, number>> = {
     blackjack: new Map(), poker: new Map(), roulette: new Map(),
     slot: new Map(), highlow: new Map(), baccarat: new Map(),
+    chinchiro: new Map(),
   };
   // 全体: userId → net 合計
   const totalUser = new Map<string, number>();
@@ -352,6 +359,7 @@ async function fetchPeriodBreakdown(
     else if (row.reason.startsWith("スロット"))       key = "slot";
     else if (row.reason.startsWith("ハイアンドロー")) key = "highlow";
     else if (row.reason.startsWith("バカラ"))         key = "baccarat";
+    else if (row.reason.startsWith("チンチロ"))       key = "chinchiro";
     else continue;
 
     const { net } = resolveCasinoLedgerAmounts(key, amount, bet, row.reason);
@@ -376,6 +384,7 @@ async function fetchPeriodBreakdown(
       slot:      toStats(byGameUser.slot),
       highlow:   toStats(byGameUser.highlow),
       baccarat:  toStats(byGameUser.baccarat),
+      chinchiro:  toStats(byGameUser.chinchiro),
     },
     total: toStats(totalUser),
   };
