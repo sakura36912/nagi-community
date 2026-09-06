@@ -57,16 +57,20 @@ export const chinchiroDiceCommand = {
     }
     const ext = IMAGE_TYPES[attachment.contentType];
     const objectPath = `chinchiro-dice/${interaction.guildId}/${face}.${ext}`;
-    await uploadImageFromUrl(attachment.url, objectPath, attachment.contentType);
-    const previous = images.get(face);
-    await setChinchiroDiceImage(interaction.guildId, face, objectPath);
-    if (previous && previous !== objectPath) await deleteGcsObject(previous);
-    const buffer = await downloadImageAsBuffer(objectPath);
-    const files = buffer ? [new AttachmentBuilder(buffer, { name: `dice-${face}.${ext}` })] : [];
-    await interaction.editReply({
-      content: `✅ ${face}の目の画像を登録しました。`,
-      embeds: [new EmbedBuilder().setTitle("🎲 サイコロ画像登録").setDescription(`${face}の目`).setImage(files.length ? `attachment://dice-${face}.${ext}` : null)],
-      files,
-    });
+    try {
+      await uploadImageFromUrl(attachment.url, objectPath, attachment.contentType);
+      const previous = images.get(face);
+      await setChinchiroDiceImage(interaction.guildId, face, objectPath);
+      if (previous && previous !== objectPath) await deleteGcsObject(previous);
+      const buffer = await downloadImageAsBuffer(objectPath);
+      const files = buffer ? [new AttachmentBuilder(buffer, { name: `dice-${face}.${ext}` })] : [];
+      await interaction.editReply({
+        content: `✅ ${face}の目の画像を登録しました。`,
+        embeds: [new EmbedBuilder().setTitle("🎲 サイコロ画像登録").setDescription(`${face}の目`).setImage(files.length ? `attachment://dice-${face}.${ext}` : null)],
+        files,
+      });
+    } catch (error) {
+      await interaction.editReply(`❌ 画像の登録に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+    }
   },
 };

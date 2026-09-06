@@ -217,30 +217,34 @@ function panel(t: ChinchiroTable, ps: ChinchiroTablePlayer[]) {
  * return null so the existing Unicode dice fallback remains in the embed. */
 async function resultImage(t: ChinchiroTable): Promise<AttachmentBuilder | null> {
   if (!t.results) return null;
-  const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
-  const paths = await getChinchiroDiceImages(t.guildId);
-  const strips: Jimp[] = [];
-  for (const pair of result.pairs) {
-    for (const roll of [pair.parent, pair.child]) {
-      const buffers = await Promise.all(roll.dice.map((face) => {
-        const path = paths.get(face);
-        return path ? downloadImageAsBuffer(path) : null;
-      }));
-      if (buffers.some((buffer) => !buffer)) return null;
-      const images = await Promise.all(buffers.map((buffer) => Jimp.read(buffer!)));
-      const height = 128;
-      const scaled = images.map((image) => image.resize(Math.max(1, Math.round(image.bitmap.width * height / image.bitmap.height)), height));
-      const strip = new Jimp(scaled.reduce((sum, image) => sum + image.bitmap.width, 0), height, 0xffffffff);
-      let x = 0;
-      for (const image of scaled) { strip.composite(image, x, 0); x += image.bitmap.width; }
-      strips.push(strip);
+  try {
+    const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
+    const paths = await getChinchiroDiceImages(t.guildId);
+    const strips: Jimp[] = [];
+    for (const pair of result.pairs) {
+      for (const roll of [pair.parent, pair.child]) {
+        const buffers = await Promise.all(roll.dice.map((face) => {
+          const path = paths.get(face);
+          return path ? downloadImageAsBuffer(path) : null;
+        }));
+        if (buffers.some((buffer) => !buffer)) return null;
+        const images = await Promise.all(buffers.map((buffer) => Jimp.read(buffer!)));
+        const height = 128;
+        const scaled = images.map((image) => image.resize(Math.max(1, Math.round(image.bitmap.width * height / image.bitmap.height)), height));
+        const strip = new Jimp(scaled.reduce((sum, image) => sum + image.bitmap.width, 0), height, 0xffffffff);
+        let x = 0;
+        for (const image of scaled) { strip.composite(image, x, 0); x += image.bitmap.width; }
+        strips.push(strip);
+      }
     }
+    if (!strips.length) return null;
+    const canvas = new Jimp(strips.reduce((sum, strip) => sum + strip.bitmap.width, 0), 128, 0xffffffff);
+    let x = 0;
+    for (const strip of strips) { canvas.composite(strip, x, 0); x += strip.bitmap.width; }
+    return new AttachmentBuilder(await canvas.getBufferAsync(Jimp.MIME_PNG), { name: `chinchiro-result-${t.id}-${t.round}.png` });
+  } catch {
+    return null;
   }
-  if (!strips.length) return null;
-  const canvas = new Jimp(strips.reduce((sum, strip) => sum + strip.bitmap.width, 0), 128, 0xffffffff);
-  let x = 0;
-  for (const strip of strips) { canvas.composite(strip, x, 0); x += strip.bitmap.width; }
-  return new AttachmentBuilder(await canvas.getBufferAsync(Jimp.MIME_PNG), { name: `chinchiro-result-${t.id}-${t.round}.png` });
 }
 function statusLabel(status: string): string {
   return {
@@ -267,7 +271,7 @@ async function refreshPanelForGuild(guild: Guild, t: ChinchiroTable) {
     const image = await resultImage(t);
     await message.edit({
       embeds: [panel(t, await players(t.id)).setImage(image ? `attachment://${image.name}` : null)],
-      components: components(t), files: image ? [image] : [],
+      components: components(t), attachments: [], files: image ? [image] : [],
     });
   }
 }
@@ -364,7 +368,7 @@ async function redraw(interaction: ButtonInteraction | ModalSubmitInteraction, t
   const image = await resultImage(t);
   await interaction.message?.edit({
     embeds: [panel(t, ps).setImage(image ? `attachment://${image.name}` : null)],
-    components: components(t), files: image ? [image] : [],
+    components: components(t), attachments: [], files: image ? [image] : [],
     allowedMentions: { users: ps.map((p) => p.userId) },
   });
 }
