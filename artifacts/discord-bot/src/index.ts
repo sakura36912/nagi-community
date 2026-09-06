@@ -13,6 +13,13 @@ import {
 import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
 import { handlePokerButton, POKER_PREFIX } from "./commands/poker";
 import { handleChinchiroButton, CHINCHIRO_PREFIX } from "./commands/chinchiro";
+import {
+  handleMultiplayerChinchiroButton,
+  handleMultiplayerChinchiroModal,
+  handleMultiplayerChinchiroVoiceDeparture,
+  startMultiplayerChinchiroRecovery,
+  MULTIPLAYER_CHINCHIRO_PREFIX,
+} from "./commands/chinchiroMultiplayer";
 import { handleRouletteInteraction, ROULETTE_PREFIX } from "./commands/roulette";
 import { handleGuideSelect, GUIDE_SELECT_ID } from "./commands/guide";
 import {
@@ -850,6 +857,7 @@ async function runVcDeleteScheduler(): Promise<void> {
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
+  startMultiplayerChinchiroRecovery(readyClient);
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
 
@@ -1227,6 +1235,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const userId = newState.member?.id ?? oldState.member?.id;
   if (!userId) return;
   if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
+  await handleMultiplayerChinchiroVoiceDeparture(oldState, newState);
 
   // 追放者は高級船室へ入室できない。古い明示権限が残っていても即時に
   // 権限を削除して切断する（フリールームや砂浜は対象外）。
@@ -1995,6 +2004,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.isButton() && interaction.customId.startsWith(MULTIPLAYER_CHINCHIRO_PREFIX)) {
+      await handleMultiplayerChinchiroButton(interaction);
+      return;
+    }
+
     if (
       (interaction.isButton() || interaction.isStringSelectMenu()) &&
       interaction.customId.startsWith(ROULETTE_PREFIX)
@@ -2121,6 +2135,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith(VC_RENAME_MODAL_PREFIX)) {
       await handleVcRenameModalSubmit(interaction);
+      return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(MULTIPLAYER_CHINCHIRO_PREFIX)) {
+      await handleMultiplayerChinchiroModal(interaction);
       return;
     }
   } catch (err) {

@@ -19,6 +19,7 @@ import {
 import { getGuildSettings, getOrCreateWallet } from "../lib/economy";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { logger } from "../lib/logger";
+import { chinchiroRecruitCommand } from "./chinchiroMultiplayer";
 
 export const CHINCHIRO_PREFIX = "chinchiro:";
 
@@ -796,26 +797,6 @@ async function handleChallenge(interaction: ChatInputCommandInteraction): Promis
   }
 }
 
-export const chinchiroCommand = {
-  data: new SlashCommandBuilder()
-    .setName("chinchiro")
-    .setDescription("プレイヤー同士でチンチロ勝負をする")
-    .setDefaultMemberPermissions(0)
-    .addUserOption((option) =>
-      option
-        .setName("opponent")
-        .setDescription("対戦相手")
-        .setRequired(true),
-    )
-    .addIntegerOption((option) =>
-      option
-        .setName("bet")
-        .setDescription(`1人あたりの賭け金（最低${MIN_BET.toLocaleString()}）`)
-        .setMinValue(MIN_BET)
-        .setMaxValue(CASINO_DEFAULT_MAX_BET)
-        .setRequired(true),
-    ),
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await handleChallenge(interaction);
-  },
-};
+// Keep the legacy handlers above for outstanding 1v1 messages only. New slash
+// registrations deliberately expose the multiplayer recruitment flow.
+export const chinchiroCommand = chinchiroRecruitCommand;
