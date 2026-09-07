@@ -42,7 +42,6 @@ vi.mock("../lib/community.js", () => ({
   getTrackedVcCategoryId:   mocks.getTrackedVcCategoryId,
   // Stubs for other exports referenced by index.ts
   closeSessionAndGetDuration: vi.fn().mockResolvedValue(null),
-  awardVcTime:              vi.fn().mockResolvedValue(undefined),
 }));
 
 // ─── Mock logger ──────────────────────────────────────────────────────────────

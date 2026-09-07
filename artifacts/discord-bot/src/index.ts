@@ -141,14 +141,6 @@ import {
 } from "./lib/vcReward";
 import { isTavernChannel, getTavernChannelNames, onTavernJoin, onTavernLeave, flushAllTavernSessions } from "./lib/chestTracker";
 import {
-  recordPointVcJoin,
-  settlePointVcSession,
-  awardBoostPoints,
-  distributeRoleTenurePoints,
-  listVcCategoryConfigs,
-  type PointVcCategoryConfig,
-} from "./lib/points";
-import {
   distributeRoleRewards,
   getExpiredPrivateVcSessions,
   getPrivateVcSessionByChannelId,
@@ -1070,16 +1062,6 @@ client.once(Events.ClientReady, async (readyClient) => {
     runCalendarReminderScheduler(readyClient).catch((err) => logger.error("[calendar] Scheduler error", err));
   }, 60 * 1000);
 
-  // Daily role-tenure point distribution — run once every 24 h
-  const ROLE_TENURE_INTERVAL_MS = 24 * 60 * 60 * 1000;
-  setInterval(() => {
-    for (const guild of readyClient.guilds.cache.values()) {
-      distributeRoleTenurePoints(guild).catch((err) =>
-        logger.error(`[points] role tenure error for guild ${guild.id}`, err),
-      );
-    }
-  }, ROLE_TENURE_INTERVAL_MS);
-
   // ── Weekly shift post — every Monday 00:00 UTC (= 09:00 JST) ─────────────
   const nextWeeklyPost = getNextWeeklyPostTime();
   const shiftDelay = nextWeeklyPost.getTime() - Date.now();
@@ -1265,14 +1247,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const wasInAfk = oldState.channelId === afkChannelId;
   const isInAfk = newState.channelId === afkChannelId;
 
-  /** Returns the category ID for a channel if it matches a configured point VC category. */
-  async function getPointCategoryId(channelId: string): Promise<string | null> {
-    const channel = guild.channels.cache.get(channelId);
-    if (!channel?.parentId) return null;
-    const configs = await listVcCategoryConfigs(guild.id).catch(() => [] as Awaited<ReturnType<typeof listVcCategoryConfigs>>);
-    return configs.some((c) => c.categoryId === channel.parentId) ? channel.parentId! : null;
-  }
-
   // ── Joined VC (from nothing or from AFK) ─────────────────────────────────
   if (isInVc && !isInAfk && (!wasInVc || wasInAfk)) {
     // 宝箱トラッカー：酒場に入室したら記録
@@ -1296,15 +1270,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           logger.error(`[vcsalary] recordVcJoin error for ${userId}`, err);
         }
       }),
-      // Point VC tracking
-      (async () => {
-        try {
-          const catId = await getPointCategoryId(newState.channelId!);
-          if (catId) await recordPointVcJoin(guild.id, userId, catId);
-        } catch (err) {
-          logger.error(`[points] recordPointVcJoin error for ${userId}`, err);
-        }
-      })(),
       // Session log tracking + join notification
       // Hub チャンネルは即座に別VCへ転送されるため VClog 通知をスキップする。
       // 転送後の MOVE イベントで join 通知が1件送られる。
@@ -1340,10 +1305,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           await handleVcLeave(guild, userId, presence.joinedAt, hubSalary ?? undefined);
         }
       }),
-      // Point VC settlement
-      settlePointVcSession(guild.id, userId).catch((err) =>
-        logger.error(`[points] settlePointVcSession error for ${userId}`, err),
-      ),
       // Session log + leave notification
       (async () => {
         try {
@@ -1411,24 +1372,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           logger.error(`[vcsalary] channel-move handling error for ${userId}`, err);
         }
       }),
-      // Point VC tracking – category may have changed
-      (async () => {
-        try {
-          const wasPointCat = await getPointCategoryId(oldState.channelId!);
-          const nowPointCat = await getPointCategoryId(newState.channelId!);
-          if (wasPointCat && !nowPointCat) {
-            await settlePointVcSession(guild.id, userId);
-          } else if (!wasPointCat && nowPointCat) {
-            await recordPointVcJoin(guild.id, userId, nowPointCat);
-          } else if (wasPointCat && nowPointCat && wasPointCat !== nowPointCat) {
-            // Different point category — settle old, start new
-            await settlePointVcSession(guild.id, userId);
-            await recordPointVcJoin(guild.id, userId, nowPointCat);
-          }
-        } catch (err) {
-          logger.error(`[points] VC move point tracking error for ${userId}`, err);
-        }
-      })(),
       // Session log + move notification – category eligibility may have changed.
       // Hub チャンネル（通過チャンネル）は即座に別VCへ転送されるため、
       // Hub 自体への join/leave 通知は二重通知を防ぐためスキップする。
@@ -1542,14 +1485,6 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
   const addedRoleIds = [...newMember.roles.cache.keys()].filter((id) => !oldRoles.has(id));
   const removedRoleIds = [...oldRoles.keys()].filter((id) => !newMember.roles.cache.has(id));
-
-  // ── サーバーブースト開始検知 → ポイント付与 ──────────────────────────────
-  const justBoosted = !oldMember.partial && !oldMember.premiumSince && !!newMember.premiumSince;
-  if (justBoosted) {
-    awardBoostPoints(guildId, newMember.id).then((pts) => {
-      if (pts > 0) logger.info(`[points] boost award ${newMember.id} +${pts}pt`);
-    }).catch((err) => logger.error("[points] boost award error", err));
-  }
 
   logger.info(`[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} addedRoles=[${addedRoleIds.join(",")}] partial=${oldMember.partial}`);
 

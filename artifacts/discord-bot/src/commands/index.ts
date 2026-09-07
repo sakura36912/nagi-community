@@ -1972,8 +1972,6 @@ import { rolePanelCommand } from "./rolepanel";
 import { guideCommand } from "./guide";
 import { leavelogCommand } from "./leavelog";
 
-import { pointconfigCommand } from "./pointconfig";
-import { pointCommand } from "./point";
 import { interviewCommand } from "./interview";
 import { stickyCommand } from "./sticky";
 import {
@@ -3898,8 +3896,6 @@ export const commands: Command[] = [
   guideCommand,
   leavelogCommand,
 
-  pointconfigCommand,
-  pointCommand,
   stickyCommand,
   adviceEndCommand,
   adviceLogCommand,

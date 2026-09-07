@@ -9,7 +9,6 @@
 import { closeSessionAndGetDuration, openVcSessionIfTracked } from "./community.js";
 import { logger } from "./logger.js";
 import { resolveIsExile, type ExileCheckMember } from "./vc-exile.js";
-import { awardVcTime } from "./points.js";
 
 export interface VoiceStateUpdateParams {
   guildId: string;
@@ -43,15 +42,10 @@ export async function handleVoiceStateUpdate(
 
   // ── Close old session ──────────────────────────────────────────────────────
   if (oldChannelId) {
-    const duration = await closeSessionAndGetDuration(guildId, userId).catch((err: unknown) => {
+    await closeSessionAndGetDuration(guildId, userId).catch((err: unknown) => {
       logger.error(`[vc] closeSession error user=${userId}`, err);
       return null;
     });
-    if (duration !== null && duration > 0) {
-      awardVcTime(guildId, userId, duration).catch((err: unknown) =>
-        logger.error(`[point] awardVcTime error user=${userId}`, err),
-      );
-    }
   }
 
   // ── Open new session with exile flag ────────────────────────────────────────

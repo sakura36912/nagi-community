@@ -26,7 +26,6 @@ export * from "./vcRewards";
 export * from "./slots";
 export * from "./triggers";
 export * from "./vcHub";
-export * from "./points";
 export * from "./guide";
 export * from "./blackjack";
 export * from "./sticky";

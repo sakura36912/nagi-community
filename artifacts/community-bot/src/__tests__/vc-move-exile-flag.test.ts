@@ -29,7 +29,6 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   openVcSessionIfTracked: vi.fn(),
   closeSessionAndGetDuration: vi.fn(),
-  awardVcTime: vi.fn(),
   loggerError: vi.fn(),
   loggerInfo: vi.fn(),
   loggerWarn: vi.fn(),
@@ -39,11 +38,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/community.js", () => ({
   openVcSessionIfTracked: mocks.openVcSessionIfTracked,
   closeSessionAndGetDuration: mocks.closeSessionAndGetDuration,
-}));
-
-// ─── Mock points lib ─────────────────────────────────────────────────────────
-vi.mock("../lib/points.js", () => ({
-  awardVcTime: mocks.awardVcTime,
 }));
 
 // ─── Mock logger ──────────────────────────────────────────────────────────────
@@ -90,7 +84,6 @@ describe("handleVoiceStateUpdate (production) – exile flag preserved on channe
     vi.clearAllMocks();
     mocks.closeSessionAndGetDuration.mockResolvedValue(60); // 60-second session
     mocks.openVcSessionIfTracked.mockResolvedValue(undefined);
-    mocks.awardVcTime.mockResolvedValue(undefined);
   });
 
   // ── Case 1: 追放者 member moves → isExile=true ──────────────────────────────

@@ -96,31 +96,6 @@ export async function listUpcomingEvents(guildId: string): Promise<CommunityEven
     .orderBy(asc(communityEventsTable.scheduledAt));
 }
 
-/**
- * Returns events across all guilds whose scheduledAt has passed but have not
- * yet had participation points awarded.
- */
-export async function getEventsNeedingParticipationPoints(): Promise<CommunityEvent[]> {
-  const now = new Date();
-  return db
-    .select()
-    .from(communityEventsTable)
-    .where(
-      and(
-        lt(communityEventsTable.scheduledAt, now),
-        isNull(communityEventsTable.participationPointsAwardedAt),
-      ),
-    );
-}
-
-/** Mark an event as having had participation points awarded. */
-export async function markParticipationPointsAwarded(eventId: number): Promise<void> {
-  await db
-    .update(communityEventsTable)
-    .set({ participationPointsAwardedAt: new Date() })
-    .where(eq(communityEventsTable.id, eventId));
-}
-
 export async function addParticipant(eventId: number, userId: string): Promise<boolean> {
   const result = await db
     .insert(communityEventParticipantsTable)
@@ -1290,9 +1265,6 @@ export async function setTrackedVcCategoryId(
       set: { trackedVcCategoryId: categoryId, updatedAt: new Date() },
     });
 }
-
-// Re-export awardVcTime so tests can mock it from this module
-export { awardVcTime } from "./points.js";
 
 /** Injectable dependencies for openVcSessionIfTracked (used in tests). */
 export interface OpenVcSessionIfTrackedDeps {

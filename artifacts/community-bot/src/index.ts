@@ -10,16 +10,12 @@ import {
 import { logger } from "./lib/logger.js";
 import {
   closeAllOpenSessions,
-  closeSession,
-  closeSessionAndGetDuration,
   getAllRankingSettings,
   getEvent,
   getEventSettings,
   getEventsNeedingReminder,
   getEventsNeeding24hReminder,
-  getEventsNeedingParticipationPoints,
   mark24hReminderSent,
-  markParticipationPointsAwarded,
   getParticipants,
   getVcRanking,
   getActiveSessionCount,
@@ -36,7 +32,6 @@ import { resolveIsExile } from "./lib/vc-exile.js";
 import { handleVoiceStateUpdate } from "./lib/vc-session-handler.js";
 import { runPerGuildVcPrune, runOrphanVcPrune } from "./lib/vc-prune-scheduler.js";
 import { runPeriodicMessages } from "./lib/periodic-message-scheduler.js";
-import { awardVcTime, awardEventParticipation, runRoleTenureBatch } from "./lib/points.js";
 import { getPreban, pool, checkSchemaDrift } from "@workspace/db";
 import {
   buildEventEmbed,
@@ -356,43 +351,6 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   scheduleDailyRanking();
 
-  // ── Daily role-tenure point batch ─────────────────────────────────────────
-  // Runs once a day at the same time as the ranking post (midnight JST = 15:00 UTC).
-  // Iterates all guilds, awards pointsPerDay to members holding tracked roles.
-  async function runRoleTenureForAllGuilds(): Promise<void> {
-    for (const guild of readyClient.guilds.cache.values()) {
-      try {
-        await guild.members.fetch(); // ensure cache is populated
-        const members = guild.members.cache.map((m) => ({
-          userId: m.id,
-          roleIds: m.roles.cache.map((r) => r.id),
-        }));
-        const awarded = await runRoleTenureBatch(guild.id, members);
-        if (awarded > 0) {
-          logger.info(`[point/role] Awarded ${awarded} pts total for role tenure in guild ${guild.id}`);
-        }
-      } catch (err) {
-        logger.error(`[point/role] Role tenure batch error in guild ${guild.id}`, err);
-      }
-    }
-  }
-
-  function scheduleRoleTenureBatch(): void {
-    const now = new Date();
-    const next = new Date(now);
-    next.setUTCHours(15, 0, 0, 0);
-    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
-    const delay = next.getTime() - now.getTime();
-    setTimeout(() => {
-      runRoleTenureForAllGuilds().catch((err) => logger.error("[point/role] Batch error", err));
-      setInterval(() => {
-        runRoleTenureForAllGuilds().catch((err) => logger.error("[point/role] Batch error", err));
-      }, 24 * 60 * 60 * 1000);
-    }, delay);
-  }
-
-  scheduleRoleTenureBatch();
-
   // ── VC session pruning ────────────────────────────────────────────────────
   // Delete completed sessions older than the per-guild retention window
   // (defaulting to 180 days) immediately on startup, then repeat every 24 h
@@ -428,10 +386,6 @@ client.once(Events.ClientReady, async (readyClient) => {
     runEventReminderScheduler().catch((err) =>
       logger.error("[event] Reminder scheduler error", err),
     );
-    // Award event participation points for events that have now passed.
-    runEventParticipationAward().catch((err) =>
-      logger.error("[point/event] Participation award error", err),
-    );
   }, 60 * 1000);
 
   // ── Periodic messages ─────────────────────────────────────────────────────
@@ -463,30 +417,6 @@ client.once(Events.ClientReady, async (readyClient) => {
     runPeriodicMessages(makePeriodicDeps()).catch((err) => logger.error("[periodic] Scheduler error", err));
   }, 10 * 60 * 1000);
 
-  async function runEventParticipationAward(): Promise<void> {
-    const events = await getEventsNeedingParticipationPoints();
-    for (const event of events) {
-      try {
-        const participants = await getParticipants(event.id);
-        if (participants.length > 0) {
-          const count = await awardEventParticipation(
-            event.guildId,
-            participants,
-            event.id,
-            event.title,
-          );
-          if (count > 0) {
-            logger.info(
-              `[point/event] Awarded participation pts for event ${event.id} "${event.title}" to ${count} user(s) in guild ${event.guildId}`,
-            );
-          }
-        }
-        await markParticipationPointsAwarded(event.id);
-      } catch (err) {
-        logger.error(`[point/event] Failed for event ${event.id}`, err);
-      }
-    }
-  }
 });
 
 // ─── GuildMemberAdd（事前BAN自動実行）────────────────────────────────────────

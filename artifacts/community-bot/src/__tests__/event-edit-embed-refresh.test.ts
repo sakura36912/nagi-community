@@ -213,7 +213,6 @@ const baseEvent = {
   title:       "Test Event",
   description: "desc",
   scheduledAt: new Date("2026-12-01T10:00:00+09:00"),
-  participationPointsAwardedAt: null,
   reminderSentAt:   null,
   reminder24hSentAt: null,
 };

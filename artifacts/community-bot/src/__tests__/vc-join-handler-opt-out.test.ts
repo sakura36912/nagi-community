@@ -18,7 +18,6 @@
  *   - Handler does NOT log an error when openSession returns null
  *   - Handler does NOT throw when openSession returns null
  *   - closeSessionAndGetDuration is NOT called for the null session
- *   - awardVcTime is NOT called for the null session
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -27,7 +26,6 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   openSession: vi.fn(),
   closeSessionAndGetDuration: vi.fn(),
-  awardVcTime: vi.fn(),
   loggerError: vi.fn(),
   loggerInfo: vi.fn(),
   loggerWarn: vi.fn(),
@@ -37,7 +35,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/community.js", () => ({
   openSession: mocks.openSession,
   closeSessionAndGetDuration: mocks.closeSessionAndGetDuration,
-  awardVcTime: mocks.awardVcTime,
 }));
 
 // ─── Mock logger ──────────────────────────────────────────────────────────────
@@ -50,7 +47,7 @@ vi.mock("../lib/logger.js", () => ({
 }));
 
 // ─── Import mocked modules ────────────────────────────────────────────────────
-import { openSession, closeSessionAndGetDuration, awardVcTime } from "../lib/community.js";
+import { openSession, closeSessionAndGetDuration } from "../lib/community.js";
 import { logger } from "../lib/logger.js";
 
 // ─── Inline handler – mirrors index.ts VoiceStateUpdate join branch exactly ───
@@ -100,14 +97,6 @@ describe("VoiceStateUpdate join handler – opted-out user", () => {
     await simulateVcJoin("guild-1", "user-opted-out", "channel-1");
 
     expect(closeSessionAndGetDuration).not.toHaveBeenCalled();
-  });
-
-  it("does NOT call awardVcTime after a null openSession", async () => {
-    mocks.openSession.mockResolvedValueOnce(null);
-
-    await simulateVcJoin("guild-1", "user-opted-out", "channel-1");
-
-    expect(awardVcTime).not.toHaveBeenCalled();
   });
 
   it("calls openSession with the correct guildId, userId, and channelId", async () => {

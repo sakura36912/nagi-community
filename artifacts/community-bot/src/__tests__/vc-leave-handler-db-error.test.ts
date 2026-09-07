@@ -21,7 +21,6 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   closeSessionAndGetDuration: vi.fn(),
   openVcSessionIfTracked: vi.fn(),
-  awardVcTime: vi.fn(),
   loggerError: vi.fn(),
   loggerInfo: vi.fn(),
   loggerWarn: vi.fn(),
@@ -31,11 +30,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/community.js", () => ({
   closeSessionAndGetDuration: mocks.closeSessionAndGetDuration,
   openVcSessionIfTracked: mocks.openVcSessionIfTracked,
-}));
-
-// ─── Mock points lib (awardVcTime) ────────────────────────────────────────────
-vi.mock("../lib/points.js", () => ({
-  awardVcTime: mocks.awardVcTime,
 }));
 
 // ─── Mock logger ──────────────────────────────────────────────────────────────
@@ -99,20 +93,6 @@ describe("handleVoiceStateUpdate leave – openSession previously returned null 
     ).resolves.toBeUndefined();
   });
 
-  it("does NOT call awardVcTime when closeSessionAndGetDuration returns null", async () => {
-    mocks.closeSessionAndGetDuration.mockResolvedValueOnce(null);
-
-    await handleVoiceStateUpdate({
-      guildId: GUILD,
-      userId: USER,
-      oldChannelId: OLD_CHANNEL,
-      newChannelId: null,
-      channelParentId: null,
-      member: null,
-    });
-
-    expect(mocks.awardVcTime).not.toHaveBeenCalled();
-  });
 
   it("calls closeSessionAndGetDuration with the correct guildId and userId", async () => {
     mocks.closeSessionAndGetDuration.mockResolvedValueOnce(null);

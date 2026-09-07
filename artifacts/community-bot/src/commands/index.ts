@@ -2496,7 +2496,6 @@ const ticketCommand: Command = {
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 import { prebanCommand } from "./preban.js";
-import { pointCommand } from "./point.js";
 import { periodicCommand } from "./periodic.js";
 
 export const commands: Command[] = [
@@ -2508,7 +2507,6 @@ export const commands: Command[] = [
   roleButtonCommand,
   leavelogCommand,
   prebanCommand,
-  pointCommand,
   tempvcCommand,
   periodicCommand,
   ticketCommand,

@@ -37,8 +37,6 @@ export const communityEventsTable = pgTable("community_events", {
   reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
   /** Set when the 24-hour-before reminder has been sent. */
   reminder24hSentAt: timestamp("reminder_24h_sent_at", { withTimezone: true }),
-  /** Set when participation points have been awarded to all RSVP'd members. */
-  participationPointsAwardedAt: timestamp("participation_points_awarded_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
