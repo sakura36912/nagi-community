@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   evaluatePaylines,
   SLOT_SETTING_PROFILES,
+  hasSlotSetupAccess,
   slotCommand,
   spinGridWithWinRate,
 } from "../commands/slot.js";
@@ -67,5 +68,49 @@ describe("スロットの当選確率設定", () => {
     const setup = command.options?.find((option) => option.name === "setup");
     const setting = setup?.options?.find((option) => option.name === "setting");
     expect(setting?.options?.[0]?.choices?.map((choice) => choice.value)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("賭博頭領ロールには設定変更・一覧の権限を与える", async () => {
+    const interaction = {
+      user: { id: "user-1" },
+      memberPermissions: { has: () => false },
+      guild: {
+        members: {
+          cache: {
+            get: () => ({
+              roles: {
+                cache: {
+                  some: (predicate: (role: { name: string }) => boolean) => predicate({ name: "賭博頭領" }),
+                },
+              },
+            }),
+          },
+        },
+      },
+    } as unknown as Parameters<typeof hasSlotSetupAccess>[0];
+
+    await expect(hasSlotSetupAccess(interaction)).resolves.toBe(true);
+  });
+
+  it("賭博頭領でない一般ユーザーには設定権限を与えない", async () => {
+    const interaction = {
+      user: { id: "user-1" },
+      memberPermissions: { has: () => false },
+      guild: {
+        members: {
+          cache: {
+            get: () => ({
+              roles: {
+                cache: {
+                  some: () => false,
+                },
+              },
+            }),
+          },
+        },
+      },
+    } as unknown as Parameters<typeof hasSlotSetupAccess>[0];
+
+    await expect(hasSlotSetupAccess(interaction)).resolves.toBe(false);
   });
 });

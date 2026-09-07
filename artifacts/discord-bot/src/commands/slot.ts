@@ -45,6 +45,7 @@ const MIN_BET = 1000;
 const MAX_BET = 10_000;
 const SYMBOL_COUNT = 4;
 const DEFAULT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇"];
+export const SLOT_SETUP_ROLE_NAME = "賭博頭領";
 
 export const SLOT_WIN_RATE_PREFIX = "slot:win-rate:";
 
@@ -892,6 +893,14 @@ async function handleSetupJackpotChannel(interaction: ChatInputCommandInteractio
   });
 }
 
+export async function hasSlotSetupAccess(interaction: ChatInputCommandInteraction): Promise<boolean> {
+  if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return true;
+  if (!interaction.guild) return false;
+  const member = interaction.guild.members.cache.get(interaction.user.id)
+    ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  return member?.roles.cache.some((role) => role.name === SLOT_SETUP_ROLE_NAME) ?? false;
+}
+
 // ─── Command definition ───────────────────────────────────────────────────────
 
 export const slotCommand: Command = {
@@ -1024,8 +1033,15 @@ export const slotCommand: Command = {
     const sub = interaction.options.getSubcommand();
 
     if (group === "setup") {
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-        await interaction.reply({ content: "❌ このサブコマンドは管理者のみ使用できます。", flags: MessageFlags.Ephemeral });
+      const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
+      const roleCanUse = sub === "setting" || sub === "list";
+      if (!isAdmin && (!roleCanUse || !await hasSlotSetupAccess(interaction))) {
+        await interaction.reply({
+          content: roleCanUse
+            ? `❌ 管理者または「${SLOT_SETUP_ROLE_NAME}」ロールが必要です。`
+            : "❌ このサブコマンドは管理者のみ使用できます。",
+          flags: MessageFlags.Ephemeral,
+        });
         return;
       }
       if (sub === "add")              { await handleSetupAdd(interaction); return; }
