@@ -205,37 +205,50 @@ function panel(t: ChinchiroTable, ps: ChinchiroTablePlayer[]) {
     const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
     return result.pairs.map((pair) => `${escapeMarkdown(displayNameFor(ps, pair.childId))}: ${pair.parent.label} ${dice(pair.parent)} vs ${pair.child.label} ${dice(pair.child)} — ${pair.winner === "draw" ? "引き分け" : pair.winner === "parent" ? "親勝ち" : "子勝ち"} / 対象 ${pair.stake.toLocaleString()} / ${pair.multiplier ?? 1}倍 / ${pair.amount.toLocaleString()} ${t.currencyName}`).join("\n")
       + "\n" + Object.entries(result.net).map(([id, amount]) => `${escapeMarkdown(displayNameFor(ps, id))} ${amount >= 0 ? "+" : ""}${amount.toLocaleString()} ${t.currencyName}`).join(" / ");
-  })() : "";
+  })() : ps.filter((p) => p.roll).map((p) => {
+    try {
+      const outcome = JSON.parse(p.roll!) as ChinchiroOutcome;
+      return `${escapeMarkdown(p.displayName)}: ${outcome.label} ${dice(outcome)}（ロール済み）`;
+    } catch {
+      return `${escapeMarkdown(p.displayName)}: ロール済み`;
+    }
+  }).join("\n");
   return new EmbedBuilder().setTitle(title).setDescription(`${list}${turn}`).addFields({
     name: "状態", value: `${statusLabel(t.status)} / ${ps.length}/6人`, inline: true,
   }, { name: "ルール", value: "ピンゾロ > アラシ > シゴロ > 6〜1 > 目なし > ヒフミ\n最大3投。残高は変更されません。", inline: false },
-  ...(resultText ? [{ name: "ラウンド結果（予定）", value: resultText.slice(0, 1024), inline: false }] : []))
+  ...(resultText ? [{ name: t.results ? "ラウンド結果（予定）" : "現在のロール結果", value: resultText.slice(0, 1024), inline: false }] : []))
     .setFooter({ text: t.status === "recruiting" ? "募集期限 5分。開始には同じ設定VCの2人以上が必要です。" : "親はラウンドごとにランダムです。" });
 }
 
 /** Render configured dice faces for the current result. Missing faces deliberately
  * return null so the existing Unicode dice fallback remains in the embed. */
-async function resultImage(t: ChinchiroTable): Promise<AttachmentBuilder | null> {
-  if (!t.results) return null;
+async function resultImage(t: ChinchiroTable, ps: ChinchiroTablePlayer[]): Promise<AttachmentBuilder | null> {
+  const rolls: ChinchiroOutcome[] = [];
   try {
-    const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
+    if (t.results) {
+      const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
+      for (const pair of result.pairs) rolls.push(pair.parent, pair.child);
+    } else {
+      for (const player of ps) {
+        if (player.roll) rolls.push(JSON.parse(player.roll) as ChinchiroOutcome);
+      }
+    }
+    if (!rolls.length) return null;
     const paths = await getChinchiroDiceImages(t.guildId);
     const strips: Jimp[] = [];
-    for (const pair of result.pairs) {
-      for (const roll of [pair.parent, pair.child]) {
-        const buffers = await Promise.all(roll.dice.map((face) => {
-          const path = paths.get(face);
-          return path ? downloadImageAsBuffer(path) : null;
-        }));
-        if (buffers.some((buffer) => !buffer)) return null;
-        const images = await Promise.all(buffers.map((buffer) => Jimp.read(buffer!)));
-        const height = 128;
-        const scaled = images.map((image) => image.resize(Math.max(1, Math.round(image.bitmap.width * height / image.bitmap.height)), height));
-        const strip = new Jimp(scaled.reduce((sum, image) => sum + image.bitmap.width, 0), height, 0xffffffff);
-        let x = 0;
-        for (const image of scaled) { strip.composite(image, x, 0); x += image.bitmap.width; }
-        strips.push(strip);
-      }
+    for (const roll of rolls) {
+      const buffers = await Promise.all(roll.dice.map((face) => {
+        const path = paths.get(face);
+        return path ? downloadImageAsBuffer(path) : null;
+      }));
+      if (buffers.some((buffer) => !buffer)) return null;
+      const images = await Promise.all(buffers.map((buffer) => Jimp.read(buffer!)));
+      const height = 128;
+      const scaled = images.map((image) => image.resize(Math.max(1, Math.round(image.bitmap.width * height / image.bitmap.height)), height));
+      const strip = new Jimp(scaled.reduce((sum, image) => sum + image.bitmap.width, 0), height, 0xffffffff);
+      let x = 0;
+      for (const image of scaled) { strip.composite(image, x, 0); x += image.bitmap.width; }
+      strips.push(strip);
     }
     if (!strips.length) return null;
     const canvas = new Jimp(strips.reduce((sum, strip) => sum + strip.bitmap.width, 0), 128, 0xffffffff);
@@ -268,9 +281,10 @@ async function refreshPanelForGuild(guild: Guild, t: ChinchiroTable) {
   if (!channel?.isTextBased() || !("messages" in channel)) return;
   const message = await channel.messages.fetch(t.messageId).catch(() => null);
   if (message) {
-    const image = await resultImage(t);
+    const ps = await players(t.id);
+    const image = await resultImage(t, ps);
     await message.edit({
-      embeds: [panel(t, await players(t.id)).setImage(image ? `attachment://${image.name}` : null)],
+      embeds: [panel(t, ps).setImage(image ? `attachment://${image.name}` : null)],
       components: components(t), attachments: [], files: image ? [image] : [],
     });
   }
@@ -365,7 +379,7 @@ function appendRoundHistory(
 }
 async function redraw(interaction: ButtonInteraction | ModalSubmitInteraction, t: ChinchiroTable) {
   const ps = await players(t.id);
-  const image = await resultImage(t);
+  const image = await resultImage(t, ps);
   await interaction.message?.edit({
     embeds: [panel(t, ps).setImage(image ? `attachment://${image.name}` : null)],
     components: components(t), attachments: [], files: image ? [image] : [],
