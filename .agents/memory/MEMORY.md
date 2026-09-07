@@ -13,3 +13,4 @@
 - [gathapin36912 calendar](calendar-feature.md) — Discord内の予定告知・参加表明・通知として実装し、日時は日本時間で扱う。
 - [Workflow signal handling](workflow-signal-handling.md) — SIGTERM/SIGINTを監視する場合も必ず終了し、再起動後のBot二重稼働を防ぐ。
 - [Multiplayer Chinchiro settlement](multiplayer-chinchiro-settlement.md) — 複数人版はテスト中、予定精算だけ保存し、旧1対1卓は期限まで互換維持する。
+- [Island resurface expiry](island-resurface-expiry.md) — 浮上券商品は期限付き効果の設定が必須。ロールIDだけでは7日後の自動解除予約が作られない。
