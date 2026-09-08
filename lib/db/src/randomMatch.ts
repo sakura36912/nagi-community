@@ -67,13 +67,14 @@ export async function joinRandomMatchQueue(
   guildId: string,
   userId: string,
   preference: RandomMatchPreference,
+  r18Allowed: boolean,
 ) {
   const [entry] = await db
     .insert(randomMatchQueueTable)
-    .values({ guildId, userId, preference })
+    .values({ guildId, userId, preference, r18Allowed })
     .onConflictDoUpdate({
       target: [randomMatchQueueTable.guildId, randomMatchQueueTable.userId],
-      set: { preference },
+      set: { preference, r18Allowed },
     })
     .returning();
   return entry;
@@ -169,16 +170,25 @@ export async function createRandomMatchIfWaiting(
       );
     const [match] = await tx
       .insert(randomMatchesTable)
-      .values({ guildId, userAId, userBId, status: "active" })
+      .values({
+        guildId,
+        userAId,
+        userBId,
+        r18Allowed: queue[0]?.r18Allowed ?? false,
+        status: "active",
+      })
       .returning();
     return match ?? null;
   });
 }
 
-export async function requeueRandomMatchUsers(guildId: string, userIds: string[]) {
+export async function requeueRandomMatchUsers(
+  guildId: string,
+  users: Array<{ userId: string; preference: RandomMatchPreference; r18Allowed: boolean }>,
+) {
   await db
     .insert(randomMatchQueueTable)
-    .values(userIds.map((userId) => ({ guildId, userId, preference: RANDOM_MATCH_ANY })))
+    .values(users.map((user) => ({ guildId, ...user })))
     .onConflictDoNothing();
 }
 

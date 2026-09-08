@@ -73,6 +73,10 @@ function preferenceLabel(preference: RandomMatchPreference): string {
   return "指定なし";
 }
 
+function r18Label(r18Allowed: boolean): string {
+  return r18Allowed ? "R18○" : "R18×";
+}
+
 function hasGender(member: { roles: { cache: { some: (fn: (role: { name: string }) => boolean) => boolean } } }, gender: "male" | "female") {
   const targetName = gender === "male" ? MALE_ROLE_NAME : FEMALE_ROLE_NAME;
   return member.roles.cache.some((role) => role.name === targetName);
@@ -100,21 +104,36 @@ function buildPanel() {
     )
     .addFields({
       name: "参加条件",
-      value: "・指定なし：全員から抽選\n・男性指定：男性ロールの相手から抽選\n・女性指定：女性ロールの相手から抽選",
+      value: "性別条件とR18可否を選んで参加してください。\n"
+        + "・指定なし：全員から抽選\n・男性指定：男性ロールの相手から抽選\n・女性指定：女性ロールの相手から抽選\n"
+        + "・R18○同士、R18×同士のみマッチします。",
     });
 
-  const joinRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  const joinR18AllowedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`${RANDOM_MATCH_PREFIX}join:any`)
-      .setLabel("マッチングに参加")
+      .setCustomId(`${RANDOM_MATCH_PREFIX}join:any:r18yes`)
+      .setLabel("指定なし・R18○")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId(`${RANDOM_MATCH_PREFIX}join:male`)
-      .setLabel("男性指定")
+      .setCustomId(`${RANDOM_MATCH_PREFIX}join:male:r18yes`)
+      .setLabel("男性指定・R18○")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId(`${RANDOM_MATCH_PREFIX}join:female`)
-      .setLabel("女性指定")
+      .setCustomId(`${RANDOM_MATCH_PREFIX}join:female:r18yes`)
+      .setStyle(ButtonStyle.Secondary),
+  );
+  const joinR18DeniedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${RANDOM_MATCH_PREFIX}join:any:r18no`)
+      .setLabel("指定なし・R18×")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`${RANDOM_MATCH_PREFIX}join:male:r18no`)
+      .setLabel("男性指定・R18×")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`${RANDOM_MATCH_PREFIX}join:female:r18no`)
+      .setLabel("女性指定・R18×")
       .setStyle(ButtonStyle.Secondary),
   );
   const cancelRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -123,7 +142,7 @@ function buildPanel() {
       .setLabel("待機をキャンセル")
       .setStyle(ButtonStyle.Danger),
   );
-  return { embeds: [embed], components: [joinRow, cancelRow] };
+  return { embeds: [embed], components: [joinR18AllowedRow, joinR18DeniedRow, cancelRow] };
 }
 
 function reportButton(matchId: number) {
@@ -227,6 +246,7 @@ async function findAndCreateRandomMatch(guild: Guild) {
         const rightGender = memberGender(right.member);
         if (!preferenceAccepts(left.entry.preference, rightGender)) continue;
         if (!preferenceAccepts(right.entry.preference, leftGender)) continue;
+        if (left.entry.r18Allowed !== right.entry.r18Allowed) continue;
         if (await isRandomMatchBlocked(guild.id, left.entry.userId, right.entry.userId)) continue;
         eligible.push([left.entry.userId, right.entry.userId]);
       }
@@ -241,7 +261,10 @@ async function findAndCreateRandomMatch(guild: Guild) {
       return { match, channel };
     } catch (err) {
       await finishRandomMatch(match.id).catch(() => undefined);
-      await requeueRandomMatchUsers(guild.id, [match.userAId, match.userBId]).catch(() => undefined);
+      await requeueRandomMatchUsers(guild.id, [
+        { userId: match.userAId, preference: RANDOM_MATCH_ANY, r18Allowed: match.r18Allowed },
+        { userId: match.userBId, preference: RANDOM_MATCH_ANY, r18Allowed: match.r18Allowed },
+      ]).catch(() => undefined);
       throw err;
     }
   }
@@ -251,6 +274,7 @@ async function findAndCreateRandomMatch(guild: Guild) {
 async function joinWithPreference(
   interaction: ButtonInteraction,
   preference: RandomMatchPreference,
+  r18Allowed: boolean,
 ) {
   const guildId = guildIdOf(interaction);
   const guild = interaction.guild;
@@ -297,11 +321,11 @@ async function joinWithPreference(
       }
     }
   }
-  await joinRandomMatchQueue(guildId, interaction.user.id, preference);
+  await joinRandomMatchQueue(guildId, interaction.user.id, preference, r18Allowed);
   const result = await findAndCreateRandomMatch(guild);
   if (!result) {
     await interaction.reply({
-      content: `待機に入りました（希望：${preferenceLabel(preference)}）。参加者一覧は公開されません。相性の合う相手が見つかるとDMで通知します。`,
+      content: `待機に入りました（希望：${preferenceLabel(preference)}、${r18Label(r18Allowed)}）。参加者一覧は公開されません。相性の合う相手が見つかるとDMで通知します。`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -321,9 +345,12 @@ export async function handleRandomMatchButton(interaction: ButtonInteraction) {
   }
   const matchPrefix = `${RANDOM_MATCH_PREFIX}join:`;
   if (!interaction.customId.startsWith(matchPrefix)) return;
-  const preference = interaction.customId.slice(matchPrefix.length) as RandomMatchPreference;
+  const [preferenceValue, r18Value] = interaction.customId.slice(matchPrefix.length).split(":");
+  const preference = preferenceValue as RandomMatchPreference;
+  const r18Allowed = r18Value === "r18yes";
   if (![RANDOM_MATCH_ANY, RANDOM_MATCH_MALE, RANDOM_MATCH_FEMALE].includes(preference)) return;
-  await joinWithPreference(interaction, preference);
+  if (r18Value !== "r18yes" && r18Value !== "r18no") return;
+  await joinWithPreference(interaction, preference, r18Allowed);
 }
 
 export async function handleRandomMatchReportButton(interaction: ButtonInteraction) {

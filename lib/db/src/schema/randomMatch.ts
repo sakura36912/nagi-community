@@ -35,6 +35,7 @@ export const randomMatchesTable = pgTable(
     guildId: text("guild_id").notNull(),
     userAId: text("user_a_id").notNull(),
     userBId: text("user_b_id").notNull(),
+    r18Allowed: boolean("r18_allowed").notNull().default(false),
     channelId: text("channel_id").unique(),
     status: text("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
