@@ -36,4 +36,5 @@ export * from "./chinchiro";
 export * from "./chinchiroMultiplayer";
 export * from "./chinchiroDice";
 export * from "./randomMatch";
+export * from "./shopForumPanel";
 

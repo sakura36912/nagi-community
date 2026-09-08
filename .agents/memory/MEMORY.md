@@ -16,3 +16,4 @@
 - [Island resurface expiry](island-resurface-expiry.md) — 浮上券商品は期限付き効果の設定が必須。ロールIDだけでは7日後の自動解除予約が作られない。
 - [Random match gender source](random-match-gender-source.md) — 裏募集の男性・女性指定は、完全一致するDiscordロール名で相手条件を判定する。
 - [Random match R18 policy](random-match-r18-policy.md) — R18○とR18×は互いに混ぜず、同じ指定同士だけをマッチさせる。
+- [Forum purchase panels](forum-purchase-panels.md) — フォーラム投稿ごとに商品・価格・購入効果を完全に分離した購入ボタンを使う。

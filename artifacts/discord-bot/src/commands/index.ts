@@ -95,6 +95,11 @@ import {
   SUB_ACCOUNT_ROLE_NAME,
   getGuildWalletUserIds,
 } from "../lib/economy";
+import {
+  getShopForumPanel,
+  setShopForumPanelMessage,
+  upsertShopForumPanel,
+} from "@workspace/db";
 import { getTodayChestVcSeconds, getTodayChestOpensCount, incrementChestOpensToday, addChestVcSeconds, getTotalChestVcSeconds, getTotalChestOpensCount, getChestLastOpenVcSeconds, setChestLastOpenVcSeconds, getChestBonusOpens, consumeChestBonusOpen, addChestBonusOpens } from "../lib/vcReward";
 import { getCurrentTavernSeconds, getPendingTavernSeconds, isTavernChannel, onTavernJoin, TAVERN_CHANNEL_NAMES, getTavernChannelNames } from "../lib/chestTracker";
 import {
@@ -484,6 +489,25 @@ function buildShopPanel(items: ShopItem[], currencyName: string, title = "🛒 �
     );
 
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+  return { embeds: [embed], components: [row] };
+}
+
+function buildForumShopPanel(item: ShopItem, currencyName: string) {
+  const embed = new EmbedBuilder()
+    .setTitle(item.name)
+    .setColor(0xf5a623)
+    .setDescription(
+      [
+        item.description ?? "",
+        `価格: **${item.price.toLocaleString()}${currencyName}**`,
+      ].filter(Boolean).join("\n\n"),
+    );
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${SHOP_BUY_PREFIX}${item.id}`)
+      .setLabel("購入")
+      .setStyle(ButtonStyle.Primary),
+  );
   return { embeds: [embed], components: [row] };
 }
 
@@ -1527,6 +1551,18 @@ const shopCommand: Command = {
           opt.setName("category").setDescription("表示するショップカテゴリ").setRequired(true).addChoices(...CATEGORY_CHOICES),
         ),
     )
+    .addSubcommand((sub) =>
+      sub.setName("forum-panel").setDescription("現在のフォーラム投稿に専用の購入パネルを設置します（管理者）")
+        .addStringOption((opt) => opt.setName("name").setDescription("このフォーラム専用の商品名").setRequired(true))
+        .addIntegerOption((opt) => opt.setName("price").setDescription("このフォーラム専用の価格").setRequired(true).setMinValue(1))
+        .addStringOption((opt) => opt.setName("description").setDescription("商品の説明").setRequired(false))
+        .addStringOption((opt) =>
+          opt.setName("effect").setDescription("購入時の特殊効果").setRequired(false).addChoices(...COMBINED_EFFECT_CHOICES),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("role").setDescription("付与するロール（永久ロール付与エフェクト使用時）").setRequired(false),
+        ),
+    )
     ,
 
   async execute(interaction) {
@@ -1781,6 +1817,60 @@ const shopCommand: Command = {
       }
       const lines = configs.map((c) => `<@&${c.squadRoleId}> → <@&${c.licenseRoleId}>`);
       await interaction.reply({ content: `## 🏪 個人ショップ開業ロール対応一覧\n${lines.join("\n")}`, ephemeral: true });
+      return;
+    }
+
+    if (sub === "forum-panel") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+
+      const thread = interaction.channel?.isThread() ? interaction.channel : null;
+      if (!thread || thread.parent?.type !== ChannelType.GuildForum) {
+        await interaction.reply({
+          content: "❌ このコマンドはフォーラム内の投稿（スレッド）で実行してください。",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const name = interaction.options.getString("name", true);
+      const price = interaction.options.getInteger("price", true);
+      const description = interaction.options.getString("description");
+      const effect = interaction.options.getString("effect");
+      const role = interaction.options.getRole("role");
+      const existingPanel = await getShopForumPanel(guildId, thread.id);
+      const settings = await getGuildSettings(guildId);
+      const saved = await upsertShopForumPanel(
+        guildId,
+        thread.id,
+        existingPanel?.panelMessageId ?? null,
+        {
+          name,
+          price,
+          description,
+          effectType: effect,
+          targetRoleId: role?.id ?? null,
+        },
+      );
+      const panel = buildForumShopPanel(saved.item, settings.currencyName);
+
+      let panelMessage: import("discord.js").Message | null = null;
+      if (saved.panel.panelMessageId) {
+        panelMessage = await thread.messages.fetch(saved.panel.panelMessageId).catch(() => null);
+      }
+      if (panelMessage) {
+        await panelMessage.edit(panel);
+      } else {
+        panelMessage = await thread.send(panel);
+        await setShopForumPanelMessage(guildId, thread.id, panelMessage.id);
+      }
+
+      await interaction.reply({
+        content: `✅ このフォーラム投稿の商品を **${saved.item.name}**（${saved.item.price.toLocaleString()}${settings.currencyName}）に設定し、購入パネルを${panelMessage.id === existingPanel?.panelMessageId ? "更新" : "設置"}しました。`,
+        ephemeral: true,
+      });
       return;
     }
 
