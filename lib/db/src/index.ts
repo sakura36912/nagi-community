@@ -18,4 +18,5 @@ export * from "./vcHub";
 export * from "./evalSheetConfig";
 export * from "./preban";
 export * from "./timedRoleGrants";
+export * from "./randomMatch";
 export * from "./schema-check";

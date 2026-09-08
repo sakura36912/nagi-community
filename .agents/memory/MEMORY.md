@@ -14,3 +14,4 @@
 - [Workflow signal handling](workflow-signal-handling.md) — SIGTERM/SIGINTを監視する場合も必ず終了し、再起動後のBot二重稼働を防ぐ。
 - [Multiplayer Chinchiro settlement](multiplayer-chinchiro-settlement.md) — 複数人版はテスト中、予定精算だけ保存し、旧1対1卓は期限まで互換維持する。
 - [Island resurface expiry](island-resurface-expiry.md) — 浮上券商品は期限付き効果の設定が必須。ロールIDだけでは7日後の自動解除予約が作られない。
+- [Random match gender source](random-match-gender-source.md) — 裏募集の男性・女性指定は、完全一致するDiscordロール名で相手条件を判定する。
