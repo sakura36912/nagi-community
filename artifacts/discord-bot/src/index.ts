@@ -85,6 +85,7 @@ import {
   handleVcPanelExtendSel,
   handleVcPanelRenameSel,
   handleVcPanelRenameModal,
+  movePrivateVcPanelToBottom,
   enforceExpelledLuxuryVcAccess,
   enforceAllExpelledLuxuryVcAccess,
   hasLuxuryVcBlockedRole,
@@ -308,6 +309,7 @@ client.on(Events.Invalidated, () => {
 // Checks every minute whether any guild's reward day has arrived and
 // distributes role-based rewards (salary) if so.
 const monthlyDebitRunningGuilds = new Set<string>();
+const vcPanelRelocationQueues = new Map<string, Promise<void>>();
 
 async function runRewardScheduler(): Promise<void> {
   const now = new Date();

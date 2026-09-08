@@ -2672,6 +2672,53 @@ export async function refreshPrivateVcPanelMessage(
   return true;
 }
 
+/**
+ * Re-posts the luxury-room control panel after the latest user message so the
+ * panel remains at the bottom of the voice channel's text chat.
+ */
+export async function movePrivateVcPanelToBottom(
+  channel: import("discord.js").TextBasedChannel & import("discord.js").GuildChannel,
+  options: RefreshPrivateVcPanelOptions,
+): Promise<boolean> {
+  if (isFreeRoomCategory(options.category) || !options.botId) return false;
+
+  const isPanel = (message: import("discord.js").Message) =>
+    message.author.id === options.botId
+    && (
+      message.embeds[0]?.title === VC_PANEL_TITLE
+      || LEGACY_VC_PANEL_TITLES.has(message.embeds[0]?.title ?? "")
+    );
+
+  const oldestMessages = await channel.messages.fetch({ limit: 100, after: "0" });
+  const recentMessages = await channel.messages.fetch({ limit: 100 });
+  const panelMessages = Array.from(
+    new Map(
+      [...oldestMessages.values(), ...recentMessages.values()].map((message) => [message.id, message]),
+    ).values(),
+  ).filter(isPanel);
+  if (panelMessages.length === 0) return false;
+
+  const memberIds = getVcAccessMemberIds(channel, options.ownerId, options.botId);
+  const streamEnabled = options.streamEnabled
+    ?? isPrivateVcStreamEnabled(channel, options.ownerId);
+  const panelPayload = buildVcPanelMessage(
+    options.channelId,
+    options.ownerId,
+    options.expiresAt ?? undefined,
+    memberIds,
+    streamEnabled,
+    false,
+  );
+
+  // Send first so a failed delete never removes the only usable panel.
+  await channel.send(panelPayload);
+  const deleteResults = await Promise.allSettled(panelMessages.map((message) => message.delete()));
+  if (deleteResults.some((result) => result.status === "rejected")) {
+    logger.warn(`[vc-panel] Failed to delete one or more old panel messages in ${options.channelId}`);
+  }
+  return true;
+}
+
 export function buildVcPanelMessage(
   channelId: string,
   ownerId: string,
