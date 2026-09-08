@@ -34,7 +34,12 @@ export async function getRandomMatchSettings(guildId: string) {
 
 export async function setRandomMatchSettings(
   guildId: string,
-  patch: Partial<{ enabled: boolean; categoryId: string | null }>,
+  patch: Partial<{
+    enabled: boolean;
+    categoryId: string | null;
+    reportChannelId: string | null;
+    reportRoleId: string | null;
+  }>,
 ) {
   await getRandomMatchSettings(guildId);
   const [settings] = await db

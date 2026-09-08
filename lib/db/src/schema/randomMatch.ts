@@ -13,6 +13,8 @@ export const randomMatchSettingsTable = pgTable("random_match_settings", {
   guildId: text("guild_id").primaryKey(),
   enabled: boolean("enabled").notNull().default(true),
   categoryId: text("category_id"),
+  reportChannelId: text("report_channel_id"),
+  reportRoleId: text("report_role_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

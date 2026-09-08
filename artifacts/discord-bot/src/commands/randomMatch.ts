@@ -439,6 +439,35 @@ export async function handleRandomMatchReportModal(interaction: ModalSubmitInter
   const reason = interaction.fields.getTextInputValue("reason").trim();
   await createRandomMatchReport(match.guildId, match.id, interaction.user.id, reportedId, reason);
   logger.warn(`[random-match] Report opened guild=${match.guildId} match=${match.id} reporter=${interaction.user.id} reported=${reportedId}`);
+  const settings = await getRandomMatchSettings(match.guildId);
+  const guild = interaction.client.guilds.cache.get(match.guildId)
+    ?? await interaction.client.guilds.fetch(match.guildId).catch(() => null);
+  const reportChannel = settings.reportChannelId
+    ? guild?.channels.cache.get(settings.reportChannelId)
+      ?? await guild?.channels.fetch(settings.reportChannelId).catch(() => null)
+    : null;
+  if (reportChannel?.isTextBased() && settings.reportRoleId) {
+    await reportChannel.send({
+      content: `<@&${settings.reportRoleId}>`,
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🚨 裏募集マッチの通報")
+          .setColor(0xff3b30)
+          .addFields(
+            { name: "マッチID", value: String(match.id), inline: true },
+            { name: "通報者", value: `<@${interaction.user.id}>`, inline: true },
+            { name: "通報対象", value: `<@${reportedId}>`, inline: true },
+            { name: "理由", value: reason.slice(0, 1024) },
+          )
+          .setTimestamp(),
+      ],
+      allowedMentions: { roles: [settings.reportRoleId], users: [] },
+    }).catch((err) =>
+      logger.error(`[random-match] Failed to send report notification guild=${match.guildId}`, err),
+    );
+  } else {
+    logger.error(`[random-match] Report notification destination is not configured guild=${match.guildId}`);
+  }
   await interaction.reply({
     content: "通報を受け付けました。管理者が確認します。",
     flags: MessageFlags.Ephemeral,
@@ -499,6 +528,16 @@ const randomMatchCommand: RandomMatchCommand = {
           opt.setName("category").setDescription("マッチVCを作成するカテゴリ").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
         ),
     )
+    .addSubcommand((sub) =>
+      sub.setName("report-setup").setDescription("通報通知先とメンション対象を設定します（管理者）")
+        .addChannelOption((opt) =>
+          opt.setName("channel").setDescription("通報を投稿するテキストチャンネル")
+            .addChannelTypes(ChannelType.GuildText).setRequired(true),
+        )
+        .addRoleOption((opt) =>
+          opt.setName("role").setDescription("通報時にメンションする管理者ロール").setRequired(true),
+        ),
+    )
     .addSubcommand((sub) => sub.setName("enable").setDescription("裏募集を開始します（管理者）"))
     .addSubcommand((sub) => sub.setName("disable").setDescription("裏募集を停止します（管理者）"))
     .addSubcommand((sub) =>
@@ -516,7 +555,7 @@ const randomMatchCommand: RandomMatchCommand = {
     const guildId = guildIdOf(interaction);
     const sub = interaction.options.getSubcommand();
     const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
-    if (["panel", "setup", "enable", "disable", "reports"].includes(sub) && !isAdmin) {
+    if (["panel", "setup", "report-setup", "enable", "disable", "reports"].includes(sub) && !isAdmin) {
       await interaction.reply({ content: "この操作はサーバー管理者のみ利用できます。", flags: MessageFlags.Ephemeral });
       return;
     }
@@ -528,6 +567,18 @@ const randomMatchCommand: RandomMatchCommand = {
       const category = interaction.options.getChannel("category", true);
       await setRandomMatchSettings(guildId, { categoryId: category.id, enabled: true });
       await interaction.reply(`✅ 裏募集マッチVCの作成先を <#${category.id}> に設定しました。`);
+      return;
+    }
+    if (sub === "report-setup") {
+      const channel = interaction.options.getChannel("channel", true);
+      const role = interaction.options.getRole("role", true);
+      await setRandomMatchSettings(guildId, {
+        reportChannelId: channel.id,
+        reportRoleId: role.id,
+      });
+      await interaction.reply(
+        `✅ 通報通知先を <#${channel.id}>、メンション対象を <@&${role.id}> に設定しました。`,
+      );
       return;
     }
     if (sub === "enable" || sub === "disable") {
