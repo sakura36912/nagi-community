@@ -20,6 +20,7 @@ import {
 import {
   addRandomMatchBlock,
   attachRandomMatchChannel,
+  cancelRandomMatch,
   clearRandomMatchQueue,
   createRandomMatchIfWaiting,
   createRandomMatchReport,
@@ -52,6 +53,7 @@ import { getGuildSettings } from "../lib/economy";
 export const RANDOM_MATCH_PREFIX = "random-match:";
 export const RANDOM_MATCH_REPORT_MODAL_PREFIX = `${RANDOM_MATCH_PREFIX}report-modal:`;
 const REPORT_BUTTON_PREFIX = `${RANDOM_MATCH_PREFIX}report:`;
+const MATCH_CANCEL_BUTTON_PREFIX = `${RANDOM_MATCH_PREFIX}cancel-match:`;
 const REMATCH_COOLDOWN_MS = 10 * 60 * 1000;
 const EMPTY_CHANNEL_DELETE_DELAY_MS = 5 * 60 * 1000;
 const MALE_ROLE_NAME = "男性";
@@ -146,8 +148,12 @@ function buildPanel() {
   return { embeds: [embed], components: [joinR18AllowedRow, joinR18DeniedRow, cancelRow] };
 }
 
-function reportButton(matchId: number) {
+function matchActionRow(matchId: number) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${MATCH_CANCEL_BUTTON_PREFIX}${matchId}`)
+      .setLabel("マッチングをキャンセル")
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`${REPORT_BUTTON_PREFIX}${matchId}`)
       .setLabel("このマッチを通報")
@@ -172,8 +178,8 @@ async function notifyMatchUsers(guild: Guild, match: RandomMatch, channelId: str
           `✅ 裏募集のマッチが成立しました。\n`
           + `相手：<@${otherId}>\n`
           + `専用VC：<#${channelId}>\n\n`
-          + "相手の変更は原則できません。問題があれば下のボタンから通報してください。",
-        components: [reportButton(match.id)],
+          + "相手の変更は原則できません。終了したい場合はキャンセル、問題があれば通報を選択してください。",
+        components: [matchActionRow(match.id)],
       }).catch((err) => logger.warn(`[random-match] Failed to DM match result user=${user.id}`, err));
     }),
   );
@@ -376,6 +382,50 @@ export async function handleRandomMatchReportButton(interaction: ButtonInteracti
   await interaction.showModal(modal.addComponents(
     new ActionRowBuilder<TextInputBuilder>().addComponents(reason),
   ));
+}
+
+export async function handleRandomMatchCancelButton(
+  interaction: ButtonInteraction,
+  client: Client,
+) {
+  const matchId = Number(interaction.customId.slice(MATCH_CANCEL_BUTTON_PREFIX.length));
+  if (!Number.isInteger(matchId)) return;
+  const match = await getRandomMatchById(matchId);
+  if (!match || ![match.userAId, match.userBId].includes(interaction.user.id)) {
+    await interaction.update({
+      content: "このマッチはキャンセルできません。",
+      components: [],
+    });
+    return;
+  }
+  const cancelled = await cancelRandomMatch(matchId);
+  if (!cancelled) {
+    await interaction.update({
+      content: "このマッチはすでに終了またはキャンセルされています。",
+      components: [],
+    });
+    return;
+  }
+
+  const guild = client.guilds.cache.get(match.guildId);
+  const channel = guild?.channels.cache.get(match.channelId ?? "");
+  if (channel) {
+    await channel.delete("裏募集マッチのキャンセル").catch((err) =>
+      logger.warn(`[random-match] Failed to delete cancelled channel match=${match.id}`, err),
+    );
+  }
+
+  const otherId = match.userAId === interaction.user.id ? match.userBId : match.userAId;
+  await interaction.update({
+    content: "🛑 裏募集のマッチングをキャンセルしました。専用VCも終了しました。",
+    components: [],
+  });
+  try {
+    const otherUser = await client.users.fetch(otherId);
+    await otherUser.send("🛑 裏募集の相手がマッチングをキャンセルしました。専用VCは終了しました。");
+  } catch (err) {
+    logger.warn(`[random-match] Failed to notify cancelled match partner=${otherId}`, err);
+  }
 }
 
 export async function handleRandomMatchReportModal(interaction: ModalSubmitInteraction) {

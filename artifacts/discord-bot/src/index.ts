@@ -87,6 +87,7 @@ import {
 } from "./commands";
 import {
   handleRandomMatchButton,
+  handleRandomMatchCancelButton,
   handleRandomMatchReportButton,
   handleRandomMatchReportModal,
   handleRandomMatchVoiceStateUpdate,
@@ -1956,6 +1957,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isButton() && interaction.customId === `${RANDOM_MATCH_PREFIX}cancel`) {
       await handleRandomMatchButton(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(`${RANDOM_MATCH_PREFIX}cancel-match:`)) {
+      await handleRandomMatchCancelButton(interaction, client);
       return;
     }
     if (interaction.isButton() && interaction.customId.startsWith(`${RANDOM_MATCH_PREFIX}report:`)) {

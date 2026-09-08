@@ -276,6 +276,15 @@ export async function finishRandomMatch(matchId: number) {
   return match ?? null;
 }
 
+export async function cancelRandomMatch(matchId: number) {
+  const [match] = await db
+    .update(randomMatchesTable)
+    .set({ status: "cancelled", endedAt: new Date(), deleteAt: null })
+    .where(and(eq(randomMatchesTable.id, matchId), eq(randomMatchesTable.status, "active")))
+    .returning();
+  return match ?? null;
+}
+
 export async function createRandomMatchReport(
   guildId: string,
   matchId: number,
