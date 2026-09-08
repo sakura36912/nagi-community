@@ -106,11 +106,16 @@ function buildPanel() {
     .addFields({
       name: "参加条件",
       value: "性別条件とR18可否を選んで参加してください。\n"
+        + "・完全ランダム：性別条件とR18条件をランダムに選択\n"
         + "・指定なし：全員から抽選\n・男性指定：男性ロールの相手から抽選\n・女性指定：女性ロールの相手から抽選\n"
         + "・R18○同士、R18×同士のみマッチします。",
     });
 
   const joinR18AllowedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${RANDOM_MATCH_PREFIX}join:any:random`)
+      .setLabel("完全ランダム")
+      .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId(`${RANDOM_MATCH_PREFIX}join:any:r18yes`)
       .setLabel("指定なし・R18○")
@@ -353,9 +358,10 @@ export async function handleRandomMatchButton(interaction: ButtonInteraction) {
   if (!interaction.customId.startsWith(matchPrefix)) return;
   const [preferenceValue, r18Value] = interaction.customId.slice(matchPrefix.length).split(":");
   const preference = preferenceValue as RandomMatchPreference;
-  const r18Allowed = r18Value === "r18yes";
+  const r18Allowed = r18Value === "r18yes"
+    || (r18Value === "random" && randomInt(2) === 1);
   if (![RANDOM_MATCH_ANY, RANDOM_MATCH_MALE, RANDOM_MATCH_FEMALE].includes(preference)) return;
-  if (r18Value !== "r18yes" && r18Value !== "r18no") return;
+  if (r18Value !== "r18yes" && r18Value !== "r18no" && r18Value !== "random") return;
   await joinWithPreference(interaction, preference, r18Allowed);
 }
 
