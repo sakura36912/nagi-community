@@ -492,23 +492,14 @@ function buildShopPanel(items: ShopItem[], currencyName: string, title = "🛒 �
   return { embeds: [embed], components: [row] };
 }
 
-function buildForumShopPanel(item: ShopItem, currencyName: string) {
-  const embed = new EmbedBuilder()
-    .setTitle(item.name)
-    .setColor(0xf5a623)
-    .setDescription(
-      [
-        item.description ?? "",
-        `価格: **${item.price.toLocaleString()}${currencyName}**`,
-      ].filter(Boolean).join("\n\n"),
-    );
+function buildForumShopPanel(itemId: number) {
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`${SHOP_BUY_PREFIX}${item.id}`)
+      .setCustomId(`${SHOP_BUY_PREFIX}${itemId}`)
       .setLabel("購入")
       .setStyle(ButtonStyle.Primary),
   );
-  return { embeds: [embed], components: [row] };
+  return { components: [row] };
 }
 
 export async function handleShopBuyButton(interaction: ButtonInteraction): Promise<void> {
@@ -1854,7 +1845,7 @@ const shopCommand: Command = {
           targetRoleId: role?.id ?? null,
         },
       );
-      const panel = buildForumShopPanel(saved.item, settings.currencyName);
+      const panel = buildForumShopPanel(saved.item.id);
 
       let panelMessage: import("discord.js").Message | null = null;
       if (saved.panel.panelMessageId) {
