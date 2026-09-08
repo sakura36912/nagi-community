@@ -35,6 +35,10 @@ import {
   handleShopBuyButton,
   handleShopSelectMenu,
   SHOP_SELECT_ID,
+  handleForumPurchaseQuantity,
+  handleForumPurchaseCast,
+  FORUM_QUANTITY_PREFIX,
+  FORUM_CAST_PREFIX,
   NICKNAME_MODAL_PREFIX,
   VC_RENAME_MODAL_PREFIX,
   SHOP_BUY_PREFIX,
@@ -1992,6 +1996,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(SHOP_BUY_PREFIX)) {
       await handleShopBuyButton(interaction);
+      return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(FORUM_QUANTITY_PREFIX)) {
+      await handleForumPurchaseQuantity(interaction);
+      return;
+    }
+
+    if (interaction.isUserSelectMenu() && interaction.customId.startsWith(FORUM_CAST_PREFIX)) {
+      await handleForumPurchaseCast(interaction);
       return;
     }
 

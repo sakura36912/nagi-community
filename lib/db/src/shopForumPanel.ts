@@ -9,6 +9,7 @@ export type ShopForumPanelConfig = {
   description: string | null;
   effectType: string | null;
   targetRoleId: string | null;
+  logChannelId: string | null;
 };
 
 export async function getShopForumPanel(
@@ -97,12 +98,14 @@ export async function upsertShopForumPanel(
         channelId,
         shopItemId: item.id,
         panelMessageId,
+        logChannelId: config.logChannelId,
       })
       .onConflictDoUpdate({
         target: [shopForumPanelsTable.guildId, shopForumPanelsTable.channelId],
         set: {
           shopItemId: item.id,
           panelMessageId,
+          logChannelId: config.logChannelId,
         },
       })
       .returning();

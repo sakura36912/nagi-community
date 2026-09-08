@@ -1108,6 +1108,24 @@ export async function buyItem(
   itemId: number,
   currencyName: string,
 ): Promise<{ ok: true; item: ShopItem } | { ok: false; reason: string }> {
+  const result = await buyItemQuantity(guildId, userId, itemId, currencyName, 1);
+  return result.ok ? { ok: true, item: result.item } : result;
+}
+
+export async function buyItemQuantity(
+  guildId: string,
+  userId: string,
+  itemId: number,
+  currencyName: string,
+  quantity: number,
+): Promise<
+  | { ok: true; item: ShopItem; quantity: number; totalPrice: number }
+  | { ok: false; reason: string }
+> {
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 25) {
+    return { ok: false, reason: "購入個数が不正です。1〜25個で指定してください。" };
+  }
+
   const [item] = await db
     .select()
     .from(shopItemsTable)
@@ -1117,6 +1135,11 @@ export async function buyItem(
     return { ok: false, reason: "そのアイテムは見つかりませんでした。" };
   }
 
+  const totalPrice = item.price * quantity;
+  if (!Number.isSafeInteger(totalPrice)) {
+    return { ok: false, reason: "合計金額が大きすぎます。管理者に連絡してください。" };
+  }
+
   await getOrCreateWallet(guildId, userId);
 
   // Debit is conditional on sufficient balance, checked atomically in the
@@ -1124,12 +1147,12 @@ export async function buyItem(
   const insufficientFunds = await db.transaction(async (tx) => {
     const [debited] = await tx
       .update(walletsTable)
-      .set({ balance: sql`${walletsTable.balance} - ${item.price}` })
+      .set({ balance: sql`${walletsTable.balance} - ${totalPrice}` })
       .where(
         and(
           eq(walletsTable.guildId, guildId),
           eq(walletsTable.userId, userId),
-          sql`${walletsTable.balance} >= ${item.price}`,
+          sql`${walletsTable.balance} >= ${totalPrice}`,
         ),
       )
       .returning();
@@ -1142,14 +1165,14 @@ export async function buyItem(
     // concurrent first-time purchases increment instead of duplicating rows.
     await tx
       .insert(inventoryItemsTable)
-      .values({ guildId, userId, shopItemId: item.id, quantity: 1 })
+      .values({ guildId, userId, shopItemId: item.id, quantity })
       .onConflictDoUpdate({
         target: [
           inventoryItemsTable.guildId,
           inventoryItemsTable.userId,
           inventoryItemsTable.shopItemId,
         ],
-        set: { quantity: sql`${inventoryItemsTable.quantity} + 1` },
+        set: { quantity: sql`${inventoryItemsTable.quantity} + ${quantity}` },
       });
 
     return false;
@@ -1159,13 +1182,18 @@ export async function buyItem(
     const wallet = await getOrCreateWallet(guildId, userId);
     return {
       ok: false,
-      reason: `残高が不足しています(所持: ${wallet.balance}${currencyName}、必要: ${item.price}${currencyName})。`,
+      reason: `残高が不足しています(所持: ${wallet.balance}${currencyName}、必要: ${totalPrice}${currencyName})。`,
     };
   }
 
-  await recordTransaction(guildId, userId, -item.price, `shop:${item.name}`);
+  await recordTransaction(
+    guildId,
+    userId,
+    -totalPrice,
+    `shop:${item.name}${quantity > 1 ? ` x${quantity}` : ""}`,
+  );
 
-  return { ok: true, item };
+  return { ok: true, item, quantity, totalPrice };
 }
 
 // Reverses a buyItem() purchase: refunds the price and removes one unit of
@@ -1175,11 +1203,16 @@ export async function refundPurchase(
   guildId: string,
   userId: string,
   item: ShopItem,
+  quantity = 1,
 ): Promise<void> {
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    throw new Error("Refund quantity must be a positive integer");
+  }
+  const totalPrice = item.price * quantity;
   await db.transaction(async (tx) => {
     await tx
       .update(walletsTable)
-      .set({ balance: sql`${walletsTable.balance} + ${item.price}` })
+      .set({ balance: sql`${walletsTable.balance} + ${totalPrice}` })
       .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)));
 
     const [inventoryRow] = await tx
@@ -1194,18 +1227,23 @@ export async function refundPurchase(
       );
 
     if (inventoryRow) {
-      if (inventoryRow.quantity <= 1) {
+      if (inventoryRow.quantity <= quantity) {
         await tx.delete(inventoryItemsTable).where(eq(inventoryItemsTable.id, inventoryRow.id));
       } else {
         await tx
           .update(inventoryItemsTable)
-          .set({ quantity: sql`${inventoryItemsTable.quantity} - 1` })
+          .set({ quantity: sql`${inventoryItemsTable.quantity} - ${quantity}` })
           .where(eq(inventoryItemsTable.id, inventoryRow.id));
       }
     }
   });
 
-  await recordTransaction(guildId, userId, item.price, `refund:${item.name}`);
+  await recordTransaction(
+    guildId,
+    userId,
+    totalPrice,
+    `refund:${item.name}${quantity > 1 ? ` x${quantity}` : ""}`,
+  );
 }
 
 // ─── Squad Treasuries ────────────────────────────────────────────────────────

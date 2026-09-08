@@ -60,6 +60,7 @@ import {
   getGroupShopSalesSummary,
   setVcCategoryId,
   buyItem,
+  buyItemQuantity,
   createOrUpdateCurrency,
   createPrivateVcSession,
   getActivePrivateVcSession,
@@ -164,6 +165,8 @@ function formatMs(ms: number): string {
 
 export const SHOP_BUY_PREFIX = "shop:buy:";
 export const SHOP_SELECT_ID = "shop:select";
+export const FORUM_QUANTITY_PREFIX = "shop:forum-quantity:";
+export const FORUM_CAST_PREFIX = "shop:forum-cast:";
 export const NICKNAME_MODAL_PREFIX = "shop:nickname-modal:";
 const NICKNAME_MODAL_INPUT_ID = "nickname";
 export const VC_RENAME_MODAL_PREFIX = "shop:vc-rename-modal:";
@@ -502,6 +505,241 @@ function buildForumShopPanel(itemId: number) {
   return { components: [row] };
 }
 
+function buildForumQuantityPicker(itemId: number) {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`${FORUM_QUANTITY_PREFIX}${itemId}`)
+    .setPlaceholder("購入個数を選択してください")
+    .addOptions(
+      Array.from({ length: 25 }, (_, index) => {
+        const quantity = index + 1;
+        return new StringSelectMenuOptionBuilder()
+          .setLabel(`${quantity}個`)
+          .setValue(String(quantity));
+      }),
+    );
+  return {
+    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)],
+  };
+}
+
+function buildForumCastPicker(itemId: number, quantity: number) {
+  const select = new UserSelectMenuBuilder()
+    .setCustomId(`${FORUM_CAST_PREFIX}${itemId}:${quantity}`)
+    .setPlaceholder("指定するキャストを選択してください")
+    .setMinValues(1)
+    .setMaxValues(1);
+  return {
+    components: [new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(select)],
+  };
+}
+
+async function getConfiguredForumPanel(
+  guildId: string,
+  channelId: string,
+  itemId: number,
+) {
+  const panel = await getShopForumPanel(guildId, channelId);
+  return panel?.shopItemId === itemId ? panel : null;
+}
+
+async function logForumPurchase(
+  guild: Guild,
+  logChannelId: string,
+  buyerId: string,
+  castId: string,
+  item: ShopItem,
+  quantity: number,
+  totalPrice: number,
+  currencyName: string,
+): Promise<boolean> {
+  try {
+    const logChannel = guild.channels.cache.get(logChannelId)
+      ?? await guild.channels.fetch(logChannelId).catch(() => null);
+    if (!logChannel?.isTextBased()) {
+      logger.warn(`[forum-shop] Configured log channel is not text-based: ${logChannelId}`);
+      return false;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("🛒 フォーラム購入ログ")
+      .setColor(0xf5a623)
+      .addFields(
+        { name: "購入者", value: `<@${buyerId}>`, inline: true },
+        { name: "指定のキャスト", value: `<@${castId}>`, inline: true },
+        { name: "商品名", value: item.name, inline: false },
+        { name: "単価", value: `${item.price.toLocaleString()}${currencyName}`, inline: true },
+        { name: "個数", value: `${quantity}個`, inline: true },
+        { name: "合計金額", value: `${totalPrice.toLocaleString()}${currencyName}`, inline: true },
+      )
+      .setTimestamp();
+
+    await logChannel.send({
+      embeds: [embed],
+      allowedMentions: { users: [buyerId, castId], roles: [] },
+    });
+    return true;
+  } catch (error) {
+    logger.warn("[forum-shop] Failed to post purchase log", error);
+    return false;
+  }
+}
+
+const FORUM_SUPPORTED_EFFECTS = new Set([
+  PERM_ROLE_EFFECT,
+  EVAL_RESURFACE_EFFECT,
+  SHOP_LICENSE_EFFECT,
+]);
+
+async function completeForumPurchase(
+  interaction: UserSelectMenuInteraction,
+  itemId: number,
+  quantity: number,
+  castId: string,
+): Promise<void> {
+  if (!interaction.guildId || !interaction.guild) {
+    await interaction.editReply("この操作はサーバー内でのみ使用できます。");
+    return;
+  }
+
+  const panel = await getConfiguredForumPanel(interaction.guildId, interaction.channelId, itemId);
+  const item = await getShopItem(interaction.guildId, itemId);
+  if (!panel || !item || item.category !== "forum") {
+    await interaction.editReply("この購入パネルは見つからないか、すでに無効です。");
+    return;
+  }
+  if (!panel.logChannelId) {
+    await interaction.editReply("購入ログ先が未設定です。管理者にパネルの再設定を依頼してください。");
+    return;
+  }
+  if (item.effectType && !FORUM_SUPPORTED_EFFECTS.has(item.effectType)) {
+    await interaction.editReply("この商品はフォーラム購入フローに対応していない特殊効果が設定されています。");
+    return;
+  }
+
+  const castMember = await interaction.guild.members.fetch(castId).catch(() => null);
+  if (!castMember || castMember.user.bot) {
+    await interaction.editReply("指定されたキャストが見つからないか、Botが選択されています。");
+    return;
+  }
+
+  const settings = await getGuildSettings(interaction.guildId);
+  const buyerMember = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+
+  if (item.effectType === SHOP_LICENSE_EFFECT && buyerMember && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    const allowedRoles = ["本船員", "航海士", "提督", "大提督"];
+    const hasAllowedRole = interaction.guild.roles.cache.some(
+      (role) => allowedRoles.includes(role.name) && buyerMember.roles.cache.has(role.id),
+    );
+    if (!hasAllowedRole) {
+      await interaction.editReply("❌ 個人ショップ開業券は本船員以上のロールを持つメンバーのみ購入できます。");
+      return;
+    }
+  }
+
+  const result = await buyItemQuantity(
+    interaction.guildId,
+    interaction.user.id,
+    itemId,
+    settings.currencyName,
+    quantity,
+  );
+  if (!result.ok) {
+    await interaction.editReply(result.reason);
+    return;
+  }
+
+  let roleGranted = false;
+  try {
+    if (item.targetRoleId) {
+      const member = buyerMember ?? await interaction.guild.members.fetch(interaction.user.id);
+      markAdviceRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
+      await member.roles.add(item.targetRoleId);
+      roleGranted = true;
+
+      if (item.effectType === EVAL_RESURFACE_EFFECT) {
+        markTimedRoleGrantFromPurchase(interaction.guildId, interaction.user.id, item.targetRoleId);
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        await upsertTimedRoleGrant(
+          interaction.guildId,
+          interaction.user.id,
+          item.targetRoleId,
+          EVAL_RESURFACE_EFFECT,
+          expiresAt,
+        );
+      }
+    }
+
+    const logged = await logForumPurchase(
+      interaction.guild,
+      panel.logChannelId,
+      interaction.user.id,
+      castId,
+      result.item,
+      quantity,
+      result.totalPrice,
+      settings.currencyName,
+    );
+    await interaction.editReply(
+      `✅ 購入を受け付けました。\n指定のキャスト: <@${castId}>\n個数: ${quantity}個\n合計金額: ${result.totalPrice.toLocaleString()}${settings.currencyName}${logged ? "" : "\n⚠️ 購入ログの投稿に失敗しました。管理者に連絡してください。"}`,
+    );
+  } catch (error) {
+    if (roleGranted) {
+      logger.error("[forum-shop] Role was granted but finalization failed", error);
+    }
+    await refundPurchase(interaction.guildId, interaction.user.id, result.item, quantity);
+    await interaction.editReply("❌ 購入処理に失敗したため、購入を取り消して返金しました。");
+  }
+}
+
+export async function handleForumPurchaseQuantity(
+  interaction: StringSelectMenuInteraction,
+): Promise<void> {
+  const itemId = Number(interaction.customId.slice(FORUM_QUANTITY_PREFIX.length));
+  const quantity = Number(interaction.values[0]);
+  if (!Number.isInteger(itemId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 25) {
+    await interaction.update({ content: "不正な購入個数です。", components: [] });
+    return;
+  }
+
+  const panel = interaction.guildId
+    ? await getConfiguredForumPanel(interaction.guildId, interaction.channelId, itemId)
+    : null;
+  if (!panel?.logChannelId) {
+    await interaction.update({
+      content: "この購入パネルは無効か、購入ログ先が未設定です。",
+      components: [],
+    });
+    return;
+  }
+
+  await interaction.update({
+    content: "指定するキャストを選択してください。",
+    ...buildForumCastPicker(itemId, quantity),
+  });
+}
+
+export async function handleForumPurchaseCast(
+  interaction: UserSelectMenuInteraction,
+): Promise<void> {
+  const payload = interaction.customId.slice(FORUM_CAST_PREFIX.length).split(":");
+  const itemId = Number(payload[0]);
+  const quantity = Number(payload[1]);
+  const castId = interaction.values[0];
+  if (
+    !Number.isInteger(itemId)
+    || !Number.isInteger(quantity)
+    || quantity < 1
+    || quantity > 25
+    || !castId
+  ) {
+    await interaction.update({ content: "不正な購入情報です。", components: [] });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  await completeForumPurchase(interaction, itemId, quantity, castId);
+}
+
 export async function handleShopBuyButton(interaction: ButtonInteraction): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply({ content: "このボタンはサーバー内でのみ使用できます。", ephemeral: true });
@@ -517,6 +755,23 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   const item = await getShopItem(interaction.guildId, itemId);
   if (!item) {
     await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+    return;
+  }
+
+  if (item.category === "forum") {
+    const panel = await getConfiguredForumPanel(interaction.guildId, interaction.channelId, itemId);
+    if (!panel?.logChannelId) {
+      await interaction.reply({
+        content: "この購入パネルは無効か、購入ログ先が未設定です。管理者にパネルの再設定を依頼してください。",
+        ephemeral: true,
+      });
+      return;
+    }
+    await interaction.reply({
+      content: "購入個数を選択してください。",
+      ...buildForumQuantityPicker(itemId),
+      ephemeral: true,
+    });
     return;
   }
 
@@ -1502,7 +1757,7 @@ const shopCommand: Command = {
         )
         .addRoleOption((opt) =>
           opt.setName("role").setDescription("付与するロール（永久ロール付与エフェクト使用時）").setRequired(false),
-        ),
+        )
     )
     .addSubcommand((sub) =>
       sub.setName("price").setDescription("アイテムの価格を変更します（管理者）")
@@ -1552,6 +1807,13 @@ const shopCommand: Command = {
         )
         .addRoleOption((opt) =>
           opt.setName("role").setDescription("付与するロール（永久ロール付与エフェクト使用時）").setRequired(false),
+        )
+        .addChannelOption((opt) =>
+          opt
+            .setName("log_channel")
+            .setDescription("購入ログを送るテキストチャンネル")
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false),
         ),
     )
     ,
@@ -1831,8 +2093,17 @@ const shopCommand: Command = {
       const description = interaction.options.getString("description");
       const effect = interaction.options.getString("effect");
       const role = interaction.options.getRole("role");
+      const logChannel = interaction.options.getChannel("log_channel");
       const existingPanel = await getShopForumPanel(guildId, thread.id);
       const settings = await getGuildSettings(guildId);
+      const logChannelId = logChannel?.id ?? existingPanel?.logChannelId ?? null;
+      if (!logChannelId) {
+        await interaction.reply({
+          content: "❌ `log_channel` を指定してください。購入結果を送るテキストチャンネルが必要です。",
+          ephemeral: true,
+        });
+        return;
+      }
       const saved = await upsertShopForumPanel(
         guildId,
         thread.id,
@@ -1843,6 +2114,7 @@ const shopCommand: Command = {
           description,
           effectType: effect,
           targetRoleId: role?.id ?? null,
+          logChannelId,
         },
       );
       const panel = buildForumShopPanel(saved.item.id);
@@ -1859,7 +2131,7 @@ const shopCommand: Command = {
       }
 
       await interaction.reply({
-        content: `✅ このフォーラム投稿の商品を **${saved.item.name}**（${saved.item.price.toLocaleString()}${settings.currencyName}）に設定し、購入パネルを${panelMessage.id === existingPanel?.panelMessageId ? "更新" : "設置"}しました。`,
+        content: `✅ このフォーラム投稿の商品を **${saved.item.name}**（${saved.item.price.toLocaleString()}${settings.currencyName}）に設定し、購入ログを <#${logChannelId}> へ送る購入パネルを${panelMessage.id === existingPanel?.panelMessageId ? "更新" : "設置"}しました。`,
         ephemeral: true,
       });
       return;
