@@ -26,6 +26,7 @@ export const shopForumPanelsTable = pgTable(
       .notNull()
       .references(() => shopItemsTable.id, { onDelete: "cascade" }),
     panelMessageId: text("panel_message_id"),
+    logChannelId: text("log_channel_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
