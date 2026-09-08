@@ -55,7 +55,6 @@ export const RANDOM_MATCH_REPORT_MODAL_PREFIX = `${RANDOM_MATCH_PREFIX}report-mo
 const REPORT_BUTTON_PREFIX = `${RANDOM_MATCH_PREFIX}report:`;
 const MATCH_CANCEL_BUTTON_PREFIX = `${RANDOM_MATCH_PREFIX}cancel-match:`;
 const REMATCH_COOLDOWN_MS = 10 * 60 * 1000;
-const EMPTY_CHANNEL_DELETE_DELAY_MS = 5 * 60 * 1000;
 const MALE_ROLE_NAME = "男性";
 const FEMALE_ROLE_NAME = "女性";
 
@@ -493,7 +492,13 @@ export async function handleRandomMatchVoiceStateUpdate(
   const guild = client.guilds.cache.get(match.guildId);
   const channel = guild?.channels.cache.get(match.channelId!);
   if (channel?.type === ChannelType.GuildVoice && channel.members.size === 0) {
-    await markRandomMatchDeleteAt(match.id, new Date(Date.now() + EMPTY_CHANNEL_DELETE_DELAY_MS));
+    await markRandomMatchDeleteAt(match.id, new Date());
+    try {
+      await channel.delete("裏募集マッチのVCが空になったため即時削除");
+      await finishRandomMatch(match.id);
+    } catch (err) {
+      logger.error(`[random-match] Failed to immediately delete empty channel match=${match.id}`, err);
+    }
   }
 }
 
