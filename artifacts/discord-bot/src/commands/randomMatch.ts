@@ -120,6 +120,7 @@ function buildPanel() {
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`${RANDOM_MATCH_PREFIX}join:female:r18yes`)
+      .setLabel("女性指定・R18○")
       .setStyle(ButtonStyle.Secondary),
   );
   const joinR18DeniedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(

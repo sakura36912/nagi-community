@@ -23,6 +23,7 @@ export const randomMatchQueueTable = pgTable(
     guildId: text("guild_id").notNull(),
     userId: text("user_id").notNull(),
     preference: text("preference").notNull().default("any"),
+    r18Allowed: boolean("r18_allowed").notNull().default(false),
     joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.guildId, table.userId] })],
