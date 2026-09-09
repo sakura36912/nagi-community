@@ -1726,6 +1726,49 @@ const INITIAL_ISSUE_AMOUNT  = 1000;
 
 const INITIAL_ISSUE_CHANNEL_ID = "1526673304327291050";
 
+// ─── 高級船室パネルの最下部追従 ───────────────────────────────────────────────
+
+client.on(Events.MessageCreate, async (message) => {
+  // 自分自身のパネル再投稿を拾うと無限に再投稿するため、Bot自身だけ除外する。
+  if (message.author.id === client.user?.id) return;
+  if (!message.guildId || message.channel.type !== ChannelType.GuildVoice) return;
+
+  const session = await getPrivateVcSessionByChannelId(message.channelId).catch(() => null);
+  if (!session) {
+    // 無期限の高級船室は既存仕様上、private_vc_sessions に保存されない。
+    // 設定済みカテゴリまたは高級船室の命名規則で補完し、パネル側から所有者を復元する。
+    const settings = await getGuildSettings(message.guildId).catch(() => null);
+    const isConfiguredLuxuryChannel = message.channel.parentId === settings?.vcCategoryId
+      || message.channel.name.startsWith("🔒 ");
+    if (!isConfiguredLuxuryChannel) return;
+  }
+
+  const channelKey = `${message.guildId}:${message.channelId}`;
+  const previous = vcPanelRelocationQueues.get(channelKey) ?? Promise.resolve();
+  const current = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const channel = message.channel as import("discord.js").TextBasedChannel & import("discord.js").GuildChannel;
+      await movePrivateVcPanelToBottom(channel, {
+        channelId: session?.channelId ?? message.channelId,
+        ownerId: session?.userId,
+        botId: client.user?.id,
+        expiresAt: session?.expiresAt,
+        category: session?.category ?? "vc",
+      });
+    })
+    .catch((err) => {
+      logger.warn(`[vc-panel] Failed to move panel to bottom in ${message.channelId}`, err);
+    });
+
+  vcPanelRelocationQueues.set(channelKey, current);
+  await current.finally(() => {
+    if (vcPanelRelocationQueues.get(channelKey) === current) {
+      vcPanelRelocationQueues.delete(channelKey);
+    }
+  });
+});
+
 // ─── MessageCreate — スティッキーメッセージ ───────────────────────────────────
 
 // ボットメッセージは message.author.bot で弾き、ユーザーメッセージは

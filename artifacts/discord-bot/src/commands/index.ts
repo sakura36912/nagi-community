@@ -2678,7 +2678,7 @@ export async function refreshPrivateVcPanelMessage(
  */
 export async function movePrivateVcPanelToBottom(
   channel: import("discord.js").TextBasedChannel & import("discord.js").GuildChannel,
-  options: RefreshPrivateVcPanelOptions,
+  options: Omit<RefreshPrivateVcPanelOptions, "ownerId"> & { ownerId?: string },
 ): Promise<boolean> {
   if (isFreeRoomCategory(options.category) || !options.botId) return false;
 
@@ -2698,12 +2698,16 @@ export async function movePrivateVcPanelToBottom(
   ).filter(isPanel);
   if (panelMessages.length === 0) return false;
 
-  const memberIds = getVcAccessMemberIds(channel, options.ownerId, options.botId);
+  const panelOwnerId = options.ownerId
+    ?? panelMessages[0]?.embeds[0]?.description?.match(/<@!?(\d+)>/)?.[1];
+  if (!panelOwnerId) return false;
+
+  const memberIds = getVcAccessMemberIds(channel, panelOwnerId, options.botId);
   const streamEnabled = options.streamEnabled
-    ?? isPrivateVcStreamEnabled(channel, options.ownerId);
+    ?? isPrivateVcStreamEnabled(channel, panelOwnerId);
   const panelPayload = buildVcPanelMessage(
     options.channelId,
-    options.ownerId,
+    panelOwnerId,
     options.expiresAt ?? undefined,
     memberIds,
     streamEnabled,
