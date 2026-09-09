@@ -19,4 +19,5 @@ export * from "./evalSheetConfig";
 export * from "./preban";
 export * from "./timedRoleGrants";
 export * from "./shopForumPanel";
+export * from "./uraRecruitment";
 export * from "./schema-check";
