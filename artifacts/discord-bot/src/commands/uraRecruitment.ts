@@ -103,7 +103,11 @@ function recruitmentCard(recruitment: {
       { name: "募集開始", value: formatJstDate(recruitment.createdAt), inline: false },
     )
     .setFooter({ text: isOpen ? "申請内容は募集者だけが確認できます" : "この募集は終了しています" });
-  if (profile) embed.setAuthor({ name: profile.name, iconURL: profile.avatarURL });
+  if (profile) {
+    embed
+      .setAuthor({ name: profile.name, iconURL: profile.avatarURL })
+      .setThumbnail(profile.avatarURL);
+  }
   return embed;
 }
 
