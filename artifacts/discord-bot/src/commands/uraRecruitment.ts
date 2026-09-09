@@ -508,7 +508,8 @@ export const uraRecruitmentCommand = {
     .setName("ura")
     .setDescription("個通・寝落ちの裏募集を管理します")
     .addSubcommand((sub) => sub.setName("setup").setDescription("裏募集を設定します")
-      .addChannelOption((option) => option.setName("channel").setDescription("募集投稿チャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
+      .addChannelOption((option) => option.setName("panel_channel").setDescription("募集パネルを置くチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
+      .addChannelOption((option) => option.setName("channel").setDescription("募集カードを投稿するチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
       .addChannelOption((option) => option.setName("category").setDescription("成立後に作る専用VCのカテゴリ").addChannelTypes(ChannelType.GuildCategory).setRequired(true))
       .addChannelOption((option) => option.setName("log_channel").setDescription("通報ログチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(false)))
     .addSubcommand((sub) => sub.setName("panel").setDescription("設定済みチャンネルへ募集パネルを投稿します"))
@@ -526,17 +527,30 @@ export const uraRecruitmentCommand = {
       return interaction.reply({ content: "管理者のみ実行できます。", ephemeral: true });
     }
     if (subcommand === "setup") {
+      const panelChannel = interaction.options.getChannel("panel_channel", true);
       const channel = interaction.options.getChannel("channel", true);
       const category = interaction.options.getChannel("category", true);
       const log = interaction.options.getChannel("log_channel", false);
-      await setUraRecruitmentSettings(interaction.guild.id, { recruitmentChannelId: channel.id, vcCategoryId: category.id, logChannelId: log?.id ?? null, enabled: true });
-      return interaction.reply({ content: `✅ 募集チャンネルを <#${channel.id}>、専用VCカテゴリを **${category.name}** に設定しました。`, ephemeral: true });
+      if (panelChannel.id === channel.id) {
+        return interaction.reply({ content: "パネルチャンネルと募集投稿チャンネルは別々に指定してください。", ephemeral: true });
+      }
+      await setUraRecruitmentSettings(interaction.guild.id, {
+        panelChannelId: panelChannel.id,
+        recruitmentChannelId: channel.id,
+        vcCategoryId: category.id,
+        logChannelId: log?.id ?? null,
+        enabled: true,
+      });
+      return interaction.reply({
+        content: `✅ パネルを <#${panelChannel.id}>、募集投稿を <#${channel.id}>、専用VCカテゴリを **${category.name}** に設定しました。`,
+        ephemeral: true,
+      });
     }
     if (subcommand === "panel") {
       const settings = await getUraRecruitmentSettings(interaction.guild.id);
-      if (!settings.recruitmentChannelId) return interaction.reply({ content: "先に `/ura setup` を実行してください。", ephemeral: true });
-      const channel = await configuredChannel(interaction.guild);
-      if (!channel) return interaction.reply({ content: "募集チャンネルが見つかりません。", ephemeral: true });
+      if (!settings.panelChannelId || !settings.recruitmentChannelId) return interaction.reply({ content: "先に `/ura setup` を実行してください。", ephemeral: true });
+      const channel = await configuredPanelChannel(interaction.guild);
+      if (!channel) return interaction.reply({ content: "パネルチャンネルが見つかりません。", ephemeral: true });
       await channel.send({ embeds: [new EmbedBuilder().setColor(0x8b5cf6).setTitle("裏募集パネル").setDescription("個通または寝落ちの募集を開始できます。\n年齢情報は取得・表示しません。")], components: panelComponents() });
       return interaction.reply({ content: `✅ <#${channel.id}> にパネルを設置しました。`, ephemeral: true });
     }
