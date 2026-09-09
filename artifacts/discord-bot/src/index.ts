@@ -91,15 +91,6 @@ import {
   hasLuxuryVcBlockedRole,
 } from "./commands";
 import {
-  handleRandomMatchButton,
-  handleRandomMatchCancelButton,
-  handleRandomMatchReportButton,
-  handleRandomMatchReportModal,
-  handleRandomMatchVoiceStateUpdate,
-  runRandomMatchCleanup,
-  RANDOM_MATCH_PREFIX,
-} from "./commands/randomMatch";
-import {
   handleHubJoin,
   handleHubLeave,
   handlePanelOnlyHubTransfer,
@@ -1072,7 +1063,6 @@ client.once(Events.ClientReady, async (readyClient) => {
     runVcExpiryScheduler().catch((err) => logger.error("[vc-expiry] Scheduler error", err));
     runVcDeleteScheduler().catch((err) => logger.error("[vc-schedule] Scheduler error", err));
     runTimedRoleExpiryScheduler().catch((err) => logger.error("[role-expiry] Scheduler error", err));
-    runRandomMatchCleanup(readyClient).catch((err) => logger.error("[random-match] Cleanup scheduler error", err));
     runSheetReminderScheduler(readyClient).catch((err) => logger.error("[sheet-reminder] Scheduler error", err));
     runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Scheduler error", err));
     runCalendarReminderScheduler(readyClient).catch((err) => logger.error("[calendar] Scheduler error", err));
@@ -1234,9 +1224,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   if (!userId) return;
   if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
   await handleMultiplayerChinchiroVoiceDeparture(oldState, newState);
-  await handleRandomMatchVoiceStateUpdate(client, oldState.channelId, newState.channelId)
-    .catch((err) => logger.error("[random-match] Voice state handling error", err));
-
   // 追放者は高級船室へ入室できない。古い明示権限が残っていても即時に
   // 権限を削除して切断する（フリールームや砂浜は対象外）。
   if (
@@ -1997,27 +1984,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(CHINCHIRO_PREFIX)) {
       await handleChinchiroButton(interaction);
-      return;
-    }
-
-    if (interaction.isButton() && interaction.customId.startsWith(`${RANDOM_MATCH_PREFIX}join:`)) {
-      await handleRandomMatchButton(interaction);
-      return;
-    }
-    if (interaction.isButton() && interaction.customId === `${RANDOM_MATCH_PREFIX}cancel`) {
-      await handleRandomMatchButton(interaction);
-      return;
-    }
-    if (interaction.isButton() && interaction.customId.startsWith(`${RANDOM_MATCH_PREFIX}cancel-match:`)) {
-      await handleRandomMatchCancelButton(interaction, client);
-      return;
-    }
-    if (interaction.isButton() && interaction.customId.startsWith(`${RANDOM_MATCH_PREFIX}report:`)) {
-      await handleRandomMatchReportButton(interaction);
-      return;
-    }
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${RANDOM_MATCH_PREFIX}report-modal:`)) {
-      await handleRandomMatchReportModal(interaction);
       return;
     }
 

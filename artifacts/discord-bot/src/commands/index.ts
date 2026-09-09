@@ -119,7 +119,6 @@ import {
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { calendarCommand } from "./calendar";
 import { chinchiroDiceCommand } from "./chinchiroDice";
-import { randomMatchCommand } from "./randomMatch";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -4311,5 +4310,4 @@ export const commands: Command[] = [
   timedRoleCommand,
   balanceRankingCommand,
   calendarCommand,
-  randomMatchCommand,
 ];

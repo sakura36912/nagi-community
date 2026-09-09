@@ -18,6 +18,5 @@ export * from "./vcHub";
 export * from "./evalSheetConfig";
 export * from "./preban";
 export * from "./timedRoleGrants";
-export * from "./randomMatch";
 export * from "./shopForumPanel";
 export * from "./schema-check";
