@@ -119,10 +119,11 @@ import {
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { calendarCommand } from "./calendar";
 import { chinchiroDiceCommand } from "./chinchiroDice";
+import { uraRecruitmentCommand } from "./uraRecruitment";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
-  execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  execute: (interaction: ChatInputCommandInteraction) => Promise<unknown>;
   autocomplete?: (interaction: import("discord.js").AutocompleteInteraction) => Promise<void>;
 }
 
@@ -4310,4 +4311,5 @@ export const commands: Command[] = [
   timedRoleCommand,
   balanceRankingCommand,
   calendarCommand,
+  uraRecruitmentCommand,
 ];

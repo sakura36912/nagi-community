@@ -103,6 +103,27 @@ export async function listOpenUraRecruitments(guildId: string) {
     .orderBy(desc(uraRecruitmentsTable.createdAt));
 }
 
+export async function getOpenUraRecruitmentByOwner(guildId: string, ownerId: string) {
+  return (await db
+    .select()
+    .from(uraRecruitmentsTable)
+    .where(and(
+      eq(uraRecruitmentsTable.guildId, guildId),
+      eq(uraRecruitmentsTable.ownerId, ownerId),
+      eq(uraRecruitmentsTable.status, "open"),
+    ))
+    .limit(1))[0] ?? null;
+}
+
+export async function setUraRecruitmentCancelled(id: number) {
+  const [row] = await db
+    .update(uraRecruitmentsTable)
+    .set({ status: "cancelled", closedAt: new Date() })
+    .where(and(eq(uraRecruitmentsTable.id, id), eq(uraRecruitmentsTable.status, "open")))
+    .returning();
+  return row ?? null;
+}
+
 export async function cancelUraRecruitment(id: number, ownerId: string) {
   const [row] = await db
     .update(uraRecruitmentsTable)
@@ -150,6 +171,19 @@ export async function listUraApplications(recruitmentId: number) {
     .orderBy(asc(uraApplicationsTable.createdAt));
 }
 
+export async function getUraApplicationById(id: number) {
+  return (await db.select().from(uraApplicationsTable).where(eq(uraApplicationsTable.id, id)).limit(1))[0] ?? null;
+}
+
+export async function dismissUraApplication(id: number) {
+  const [row] = await db
+    .update(uraApplicationsTable)
+    .set({ status: "dismissed", updatedAt: new Date() })
+    .where(and(eq(uraApplicationsTable.id, id), eq(uraApplicationsTable.status, "pending")))
+    .returning();
+  return row ?? null;
+}
+
 export async function markUraRecruitmentMatched(id: number, applicantId: string) {
   return db.transaction(async (tx) => {
     const [recruitment] = await tx
@@ -172,6 +206,15 @@ export async function markUraRecruitmentMatched(id: number, applicantId: string)
       .where(and(eq(uraApplicationsTable.recruitmentId, id), ne(uraApplicationsTable.applicantId, applicantId), eq(uraApplicationsTable.status, "pending")));
     return recruitment;
   });
+}
+
+export async function abortUraRecruitment(id: number) {
+  const [row] = await db
+    .update(uraRecruitmentsTable)
+    .set({ status: "cancelled", closedAt: new Date() })
+    .where(eq(uraRecruitmentsTable.id, id))
+    .returning();
+  return row ?? null;
 }
 
 export async function createUraMatch(values: {

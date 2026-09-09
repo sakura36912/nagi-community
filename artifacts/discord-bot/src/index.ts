@@ -129,6 +129,12 @@ import {
   type ActiveRewardVoiceState,
 } from "./lib/vcRewardPresenceReconciliation";
 import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/calendar";
+import {
+  handleUraInteraction,
+  handleUraVoiceStateUpdate,
+  runUraRecruitmentCleanup,
+  URA_PREFIX,
+} from "./commands/uraRecruitment";
 
 import { logger } from "./lib/logger";
 import {
@@ -1038,6 +1044,9 @@ client.once(Events.ClientReady, async (readyClient) => {
   runCalendarReminderScheduler(readyClient).catch((err) =>
     logger.error("[calendar] Startup reminder scheduler error", err),
   );
+  runUraRecruitmentCleanup(readyClient).catch((err) =>
+    logger.error("[ura] Startup cleanup error", err),
+  );
 
   // 起動直後に全高級船室パネルを一括更新（メンバーリスト・期限・ボタンを現在の状態に同期）
   enforceAllExpelledLuxuryVcAccess(readyClient)
@@ -1066,6 +1075,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     runSheetReminderScheduler(readyClient).catch((err) => logger.error("[sheet-reminder] Scheduler error", err));
     runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Scheduler error", err));
     runCalendarReminderScheduler(readyClient).catch((err) => logger.error("[calendar] Scheduler error", err));
+    runUraRecruitmentCleanup(readyClient).catch((err) => logger.error("[ura] Scheduler error", err));
   }, 60 * 1000);
 
   // ── Weekly shift post — every Monday 00:00 UTC (= 09:00 JST) ─────────────
@@ -1223,6 +1233,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const userId = newState.member?.id ?? oldState.member?.id;
   if (!userId) return;
   if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
+  await handleUraVoiceStateUpdate(client, oldState.channelId, newState.channelId).catch((err) =>
+    logger.error("[ura] Voice state handling error", err),
+  );
   await handleMultiplayerChinchiroVoiceDeparture(oldState, newState);
   // 追放者は高級船室へ入室できない。古い明示権限が残っていても即時に
   // 権限を削除して切断する（フリールームや砂浜は対象外）。
@@ -1934,8 +1947,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             r.name === "追放者" && member.roles.cache.has(r.id),
           );
           const hasRestrictedRole = !isExempt && (hasIslandRole || hasExpelledRole);
-          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow", "chinchiro"]);
-          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow", "chinchiro"]);
+          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow", "chinchiro", "ura"]);
+          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow", "chinchiro", "ura"]);
           const allowedCommands = hasIslandRole && !hasExpelledRole
             ? allowedForIsland
             : allowedForExpelled;
@@ -1959,6 +1972,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(BJ_PREFIX)) {
       await handleBlackjackButton(interaction);
+      return;
+    }
+
+    if (
+      (interaction.isButton() || interaction.isModalSubmit()) &&
+      interaction.customId.startsWith(URA_PREFIX)
+    ) {
+      await handleUraInteraction(interaction, client);
       return;
     }
 
