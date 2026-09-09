@@ -60,6 +60,18 @@ const lastUraActions = new Map<string, number>();
 const typeLabel = (type: string) => type === URA_TALK ? "🎙️ 個通募集" : "🌙 寝落ち募集";
 const typeEmoji = (type: string) => type === URA_TALK ? "🎙️" : "🌙";
 
+function formatJstDate(date: Date): string {
+  return new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function adminOnly(interaction: ChatInputCommandInteraction): boolean {
   return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.Administrator));
 }
@@ -80,7 +92,7 @@ function recruitmentCard(recruitment: {
   note: string;
   status: string;
   createdAt: Date;
-}, user?: { username: string; displayAvatarURL: () => string }) {
+}, profile?: { name: string; avatarURL: string }) {
   const isOpen = recruitment.status === "open";
   const embed = new EmbedBuilder()
     .setColor(isOpen ? 0x8b5cf6 : 0x6b7280)
@@ -88,10 +100,10 @@ function recruitmentCard(recruitment: {
     .addFields(
       { name: "募集者", value: `<@${recruitment.ownerId}>`, inline: true },
       { name: "一言", value: recruitment.note.slice(0, 1024) || "（なし）", inline: false },
-      { name: "募集開始", value: `<t:${Math.floor(recruitment.createdAt.getTime() / 1000)}:f>`, inline: false },
+      { name: "募集開始", value: formatJstDate(recruitment.createdAt), inline: false },
     )
     .setFooter({ text: isOpen ? "申請内容は募集者だけが確認できます" : "この募集は終了しています" });
-  if (user) embed.setAuthor({ name: user.username, iconURL: user.displayAvatarURL() });
+  if (profile) embed.setAuthor({ name: profile.name, iconURL: profile.avatarURL });
   return embed;
 }
 
@@ -138,19 +150,36 @@ function noteModal(customId: string, title: string, inputId: string, label: stri
     );
 }
 
-async function configuredChannel(guild: Guild) {
+async function configuredRecruitmentChannel(guild: Guild) {
   const settings = await getUraRecruitmentSettings(guild.id);
   if (!settings.recruitmentChannelId) return null;
   const channel = await guild.channels.fetch(settings.recruitmentChannelId).catch(() => null);
   return channel?.isTextBased() && !channel.isDMBased() ? channel : null;
 }
 
+async function configuredPanelChannel(guild: Guild) {
+  const settings = await getUraRecruitmentSettings(guild.id);
+  if (!settings.panelChannelId) return null;
+  const channel = await guild.channels.fetch(settings.panelChannelId).catch(() => null);
+  return channel?.isTextBased() && !channel.isDMBased() ? channel : null;
+}
+
+async function getGuildProfile(guild: Guild, userId: string) {
+  const member = await guild.members.fetch(userId).catch(() => null);
+  const user = member?.user ?? await guild.client.users.fetch(userId).catch(() => null);
+  if (!user) return null;
+  return {
+    name: member?.displayName ?? user.username,
+    avatarURL: member?.displayAvatarURL({ size: 256 }) ?? user.displayAvatarURL({ size: 256 }),
+  };
+}
+
 async function postRecruitmentCard(guild: Guild, recruitment: Awaited<ReturnType<typeof createUraRecruitment>>) {
-  const channel = await configuredChannel(guild);
+  const channel = await configuredRecruitmentChannel(guild);
   if (!channel) throw new Error("裏募集チャンネルが設定されていないか、見つかりません。");
-  const user = await guild.client.users.fetch(recruitment.ownerId).catch(() => null);
+  const profile = await getGuildProfile(guild, recruitment.ownerId);
   const message = await channel.send({
-    embeds: [recruitmentCard(recruitment, user ?? undefined)],
+    embeds: [recruitmentCard(recruitment, profile ?? undefined)],
     components: recruitmentComponents(recruitment.id, true),
     allowedMentions: { users: [] },
   });
@@ -165,9 +194,9 @@ async function refreshRecruitmentMessage(guild: Guild, recruitmentId: number) {
   if (!channel?.isTextBased() || channel.isDMBased()) return;
   const message = await channel.messages.fetch(recruitment.messageId).catch(() => null);
   if (!message) return;
-  const user = await guild.client.users.fetch(recruitment.ownerId).catch(() => null);
+  const profile = await getGuildProfile(guild, recruitment.ownerId);
   await message.edit({
-    embeds: [recruitmentCard(recruitment, user ?? undefined)],
+    embeds: [recruitmentCard(recruitment, profile ?? undefined)],
     components: recruitmentComponents(recruitment.id, recruitment.status === "open"),
   }).catch((error) => logger.warn("[ura] failed to refresh recruitment card", error));
 }
@@ -179,14 +208,19 @@ async function sendApplicationNotice(guild: Guild, recruitmentId: number, applic
   const owner = await guild.client.users.fetch(recruitment.ownerId).catch(() => null);
   const applicant = await guild.client.users.fetch(application.applicantId).catch(() => null);
   if (!owner || !applicant) return false;
+  const applicantMember = await guild.members.fetch(application.applicantId).catch(() => null);
   const embed = new EmbedBuilder()
     .setColor(0x22c55e)
     .setTitle("📨 申請が届きました")
     .setDescription(`募集 **#${recruitment.id}**（${typeLabel(recruitment.type)}）への申請です。`)
-    .setAuthor({ name: applicant.username, iconURL: applicant.displayAvatarURL() })
+    .setAuthor({
+      name: applicantMember?.displayName ?? applicant.username,
+      iconURL: applicantMember?.displayAvatarURL({ size: 256 }) ?? applicant.displayAvatarURL({ size: 256 }),
+    })
     .addFields(
       { name: "申請者", value: `<@${applicant.id}>`, inline: true },
       { name: "一言", value: application.note.slice(0, 1024) || "（なし）" },
+      { name: "募集開始", value: formatJstDate(recruitment.createdAt), inline: false },
     )
     .setFooter({ text: "この情報は募集者だけに表示されています" });
   await owner.send({

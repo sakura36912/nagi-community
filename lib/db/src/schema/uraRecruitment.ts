@@ -10,6 +10,7 @@ import {
 
 export const uraRecruitmentSettingsTable = pgTable("ura_recruitment_settings", {
   guildId: text("guild_id").primaryKey(),
+  panelChannelId: text("panel_channel_id"),
   recruitmentChannelId: text("recruitment_channel_id"),
   vcCategoryId: text("vc_category_id"),
   logChannelId: text("log_channel_id"),

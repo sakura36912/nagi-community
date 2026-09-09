@@ -46,6 +46,7 @@ export async function getUraRecruitmentSettings(guildId: string) {
 export async function setUraRecruitmentSettings(
   guildId: string,
   values: Partial<{
+    panelChannelId: string | null;
     recruitmentChannelId: string | null;
     vcCategoryId: string | null;
     logChannelId: string | null;
