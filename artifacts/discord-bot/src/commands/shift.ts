@@ -190,9 +190,12 @@ function buildSubmitComponents(
   session: SubmitSession,
 ): ActionRowBuilder<ButtonBuilder>[] {
   const dayButtons = session.dates.map((date) => {
-    const d = new Date(`${date}T00:00:00+09:00`);
-    const dow = WEEKDAY_JA[d.getDay()]!;
-    const base = `${d.getMonth() + 1}/${d.getDate()}(${dow})`;
+    // 日付文字列はJSTの暦日として保存している。サーバーのローカル時刻や
+    // JSTの00:00をDate経由で読むとUTC環境では前日になるため、UTCの暦日
+    // として曜日・表示日を計算する。
+    const d = new Date(`${date}T00:00:00Z`);
+    const dow = WEEKDAY_JA[d.getUTCDay()]!;
+    const base = `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${dow})`;
     const sel = session.selections[date]!;
     const isActive = session.activeDate === date;
     const hasTimes = sel.times.length > 0;
