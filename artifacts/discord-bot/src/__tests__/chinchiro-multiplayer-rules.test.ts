@@ -72,7 +72,7 @@ describe("multiplayer chinchiro planning helpers", () => {
     expect(JSON.stringify(embed)).not.toContain("最大3投");
   });
 
-  it("does not show a roll button on the public table during another player's turn", () => {
+  it("shows the numbered roll button on the public table during a player's turn", () => {
     const table: ChinchiroTable = {
       id: 1,
       guildId: "guild",
@@ -90,6 +90,30 @@ describe("multiplayer chinchiro planning helpers", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    expect(buildMultiplayerChinchiroComponents(table)).toEqual([]);
+    const currentPlayer = {
+      id: 1,
+      tableId: 1,
+      userId: "parent",
+      displayName: "親",
+      joinOrder: 1,
+      bet: 1000,
+      roll: JSON.stringify({
+        kind: "menashi",
+        label: "目なし",
+        rank: 0,
+        dice: [1, 3, 6],
+        attempts: [[1, 3, 6]],
+      }),
+      active: 1,
+      createdAt: new Date(),
+    } satisfies ChinchiroTablePlayer;
+    const rows = buildMultiplayerChinchiroComponents(table, [currentPlayer]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.toJSON()).toMatchObject({
+      components: [{
+        custom_id: "chinchiro-mp:roll:1:2",
+        label: "サイコロを振る（2投目）",
+      }],
+    });
   });
 });

@@ -176,7 +176,10 @@ async function allPlayers(tableId: number) {
     .where(eq(chinchiroTablePlayersTable.tableId, tableId))
     .orderBy(asc(chinchiroTablePlayersTable.joinOrder));
 }
-export function buildMultiplayerChinchiroComponents(t: ChinchiroTable) {
+export function buildMultiplayerChinchiroComponents(
+  t: ChinchiroTable,
+  ps: ChinchiroTablePlayer[] = [],
+) {
   const id = t.id;
   if (t.status === "recruiting") return [new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(`${MULTIPLAYER_CHINCHIRO_PREFIX}join:${id}`).setLabel("参加").setStyle(ButtonStyle.Success),
@@ -188,9 +191,12 @@ export function buildMultiplayerChinchiroComponents(t: ChinchiroTable) {
     new ButtonBuilder().setCustomId(`${MULTIPLAYER_CHINCHIRO_PREFIX}bet:${id}`).setLabel("賭け金を入力").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`${MULTIPLAYER_CHINCHIRO_PREFIX}leave:${id}`).setLabel("退出").setStyle(ButtonStyle.Secondary),
   )];
-  // A public message cannot hide a component per viewer. Roll controls are
-  // delivered only to the current player by DM.
-  if (t.status === "rolling") return [];
+  if (t.status === "rolling" && t.turnUserId) {
+    const currentPlayer = ps.find((player) => player.userId === t.turnUserId);
+    const previous = parsePlayerRoll(currentPlayer?.roll ?? null);
+    const attempt = Math.min((previous?.attempts.length ?? 0) + 1, 3);
+    return turnRollComponents(t.id, attempt);
+  }
   if (t.status === "finished") return [new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(`${MULTIPLAYER_CHINCHIRO_PREFIX}next:${id}`).setLabel("次のラウンド").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`${MULTIPLAYER_CHINCHIRO_PREFIX}end:${id}`).setLabel("終了").setStyle(ButtonStyle.Danger),
@@ -217,33 +223,6 @@ function turnRollComponents(tableId: number, attempt: number) {
   )];
 }
 
-async function sendTurnPrompt(client: Client, t: ChinchiroTable): Promise<boolean> {
-  if (t.status !== "rolling" || !t.turnUserId) return false;
-  const currentPlayers = await players(t.id);
-  const currentPlayer = currentPlayers.find((player) => player.userId === t.turnUserId);
-  if (!currentPlayer) return false;
-  const previous = parsePlayerRoll(currentPlayer.roll);
-  if (previous && isChinchiroHandComplete(previous)) return false;
-  const attempt = (previous?.attempts.length ?? 0) + 1;
-  if (attempt > 3) return false;
-  const user = await client.users.fetch(t.turnUserId).catch(() => null);
-  if (!user) return false;
-  try {
-    await user.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🎲 チンチロ — あなたの手番です")
-          .setDescription(`卓 #${t.id} の **${attempt}投目**です。下のボタンからサイコロを振ってください。`)
-          .setColor(0x5865f2),
-      ],
-      components: turnRollComponents(t.id, attempt),
-    });
-    return true;
-  } catch (error) {
-    logger.warn(`[chinchiro-mp] Failed to send turn DM table=${t.id} user=${t.turnUserId}`, error);
-    return false;
-  }
-}
 function dice(outcome: ChinchiroOutcome): string {
   return outcome.dice.map((die) => ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][die - 1]).join(" ");
 }
@@ -339,7 +318,7 @@ async function refreshPanelForGuild(guild: Guild, t: ChinchiroTable) {
     const image = await resultImage(t, ps);
     await message.edit({
       embeds: [buildMultiplayerChinchiroPanel(t, ps).setImage(image ? `attachment://${image.name}` : null)],
-      components: buildMultiplayerChinchiroComponents(t), attachments: [], files: image ? [image] : [],
+      components: buildMultiplayerChinchiroComponents(t, ps), attachments: [], files: image ? [image] : [],
     });
   }
 }
@@ -539,7 +518,7 @@ async function redraw(interaction: ButtonInteraction | ModalSubmitInteraction, t
   const image = await resultImage(t, ps);
   await interaction.message?.edit({
     embeds: [buildMultiplayerChinchiroPanel(t, ps).setImage(image ? `attachment://${image.name}` : null)],
-    components: buildMultiplayerChinchiroComponents(t), attachments: [], files: image ? [image] : [],
+    components: buildMultiplayerChinchiroComponents(t, ps), attachments: [], files: image ? [image] : [],
     allowedMentions: { users: ps.map((p) => p.userId) },
   });
 }
@@ -621,7 +600,6 @@ export const chinchiroRecruitCommand = {
       await db.update(chinchiroTablePlayersTable).set({ active: 0 }).where(and(eq(chinchiroTablePlayersTable.tableId, target.id), eq(chinchiroTablePlayersTable.userId, user.id)));
       await normalizeAfterDeparture(target.id, user.id);
       const fresh = await table(target.id); if (fresh) await refreshStoredPanel(interaction, fresh);
-      if (fresh?.status === "rolling") await sendTurnPrompt(interaction.client, fresh);
       await interaction.reply({ content: `<@${user.id}> を卓 #${target.id} から外しました。`, flags: MessageFlags.Ephemeral, allowedMentions: { users: [user.id] } }); return;
     }
     const config = await settings(interaction.guildId);
@@ -645,7 +623,8 @@ export const chinchiroRecruitCommand = {
       return created;
     });
     if (!t) { await interaction.reply({ content: "すでに進行中または募集済みの卓に参加しています。", flags: MessageFlags.Ephemeral }); return; }
-    const message = await interaction.reply({ embeds: [buildMultiplayerChinchiroPanel(t, await players(t.id))], components: buildMultiplayerChinchiroComponents(t), fetchReply: true });
+    const ps = await players(t.id);
+    const message = await interaction.reply({ embeds: [buildMultiplayerChinchiroPanel(t, ps)], components: buildMultiplayerChinchiroComponents(t, ps), fetchReply: true });
     await db.update(chinchiroTablesTable).set({ messageId: message.id }).where(eq(chinchiroTablesTable.id, t.id));
   },
 };
@@ -761,8 +740,11 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
     const guild = interaction.guild
       ?? await interaction.client.guilds.fetch(updated.guildId).catch(() => null);
     if (guild && !interaction.guild) await refreshPanelForGuild(guild, updated);
-    if (updated.status === "rolling") await sendTurnPrompt(interaction.client, updated);
     if (updated.status === "finished" && guild) await sendConfiguredLog(guild, updated, "ラウンド結果確定");
+    return;
+  }
+  if (action === "roll" && t.status === "rolling") {
+    await interaction.reply({ content: "現在はあなたの手番ではありません。", flags: MessageFlags.Ephemeral });
     return;
   }
   await interaction.reply({ content: "この操作は実行できません。", flags: MessageFlags.Ephemeral });
@@ -788,7 +770,6 @@ export async function handleMultiplayerChinchiroModal(interaction: ModalSubmitIn
   if (!updated) { await interaction.reply({ content: "賭け金入力の期限が切れています。", flags: MessageFlags.Ephemeral }); return; }
   await interaction.reply({ content: "賭け金を受け付けました。", flags: MessageFlags.Ephemeral });
   await redraw(interaction, updated);
-  if (updated.status === "rolling") await sendTurnPrompt(interaction.client, updated);
 }
 
 /** Called by VoiceStateUpdate. Leaving the configured table VC is a departure. */
@@ -809,7 +790,6 @@ export async function handleMultiplayerChinchiroVoiceDeparture(oldState: VoiceSt
     const updated = await normalizeAfterDeparture(current.id, userId);
     if (updated) {
       await refreshPanelForGuild(oldState.guild, updated);
-      if (updated.status === "rolling") await sendTurnPrompt(oldState.client, updated);
       await sendConfiguredLog(oldState.guild, updated, `${player.displayName} がVCを退出`);
     }
   }
@@ -839,7 +819,6 @@ export async function recoverExpiredMultiplayerChinchiro(now = new Date(), clien
       const guild = await client.guilds.fetch(updated.guildId).catch(() => null);
       if (guild) {
         await refreshPanelForGuild(guild, updated);
-        if (updated.status === "rolling") await sendTurnPrompt(client, updated);
         if (updated.status === "finished") await sendConfiguredLog(guild, updated, "時間切れ自動ロールで結果確定");
       }
     }
