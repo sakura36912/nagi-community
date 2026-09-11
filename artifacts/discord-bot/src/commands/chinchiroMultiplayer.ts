@@ -228,21 +228,37 @@ export function buildMultiplayerChinchiroPanel(t: ChinchiroTable, ps: ChinchiroT
   const turn = t.status === "rolling" && t.turnUserId
     ? `\n手番: **${escapeMarkdown(displayNameFor(ps, t.turnUserId))}**（60秒）`
     : "";
-  const resultText = t.results ? (() => {
-    const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
-    return result.pairs.map((pair) => `${escapeMarkdown(displayNameFor(ps, pair.childId))}: ${pair.parent.label} ${dice(pair.parent)} vs ${pair.child.label} ${dice(pair.child)} — ${pair.winner === "draw" ? "引き分け" : pair.winner === "parent" ? "親勝ち" : "子勝ち"} / 対象 ${pair.stake.toLocaleString()} / ${pair.multiplier ?? 1}倍 / ${pair.amount.toLocaleString()} ${t.currencyName}`).join("\n")
-      + "\n" + Object.entries(result.net).map(([id, amount]) => `${escapeMarkdown(displayNameFor(ps, id))} ${amount >= 0 ? "+" : ""}${amount.toLocaleString()} ${t.currencyName}`).join(" / ");
-  })() : ps.filter((p) => p.roll).map((p) => {
+  const currentRollText = !t.results ? ps.filter((p) => p.roll).map((p) => {
     try {
       const outcome = JSON.parse(p.roll!) as ChinchiroOutcome;
       return `${escapeMarkdown(p.displayName)}: ${outcome.label} ${dice(outcome)}（ロール済み）`;
     } catch {
       return `${escapeMarkdown(p.displayName)}: ロール済み`;
     }
-  }).join("\n");
+  }).join("\n") : "";
   const embed = new EmbedBuilder().setTitle(title).setDescription(`${list}${turn}`).addFields({
     name: "状態", value: `${statusLabel(t.status)} / ${ps.length}/6人`, inline: true,
-  }, ...(resultText ? [{ name: t.results ? "ラウンド結果（予定）" : "現在のロール結果", value: resultText.slice(0, 1024), inline: false }] : []));
+  });
+  if (t.results) {
+    const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
+    const parentRoll = result.pairs[0]?.parent;
+    const parentValue = parentRoll
+      ? `**${escapeMarkdown(displayNameFor(ps, t.parentId))}**\n${dice(parentRoll)}（${parentRoll.label}）`
+      : "結果なし";
+    const childValue = result.pairs.map((pair) =>
+      `**${escapeMarkdown(displayNameFor(ps, pair.childId))}**\n${dice(pair.child)}（${pair.child.label}）`,
+    ).join("\n\n") || "結果なし";
+    const amountValue = Object.entries(result.net).map(([id, amount]) =>
+      `${escapeMarkdown(displayNameFor(ps, id))}：${amount > 0 ? "+" : amount === 0 ? "±" : ""}${amount.toLocaleString()} ${t.currencyName}`,
+    ).join("\n");
+    embed.addFields(
+      { name: "【親】", value: parentValue.slice(0, 1024), inline: false },
+      { name: "【子】", value: childValue.slice(0, 1024), inline: false },
+      { name: "【金額（予定増減）】", value: amountValue.slice(0, 1024), inline: false },
+    );
+  } else if (currentRollText) {
+    embed.addFields({ name: "現在のロール結果", value: currentRollText.slice(0, 1024), inline: false });
+  }
   if (t.status === "recruiting") {
     embed.setFooter({ text: "募集期限 5分。開始には同じ設定VCの2人以上が必要です。" });
   }

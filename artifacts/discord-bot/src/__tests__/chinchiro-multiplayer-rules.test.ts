@@ -56,6 +56,45 @@ describe("multiplayer chinchiro planning helpers", () => {
     expect(result.net).toEqual({ parent: 2_000, child: -2_000 });
   });
 
+  it("shows the finished round as parent, children, and total amount sections", () => {
+    const ps = [
+      player("parent", 1, 1_000, [[2, 2, 5]]),
+      player("child", 2, 1_000, [[3, 3, 1]]),
+    ];
+    ps[0]!.displayName = "親ユーザー";
+    ps[1]!.displayName = "子ユーザー";
+    const results = calculateRoundResults("parent", ps);
+    const table: ChinchiroTable = {
+      id: 1,
+      guildId: "guild",
+      channelId: "channel",
+      messageId: null,
+      ownerId: "parent",
+      parentId: "parent",
+      status: "finished",
+      currencyName: "$",
+      round: 1,
+      turnUserId: null,
+      results: JSON.stringify(results),
+      history: "[]",
+      expiresAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const fields = buildMultiplayerChinchiroPanel(table, ps).toJSON().fields ?? [];
+    expect(fields.map((field) => field.name)).toEqual([
+      "状態",
+      "【親】",
+      "【子】",
+      "【金額（予定増減）】",
+    ]);
+    expect(fields[1]!.value).toContain("親ユーザー");
+    expect(fields[1]!.value).toContain("⚁ ⚁ ⚄（5の目）");
+    expect(fields[2]!.value).toContain("子ユーザー");
+    expect(fields[3]!.value).toContain("親ユーザー：+1,000 $");
+    expect(fields[3]!.value).toContain("子ユーザー：-1,000 $");
+  });
+
   it("does not include the rules field in the public table embed", () => {
     const table: ChinchiroTable = {
       id: 1,
