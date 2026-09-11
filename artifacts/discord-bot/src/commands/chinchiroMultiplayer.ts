@@ -1,5 +1,5 @@
 import {
-  ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags,
   ModalBuilder, SlashCommandBuilder, TextInputBuilder, TextInputStyle,
   PermissionFlagsBits, ChannelType, escapeMarkdown,
   type Client, type Guild, type VoiceState,
@@ -17,9 +17,6 @@ import {
   rollChinchiroOnce,
   type ChinchiroOutcome,
 } from "./chinchiro";
-import { getChinchiroDiceImages } from "../lib/chinchiroDiceImages";
-import { downloadImageAsBuffer } from "../lib/gcsStorage";
-import Jimp from "jimp";
 
 export const MULTIPLAYER_CHINCHIRO_PREFIX = "chinchiro-mp:";
 const RECRUIT_MS = 5 * 60_000, BET_MS = 2 * 60_000, TURN_MS = 60_000;
@@ -43,8 +40,7 @@ export function chinchiroMultiplier(outcome: Pick<ChinchiroOutcome, "kind">): nu
 
 export function plannedPairResult(parentBet: number, childBet: number, parent: ChinchiroOutcome, child: ChinchiroOutcome) {
   const stake = pairStake(parentBet, childBet);
-  if (parent.rank === child.rank) return { stake, winner: "draw" as const, amount: 0 };
-  const winner = parent.rank > child.rank ? "parent" as const : "child" as const;
+  const winner = parent.rank >= child.rank ? "parent" as const : "child" as const;
   const winning = winner === "parent" ? parent : child;
   const losing = winner === "parent" ? child : parent;
   const multiplier = Math.max(
@@ -253,45 +249,6 @@ export function buildMultiplayerChinchiroPanel(t: ChinchiroTable, ps: ChinchiroT
   return embed;
 }
 
-/** Render configured dice faces for the current result. Missing faces deliberately
- * return null so the existing Unicode dice fallback remains in the embed. */
-async function resultImage(t: ChinchiroTable, ps: ChinchiroTablePlayer[]): Promise<AttachmentBuilder | null> {
-  const rolls: ChinchiroOutcome[] = [];
-  try {
-    if (t.results) {
-      const result = JSON.parse(t.results) as ReturnType<typeof calculateRoundResults>;
-      for (const pair of result.pairs) rolls.push(pair.parent, pair.child);
-    } else {
-      for (const player of ps) {
-        if (player.roll) rolls.push(JSON.parse(player.roll) as ChinchiroOutcome);
-      }
-    }
-    if (!rolls.length) return null;
-    const paths = await getChinchiroDiceImages(t.guildId);
-    const strips: Jimp[] = [];
-    for (const roll of rolls) {
-      const buffers = await Promise.all(roll.dice.map((face) => {
-        const path = paths.get(face);
-        return path ? downloadImageAsBuffer(path) : null;
-      }));
-      if (buffers.some((buffer) => !buffer)) return null;
-      const images = await Promise.all(buffers.map((buffer) => Jimp.read(buffer!)));
-      const height = 128;
-      const scaled = images.map((image) => image.resize(Math.max(1, Math.round(image.bitmap.width * height / image.bitmap.height)), height));
-      const strip = new Jimp(scaled.reduce((sum, image) => sum + image.bitmap.width, 0), height, 0xffffffff);
-      let x = 0;
-      for (const image of scaled) { strip.composite(image, x, 0); x += image.bitmap.width; }
-      strips.push(strip);
-    }
-    if (!strips.length) return null;
-    const canvas = new Jimp(strips.reduce((sum, strip) => sum + strip.bitmap.width, 0), 128, 0xffffffff);
-    let x = 0;
-    for (const strip of strips) { canvas.composite(strip, x, 0); x += strip.bitmap.width; }
-    return new AttachmentBuilder(await canvas.getBufferAsync(Jimp.MIME_PNG), { name: `chinchiro-result-${t.id}-${t.round}.png` });
-  } catch {
-    return null;
-  }
-}
 function statusLabel(status: string): string {
   return {
     recruiting: "募集中",
@@ -315,10 +272,9 @@ async function refreshPanelForGuild(guild: Guild, t: ChinchiroTable) {
   const message = await channel.messages.fetch(t.messageId).catch(() => null);
   if (message) {
     const ps = await players(t.id);
-    const image = await resultImage(t, ps);
     await message.edit({
-      embeds: [buildMultiplayerChinchiroPanel(t, ps).setImage(image ? `attachment://${image.name}` : null)],
-      components: buildMultiplayerChinchiroComponents(t, ps), attachments: [], files: image ? [image] : [],
+      embeds: [buildMultiplayerChinchiroPanel(t, ps)],
+      components: buildMultiplayerChinchiroComponents(t, ps), attachments: [],
     });
   }
 }
@@ -340,61 +296,36 @@ async function resolvedDisplayName(guild: Guild, userId: string): Promise<string
   const user = await guild.client.users.fetch(userId).catch(() => null);
   return user?.globalName ?? user?.username ?? "参加者";
 }
-async function normalizeAfterDeparture(tableId: number, departedId: string) {
-  const current = await table(tableId);
-  if (!current || ["finished", "closed"].includes(current.status)) return current;
-  const remaining = await players(tableId);
-  if (remaining.length < 2) {
-    const [closed] = await db.update(chinchiroTablesTable)
-      .set({ status: "closed", turnUserId: null })
+async function closeTableForDeparture(tableId: number, departedId: string) {
+  return db.transaction(async (tx) => {
+    await lockTable(tx, tableId);
+    const [current] = await tx.select().from(chinchiroTablesTable)
       .where(eq(chinchiroTablesTable.id, tableId))
-      .returning();
-    return closed ?? current;
-  }
-  const ownerId = current.ownerId === departedId
-    ? remaining[0]!.userId
-    : current.ownerId;
-  if (current.parentId === departedId) {
-    const parent = remaining[Math.floor(Math.random() * remaining.length)]!;
-    return db.transaction(async (tx) => {
-      await tx.update(chinchiroTablePlayersTable).set({ bet: null, roll: null }).where(and(eq(chinchiroTablePlayersTable.tableId, tableId), eq(chinchiroTablePlayersTable.active, 1)));
-      const [updated] = await tx.update(chinchiroTablesTable).set({
-        ownerId,
-        parentId: parent.userId,
-        status: "betting",
-        turnUserId: null,
-        results: null,
-        expiresAt: new Date(Date.now() + BET_MS),
-      }).where(eq(chinchiroTablesTable.id, tableId)).returning();
-      return updated ?? current;
-    });
-  }
-  if (current.status === "rolling" && current.turnUserId === departedId) {
-    const order = rollOrder(current.parentId!, remaining);
-    const next = order.find((userId) => !remaining.find((player) => player.userId === userId)?.roll);
-    if (next) {
-      const [updated] = await db.update(chinchiroTablesTable).set({
-        ownerId,
-        turnUserId: next,
-        expiresAt: new Date(Date.now() + TURN_MS),
-      }).where(eq(chinchiroTablesTable.id, tableId)).returning();
-      return updated ?? current;
+      .for("update");
+    if (!current || current.status === "closed") {
+      return { table: current ?? null, departed: null };
     }
-    const result = calculateRoundResults(current.parentId!, remaining);
-    const [finished] = await db.update(chinchiroTablesTable).set({
-      ownerId,
-      status: "finished",
-      turnUserId: null,
-      results: JSON.stringify(result),
-      history: appendRoundHistory(current, result),
-    }).where(eq(chinchiroTablesTable.id, tableId)).returning();
-    return finished ?? current;
-  }
-  const [updated] = await db.update(chinchiroTablesTable)
-    .set({ ownerId })
-    .where(eq(chinchiroTablesTable.id, tableId))
-    .returning();
-  return updated ?? current;
+    const [departed] = await tx.update(chinchiroTablePlayersTable)
+      .set({ active: 0 })
+      .where(and(
+        eq(chinchiroTablePlayersTable.tableId, tableId),
+        eq(chinchiroTablePlayersTable.userId, departedId),
+        eq(chinchiroTablePlayersTable.active, 1),
+      ))
+      .returning();
+    if (!departed) return { table: current, departed: null };
+
+    // Multiplayer bets are not debited while test mode is active, so closing
+    // the table is the refund: no balance credit is added or money minted.
+    const [closed] = await tx.update(chinchiroTablesTable)
+      .set({ status: "closed", turnUserId: null })
+      .where(and(
+        eq(chinchiroTablesTable.id, tableId),
+        inArray(chinchiroTablesTable.status, OPEN_TABLE_STATUSES),
+      ))
+      .returning();
+    return { table: closed ?? current, departed };
+  });
 }
 
 function appendRoundHistory(
@@ -515,10 +446,9 @@ async function takeTurnThrow(
 
 async function redraw(interaction: ButtonInteraction | ModalSubmitInteraction, t: ChinchiroTable) {
   const ps = await players(t.id);
-  const image = await resultImage(t, ps);
   await interaction.message?.edit({
-    embeds: [buildMultiplayerChinchiroPanel(t, ps).setImage(image ? `attachment://${image.name}` : null)],
-    components: buildMultiplayerChinchiroComponents(t, ps), attachments: [], files: image ? [image] : [],
+    embeds: [buildMultiplayerChinchiroPanel(t, ps)],
+    components: buildMultiplayerChinchiroComponents(t, ps), attachments: [],
     allowedMentions: { users: ps.map((p) => p.userId) },
   });
 }
@@ -597,10 +527,13 @@ export const chinchiroRecruitCommand = {
         await interaction.reply({ content: `卓 #${target.id} を終了しました（テストモードのため精算なし）。`, flags: MessageFlags.Ephemeral }); return;
       }
       const user = interaction.options.getUser("user", true);
-      await db.update(chinchiroTablePlayersTable).set({ active: 0 }).where(and(eq(chinchiroTablePlayersTable.tableId, target.id), eq(chinchiroTablePlayersTable.userId, user.id)));
-      await normalizeAfterDeparture(target.id, user.id);
-      const fresh = await table(target.id); if (fresh) await refreshStoredPanel(interaction, fresh);
-      await interaction.reply({ content: `<@${user.id}> を卓 #${target.id} から外しました。`, flags: MessageFlags.Ephemeral, allowedMentions: { users: [user.id] } }); return;
+      const departure = await closeTableForDeparture(target.id, user.id);
+      if (!departure.departed) {
+        await interaction.reply({ content: "指定したユーザーはこの卓に参加していません。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const fresh = departure.table; if (fresh) await refreshStoredPanel(interaction, fresh);
+      await interaction.reply({ content: `<@${user.id}> の退出により卓 #${target.id} を終了しました。賭け金は返金されました。`, flags: MessageFlags.Ephemeral, allowedMentions: { users: [user.id] } }); return;
     }
     const config = await settings(interaction.guildId);
     if (!await inConfiguredVoice(interaction, config.voiceChannelId)) {
@@ -670,11 +603,13 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
     await interaction.deferUpdate(); await redraw(interaction, t); return;
   }
   if (action === "leave") {
-    const ps = await players(id); if (!ps.some((p) => p.userId === interaction.user.id)) { await interaction.reply({ content: "参加していません。", flags: MessageFlags.Ephemeral }); return; }
-    await db.update(chinchiroTablePlayersTable).set({ active: 0 }).where(and(eq(chinchiroTablePlayersTable.tableId, id), eq(chinchiroTablePlayersTable.userId, interaction.user.id)));
-    const left = await players(id); let updated = t;
-    if (t.parentId === interaction.user.id && left.length) { const p = left[Math.floor(Math.random() * left.length)]!; [updated] = await db.update(chinchiroTablesTable).set({ parentId: p.userId }).where(eq(chinchiroTablesTable.id, id)).returning(); }
-    await interaction.deferUpdate(); await redraw(interaction, updated ?? t); return;
+    const departure = await closeTableForDeparture(id, interaction.user.id);
+    if (!departure.departed) { await interaction.reply({ content: "参加していません。", flags: MessageFlags.Ephemeral }); return; }
+    const updated = departure.table;
+    await interaction.deferUpdate();
+    await redraw(interaction, updated ?? t);
+    await interaction.followUp({ content: "退出したためゲームを終了しました。賭け金は返金されました。", flags: MessageFlags.Ephemeral });
+    return;
   }
   // 「募集終了」は募集だけを締め切り、卓をBET入力へ進める。
   // 卓そのものを終了する操作は、結果画面の「終了」または管理者の
@@ -780,17 +715,17 @@ export async function handleMultiplayerChinchiroVoiceDeparture(oldState: VoiceSt
   if (!await isConfiguredChinchiroVoice(oldState.guild.id, oldState.channelId, config.voiceChannelId)) return;
   const open = await db.select().from(chinchiroTablesTable).where(and(
     eq(chinchiroTablesTable.guildId, oldState.guild.id),
-    inArray(chinchiroTablesTable.status, ["recruiting", "betting", "rolling"]),
+    inArray(chinchiroTablesTable.status, OPEN_TABLE_STATUSES),
   ));
   for (const current of open) {
     const [player] = await db.select().from(chinchiroTablePlayersTable).where(and(eq(chinchiroTablePlayersTable.tableId, current.id), eq(chinchiroTablePlayersTable.userId, userId), eq(chinchiroTablePlayersTable.active, 1)));
     if (!player) continue;
-    // Bets are planning data only in test mode, so "refund" is intentionally a no-op.
-    await db.update(chinchiroTablePlayersTable).set({ active: 0 }).where(eq(chinchiroTablePlayersTable.id, player.id));
-    const updated = await normalizeAfterDeparture(current.id, userId);
+    const departure = await closeTableForDeparture(current.id, userId);
+    const updated = departure.table;
+    if (!departure.departed) continue;
     if (updated) {
       await refreshPanelForGuild(oldState.guild, updated);
-      await sendConfiguredLog(oldState.guild, updated, `${player.displayName} がVCを退出`);
+      await sendConfiguredLog(oldState.guild, updated, `${player.displayName} がVCを退出したため終了・賭け金返金`);
     }
   }
 }

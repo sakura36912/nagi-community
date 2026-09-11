@@ -6,6 +6,7 @@ import {
   calculateRoundResults,
   chinchiroMultiplier,
   pairStake,
+  plannedPairResult,
   rollOrder,
 } from "../commands/chinchiroMultiplayer";
 import { evaluateChinchiroRoll } from "../commands/chinchiro";
@@ -35,6 +36,15 @@ describe("multiplayer chinchiro planning helpers", () => {
     expect(pairStake(2_000, 500)).toBe(500);
     expect(chinchiroMultiplier({ kind: "pinzoro" })).toBe(5);
     expect(chinchiroMultiplier({ kind: "hifumi" })).toBe(2);
+  });
+
+  it("awards equal-ranked rolls to the parent", () => {
+    const sameRoll = evaluateChinchiroRoll([[2, 2, 5]]);
+    expect(plannedPairResult(1_000, 1_000, sameRoll, sameRoll)).toMatchObject({
+      winner: "parent",
+      stake: 1_000,
+      amount: 1_000,
+    });
   });
 
   it("builds isolated pair results and planned net changes", () => {
