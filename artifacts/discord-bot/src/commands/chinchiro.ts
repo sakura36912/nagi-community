@@ -101,6 +101,21 @@ export function rollChinchiroHand(random: () => number = Math.random): Chinchiro
   return evaluateChinchiroRoll(attempts);
 }
 
+/** Roll exactly once, preserving earlier no-hand attempts for manual play. */
+export function rollChinchiroOnce(
+  previousAttempts: number[][] = [],
+  random: () => number = Math.random,
+): ChinchiroOutcome {
+  const attempts = previousAttempts.slice(0, 2).map((dice) => [...dice]);
+  const dice = Array.from({ length: 3 }, () => Math.floor(random() * 6) + 1);
+  attempts.push(dice);
+  return evaluateChinchiroRoll(attempts);
+}
+
+export function isChinchiroHandComplete(outcome: ChinchiroOutcome): boolean {
+  return outcome.kind !== "menashi" || outcome.attempts.length >= 3;
+}
+
 export function compareChinchiroOutcomes(
   challenger: ChinchiroOutcome,
   opponent: ChinchiroOutcome,
@@ -243,7 +258,6 @@ export function buildActiveEmbed(
   return new EmbedBuilder()
     .setTitle("🎲 対人チンチロ — 勝負開始")
     .setColor(COLOR_NEUTRAL)
-    .setDescription("両者とも「サイコロを振る」を押してください。役が出なければ最大3回まで自動で振ります。")
     .addFields(
       {
         name: `挑戦者 ${names.challenger}`,
@@ -259,8 +273,7 @@ export function buildActiveEmbed(
         name: "賭け金",
         value: `1人 **${game.bet.toLocaleString()}** ${game.currencyName}`,
       },
-    )
-    .setFooter({ text: "強さ: ピンゾロ > アラシ > シゴロ > 6〜1の目 > 目なし > ヒフミ" });
+    );
 }
 
 export interface Settlement {

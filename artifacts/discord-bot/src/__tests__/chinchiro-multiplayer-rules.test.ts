@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { ChinchiroTablePlayer } from "@workspace/db";
-import { calculateRoundResults, chinchiroMultiplier, pairStake, rollOrder } from "../commands/chinchiroMultiplayer";
+import type { ChinchiroTable, ChinchiroTablePlayer } from "@workspace/db";
+import {
+  buildMultiplayerChinchiroComponents,
+  buildMultiplayerChinchiroPanel,
+  calculateRoundResults,
+  chinchiroMultiplier,
+  pairStake,
+  rollOrder,
+} from "../commands/chinchiroMultiplayer";
 import { evaluateChinchiroRoll } from "../commands/chinchiro";
 
 const player = (userId: string, joinOrder: number, bet: number, attempts: number[][]): ChinchiroTablePlayer => ({
@@ -37,5 +44,52 @@ describe("multiplayer chinchiro planning helpers", () => {
     ]);
     expect(result.pairs[0]).toMatchObject({ childId: "child", stake: 400, winner: "parent", amount: 2_000 });
     expect(result.net).toEqual({ parent: 2_000, child: -2_000 });
+  });
+
+  it("does not include the rules field in the public table embed", () => {
+    const table: ChinchiroTable = {
+      id: 1,
+      guildId: "guild",
+      channelId: "channel",
+      messageId: null,
+      ownerId: "parent",
+      parentId: "parent",
+      status: "rolling",
+      currencyName: "コイン",
+      round: 1,
+      turnUserId: "parent",
+      results: null,
+      history: "[]",
+      expiresAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const embed = buildMultiplayerChinchiroPanel(table, [
+      player("parent", 1, 1_000, []),
+      player("child", 2, 1_000, []),
+    ]).toJSON();
+    expect(embed.fields?.some((field) => field.name === "ルール")).toBe(false);
+    expect(JSON.stringify(embed)).not.toContain("最大3投");
+  });
+
+  it("does not show a roll button on the public table during another player's turn", () => {
+    const table: ChinchiroTable = {
+      id: 1,
+      guildId: "guild",
+      channelId: "channel",
+      messageId: null,
+      ownerId: "parent",
+      parentId: "parent",
+      status: "rolling",
+      currencyName: "コイン",
+      round: 1,
+      turnUserId: "parent",
+      results: null,
+      history: "[]",
+      expiresAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    expect(buildMultiplayerChinchiroComponents(table)).toEqual([]);
   });
 });

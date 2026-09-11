@@ -7,7 +7,9 @@ import {
   compareChinchiroOutcomes,
   evaluateChinchiroRoll,
   getChinchiroDisplayName,
+  isChinchiroHandComplete,
   rollChinchiroHand,
+  rollChinchiroOnce,
 } from "../commands/chinchiro";
 
 describe("対人チンチロの役判定", () => {
@@ -34,6 +36,26 @@ describe("対人チンチロの役判定", () => {
     const result = rollChinchiroHand(() => values[index++]!);
     expect(result.kind).toBe("shigoro");
     expect(result.attempts).toHaveLength(3);
+  });
+
+  it("手動ロールは1回のボタン操作につき1投だけ追加する", () => {
+    const firstValues = [0 / 6, 1 / 6, 3 / 6];
+    const first = rollChinchiroOnce([], () => firstValues.shift()!);
+    expect(first.attempts).toHaveLength(1);
+    expect(first.kind).toBe("menashi");
+    expect(isChinchiroHandComplete(first)).toBe(false);
+
+    const secondValues = [1 / 6, 2 / 6, 4 / 6];
+    const second = rollChinchiroOnce(first.attempts, () => secondValues.shift()!);
+    expect(second.attempts).toHaveLength(2);
+    expect(second.kind).toBe("menashi");
+    expect(isChinchiroHandComplete(second)).toBe(false);
+
+    const thirdValues = [0 / 6, 3 / 6, 5 / 6];
+    const third = rollChinchiroOnce(second.attempts, () => thirdValues.shift()!);
+    expect(third.attempts).toHaveLength(3);
+    expect(third.kind).toBe("menashi");
+    expect(isChinchiroHandComplete(third)).toBe(true);
   });
 
   it("役の強さで勝敗を比較し、同じ強さは引き分けにする", () => {
@@ -103,5 +125,7 @@ describe("対人チンチロの役判定", () => {
     expect(serialized).toContain("resub");
     expect(serialized).not.toContain(challengerId);
     expect(serialized).not.toContain(opponentId);
+    expect(serialized).not.toContain("強さ:");
+    expect(serialized).not.toContain("最大3回");
   });
 });
