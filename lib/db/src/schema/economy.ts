@@ -30,6 +30,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   lastMonthlyDebitAt: timestamp("last_monthly_debit_at", { withTimezone: true }),
   // Discord category channel ID where private VCs (vcshop) are created.
   vcCategoryId: text("vc_category_id"),
+  // Optional fallback category used when the primary private-VC category is full.
+  vcCategoryId2: text("vc_category_id_2"),
   // Discord category channel ID where 裏フリールーム VCs (urashop) are created.
   uraCategoryId: text("ura_category_id"),
   // Discord text/voice channel ID that urashop buyers get ViewChannel access to.

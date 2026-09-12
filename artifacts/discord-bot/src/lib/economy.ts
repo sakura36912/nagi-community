@@ -219,6 +219,13 @@ export async function setVcCategoryId(
   return upsertGuildSetting(guildId, { vcCategoryId });
 }
 
+export async function setVcCategoryId2(
+  guildId: string,
+  vcCategoryId2: string | null,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, { vcCategoryId2 });
+}
+
 export async function setVcWarnBeforeMinutes(
   guildId: string,
   vcWarnBeforeMinutes: number,

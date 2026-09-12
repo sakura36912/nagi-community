@@ -23,7 +23,7 @@ import {
   type UserSelectMenuInteraction,
 } from "discord.js";
 import type { ShopItem } from "@workspace/db";
-import type { Client, Guild } from "discord.js";
+import type { Client, Guild, VoiceChannel } from "discord.js";
 import { logger } from "../lib/logger";
 import {
   DEFAULT_DAILY_AMOUNT,
@@ -59,6 +59,7 @@ import {
   recordGroupShopSale,
   getGroupShopSalesSummary,
   setVcCategoryId,
+  setVcCategoryId2,
   buyItem,
   buyItemQuantity,
   createOrUpdateCurrency,
@@ -310,7 +311,7 @@ async function purchaseAndCreatePrivateVc(
   itemId: number,
   currencyName: string,
   durationMs?: number,
-  vcCategoryId?: string | null,
+  vcCategoryIds: string[] = [],
   accessRoleIds: string[] = [],
   roomCategory: PrivateVcRoomCategory = "vc",
   accessChannelId?: string | null,
@@ -336,52 +337,71 @@ async function purchaseAndCreatePrivateVc(
       ? `${isIsland ? "" : "🔒 "}${member.displayName}(${label})`
       : `${isIsland ? "" : "🔒 "}${member.displayName}`;
 
-    // Resolve the category from cache or fetch it so discord.js can set parent_id correctly.
-    const parentCategory = vcCategoryId
-      ? (guild.channels.cache.get(vcCategoryId) ?? await guild.channels.fetch(vcCategoryId).catch(() => null))
-      : null;
-    logger.info(`[privateVC] category=${vcCategoryId ?? "none"} resolved=${parentCategory?.id ?? "null"}`);
-
     const botId = guild.members.me?.id;
-    const channel = await guild.channels.create({
-      name: channelName.slice(0, 100),
-      type: ChannelType.GuildVoice,
-      userLimit: 0,
-      ...(parentCategory ? { parent: parentCategory.id } : {}),
-      permissionOverwrites: [
-        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-        {
-          id: member.id,
+    const permissionOverwrites = [
+      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+      {
+        id: member.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.Connect,
+          PermissionFlagsBits.Speak,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.AttachFiles,
+        ],
+      },
+      ...accessRoleIds
+        .filter((roleId) => roleId !== guild.roles.everyone.id && roleId !== member.id)
+        .map((roleId) => ({
+          id: roleId,
           allow: [
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.Connect,
             PermissionFlagsBits.Speak,
             PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.AttachFiles,
           ],
-        },
-        ...accessRoleIds
-          .filter((roleId) => roleId !== guild.roles.everyone.id && roleId !== member.id)
-          .map((roleId) => ({
-            id: roleId,
-            allow: [
-              PermissionFlagsBits.ViewChannel,
-              PermissionFlagsBits.Connect,
-              PermissionFlagsBits.Speak,
-              PermissionFlagsBits.SendMessages,
-            ],
-          })),
-        // Bot 自身が ViewChannel を持たないとパネルを送信できないため明示追加
-        ...(botId ? [{
-          id: botId,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.AttachFiles,
-          ],
-        }] : []),
-      ],
-    });
+        })),
+      // Bot 自身が ViewChannel を持たないとパネルを送信できないため明示追加
+      ...(botId ? [{
+        id: botId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.AttachFiles,
+        ],
+      }] : []),
+    ];
+
+    const categoryIds = [...new Set(vcCategoryIds.filter(Boolean))];
+    const candidates = categoryIds.length ? categoryIds : [null];
+    let channel: VoiceChannel | null = null;
+    let lastCreateError: unknown = null;
+    for (const categoryId of candidates) {
+      const parentCategory = categoryId
+        ? (guild.channels.cache.get(categoryId) ?? await guild.channels.fetch(categoryId).catch(() => null))
+        : null;
+      logger.info(`[privateVC] category=${categoryId ?? "none"} resolved=${parentCategory?.id ?? "null"}`);
+      if (categoryId && parentCategory?.type !== ChannelType.GuildCategory) {
+        lastCreateError = new Error(`Configured VC parent ${categoryId} is not a category`);
+        logger.warn(`[privateVC] Skipping invalid VC category ${categoryId}`);
+        continue;
+      }
+      try {
+        channel = await guild.channels.create({
+          name: channelName.slice(0, 100),
+          type: ChannelType.GuildVoice,
+          userLimit: 0,
+          ...(parentCategory ? { parent: parentCategory.id } : {}),
+          permissionOverwrites,
+        });
+        logger.info(`[privateVC] created channel=${channel.id} category=${parentCategory?.id ?? "none"}`);
+        break;
+      } catch (createError) {
+        lastCreateError = createError;
+        logger.warn(`[privateVC] Failed to create VC in category ${categoryId ?? "none"}; trying fallback`, createError);
+      }
+    }
+    if (!channel) throw lastCreateError ?? new Error("Failed to create private VC in any configured category");
 
     if (expiresAt) {
       await createPrivateVcSession(guild.id, member.id, channel.id, expiresAt, roomCategory);
@@ -798,18 +818,18 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     const freeRoomSettings = isFreeRoomCategory(roomCategory)
       ? await resolveFreeRoomSettings(interaction.guild!)
       : { categoryId: null, accessRoleIds: [] };
-    const roomCategoryId = roomCategory === "island"
-      ? freeRoomSettings.categoryId
+    const roomCategoryIds = roomCategory === "island"
+      ? [freeRoomSettings.categoryId].filter((id): id is string => Boolean(id))
       : roomCategory === "ura"
-        ? settings.uraCategoryId
-        : settings.vcCategoryId;
+        ? [settings.uraCategoryId].filter((id): id is string => Boolean(id))
+        : [settings.vcCategoryId, settings.vcCategoryId2].filter((id): id is string => Boolean(id));
     const result = await purchaseAndCreatePrivateVc(
       interaction.guild!,
       member,
       itemId,
       settings.currencyName,
       vcDuration,
-      roomCategoryId,
+      roomCategoryIds,
       isFreeRoomCategory(roomCategory) ? freeRoomSettings.accessRoleIds : [],
       roomCategory,
       roomCategory === "ura" ? settings.uraChannelId : null,
@@ -1074,18 +1094,18 @@ async function applyShopPurchase(
     const freeRoomSettings = isFreeRoomCategory(roomCategory)
       ? await resolveFreeRoomSettings(interaction.guild)
       : { categoryId: null, accessRoleIds: [] };
-    const roomCategoryId = roomCategory === "island"
-      ? freeRoomSettings.categoryId
+    const roomCategoryIds = roomCategory === "island"
+      ? [freeRoomSettings.categoryId].filter((id): id is string => Boolean(id))
       : roomCategory === "ura"
-        ? settings.uraCategoryId
-        : settings.vcCategoryId;
+        ? [settings.uraCategoryId].filter((id): id is string => Boolean(id))
+        : [settings.vcCategoryId, settings.vcCategoryId2].filter((id): id is string => Boolean(id));
     const result = await purchaseAndCreatePrivateVc(
       interaction.guild,
       member,
       itemId,
       settings.currencyName,
       vcDuration,
-      roomCategoryId,
+      roomCategoryIds,
       isFreeRoomCategory(roomCategory) ? freeRoomSettings.accessRoleIds : [],
       roomCategory,
       roomCategory === "ura" ? settings.uraChannelId : null,
@@ -1775,6 +1795,12 @@ const shopCommand: Command = {
         ),
     )
     .addSubcommand((sub) =>
+      sub.setName("vc-category-2").setDescription("高級船室の予備作成先カテゴリを設定します（管理者）")
+        .addChannelOption((opt) =>
+          opt.setName("channel").setDescription("カテゴリチャンネルを選択").addChannelTypes(ChannelType.GuildCategory).setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
       sub.setName("invite").setDescription("高級船室に別のメンバーを招待します")
         .addUserOption((opt) => opt.setName("member").setDescription("招待するメンバー").setRequired(true)),
     )
@@ -1906,6 +1932,20 @@ const shopCommand: Command = {
       await setVcCategoryId(guildId, channelId);
       logger.info(`[vc-category] saved ok`);
       await interaction.reply(`✅ 高級船室の作成先カテゴリを <#${channelId}> に設定しました。`);
+      return;
+    }
+
+    if (sub === "vc-category-2") {
+      if (!requireManageGuild(interaction)) {
+        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
+        return;
+      }
+      const channel = interaction.options.getChannel("channel", true);
+      const channelId = channel.id;
+      logger.info(`[vc-category-2] guild=${guildId} channelId=${channelId}`);
+      await setVcCategoryId2(guildId, channelId);
+      logger.info(`[vc-category-2] saved ok`);
+      await interaction.reply(`✅ 高級船室の予備作成先カテゴリを <#${channelId}> に設定しました。`);
       return;
     }
 
@@ -2482,6 +2522,8 @@ async function getLuxuryVcChannels(
   onlyChannelId?: string,
 ): Promise<import("discord.js").GuildChannel[]> {
   const settings = await getGuildSettings(guild.id);
+  const vcCategoryIds = [settings.vcCategoryId, settings.vcCategoryId2]
+    .filter((id): id is string => Boolean(id));
   const sessions = await getActivePrivateVcSessionsByGuild(guild.id);
   const luxurySessionChannelIds = new Set(
     sessions.filter((session) => getPrivateVcRoomCategory(session.category) === "vc")
@@ -2493,7 +2535,7 @@ async function getLuxuryVcChannels(
     : [
         ...luxurySessionChannelIds,
         ...guild.channels.cache
-          .filter((channel) => channel.parentId === settings.vcCategoryId)
+          .filter((channel) => channel.parentId !== null && vcCategoryIds.includes(channel.parentId))
           .map((channel) => channel.id),
       ];
 
@@ -2507,7 +2549,7 @@ async function getLuxuryVcChannels(
       if (session) {
         return getPrivateVcRoomCategory(session.category) === "vc" ? channel : null;
       }
-      return settings.vcCategoryId && channel.parentId === settings.vcCategoryId
+      return channel.parentId !== null && vcCategoryIds.includes(channel.parentId)
         ? channel
         : null;
     }),
