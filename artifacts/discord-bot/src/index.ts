@@ -221,6 +221,14 @@ function isRecoverableObjectStorageStreamError(err: unknown): boolean {
   );
 }
 
+let instanceLockClient: { release: () => void } | null = null;
+
+function releaseBotInstanceLock(): void {
+  const lockClient = instanceLockClient;
+  instanceLockClient = null;
+  lockClient?.release();
+}
+
 // @replit/object-storage の依存先が Node 24 でまれにこの例外をイベント経由で
 // 投げることがある。個別の画像取得だけが失敗した状態なので、Bot 全体を停止せず
 // 次回の取得へ進める。他の未処理例外は壊れた状態で動作を継続しないよう終了する。
@@ -241,13 +249,13 @@ process.on("unhandledRejection", (reason) => {
 
 process.once("SIGTERM", () => {
   logger.warn("[process] Received SIGTERM; workflow is stopping the bot");
-  instanceLockClient?.release();
+  releaseBotInstanceLock();
   process.exit(0);
 });
 
 process.once("SIGINT", () => {
   logger.warn("[process] Received SIGINT; workflow is stopping the bot");
-  instanceLockClient?.release();
+  releaseBotInstanceLock();
   process.exit(0);
 });
 
@@ -262,8 +270,6 @@ if (!token) {
 }
 
 const commandsByName = new Map(commands.map((c) => [c.data.name, c]));
-
-let instanceLockClient: Awaited<ReturnType<typeof pool.connect>> | null = null;
 
 async function acquireBotInstanceLock(): Promise<boolean> {
   const lockClient = await pool.connect();
@@ -2226,7 +2232,7 @@ async function startDiscordBot(): Promise<void> {
   } catch (err) {
     dlog(`login failed: ${err}`);
     logger.error("Failed to start or log in to Discord", err);
-    instanceLockClient?.release();
+    releaseBotInstanceLock();
     process.exit(1);
   }
 }
