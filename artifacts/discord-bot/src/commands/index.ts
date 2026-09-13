@@ -25,6 +25,7 @@ import {
 import type { ShopItem } from "@workspace/db";
 import type { Client, Guild, VoiceChannel } from "discord.js";
 import { logger } from "../lib/logger";
+import { WAITING_ROLE_NAME } from "../lib/rejoinLog";
 import {
   DEFAULT_DAILY_AMOUNT,
   NICKNAME_CHANGE_EFFECT,
@@ -1479,7 +1480,7 @@ const payCommand: Command = {
     .setName("送金")
     .setDescription("他のユーザーに送金します")
     .addUserOption((opt) =>
-      opt.setName("相手").setDescription("送金先のユーザー").setRequired(true),
+      opt.setName("相手").setDescription("送金先のユーザー（入島待ちは指定不可）").setRequired(true),
     )
     .addIntegerOption((opt) =>
       opt.setName("金額").setDescription("送金額").setRequired(true).setMinValue(1),
@@ -1496,6 +1497,16 @@ const payCommand: Command = {
     const isSelf = target.id === interaction.client.user?.id;
     if (target.bot && !isSelf) {
       await interaction.reply({ content: "Botには送金できません。", ephemeral: true });
+      return;
+    }
+
+    const targetMember = interaction.guild?.members.cache.get(target.id)
+      ?? await interaction.guild?.members.fetch(target.id).catch(() => null);
+    if (targetMember?.roles.cache.some((role) => role.name === WAITING_ROLE_NAME)) {
+      await interaction.reply({
+        content: `❌ ${WAITING_ROLE_NAME}のメンバーには送金できません。`,
+        ephemeral: true,
+      });
       return;
     }
 
