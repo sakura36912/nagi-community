@@ -1735,7 +1735,7 @@ client.on(Events.GuildMemberRemove, async (member) => {
       { name: "ユーザーID", value: member.id, inline: true },
       { name: "出戻り履歴", value: rejoinDisplay, inline: true },
       { name: "アカウント作成日", value: `<t:${createdAt}:D>（<t:${createdAt}:R>）`, inline: false },
-      { name: "所持金", value: `${balance} ${settings.currencyName}`, inline: true },
+      { name: "所持金", value: `${balance} ${settings?.currencyName ?? "円"}`, inline: true },
       { name: "ロール", value: roleDisplay, inline: false },
     )
     .setTimestamp()

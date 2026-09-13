@@ -20,7 +20,12 @@
  */
 
 import { getVcLogSettings, setVcLogNotifyChannel } from "./vcReward.js";
-import { getGuildSettings, setBanLogChannelId, setLeaveLogChannelId } from "./economy.js";
+import {
+  getGuildSettings,
+  setBanLogChannelId,
+  setLeaveLogChannelId,
+  setReturnLogChannelId,
+} from "./economy.js";
 import { logger } from "./logger.js";
 
 /**
@@ -96,7 +101,11 @@ export async function validateGuildConfiguredChannels(
   }
 
   // ── ギルド設定を一度だけ読み込む ─────────────────────────────────────────
-  let guildSettings: { banLogChannelId: string | null; leaveLogChannelId: string | null } | null =
+  let guildSettings: {
+    banLogChannelId: string | null;
+    leaveLogChannelId: string | null;
+    returnLogChannelId: string | null;
+  } | null =
     null;
   try {
     guildSettings = await getGuildSettings(guildId);
@@ -153,6 +162,30 @@ export async function validateGuildConfiguredChannels(
       } catch (err) {
         logger.error(
           `[economy] startup validation: leaveLogChannelId のクリアに失敗 (guild=${guildId}, channel=${leaveChannelId})`,
+          err,
+        );
+      }
+    }
+  }
+
+  // ── 出戻りログチャンネル ────────────────────────────────────────────────
+  if (guildSettings.returnLogChannelId) {
+    const returnChannelId = guildSettings.returnLogChannelId;
+    const exists = await resolveChannel(returnChannelId).catch(() => {
+      logger.error(
+        `[returnlog] startup validation: チャンネル ${returnChannelId} の確認中にエラーが発生したためスキップします (guild=${guildId})`,
+      );
+      return true;
+    });
+    if (!exists) {
+      try {
+        await setReturnLogChannelId(guildId, null);
+        logger.warn(
+          `[returnlog] 起動時検証: 出戻りログチャンネル ${returnChannelId} がギルド ${guildId} に存在しないため returnLogChannelId を自動クリアしました。再設定してください。`,
+        );
+      } catch (err) {
+        logger.error(
+          `[economy] startup validation: returnLogChannelId のクリアに失敗 (guild=${guildId}, channel=${returnChannelId})`,
           err,
         );
       }

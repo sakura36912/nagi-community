@@ -37,7 +37,11 @@ export async function handleChannelDelete(
   }
 
   // ── ギルド設定を一度だけ読み込む ─────────────────────────────────────────
-  let guildSettings: { banLogChannelId: string | null; leaveLogChannelId: string | null } | null =
+  let guildSettings: {
+    banLogChannelId: string | null;
+    leaveLogChannelId: string | null;
+    returnLogChannelId: string | null;
+  } | null =
     null;
   try {
     guildSettings = await getGuildSettings(guildId);
