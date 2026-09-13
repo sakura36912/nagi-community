@@ -241,11 +241,13 @@ process.on("unhandledRejection", (reason) => {
 
 process.once("SIGTERM", () => {
   logger.warn("[process] Received SIGTERM; workflow is stopping the bot");
+  instanceLockClient?.release();
   process.exit(0);
 });
 
 process.once("SIGINT", () => {
   logger.warn("[process] Received SIGINT; workflow is stopping the bot");
+  instanceLockClient?.release();
   process.exit(0);
 });
 
@@ -260,6 +262,27 @@ if (!token) {
 }
 
 const commandsByName = new Map(commands.map((c) => [c.data.name, c]));
+
+let instanceLockClient: Awaited<ReturnType<typeof pool.connect>> | null = null;
+
+async function acquireBotInstanceLock(): Promise<boolean> {
+  const lockClient = await pool.connect();
+  try {
+    const result = await lockClient.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
+      ["gathapin36912:discord-bot"],
+    );
+    if (!result.rows[0]?.locked) {
+      lockClient.release();
+      return false;
+    }
+    instanceLockClient = lockClient;
+    return true;
+  } catch (err) {
+    lockClient.release();
+    throw err;
+  }
+}
 
 const client = new Client({
   // NOTE: GuildMembers (privileged intent) is commented out until you enable
@@ -2191,9 +2214,21 @@ checkSchemaDrift(pool, (msg) => logger.warn(msg)).then((result) => {
   // Never let a schema check failure block startup.
 });
 
-dlog("calling client.login()");
-client.login(token).catch((err) => {
-  dlog(`login failed: ${err}`);
-  logger.error("Failed to log in to Discord", err);
-  process.exit(1);
-});
+async function startDiscordBot(): Promise<void> {
+  try {
+    const lockAcquired = await acquireBotInstanceLock();
+    if (!lockAcquired) {
+      logger.warn("[startup] Another gathapin36912 Discord Bot instance is already running; skipping duplicate login");
+      process.exit(0);
+    }
+    dlog("calling client.login()");
+    await client.login(token);
+  } catch (err) {
+    dlog(`login failed: ${err}`);
+    logger.error("Failed to start or log in to Discord", err);
+    instanceLockClient?.release();
+    process.exit(1);
+  }
+}
+
+void startDiscordBot();
