@@ -285,6 +285,13 @@ export async function setLeaveLogChannelId(
   return upsertGuildSetting(guildId, { leaveLogChannelId });
 }
 
+export async function setReturnLogChannelId(
+  guildId: string,
+  returnLogChannelId: string | null,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, { returnLogChannelId });
+}
+
 // ─── 入退出履歴 ───────────────────────────────────────────────────────────────
 
 /** メンバー参加を記録する。 */

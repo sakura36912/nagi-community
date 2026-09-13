@@ -2365,6 +2365,7 @@ import { bannotifyCommand } from "./bannotify";
 import { rolePanelCommand } from "./rolepanel";
 import { guideCommand } from "./guide";
 import { leavelogCommand } from "./leavelog";
+import { returnlogCommand } from "./returnlog";
 
 import { interviewCommand } from "./interview";
 import { stickyCommand } from "./sticky";
@@ -4342,6 +4343,7 @@ export const commands: Command[] = [
   rolePanelCommand,
   guideCommand,
   leavelogCommand,
+  returnlogCommand,
 
   stickyCommand,
   adviceEndCommand,

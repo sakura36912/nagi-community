@@ -179,6 +179,7 @@ import {
   markSheetReminderSent,
   setBanLogChannelId,
   setLeaveLogChannelId,
+  setReturnLogChannelId,
   recordMemberJoin,
   recordMemberLeave,
   getRejoinLogStats,
@@ -1692,11 +1693,12 @@ client.on(Events.GuildMemberRemove, async (member) => {
 
   // 通知チャンネル設定確認
   const settings = await getGuildSettings(guildId).catch(() => null);
-  if (!settings?.leaveLogChannelId) return;
+  const logChannelId = settings?.returnLogChannelId ?? settings?.leaveLogChannelId;
+  if (!logChannelId) return;
 
   const logChannel =
-    member.guild.channels.cache.get(settings.leaveLogChannelId) ??
-    await member.guild.channels.fetch(settings.leaveLogChannelId).catch(() => null);
+    member.guild.channels.cache.get(logChannelId) ??
+    await member.guild.channels.fetch(logChannelId).catch(() => null);
   if (!logChannel?.isTextBased()) return;
 
   const logText = buildRejoinLogText({

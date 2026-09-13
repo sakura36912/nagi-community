@@ -8,7 +8,7 @@
 
 import type { DMChannel, NonThreadGuildBasedChannel } from "discord.js";
 import { getVcLogSettings, setVcLogNotifyChannel } from "./vcReward.js";
-import { getGuildSettings, setBanLogChannelId, setLeaveLogChannelId } from "./economy.js";
+import { getGuildSettings, setBanLogChannelId, setLeaveLogChannelId, setReturnLogChannelId } from "./economy.js";
 import { logger } from "./logger.js";
 
 export async function handleChannelDelete(
@@ -77,6 +77,21 @@ export async function handleChannelDelete(
     } catch (err) {
       logger.error(
         `[economy] ChannelDelete: leaveLogChannelId のクリアに失敗 (guild=${guildId}, channel=${channel.id})`,
+        err,
+      );
+    }
+  }
+
+  // ── 出戻りログチャンネル ────────────────────────────────────────────────
+  if (guildSettings.returnLogChannelId === channel.id) {
+    try {
+      await setReturnLogChannelId(guildId, null);
+      logger.warn(
+        `[returnlog] 出戻りログチャンネル ${channel.id} がギルド ${guildId} で削除されたため returnLogChannelId を自動クリアしました。再設定してください。`,
+      );
+    } catch (err) {
+      logger.error(
+        `[economy] ChannelDelete: returnLogChannelId のクリアに失敗 (guild=${guildId}, channel=${channel.id})`,
         err,
       );
     }
