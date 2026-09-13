@@ -12,6 +12,7 @@
 - [Private VC panel categories](private-vc-panel-category.md) — 旧`ura`と現行`island`はフリールームとして扱い、高級船室`vc`と混同しない。
 - [gathapin36912 calendar](calendar-feature.md) — Discord内の予定告知・参加表明・通知として実装し、日時は日本時間で扱う。
 - [Workflow signal handling](workflow-signal-handling.md) — SIGTERM/SIGINTを監視する場合も必ず終了し、再起動後のBot二重稼働を防ぐ。
+- [Bot process singleton](bot-process-singleton.md) — 開発ワークフローと公開VMを同時起動するとDBロックを越えて二重稼働するため、常駐先を一方に限定する。
 - [Multiplayer Chinchiro settlement](multiplayer-chinchiro-settlement.md) — 複数人版はテスト中、予定精算だけ保存し、旧1対1卓は期限まで互換維持する。
 - [Island resurface expiry](island-resurface-expiry.md) — 浮上券商品は期限付き効果の設定が必須。ロールIDだけでは7日後の自動解除予約が作られない。
 - [Forum purchase panels](forum-purchase-panels.md) — フォーラム投稿ごとに商品・価格・購入効果を完全に分離した購入ボタンを使う。
