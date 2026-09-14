@@ -205,6 +205,16 @@ async function refreshRecruitmentMessage(guild: Guild, recruitmentId: number) {
   }).catch((error) => logger.warn("[ura] failed to refresh recruitment card", error));
 }
 
+async function deleteRecruitmentMessage(guild: Guild, recruitmentId: number) {
+  const recruitment = await getUraRecruitmentById(recruitmentId);
+  if (!recruitment?.messageId) return;
+  const channel = await guild.channels.fetch(recruitment.recruitmentChannelId).catch(() => null);
+  if (!channel?.isTextBased() || channel.isDMBased()) return;
+  const message = await channel.messages.fetch(recruitment.messageId).catch(() => null);
+  if (!message) return;
+  await message.delete().catch((error) => logger.warn("[ura] failed to delete recruitment card", error));
+}
+
 async function sendApplicationNotice(guild: Guild, recruitmentId: number, applicationId: number) {
   const recruitment = await getUraRecruitmentById(recruitmentId);
   const application = await getUraApplicationById(applicationId);
@@ -383,7 +393,7 @@ async function handleSelectApplication(interaction: ButtonInteraction, client: C
       guestId: application.applicantId,
       channelId: channel.id,
     });
-    await refreshRecruitmentMessage(guild, recruitmentId);
+    await deleteRecruitmentMessage(guild, recruitmentId);
     await notifyApplicants(guild, recruitmentId, application.applicantId);
     await sendMatchNotice(guild, match.id, recruitment.ownerId, application.applicantId, channel.id, `マッチが成立しました。専用VC <#${channel.id}> をご利用ください。`);
     await sendMatchNotice(guild, match.id, application.applicantId, recruitment.ownerId, channel.id, `マッチが成立しました。専用VC <#${channel.id}> をご利用ください。`);
@@ -403,7 +413,7 @@ async function handleCancelRecruitment(interaction: ButtonInteraction, guild: Gu
   if (!recruitment || recruitment.ownerId !== interaction.user.id) return interaction.reply({ content: "募集者だけが終了できます。", ephemeral: true });
   const cancelled = await cancelUraRecruitment(recruitmentId, interaction.user.id);
   if (!cancelled) return interaction.reply({ content: "この募集はすでに終了しています。", ephemeral: true });
-  await refreshRecruitmentMessage(guild, recruitmentId);
+  await deleteRecruitmentMessage(guild, recruitmentId);
   await notifyApplicants(guild, recruitmentId);
   return interaction.reply({ content: "募集を終了しました。", ephemeral: true });
 }
