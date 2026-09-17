@@ -57,11 +57,11 @@ export const SLOT_WIN_RATE_PREFIX = "slot:win-rate:";
  * 近づくように設定している。設定変更ではこの値だけを変更し、配当倍率は変更しない。
  */
 export const SLOT_SETTING_PROFILES = [
-  { setting: 1, winRate: 35, payoutRate: 90 },
-  { setting: 2, winRate: 37, payoutRate: 93 },
-  { setting: 3, winRate: 38, payoutRate: 96 },
-  { setting: 4, winRate: 39, payoutRate: 99 },
-  { setting: 5, winRate: 41, payoutRate: 103 },
+  { setting: 1, winRate: 33, payoutRate: 84 },
+  { setting: 2, winRate: 35, payoutRate: 88 },
+  { setting: 3, winRate: 36, payoutRate: 92.6 },
+  { setting: 4, winRate: 38, payoutRate: 97 },
+  { setting: 5, winRate: 40, payoutRate: 102 },
   { setting: 6, winRate: 43, payoutRate: 108 },
 ] as const;
 
