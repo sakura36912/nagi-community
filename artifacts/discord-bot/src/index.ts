@@ -293,6 +293,33 @@ async function acquireBotInstanceLock(): Promise<boolean> {
   }
 }
 
+/**
+ * During a VM deployment rollout, the new process can start before the old
+ * process has released its PostgreSQL advisory lock. Waiting here lets the
+ * new process become the owner after the old process receives SIGTERM instead
+ * of exiting and leaving the deployment without a Discord bot.
+ */
+async function waitForBotInstanceLock(): Promise<boolean> {
+  const retryDelayMs = 2_000;
+  const maxAttempts = 60; // approximately two minutes during a rollout
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (await acquireBotInstanceLock()) return true;
+
+    if (attempt === 1 || attempt % 5 === 0) {
+      logger.warn(
+        `[startup] Another gathapin36912 Discord Bot instance is still running; ` +
+        `waiting for its lock to be released (attempt ${attempt}/${maxAttempts})`,
+      );
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+
+  return false;
+}
+
 const client = new Client({
   // NOTE: GuildMembers (privileged intent) is commented out until you enable
   // "Server Members Intent" in the Discord Developer Portal.
@@ -2230,9 +2257,12 @@ checkSchemaDrift(pool, (msg) => logger.warn(msg)).then((result) => {
 
 async function startDiscordBot(): Promise<void> {
   try {
-    const lockAcquired = await acquireBotInstanceLock();
+    const lockAcquired = await waitForBotInstanceLock();
     if (!lockAcquired) {
-      logger.warn("[startup] Another gathapin36912 Discord Bot instance is already running; skipping duplicate login");
+      logger.error(
+        "[startup] Could not acquire the gathapin36912 Discord Bot instance lock " +
+        "within two minutes; stopping so deployment can retry",
+      );
       process.exit(0);
     }
     dlog("calling client.login()");
