@@ -56,6 +56,7 @@ const CREATE_MODAL_PREFIX = `${URA_PREFIX}create:`;
 const APPLY_MODAL_PREFIX = `${URA_PREFIX}apply:`;
 const REPORT_MODAL_PREFIX = `${URA_PREFIX}report:`;
 const lastUraActions = new Map<string, number>();
+const syncedOpenRecruitmentGuilds = new Set<string>();
 
 const typeLabel = (type: string) => type === URA_TALK ? "🎙️ 個通募集" : "🌙 寝落ち募集";
 const typeEmoji = (type: string) => type === URA_TALK ? "🎙️" : "🌙";
@@ -128,11 +129,18 @@ function recruitmentComponents(id: number, open: boolean) {
         .setLabel("📨 申請する")
         .setStyle(ButtonStyle.Success)
         .setDisabled(!open),
+    ),
+  ];
+}
+
+function recruitmentCancelComponents(id: number, disabled = false) {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`${URA_PREFIX}recruitment:cancel:${id}`)
         .setLabel("❌ 募集終了")
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(!open),
+        .setDisabled(disabled),
     ),
   ];
 }
@@ -326,7 +334,11 @@ async function handleCreateSubmit(interaction: ModalSubmitInteraction, type: Ura
     logger.error("[ura] failed to post recruitment card", error);
     return interaction.reply({ content: "募集カードの投稿に失敗しました。設定を確認してください。", ephemeral: true });
   }
-  return interaction.reply({ content: "募集を開始しました。募集チャンネルを確認してください。", ephemeral: true });
+  return interaction.reply({
+    content: "募集を開始しました。募集チャンネルを確認してください。\n募集終了ボタンは募集者本人にだけ表示されています。",
+    ephemeral: true,
+    components: recruitmentCancelComponents(recruitment.id),
+  });
 }
 
 async function handleApplySubmit(interaction: ModalSubmitInteraction, recruitmentId: number) {
@@ -413,9 +425,13 @@ async function handleCancelRecruitment(interaction: ButtonInteraction, guild: Gu
   if (!recruitment || recruitment.ownerId !== interaction.user.id) return interaction.reply({ content: "募集者だけが終了できます。", ephemeral: true });
   const cancelled = await cancelUraRecruitment(recruitmentId, interaction.user.id);
   if (!cancelled) return interaction.reply({ content: "この募集はすでに終了しています。", ephemeral: true });
+  await interaction.update({
+    content: "募集を終了しました。",
+    components: recruitmentCancelComponents(recruitmentId, true),
+  });
   await deleteRecruitmentMessage(guild, recruitmentId);
   await notifyApplicants(guild, recruitmentId);
-  return interaction.reply({ content: "募集を終了しました。", ephemeral: true });
+  return undefined;
 }
 
 export async function handleUraInteraction(
@@ -509,6 +525,17 @@ export async function handleUraVoiceStateUpdate(client: Client, oldChannelId: st
 }
 
 export async function runUraRecruitmentCleanup(client: Client) {
+  for (const guild of client.guilds.cache.values()) {
+    if (syncedOpenRecruitmentGuilds.has(guild.id)) continue;
+    try {
+      const openRecruitments = await listOpenUraRecruitments(guild.id);
+      await Promise.all(openRecruitments.map((recruitment) => refreshRecruitmentMessage(guild, recruitment.id)));
+      syncedOpenRecruitmentGuilds.add(guild.id);
+    } catch (error) {
+      logger.warn(`[ura] failed to sync open recruitment cards for guild ${guild.id}`, error);
+    }
+  }
+
   const matches = await listUraMatchesReadyForDeletion(new Date());
   for (const match of matches) {
     const channel = match.channelId ? await client.channels.fetch(match.channelId).catch(() => null) : null;
