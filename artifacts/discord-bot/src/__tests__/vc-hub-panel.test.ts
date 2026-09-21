@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildHubVcPanelMessage, isBeachTransferHub, vcCommand } from "../commands/vc.js";
-import { shiftCommand } from "../commands/shift.js";
+import {
+  buildShiftEmbeds,
+  buildShiftPanelComponents,
+  SHIFT_UNAVAILABLE_PREFIX,
+  shiftCommand,
+} from "../commands/shift.js";
 
 describe("Hub VCインチャットパネル", () => {
   it("通常のHubでは画面共有コントロールを表示する", () => {
@@ -44,5 +49,44 @@ describe("Hub VCインチャットパネル", () => {
       default_member_permissions?: string | null;
     };
     expect(definition.default_member_permissions).toBe("0");
+  });
+
+  it("/shift panelに3週分の「出れません」ボタンを表示する", () => {
+    const rows = buildShiftPanelComponents((offset) => ["今週", "来週", "再来週"][offset]!);
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.components).toHaveLength(3);
+    expect(rows[1]!.components).toHaveLength(3);
+    const unavailableButtons = rows[1]!.components.map((button) => button.toJSON() as { custom_id?: string; label?: string });
+    expect(unavailableButtons.map((button) => button.custom_id)).toEqual([
+      `${SHIFT_UNAVAILABLE_PREFIX}0`,
+      `${SHIFT_UNAVAILABLE_PREFIX}1`,
+      `${SHIFT_UNAVAILABLE_PREFIX}2`,
+    ]);
+    expect(unavailableButtons.map((button) => button.label)).toEqual([
+      "今週：出れません",
+      "来週：出れません",
+      "再来週：出れません",
+    ]);
+  });
+
+  it("シフト一覧に週全体の出勤不可を表示する", () => {
+    const embeds = buildShiftEmbeds(
+      [],
+      "今週のシフト",
+      "2026-09-19",
+      "2026-09-25",
+      true,
+      [{
+        id: 1,
+        guildId: "guild-1",
+        userId: "user-1",
+        weekStart: "2026-09-19",
+        createdAt: new Date(),
+      }],
+    );
+
+    expect(embeds[0]!.toJSON().description).toContain("出勤不可（週全体）");
+    expect(embeds[0]!.toJSON().description).toContain("<@user-1>");
   });
 });

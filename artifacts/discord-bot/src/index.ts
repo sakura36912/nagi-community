@@ -49,12 +49,14 @@ import {
   SHIFT_CANCEL_PREFIX,
   SHIFT_TIME_PREFIX,
   SHIFT_PANEL_OPEN_PREFIX,
+  SHIFT_UNAVAILABLE_PREFIX,
   SHIFT_LIST_NAV_PREFIX,
   handleShiftToggle,
   handleShiftConfirm,
   handleShiftCancel,
   handleShiftTime,
   handleShiftPanelOpen,
+  handleShiftUnavailable,
   handleShiftListNav,
   VC_PANEL_BTN_ADD,
   VC_PANEL_BTN_KICK,
@@ -2101,6 +2103,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isButton() && interaction.customId.startsWith(SHIFT_CANCEL_PREFIX)) {
       await handleShiftCancel(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith(SHIFT_UNAVAILABLE_PREFIX)) {
+      await handleShiftUnavailable(interaction);
       return;
     }
     // Also match the legacy bare ID ("shift:panel:open") posted by older panel messages.

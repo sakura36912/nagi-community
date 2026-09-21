@@ -1,13 +1,15 @@
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import {
   db,
+  shiftUnavailabilityTable,
   shiftSettingsTable,
   shiftsTable,
   type Shift,
   type ShiftSettings,
+  type ShiftUnavailability,
 } from "@workspace/db";
 
-export { type Shift, type ShiftSettings };
+export { type Shift, type ShiftSettings, type ShiftUnavailability };
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
@@ -157,6 +159,79 @@ export async function getShiftsInRange(
     .from(shiftsTable)
     .where(and(...conditions))
     .orderBy(asc(shiftsTable.date), asc(shiftsTable.startTime));
+}
+
+// ─── Weekly unavailability ────────────────────────────────────────────────────
+
+export async function getShiftUnavailability(
+  guildId: string,
+  userId: string,
+  weekStart: string,
+): Promise<ShiftUnavailability | undefined> {
+  const [row] = await db
+    .select()
+    .from(shiftUnavailabilityTable)
+    .where(and(
+      eq(shiftUnavailabilityTable.guildId, guildId),
+      eq(shiftUnavailabilityTable.userId, userId),
+      eq(shiftUnavailabilityTable.weekStart, weekStart),
+    ));
+  return row;
+}
+
+export async function addShiftUnavailability(
+  guildId: string,
+  userId: string,
+  weekStart: string,
+): Promise<ShiftUnavailability> {
+  const [row] = await db
+    .insert(shiftUnavailabilityTable)
+    .values({ guildId, userId, weekStart })
+    .onConflictDoUpdate({
+      target: [
+        shiftUnavailabilityTable.guildId,
+        shiftUnavailabilityTable.userId,
+        shiftUnavailabilityTable.weekStart,
+      ],
+      set: { createdAt: new Date() },
+    })
+    .returning();
+  if (!row) throw new Error("Failed to create shift unavailability");
+  return row;
+}
+
+export async function removeShiftUnavailability(
+  guildId: string,
+  userId: string,
+  weekStart: string,
+): Promise<void> {
+  await db
+    .delete(shiftUnavailabilityTable)
+    .where(and(
+      eq(shiftUnavailabilityTable.guildId, guildId),
+      eq(shiftUnavailabilityTable.userId, userId),
+      eq(shiftUnavailabilityTable.weekStart, weekStart),
+    ));
+}
+
+export async function getShiftUnavailabilitiesInRange(
+  guildId: string,
+  from: string,
+  to: string,
+  userId?: string,
+): Promise<ShiftUnavailability[]> {
+  const conditions = [
+    eq(shiftUnavailabilityTable.guildId, guildId),
+    gte(shiftUnavailabilityTable.weekStart, from),
+    lte(shiftUnavailabilityTable.weekStart, to),
+  ];
+  if (userId) conditions.push(eq(shiftUnavailabilityTable.userId, userId));
+
+  return db
+    .select()
+    .from(shiftUnavailabilityTable)
+    .where(and(...conditions))
+    .orderBy(asc(shiftUnavailabilityTable.weekStart), asc(shiftUnavailabilityTable.userId));
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────

@@ -13,17 +13,22 @@ import {
 import { logger } from "../lib/logger.js";
 import {
   addShift,
+  addShiftUnavailability,
   calcMinutes,
   formatDuration,
   getAllShiftSettings,
+  getShiftUnavailability,
   getShiftSettings,
+  getShiftUnavailabilitiesInRange,
   getShiftsInRange,
   removeShift,
+  removeShiftUnavailability,
   setShiftListRoles,
   setShiftRewardAmount,
   setShiftSettings,
   setShiftSubmitRoles,
   type Shift,
+  type ShiftUnavailability,
 } from "../lib/shift.js";
 
 // ─── Button prefix constants ─────────────────────────────────────────────────
@@ -33,6 +38,7 @@ export const SHIFT_CONFIRM_PREFIX = "shift:confirm:"; // shift:confirm:{sid}
 export const SHIFT_CANCEL_PREFIX  = "shift:cancel:";  // shift:cancel:{sid}
 export const SHIFT_TIME_PREFIX    = "shift:time:";    // shift:time:{sid}:{time}
 export const SHIFT_PANEL_OPEN_PREFIX = "shift:panel:open:"; // shift:panel:open:{weekOffset}
+export const SHIFT_UNAVAILABLE_PREFIX = "shift:unavailable:"; // shift:unavailable:{weekOffset}
 export const SHIFT_LIST_NAV_PREFIX   = "shift:list:nav:";   // shift:list:nav:{weekOffset}
 
 /** 選択肢として表示する時刻一覧 */
@@ -285,8 +291,12 @@ export function buildShiftEmbeds(
   from: string,
   to: string,
   isWeekMode = false,
+  unavailabilities: ShiftUnavailability[] = [],
 ): EmbedBuilder[] {
   const header = `**${formatDateLabel(from)} 〜 ${formatDateLabel(to)}**`;
+  const unavailableSummary = unavailabilities.length > 0
+    ? `\n\n🚫 **出勤不可（週全体）**\n${unavailabilities.map((entry) => `• <@${entry.userId}>`).join("\n")}`
+    : "";
 
   if (isWeekMode) {
     // Generate all 7 days in range
@@ -335,7 +345,7 @@ export function buildShiftEmbeds(
       new EmbedBuilder()
         .setTitle(title)
         .setColor(0x5865f2)
-        .setDescription(`${header}\n\n${lines.join("\n")}`.slice(0, 4096))
+        .setDescription(`${header}${unavailableSummary}\n\n${lines.join("\n")}`.slice(0, 4096))
         .setTimestamp(),
     ];
   }
@@ -346,7 +356,11 @@ export function buildShiftEmbeds(
       new EmbedBuilder()
         .setTitle(title)
         .setColor(0x5865f2)
-        .setDescription(`${header}\n\nこの期間にシフトは登録されていません。`)
+        .setDescription(
+          unavailabilities.length > 0
+            ? `${header}${unavailableSummary}`
+            : `${header}\n\nこの期間にシフトは登録されていません。`,
+        )
         .setTimestamp(),
     ];
   }
@@ -383,7 +397,7 @@ export function buildShiftEmbeds(
       .setColor(0x5865f2)
       .addFields(fields.slice(i, i + 25));
     if (i === 0) {
-      embed.setTitle(title).setDescription(header).setTimestamp();
+      embed.setTitle(title).setDescription(`${header}${unavailableSummary}`).setTimestamp();
     }
     embeds.push(embed);
   }
@@ -402,6 +416,30 @@ export function buildListNavRow(weekOffset: number): ActionRowBuilder<ButtonBuil
       .setLabel("来週 ▶")
       .setStyle(ButtonStyle.Secondary),
   );
+}
+
+export function buildShiftPanelComponents(
+  panelWeekLabel: (offset: number) => string,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const offsets = [0, 1, 2] as const;
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      ...offsets.map((offset) =>
+        new ButtonBuilder()
+          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}${offset}`)
+          .setLabel(panelWeekLabel(offset))
+          .setStyle(offset === 0 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      ),
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      ...offsets.map((offset) =>
+        new ButtonBuilder()
+          .setCustomId(`${SHIFT_UNAVAILABLE_PREFIX}${offset}`)
+          .setLabel(`${panelWeekLabel(offset).split(" (")[0]}：出れません`)
+          .setStyle(ButtonStyle.Danger),
+      ),
+    ),
+  ];
 }
 
 function buildSummaryEmbed(
@@ -472,7 +510,8 @@ export async function postWeeklyShifts(client: Client): Promise<void> {
       if (!channel?.isTextBased()) continue;
 
       const shifts = await getShiftsInRange(setting.guildId, from, to);
-      const embeds = buildShiftEmbeds(shifts, "📅 今週のシフト", from, to, true);
+      const unavailabilities = await getShiftUnavailabilitiesInRange(setting.guildId, from, to);
+      const embeds = buildShiftEmbeds(shifts, "📅 今週のシフト", from, to, true, unavailabilities);
       await channel.send({ embeds });
       logger.info(`[shift] Posted weekly schedule to ${setting.channelId} in guild ${setting.guildId}`);
     } catch (err) {
@@ -726,7 +765,8 @@ export const shiftCommand: Command = {
       }
 
       const shifts = await getShiftsInRange(guildId, from, to, userOpt?.id);
-      const embeds = buildShiftEmbeds(shifts, title, from, to, weekOffset !== undefined);
+      const unavailabilities = await getShiftUnavailabilitiesInRange(guildId, from, to, userOpt?.id);
+      const embeds = buildShiftEmbeds(shifts, title, from, to, weekOffset !== undefined, unavailabilities);
       const components = weekOffset !== undefined ? [buildListNavRow(weekOffset)] : [];
       await interaction.editReply({ embeds, components });
       return;
@@ -776,21 +816,7 @@ export const shiftCommand: Command = {
         const name = offset === 0 ? "今週" : offset === 1 ? "来週" : "再来週";
         return `${name} (${range})`;
       };
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}0`)
-          .setLabel(panelWeekLabel(0))
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}1`)
-          .setLabel(panelWeekLabel(1))
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`${SHIFT_PANEL_OPEN_PREFIX}2`)
-          .setLabel(panelWeekLabel(2))
-          .setStyle(ButtonStyle.Secondary),
-      );
-      await ch.send({ embeds: [embed], components: [row] });
+      await ch.send({ embeds: [embed], components: buildShiftPanelComponents(panelWeekLabel) });
       await interaction.reply({ content: "✅ シフト提出パネルを設置しました。", ephemeral: true });
       return;
     }
@@ -886,7 +912,8 @@ export const shiftCommand: Command = {
         }
         const { from, to } = getWeekRange();
         const shifts = await getShiftsInRange(guildId, from, to);
-        const embeds = buildShiftEmbeds(shifts, "📅 今週のシフト", from, to);
+        const unavailabilities = await getShiftUnavailabilitiesInRange(guildId, from, to);
+        const embeds = buildShiftEmbeds(shifts, "📅 今週のシフト", from, to, false, unavailabilities);
         await ch.send({ embeds });
         lines.push(`✅ <#${targetId}> に今週のシフト表を投稿しました。`);
       }
@@ -1021,6 +1048,19 @@ export async function handleShiftConfirm(interaction: ButtonInteraction): Promis
   await interaction.deferUpdate();
 
   const s = session!;
+  if (await getShiftUnavailability(s.guildId, s.userId, s.dates[0]!)) {
+    submitSessions.delete(sessionId);
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🚫 出れません登録済み")
+          .setDescription("この週は「出れません」として登録されています。先にその登録を解除してください。")
+          .setColor(0xed4245),
+      ],
+      components: [],
+    });
+    return;
+  }
   const workDays = s.dates.filter((d) => s.selections[d]!.times.length > 0);
 
   const saved: { date: string; start: string; end: string }[] = [];
@@ -1122,6 +1162,62 @@ export async function handleShiftPanelOpen(interaction: ButtonInteraction): Prom
   });
 }
 
+/** パネルの「出れません」ボタン: 対象週全体の不可状態をトグル */
+export async function handleShiftUnavailable(interaction: ButtonInteraction): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "このボタンはサーバー内でのみ使用できます。", ephemeral: true });
+    return;
+  }
+
+  const guildId = interaction.guildId;
+  const settings = await getShiftSettings(guildId);
+  const allowedRoles = settings?.submitRoleIds ?? [];
+  if (allowedRoles.length > 0) {
+    const memberRoles = interaction.member && "roles" in interaction.member
+      ? (interaction.member.roles as { cache: Map<string, unknown> }).cache
+      : null;
+    const hasRole = memberRoles ? allowedRoles.some((id: string) => memberRoles.has(id)) : false;
+    if (!hasRole) {
+      await interaction.reply({ content: "❌ このボタンは指定されたロールのメンバーのみ使用できます。", ephemeral: true });
+      return;
+    }
+  }
+
+  const VALID_OFFSETS = [0, 1, 2] as const;
+  const rawOffset = parseInt(interaction.customId.slice(SHIFT_UNAVAILABLE_PREFIX.length), 10);
+  const weekOffset: (typeof VALID_OFFSETS)[number] = VALID_OFFSETS.includes(rawOffset as 0 | 1 | 2)
+    ? (rawOffset as 0 | 1 | 2)
+    : 0;
+  const dates = getWeekDates(weekOffset);
+  const weekStart = dates[0]!;
+  const weekEnd = dates[6]!;
+
+  const existingShifts = await getShiftsInRange(guildId, weekStart, weekEnd, interaction.user.id);
+  if (existingShifts.length > 0) {
+    await interaction.reply({
+      content: `❌ ${formatDateLabel(weekStart)}〜${formatDateLabel(weekEnd)}には既にシフトが登録されています。先にシフトを削除してください。`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const existing = await getShiftUnavailability(guildId, interaction.user.id, weekStart);
+  if (existing) {
+    await removeShiftUnavailability(guildId, interaction.user.id, weekStart);
+    await interaction.reply({
+      content: `✅ ${formatDateLabel(weekStart)}〜${formatDateLabel(weekEnd)}の「出れません」登録を解除しました。`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await addShiftUnavailability(guildId, interaction.user.id, weekStart);
+  await interaction.reply({
+    content: `🚫 ${formatDateLabel(weekStart)}〜${formatDateLabel(weekEnd)}を「出れません」として登録しました。`,
+    ephemeral: true,
+  });
+}
+
 /** ◀先週 / 来週▶ ボタン押下: 対応する週のシフト一覧に更新 */
 export async function handleShiftListNav(interaction: ButtonInteraction): Promise<void> {
   const guildId = interaction.guildId;
@@ -1146,6 +1242,7 @@ export async function handleShiftListNav(interaction: ButtonInteraction): Promis
 
   await interaction.deferUpdate();
   const shifts = await getShiftsInRange(guildId, from, to);
-  const embeds = buildShiftEmbeds(shifts, title, from, to, true);
+  const unavailabilities = await getShiftUnavailabilitiesInRange(guildId, from, to);
+  const embeds = buildShiftEmbeds(shifts, title, from, to, true, unavailabilities);
   await interaction.editReply({ embeds, components: [buildListNavRow(weekOffset)] });
 }

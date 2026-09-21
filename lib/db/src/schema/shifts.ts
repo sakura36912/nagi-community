@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, unique } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // ─── Shift Settings ───────────────────────────────────────────────────────────
@@ -41,3 +41,21 @@ export const shiftsTable = pgTable("shifts", {
 });
 
 export type Shift = typeof shiftsTable.$inferSelect;
+
+// ─── Shift unavailability ─────────────────────────────────────────────────────
+
+/** One "unavailable for the whole week" entry per user and JST week. */
+export const shiftUnavailabilityTable = pgTable(
+  "shift_unavailability",
+  {
+    id: serial("id").primaryKey(),
+    guildId: text("guild_id").notNull(),
+    userId: text("user_id").notNull(),
+    /** Saturday of the target Sat–Fri week, stored as "YYYY-MM-DD" in JST. */
+    weekStart: text("week_start").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique("shift_unavailability_user_week_unique").on(table.guildId, table.userId, table.weekStart)],
+);
+
+export type ShiftUnavailability = typeof shiftUnavailabilityTable.$inferSelect;
