@@ -3,6 +3,7 @@
 - [Casino control placement](casino-control-placement.md) — 公開Embedに所有者付きボタンを置き、操作位置の安定と本人限定操作を両立する。
 - [Slot setting profiles](slot-setting-profiles.md) — 設定ごとの機械割目安は、固定配当を変えずに当選確率へ換算して表現する。
 - [Beach transfer panel](beach-transfer-panel.md) — 砂浜のパネルのみ画面共有操作を隠し、通常のHubパネルの操作性は維持する。
+- [Panel-only Hub ownership](panel-only-hub-ownership.md) — 別Bot管理の転送先VCはHub由来として追跡するが、このBotから削除しない。
 - [Drizzle schema index names](drizzle-schema-index-names.md) — 既存PostgreSQLインデックス名をDrizzle定義と合わせ、危険な移行プロンプトを避ける。
 - [Object Storage stream guard](object-storage-stream-guard.md) — Node 24の一時的なObject Storageストリーム例外は、Bot全体を止めずに記録して継続する。
 - [Monthly payroll timezone](monthly-payroll-timezone.md) — 給与日、重複防止、シフト集計はすべて日本時間の暦日で判定する。

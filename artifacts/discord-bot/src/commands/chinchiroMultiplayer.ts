@@ -488,17 +488,27 @@ async function inConfiguredVoice(
   interaction: ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction,
   voiceId: string | null,
 ): Promise<boolean> {
-  const channelId = interaction.guild?.members.cache.get(interaction.user.id)?.voice.channelId ?? null;
-  return isConfiguredChinchiroVoice(interaction.guildId ?? "", channelId, voiceId);
+  const guild = interaction.guild;
+  if (!guild) return false;
+
+  const cachedChannelId = guild.members.cache.get(interaction.user.id)?.voice.channelId ?? null;
+  if (await isConfiguredChinchiroVoice(guild.id, cachedChannelId, voiceId)) return true;
+
+  // Interaction member caches can lag behind a recent VC join/transfer.
+  // Fetch the member once before rejecting a valid configured-VC participant.
+  const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+  return isConfiguredChinchiroVoice(guild.id, member?.voice.channelId ?? null, voiceId);
 }
 
 export const chinchiroRecruitCommand = {
   data: new SlashCommandBuilder().setName("chinchiro").setDescription("複数人チンチロ（テストモード）")
     .addSubcommand((s) => s.setName("recruit").setDescription("チンチロ参加者を募集する"))
-    .addSubcommand((s) => s.setName("config").setDescription("管理者設定").addChannelOption((o) => o.setName("voice").setDescription("参加必須VC"))
+    .addSubcommand((s) => s.setName("config").setDescription("管理者設定").addChannelOption((o) =>
+      o.setName("voice").setDescription("参加必須VC").addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice))
       .addIntegerOption((o) => o.setName("min_bet").setDescription("最低賭け金").setMinValue(1))
       .addIntegerOption((o) => o.setName("max_bet").setDescription("最高賭け金").setMinValue(1))
-      .addChannelOption((o) => o.setName("logs").setDescription("ログ送信先")))
+      .addChannelOption((o) =>
+        o.setName("logs").setDescription("ログ送信先").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)))
     .addSubcommand((s) => s.setName("force-end").setDescription("卓を強制終了").addIntegerOption((o) => o.setName("table").setDescription("卓ID").setRequired(true)))
     .addSubcommand((s) => s.setName("kick").setDescription("卓から参加者を外す").addIntegerOption((o) => o.setName("table").setDescription("卓ID").setRequired(true)).addUserOption((o) => o.setName("user").setDescription("参加者").setRequired(true)))
     .addSubcommand((s) => s.setName("logs").setDescription("最近終了した卓の結果を表示")),

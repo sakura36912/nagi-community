@@ -723,6 +723,18 @@ export async function handlePanelOnlyHubTransfer(
     ?? await guild.channels.fetch(newState.channelId).catch(() => null);
   if (!vc || vc.type !== ChannelType.GuildVoice) return;
 
+  // The external bot owns this generated VC, but Chinchiro still needs a
+  // durable source-Hub mapping so it can accept members in the transfer target.
+  const existingSession = await getHubSession(vc.id).catch(() => null);
+  if (!existingSession) {
+    await createHubSession(guild.id, vc.id, member.id, hub.id).catch((err) =>
+      logger.warn(
+        `[vcHub] panel_only: Failed to record transfer session channel=${vc.id} hub=${hub.hubChannelId}`,
+        err,
+      ),
+    );
+  }
+
   const sourceChannel = oldState.channel
     ?? await guild.channels.fetch(hub.hubChannelId).catch(() => null);
   const [sourceParentName, targetParentName] = await Promise.all([
@@ -825,6 +837,19 @@ export async function handleHubLeave(oldState: VoiceState): Promise<void> {
 
   const guild   = oldState.guild;
   const channel = guild.channels.cache.get(oldState.channelId);
+  const hub = await getHubChannelById(session.hubId);
+
+  // panel-only Hubs are transferred and deleted by another bot. Keep only the
+  // Chinchiro source mapping; never delete the externally-managed voice channel.
+  if (hub?.panelOnly) {
+    if (!channel || !channel.isVoiceBased() || channel.members.size === 0) {
+      await deleteHubSession(oldState.channelId).catch((err) =>
+        logger.warn(`[vcHub] panel_only: Failed to clear transfer session channel=${oldState.channelId}`, err),
+      );
+    }
+    return;
+  }
+
   if (!channel || !channel.isVoiceBased()) return;
 
   // まだ誰かいるなら何もしない
