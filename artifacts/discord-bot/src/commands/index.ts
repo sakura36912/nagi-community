@@ -4145,7 +4145,7 @@ const monthlyDebitCommand: Command = {
         .addRoleOption((opt) => opt.setName("role").setDescription("対象ロール").setRequired(true))
         .addIntegerOption((opt) =>
           opt.setName("amount").setDescription("毎月引き落とす金額").setRequired(true).setMinValue(1),
-        ),
+        )
         .addChannelOption((opt) =>
           opt
             .setName("log_channel")
