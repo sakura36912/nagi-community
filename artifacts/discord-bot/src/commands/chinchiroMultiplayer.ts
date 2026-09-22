@@ -488,16 +488,23 @@ async function inConfiguredVoice(
   interaction: ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction,
   voiceId: string | null,
 ): Promise<boolean> {
+  const channelId = await currentVoiceChannelId(interaction);
+  return isConfiguredChinchiroVoice(interaction.guildId ?? "", channelId, voiceId);
+}
+
+async function currentVoiceChannelId(
+  interaction: ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction,
+): Promise<string | null> {
   const guild = interaction.guild;
-  if (!guild) return false;
+  if (!guild) return null;
 
   const cachedChannelId = guild.members.cache.get(interaction.user.id)?.voice.channelId ?? null;
-  if (await isConfiguredChinchiroVoice(guild.id, cachedChannelId, voiceId)) return true;
+  if (cachedChannelId) return cachedChannelId;
 
   // Interaction member caches can lag behind a recent VC join/transfer.
-  // Fetch the member once before rejecting a valid configured-VC participant.
+  // Fetch the member once before deciding that the participant is not in a VC.
   const member = await guild.members.fetch(interaction.user.id).catch(() => null);
-  return isConfiguredChinchiroVoice(guild.id, member?.voice.channelId ?? null, voiceId);
+  return member?.voice.channelId ?? null;
 }
 
 export const chinchiroRecruitCommand = {
@@ -520,19 +527,37 @@ export const chinchiroRecruitCommand = {
         await interaction.reply({ content: "この操作にはサーバー管理権限が必要です。", flags: MessageFlags.Ephemeral }); return;
       }
       if (subcommand === "config") {
-        const voiceChannel = interaction.options.getChannel("voice"), logChannel = interaction.options.getChannel("logs");
+        const selectedVoiceChannel = interaction.options.getChannel("voice");
+        const logChannel = interaction.options.getChannel("logs");
+        const minBet = interaction.options.getInteger("min_bet");
+        const maxBet = interaction.options.getInteger("max_bet");
+        const hasExplicitOption = Boolean(selectedVoiceChannel || logChannel || minBet !== null || maxBet !== null);
+        const joinedVoiceId = hasExplicitOption ? null : await currentVoiceChannelId(interaction);
+        const voiceChannel = selectedVoiceChannel
+          ?? (joinedVoiceId ? await interaction.guild!.channels.fetch(joinedVoiceId).catch(() => null) : null);
         if (voiceChannel && ![ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(voiceChannel.type)) { await interaction.reply({ content: "voiceにはボイスチャンネルを指定してください。", flags: MessageFlags.Ephemeral }); return; }
         if (logChannel && ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(logChannel.type)) { await interaction.reply({ content: "logsにはテキストチャンネルを指定してください。", flags: MessageFlags.Ephemeral }); return; }
         const voice = voiceChannel?.id, logs = logChannel?.id;
-        const minBet = interaction.options.getInteger("min_bet"), maxBet = interaction.options.getInteger("max_bet");
         const current = await settings(interaction.guildId);
         const nextMin = minBet ?? current.minBet, nextMax = maxBet ?? current.maxBet;
         if (nextMin > nextMax) { await interaction.reply({ content: "最低賭け金は最高賭け金以下にしてください。", flags: MessageFlags.Ephemeral }); return; }
+        if (!hasExplicitOption && !voice) {
+          await interaction.reply({
+            content: "設定するVCに参加してから、オプションなしで `/chinchiro config` を実行してください。",
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
         await db.update(chinchiroMultiplayerSettingsTable).set({
           voiceChannelId: voice ?? current.voiceChannelId, logChannelId: logs ?? current.logChannelId,
           minBet: nextMin, maxBet: nextMax, testMode: 1,
         }).where(eq(chinchiroMultiplayerSettingsTable.guildId, interaction.guildId));
-        await interaction.reply({ content: "チンチロ設定を保存しました。", flags: MessageFlags.Ephemeral }); return;
+        const savedVoiceId = voice ?? current.voiceChannelId;
+        await interaction.reply({
+          content: `チンチロ設定を保存しました。\n参加必須VC: ${savedVoiceId ? `<#${savedVoiceId}>` : "未設定"}`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
       }
       if (subcommand === "logs") {
         const rows = await db.select().from(chinchiroTablesTable).where(and(eq(chinchiroTablesTable.guildId, interaction.guildId), inArray(chinchiroTablesTable.status, ["finished", "closed"]))).orderBy(sql`${chinchiroTablesTable.updatedAt} desc`).limit(10);
@@ -563,7 +588,19 @@ export const chinchiroRecruitCommand = {
     }
     const config = await settings(interaction.guildId);
     if (!await inConfiguredVoice(interaction, config.voiceChannelId)) {
-      await interaction.reply({ content: "管理者が設定したボイスチャンネルに参加してから募集してください。", flags: MessageFlags.Ephemeral }); return;
+      const currentVoiceId = await currentVoiceChannelId(interaction);
+      logger.warn(
+        `[chinchiro] Recruit rejected by VC gate guild=${interaction.guildId} user=${interaction.user.id} ` +
+        `configured=${config.voiceChannelId ?? "none"} current=${currentVoiceId ?? "none"}`,
+      );
+      await interaction.reply({
+        content:
+          `管理者が設定したボイスチャンネルに参加してから募集してください。\n` +
+          `設定VC: ${config.voiceChannelId ? `<#${config.voiceChannelId}>` : "未設定"}\n` +
+          `現在VC: ${currentVoiceId ? `<#${currentVoiceId}>` : "未参加"}`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
     }
     const economy = await getGuildSettings(interaction.guildId);
     const displayName = await resolvedDisplayName(interaction.guild!, interaction.user.id);
@@ -608,7 +645,17 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
     await interaction.showModal(modal); return;
   }
   if (action === "join") {
-    if (t.status !== "recruiting" || !await inConfiguredVoice(interaction, config.voiceChannelId)) { await interaction.reply({ content: "募集中で、設定VCまたはそこからVC Hubで転送されたVCにいる場合のみ参加できます。", flags: MessageFlags.Ephemeral }); return; }
+    if (t.status !== "recruiting" || !await inConfiguredVoice(interaction, config.voiceChannelId)) {
+      const currentVoiceId = await currentVoiceChannelId(interaction);
+      await interaction.reply({
+        content:
+          "募集中で、設定VCまたはそこからVC Hubで転送されたVCにいる場合のみ参加できます。\n" +
+          `設定VC: ${config.voiceChannelId ? `<#${config.voiceChannelId}>` : "未設定"}\n` +
+          `現在VC: ${currentVoiceId ? `<#${currentVoiceId}>` : "未参加"}`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     const displayName = await resolvedDisplayName(interaction.guild!, interaction.user.id);
     const joined = await db.transaction(async (tx) => {
       await lockUsers(tx, t.guildId, [interaction.user.id]);
