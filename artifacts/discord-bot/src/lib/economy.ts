@@ -805,14 +805,20 @@ export async function setMonthlyRoleDebit(
   guildId: string,
   roleId: string,
   amount: number,
+  logChannelId: string | null = null,
 ): Promise<GuildSettings> {
-  return upsertGuildSetting(guildId, { monthlyDebitRoleId: roleId, monthlyDebitAmount: amount });
+  return upsertGuildSetting(guildId, {
+    monthlyDebitRoleId: roleId,
+    monthlyDebitAmount: amount,
+    monthlyDebitLogChannelId: logChannelId,
+  });
 }
 
 export async function clearMonthlyRoleDebit(guildId: string): Promise<GuildSettings> {
   return upsertGuildSetting(guildId, {
     monthlyDebitRoleId: null,
     monthlyDebitAmount: null,
+    monthlyDebitLogChannelId: null,
     lastMonthlyDebitAt: null,
   });
 }
@@ -841,10 +847,16 @@ export async function distributeMonthlyRoleDebit(
   members: Map<string, string[]>,
   roleId: string,
   amount: number,
-): Promise<{ chargedCount: number; totalCharged: number; insufficientCount: number }> {
+): Promise<{
+  chargedCount: number;
+  totalCharged: number;
+  insufficientCount: number;
+  insufficientUserIds: string[];
+}> {
   let chargedCount = 0;
   let totalCharged = 0;
   let insufficientCount = 0;
+  const insufficientUserIds: string[] = [];
 
   for (const [userId, roleIds] of members) {
     if (!roleIds.includes(roleId)) continue;
@@ -860,10 +872,11 @@ export async function distributeMonthlyRoleDebit(
       totalCharged += amount;
     } else {
       insufficientCount += 1;
+      insufficientUserIds.push(userId);
     }
   }
 
-  return { chargedCount, totalCharged, insufficientCount };
+  return { chargedCount, totalCharged, insufficientCount, insufficientUserIds };
 }
 
 export const SUB_ACCOUNT_ROLE_NAME = "sub垢";

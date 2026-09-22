@@ -27,6 +27,8 @@ export const guildSettingsTable = pgTable("guild_settings", {
   // 25th of each Japan calendar month.
   monthlyDebitRoleId: text("monthly_debit_role_id"),
   monthlyDebitAmount: integer("monthly_debit_amount"),
+  // Discord text channel where insufficient-balance role removals are logged.
+  monthlyDebitLogChannelId: text("monthly_debit_log_channel_id"),
   lastMonthlyDebitAt: timestamp("last_monthly_debit_at", { withTimezone: true }),
   // Discord category channel ID where private VCs (vcshop) are created.
   vcCategoryId: text("vc_category_id"),

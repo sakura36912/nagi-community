@@ -4146,6 +4146,13 @@ const monthlyDebitCommand: Command = {
         .addIntegerOption((opt) =>
           opt.setName("amount").setDescription("毎月引き落とす金額").setRequired(true).setMinValue(1),
         ),
+        .addChannelOption((opt) =>
+          opt
+            .setName("log_channel")
+            .setDescription("残高不足時のロール剥奪ログを送るテキストチャンネル")
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(true),
+        ),
     )
     .addSubcommand((sub) => sub.setName("remove").setDescription("毎月の引き落とし設定を解除"))
     .addSubcommand((sub) => sub.setName("list").setDescription("毎月の引き落とし設定を表示")),
@@ -4171,7 +4178,7 @@ const monthlyDebitCommand: Command = {
         return;
       }
       await interaction.reply({
-        content: `## 月額引き落とし設定\n対象: <@&${settings.monthlyDebitRoleId}>\n金額: **${settings.monthlyDebitAmount.toLocaleString()}${settings.currencyName}**\n実行日: **毎月25日 00:00（日本時間）**`,
+        content: `## 月額引き落とし設定\n対象: <@&${settings.monthlyDebitRoleId}>\n金額: **${settings.monthlyDebitAmount.toLocaleString()}${settings.currencyName}**\nログ先: ${settings.monthlyDebitLogChannelId ? `<#${settings.monthlyDebitLogChannelId}>` : "未設定"}\n実行日: **毎月25日 00:00（日本時間）**`,
         allowedMentions: { parse: [] },
       });
       return;
@@ -4179,9 +4186,10 @@ const monthlyDebitCommand: Command = {
 
     const role = interaction.options.getRole("role", true);
     const amount = interaction.options.getInteger("amount", true);
-    await setMonthlyRoleDebit(guildId, role.id, amount);
+    const logChannel = interaction.options.getChannel("log_channel", true);
+    await setMonthlyRoleDebit(guildId, role.id, amount, logChannel.id);
     await interaction.reply(
-      `<@&${role.id}> の月額引き落としを **${amount.toLocaleString()}${settings.currencyName}** に設定しました。毎月25日00:00（日本時間）に実行します。`,
+      `<@&${role.id}> の月額引き落としを **${amount.toLocaleString()}${settings.currencyName}** に設定しました。\n残高不足時は <#${logChannel.id}> にログを送り、対象者からロールを剥奪します。\n毎月25日00:00（日本時間）に実行します。`,
     );
   },
 };

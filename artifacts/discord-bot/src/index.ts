@@ -392,10 +392,80 @@ async function runRewardScheduler(): Promise<void> {
               settings.monthlyDebitRoleId!,
               settings.monthlyDebitAmount!,
             );
+
+            const roleRemovalFailures: string[] = [];
+            for (const userId of debit.insufficientUserIds) {
+              const member = guild.members.cache.get(userId)
+                ?? await guild.members.fetch(userId).catch(() => null);
+              if (!member) {
+                roleRemovalFailures.push(userId);
+                continue;
+              }
+              try {
+                await member.roles.remove(
+                  settings.monthlyDebitRoleId!,
+                  "月額引き落としの残高不足",
+                );
+              } catch (err) {
+                roleRemovalFailures.push(userId);
+                logger.error(
+                  `[monthly-debit] Failed to remove role ${settings.monthlyDebitRoleId} ` +
+                  `from ${userId} in guild ${guild.id}`,
+                  err,
+                );
+              }
+            }
+
+            if (debit.insufficientUserIds.length > 0) {
+              const logChannelId = settings.monthlyDebitLogChannelId;
+              if (!logChannelId) {
+                logger.warn(
+                  `[monthly-debit] ${guild.name}: ${debit.insufficientCount} member(s) ` +
+                  "had insufficient balance, but no log channel is configured.",
+                );
+              } else {
+                const logChannel = guild.channels.cache.get(logChannelId)
+                  ?? await guild.channels.fetch(logChannelId).catch(() => null);
+                if (!logChannel?.isTextBased()) {
+                  logger.warn(
+                    `[monthly-debit] Log channel ${logChannelId} is missing or not text-based ` +
+                    `in guild ${guild.id}.`,
+                  );
+                } else {
+                  const mentions = debit.insufficientUserIds.map((userId) => `<@${userId}>`).join(", ");
+                  const removedCount = debit.insufficientUserIds.length - roleRemovalFailures.length;
+                  const embed = new EmbedBuilder()
+                    .setTitle("月額引き落とし：残高不足")
+                    .setColor(0xed4245)
+                    .setDescription(
+                      `**${guild.name}** の月額引き落としで残高不足が発生しました。`,
+                    )
+                    .addFields(
+                      { name: "対象ロール", value: `<@&${settings.monthlyDebitRoleId!}>`, inline: true },
+                      { name: "請求額", value: `${settings.monthlyDebitAmount!.toLocaleString()}${settings.currencyName}`, inline: true },
+                      { name: "対象者", value: mentions.slice(0, 1024) || "なし" },
+                      { name: "ロール剥奪", value: `${removedCount}/${debit.insufficientUserIds.length}人`, inline: true },
+                      ...(roleRemovalFailures.length > 0
+                        ? [{ name: "剥奪失敗", value: roleRemovalFailures.map((userId) => `<@${userId}>`).join(", ").slice(0, 1024), inline: true }]
+                        : []),
+                    )
+                    .setTimestamp();
+                  await (logChannel as TextChannel).send({ embeds: [embed] }).catch((err) => {
+                    logger.error(
+                      `[monthly-debit] Failed to send insufficient-balance log to ${logChannelId} ` +
+                      `in guild ${guild.id}`,
+                      err,
+                    );
+                  });
+                }
+              }
+            }
+
             await markMonthlyRoleDebitProcessed(guild.id, now);
             logger.info(
               `[monthly-debit] ${guild.name}: charged ${debit.totalCharged}${settings.currencyName} ` +
-              `to ${debit.chargedCount} member(s); insufficient balance: ${debit.insufficientCount}.`,
+              `to ${debit.chargedCount} member(s); insufficient balance: ${debit.insufficientCount}; ` +
+              `roles removed: ${debit.insufficientUserIds.length - roleRemovalFailures.length}.`,
             );
           } finally {
             monthlyDebitRunningGuilds.delete(guild.id);
