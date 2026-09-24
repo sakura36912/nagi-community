@@ -993,6 +993,11 @@ client.once(Events.ClientReady, async (readyClient) => {
   startMultiplayerChinchiroRecovery(readyClient);
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
+  // Discord may still show the old command while the new version starts.
+  // Register the renamed command before the other (potentially slow) startup work.
+  syncUraCommandRegistration(readyClient).catch((err) =>
+    logger.error("[ura] Startup command registration failed", err),
+  );
 
   // ルーレットGIFを全番号分バックグラウンドで事前生成してキャッシュする。
   // コマンド応答を即時化するため、ready 直後に起動して完了を待たない。
@@ -1175,9 +1180,6 @@ client.once(Events.ClientReady, async (readyClient) => {
   );
   runUraRecruitmentCleanup(readyClient).catch((err) =>
     logger.error("[ura] Startup cleanup error", err),
-  );
-  syncUraCommandRegistration(readyClient).catch((err) =>
-    logger.error("[ura] Startup command registration failed", err),
   );
 
   // 起動直後に全高級船室パネルを一括更新（メンバーリスト・期限・ボタンを現在の状態に同期）
@@ -2061,6 +2063,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const command = commandsByName.get(interaction.commandName);
       if (!command) {
         logger.warn(`Unknown command: ${interaction.commandName}`);
+        await interaction.reply({
+          content: interaction.commandName === "ura"
+            ? "コマンド名は `/裏航海` に変更されました。新しいコマンドをご利用ください。"
+            : "このコマンドは現在使用できません。少し待ってから再度お試しください。",
+          ephemeral: true,
+        });
         return;
       }
         // 島民・追放者ロール制限（スタッフロールは免除）

@@ -5,6 +5,7 @@ import {
   ChannelType,
   EmbedBuilder,
   ModalBuilder,
+  MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
   TextInputBuilder,
@@ -627,12 +628,14 @@ export const uraRecruitmentCommand = {
     if (["setup", "panel", "enable", "disable", "list"].includes(subcommand) && !adminOnly(interaction)) {
       return interaction.reply({ content: "管理者のみ実行できます。", ephemeral: true });
     }
+    // Acknowledge before database or Discord API calls; slash commands expire after 3s.
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     if (subcommand === "setup") {
       const panelChannel = interaction.options.getChannel("panel_channel", true);
       const channel = interaction.options.getChannel("channel", true);
       const category = interaction.options.getChannel("category", true);
       if (panelChannel.id === channel.id) {
-        return interaction.reply({ content: "パネルチャンネルと募集投稿チャンネルは別々に指定してください。", ephemeral: true });
+        return interaction.editReply("パネルチャンネルと募集投稿チャンネルは別々に指定してください。");
       }
       await setUraRecruitmentSettings(interaction.guild.id, {
         panelChannelId: panelChannel.id,
@@ -640,41 +643,40 @@ export const uraRecruitmentCommand = {
         vcCategoryId: category.id,
         enabled: true,
       });
-      return interaction.reply({
+      return interaction.editReply({
         content: `✅ パネルを <#${panelChannel.id}>、募集投稿を <#${channel.id}>、専用VCカテゴリを **${category.name}** に設定しました。`,
-        ephemeral: true,
       });
     }
     if (subcommand === "panel") {
       const settings = await getUraRecruitmentSettings(interaction.guild.id);
-      if (!settings.panelChannelId || !settings.recruitmentChannelId) return interaction.reply({ content: "先に `/ura setup` を実行してください。", ephemeral: true });
+      if (!settings.panelChannelId || !settings.recruitmentChannelId) return interaction.editReply("先に `/裏航海 setup` を実行してください。");
       const channel = await configuredPanelChannel(interaction.guild);
-      if (!channel) return interaction.reply({ content: "パネルチャンネルが見つかりません。", ephemeral: true });
+      if (!channel) return interaction.editReply("パネルチャンネルが見つかりません。");
       await channel.send({ embeds: [panelEmbed()], components: panelComponents() });
-      return interaction.reply({ content: `✅ <#${channel.id}> にパネルを設置しました。`, ephemeral: true });
+      return interaction.editReply(`✅ <#${channel.id}> にパネルを設置しました。`);
     }
     if (subcommand === "enable" || subcommand === "disable") {
       await setUraRecruitmentSettings(interaction.guild.id, { enabled: subcommand === "enable" });
-      return interaction.reply({ content: subcommand === "enable" ? "✅ 裏航海を有効化しました。" : "✅ 裏航海を停止しました。", ephemeral: true });
+      return interaction.editReply(subcommand === "enable" ? "✅ 裏航海を有効化しました。" : "✅ 裏航海を停止しました。");
     }
     if (subcommand === "list") {
       const rows = await listOpenUraRecruitments(interaction.guild.id);
-      return interaction.reply({ content: rows.length ? rows.map((row) => `#${row.id} ${typeLabel(row.type as UraRecruitmentType)} <@${row.ownerId}>`).join("\n") : "募集中の募集はありません。", ephemeral: true });
+      return interaction.editReply(rows.length ? rows.map((row) => `#${row.id} ${typeLabel(row.type as UraRecruitmentType)} <@${row.ownerId}>`).join("\n") : "募集中の募集はありません。");
     }
     if (subcommand === "blocks") {
       const blocks = await listUraBlocks(interaction.guild.id, interaction.user.id);
-      return interaction.reply({ content: blocks.length ? blocks.map((row) => `<@${row.blockedId}>`).join("\n") : "ブロック中のユーザーはいません。", ephemeral: true });
+      return interaction.editReply(blocks.length ? blocks.map((row) => `<@${row.blockedId}>`).join("\n") : "ブロック中のユーザーはいません。");
     }
     const target = interaction.options.getUser("user", true);
-    if (target.id === interaction.user.id) return interaction.reply({ content: "自分自身は指定できません。", ephemeral: true });
+    if (target.id === interaction.user.id) return interaction.editReply("自分自身は指定できません。");
     if (subcommand === "block") {
       await addUraBlock(interaction.guild.id, interaction.user.id, target.id);
-      return interaction.reply({ content: "ブロックしました。", ephemeral: true });
+      return interaction.editReply("ブロックしました。");
     }
     if (subcommand === "unblock") {
       await removeUraBlock(interaction.guild.id, interaction.user.id, target.id);
-      return interaction.reply({ content: "ブロックを解除しました。", ephemeral: true });
+      return interaction.editReply("ブロックを解除しました。");
     }
-    return interaction.reply({ content: "操作を受け付けました。", ephemeral: true });
+    return interaction.editReply("操作を受け付けました。");
   },
 };
