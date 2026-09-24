@@ -116,6 +116,7 @@ function panelComponents() {
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`${URA_PREFIX}panel:create:${URA_TALK}`).setLabel("🎙️ 個通募集").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${URA_PREFIX}panel:create:${URA_SLEEP}`).setLabel("🌙 寝落ち募集").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${URA_PREFIX}panel:delete`).setLabel("🗑️ マッチ中のVCを削除").setStyle(ButtonStyle.Danger),
     ),
   ];
 }
@@ -123,7 +124,7 @@ function panelComponents() {
 const panelEmbed = () => new EmbedBuilder()
   .setColor(0x8b5cf6)
   .setTitle("裏航海")
-  .setDescription("個通または寝落ちの募集を開始できます。\n募集開始時に30,000引き落とします。専用VCは作成から24時間で削除されます。");
+  .setDescription("個通または寝落ちの募集を開始できます。\n募集開始時に30,000引き落とします。専用VCは作成から24時間で削除されます。\nマッチ中の参加者は、専用VCを早めに削除できます。");
 
 export async function syncUraCommandRegistration(client: Client) {
   if (!client.application) return;
@@ -497,6 +498,21 @@ export async function handleUraInteraction(
   const id = interaction.customId;
   if (interaction.isButton()) {
     const parts = id.split(":");
+    if (id === `${URA_PREFIX}panel:delete`) {
+      if (!interaction.guild) return interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const match = await getActiveUraMatchForUser(interaction.guild.id, interaction.user.id);
+      if (!match) return interaction.editReply("現在マッチ中の専用VCはありません。");
+      return interaction.editReply({
+        content: `専用VC <#${match.channelId}> を削除しますか？削除すると、参加者全員が切断されます。`,
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(`${URA_PREFIX}match:delete:${match.id}`).setLabel("VCの削除を確定").setStyle(ButtonStyle.Danger),
+          ),
+        ],
+        allowedMentions: { users: [] },
+      });
+    }
     if (id.startsWith(`${URA_PREFIX}panel:create:`)) {
       const type = parts[3] as UraRecruitmentType;
       return interaction.showModal(noteModal(`${CREATE_MODAL_PREFIX}${type}`, typeLabel(type), "note", "一言"));
