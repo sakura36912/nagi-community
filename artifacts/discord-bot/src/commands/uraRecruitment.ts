@@ -121,7 +121,7 @@ function panelComponents() {
 
 const panelEmbed = () => new EmbedBuilder()
   .setColor(0x8b5cf6)
-  .setTitle("裏航海パネル")
+  .setTitle("裏航海")
   .setDescription("個通または寝落ちの募集を開始できます。\n募集開始時に30,000引き落とします。専用VCは作成から24時間で削除されます。");
 
 export async function syncUraCommandRegistration(client: Client) {
@@ -151,12 +151,21 @@ export async function syncUraCommandRegistration(client: Client) {
 async function refreshExistingUraPanel(guild: Guild) {
   const channel = await configuredPanelChannel(guild);
   if (!channel || channel.type !== ChannelType.GuildText) return;
-  const messages = await channel.messages.fetch({ limit: 100 });
-  const panel = messages.find((message) =>
-    message.author.id === guild.client.user?.id
-    && ["裏募集パネル", "裏航海パネル"].includes(message.embeds[0]?.title ?? ""),
-  );
-  if (panel) await panel.edit({ embeds: [panelEmbed()], components: panelComponents() });
+  let before: string | undefined;
+  while (true) {
+    const messages = await channel.messages.fetch({ limit: 100, before });
+    const panel = messages.find((message) =>
+      message.author.id === guild.client.user?.id
+      && ["裏募集パネル", "裏航海パネル", "裏航海"].includes(message.embeds[0]?.title ?? ""),
+    );
+    if (panel) {
+      await panel.edit({ embeds: [panelEmbed()], components: panelComponents() });
+      return;
+    }
+    if (messages.size < 100) return;
+    before = messages.lastKey();
+    if (!before) return;
+  }
 }
 
 function recruitmentComponents(id: number, open: boolean) {
