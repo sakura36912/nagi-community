@@ -42,8 +42,10 @@ import {
   listOpenUraRecruitments,
   listUraApplications,
   listUraBlocks,
+  listUraMatchesForGuildBefore,
   listUraMatchesReadyForDeletion,
   markUraRecruitmentMatched,
+  removeUraMatch,
   removeUraBlock,
   setUraRecruitmentMessage,
   setUraRecruitmentSettings,
@@ -498,6 +500,57 @@ export async function handleUraInteraction(
   const id = interaction.customId;
   if (interaction.isButton()) {
     const parts = id.split(":");
+    if (id.startsWith(`${URA_PREFIX}matches:purge:`)) {
+      if (!interaction.guild || !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        return interaction.reply({ content: "管理者のみ実行できます。", ephemeral: true });
+      }
+      const cutoffMs = Number(parts[3]);
+      if (!Number.isSafeInteger(cutoffMs) || cutoffMs > Date.now() || Date.now() - cutoffMs > 120_000) {
+        return interaction.reply({ content: "確認の有効期限が切れました。`/裏航海 purge-matches` からやり直してください。", ephemeral: true });
+      }
+      await interaction.deferUpdate();
+      await interaction.editReply({ content: "マッチとVCを削除しています…", components: [] });
+      const matches = await listUraMatchesForGuildBefore(interaction.guild.id, new Date(cutoffMs));
+      let removed = 0;
+      let failed = 0;
+      for (const match of matches) {
+        let channel = null;
+        if (match.channelId) {
+          try {
+            channel = await client.channels.fetch(match.channelId);
+          } catch (error) {
+            if ((error as { code?: number }).code !== 10003) {
+              logger.error(`[ura] failed to fetch match VC for purge ${match.id}`, error);
+              failed++;
+              continue;
+            }
+          }
+        }
+        if (channel) {
+          if (channel.type !== ChannelType.GuildVoice || channel.guild.id !== interaction.guild.id) {
+            logger.error(`[ura] unexpected channel for match purge ${match.id}`);
+            failed++;
+            continue;
+          }
+          try {
+            await channel.delete("管理者による古い裏航海マッチの一括削除");
+          } catch (error) {
+            if ((error as { code?: number }).code !== 10003) {
+              logger.error(`[ura] failed to delete match VC for purge ${match.id}`, error);
+              failed++;
+              continue;
+            }
+          }
+        }
+        try {
+          if (await removeUraMatch(interaction.guild.id, match.id)) removed++;
+        } catch (error) {
+          logger.error(`[ura] failed to remove match history ${match.id}`, error);
+          failed++;
+        }
+      }
+      return interaction.editReply(`削除完了: ${removed}件。${failed ? `削除できなかったマッチ: ${failed}件。Botの権限・ログを確認してください。` : ""}`);
+    }
     if (id === `${URA_PREFIX}panel:delete`) {
       if (!interaction.guild) return interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -637,15 +690,30 @@ export const uraRecruitmentCommand = {
     .addSubcommand((sub) => sub.setName("block").setDescription("相手をブロックします").addUserOption((option) => option.setName("user").setDescription("ブロックする相手").setRequired(true)))
     .addSubcommand((sub) => sub.setName("unblock").setDescription("相手のブロックを解除します").addUserOption((option) => option.setName("user").setDescription("ブロック解除する相手").setRequired(true)))
     .addSubcommand((sub) => sub.setName("blocks").setDescription("自分がブロックしている相手を確認します"))
-    .addSubcommand((sub) => sub.setName("list").setDescription("現在の募集一覧を確認します")),
+    .addSubcommand((sub) => sub.setName("list").setDescription("現在の募集一覧を確認します"))
+    .addSubcommand((sub) => sub.setName("purge-matches").setDescription("マッチVCと履歴を一括削除（管理者・確認必須）")),
   async execute(interaction: ChatInputCommandInteraction) {
     if (!interaction.guild) return interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
     const subcommand = interaction.options.getSubcommand();
-    if (["setup", "panel", "enable", "disable", "list"].includes(subcommand) && !adminOnly(interaction)) {
+    if (["setup", "panel", "enable", "disable", "list", "purge-matches"].includes(subcommand) && !adminOnly(interaction)) {
       return interaction.reply({ content: "管理者のみ実行できます。", ephemeral: true });
     }
     // Acknowledge before database or Discord API calls; slash commands expire after 3s.
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    if (subcommand === "purge-matches") {
+      const cutoff = new Date();
+      const matches = await listUraMatchesForGuildBefore(interaction.guild.id, cutoff);
+      if (!matches.length) return interaction.editReply("削除対象のマッチはありません。");
+      const active = matches.filter((match) => match.status === "active").length;
+      return interaction.editReply({
+        content: `マッチ${matches.length}件（進行中${active}件、終了済み${matches.length - active}件）のVCと履歴を完全に削除します。関連する通報履歴も削除され、進行中のVCの参加者は切断されます。新しいマッチは対象外です。実行しますか？`,
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(`${URA_PREFIX}matches:purge:${cutoff.getTime()}`).setLabel("全件削除を確定").setStyle(ButtonStyle.Danger),
+          ),
+        ],
+      });
+    }
     if (subcommand === "setup") {
       const panelChannel = interaction.options.getChannel("panel_channel", true);
       const channel = interaction.options.getChannel("channel", true);

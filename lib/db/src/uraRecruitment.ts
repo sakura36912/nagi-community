@@ -307,6 +307,26 @@ export async function getActiveUraMatchForUser(guildId: string, userId: string) 
     .limit(1))[0] ?? null;
 }
 
+export async function listUraMatchesForGuildBefore(guildId: string, cutoff: Date) {
+  return db.select().from(uraMatchesTable)
+    .where(and(eq(uraMatchesTable.guildId, guildId), lte(uraMatchesTable.createdAt, cutoff)))
+    .orderBy(asc(uraMatchesTable.id));
+}
+
+/** Remove a match and its dependent report records only after its VC is gone. */
+export async function removeUraMatch(guildId: string, id: number) {
+  return db.transaction(async (tx) => {
+    const [match] = await tx.select().from(uraMatchesTable)
+      .where(and(eq(uraMatchesTable.guildId, guildId), eq(uraMatchesTable.id, id))).limit(1);
+    if (!match) return false;
+    await tx.delete(uraReportsTable).where(eq(uraReportsTable.matchId, id));
+    await tx.delete(uraMatchesTable).where(and(eq(uraMatchesTable.guildId, guildId), eq(uraMatchesTable.id, id)));
+    await tx.update(uraRecruitmentsTable).set({ vcChannelId: null })
+      .where(and(eq(uraRecruitmentsTable.id, match.recruitmentId), eq(uraRecruitmentsTable.guildId, guildId)));
+    return true;
+  });
+}
+
 export async function markUraMatchDeleteAt(id: number, deleteAt: Date | null) {
   const [row] = await db
     .update(uraMatchesTable)

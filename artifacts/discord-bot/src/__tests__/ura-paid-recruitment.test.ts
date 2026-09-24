@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import {
-  db, pool, walletsTable, transactionsTable, uraRecruitmentsTable, uraMatchesTable,
+  db, pool, walletsTable, transactionsTable, uraRecruitmentsTable, uraMatchesTable, uraReportsTable,
   createPaidUraRecruitment, cancelAndRefundUraRecruitment, createUraMatch,
-  listUraMatchesReadyForDeletion, URA_RECRUITMENT_FEE,
+  listUraMatchesReadyForDeletion, listUraMatchesForGuildBefore, removeUraMatch, URA_RECRUITMENT_FEE,
 } from "@workspace/db";
 
 const guildId = `test-ura-${randomUUID()}`;
@@ -12,6 +12,7 @@ const ownerId = `test-user-${randomUUID()}`;
 const values = { guildId, recruitmentChannelId: "test-text", ownerId, type: "talk" as const, note: "test" };
 
 afterEach(async () => {
+  await db.delete(uraReportsTable).where(eq(uraReportsTable.guildId, guildId));
   await db.delete(uraMatchesTable).where(eq(uraMatchesTable.guildId, guildId));
   await db.delete(uraRecruitmentsTable).where(eq(uraRecruitmentsTable.guildId, guildId));
   await db.delete(transactionsTable).where(eq(transactionsTable.guildId, guildId));
@@ -48,5 +49,22 @@ describe("裏航海の募集料金", () => {
     });
     expect((await listUraMatchesReadyForDeletion(new Date(Date.now() + 23 * 60 * 60 * 1000))).some((row) => row.id === match.id)).toBe(false);
     expect((await listUraMatchesReadyForDeletion(new Date(Date.now() + 25 * 60 * 60 * 1000))).some((row) => row.id === match.id)).toBe(true);
+  });
+
+  it("マッチ削除では関連通報も消し、募集履歴のVC参照を解除する", async () => {
+    const [recruitment] = await db.insert(uraRecruitmentsTable).values(values).returning();
+    const match = await createUraMatch({
+      guildId, recruitmentId: recruitment.id, hostId: ownerId, guestId: "test-guest", channelId: `test-vc-${randomUUID()}`,
+    });
+    await db.insert(uraReportsTable).values({
+      guildId, matchId: match.id, reporterId: ownerId, reportedId: "test-guest",
+      reason: "test", details: "test",
+    });
+    expect((await listUraMatchesForGuildBefore(guildId, new Date(Date.now() + 1000))).map((row) => row.id)).toContain(match.id);
+    expect(await removeUraMatch(guildId, match.id)).toBe(true);
+    expect(await removeUraMatch(guildId, match.id)).toBe(false);
+    expect(await db.select().from(uraMatchesTable).where(eq(uraMatchesTable.id, match.id))).toHaveLength(0);
+    expect(await db.select().from(uraReportsTable).where(eq(uraReportsTable.matchId, match.id))).toHaveLength(0);
+    expect((await db.select().from(uraRecruitmentsTable).where(eq(uraRecruitmentsTable.id, recruitment.id)))[0]?.vcChannelId).toBeNull();
   });
 });
