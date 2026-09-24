@@ -8,8 +8,10 @@ import {
   lte,
   ne,
   or,
+  sql,
 } from "drizzle-orm";
 import { db } from "./index";
+import { transactionsTable, walletsTable } from "./schema/economy";
 import {
   uraApplicationsTable,
   uraBlocksTable,
@@ -22,6 +24,7 @@ import {
 export const URA_TALK = "talk" as const;
 export const URA_SLEEP = "sleep" as const;
 export type UraRecruitmentType = typeof URA_TALK | typeof URA_SLEEP;
+export const URA_RECRUITMENT_FEE = 30_000;
 
 export async function getUraRecruitmentSettings(guildId: string) {
   const existing = await db
@@ -73,6 +76,51 @@ export async function createUraRecruitment(values: {
 }) {
   const [row] = await db.insert(uraRecruitmentsTable).values(values).returning();
   return row;
+}
+
+/** Charge and create together; serialize per owner to prevent concurrent duplicate cards/charges. */
+export async function createPaidUraRecruitment(values: {
+  guildId: string;
+  recruitmentChannelId: string;
+  ownerId: string;
+  type: UraRecruitmentType;
+  note: string;
+}): Promise<{ status: "created"; recruitment: Awaited<ReturnType<typeof createUraRecruitment>> } | { status: "already_open" } | { status: "insufficient" }> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`ura-recruit:${values.guildId}:${values.ownerId}`}, 0))`);
+    const [open] = await tx.select({ id: uraRecruitmentsTable.id }).from(uraRecruitmentsTable)
+      .where(and(eq(uraRecruitmentsTable.guildId, values.guildId), eq(uraRecruitmentsTable.ownerId, values.ownerId), eq(uraRecruitmentsTable.status, "open"))).limit(1);
+    if (open) return { status: "already_open" } as const;
+    await tx.insert(walletsTable).values({ guildId: values.guildId, userId: values.ownerId })
+      .onConflictDoNothing();
+    const [charged] = await tx.update(walletsTable)
+      .set({ balance: sql`${walletsTable.balance} - ${URA_RECRUITMENT_FEE}` })
+      .where(and(eq(walletsTable.guildId, values.guildId), eq(walletsTable.userId, values.ownerId), sql`${walletsTable.balance} >= ${URA_RECRUITMENT_FEE}`))
+      .returning({ balance: walletsTable.balance });
+    if (!charged) return { status: "insufficient" } as const;
+    const [recruitment] = await tx.insert(uraRecruitmentsTable).values(values).returning();
+    await tx.insert(transactionsTable).values({
+      guildId: values.guildId, userId: values.ownerId, amount: -URA_RECRUITMENT_FEE,
+      reason: `裏航海募集 #${recruitment.id}`,
+    });
+    return { status: "created", recruitment } as const;
+  });
+}
+
+export async function cancelAndRefundUraRecruitment(id: number) {
+  return db.transaction(async (tx) => {
+    const [row] = await tx.update(uraRecruitmentsTable)
+      .set({ status: "cancelled", closedAt: new Date() })
+      .where(and(eq(uraRecruitmentsTable.id, id), eq(uraRecruitmentsTable.status, "open"))).returning();
+    if (!row) return false;
+    await tx.update(walletsTable).set({ balance: sql`${walletsTable.balance} + ${URA_RECRUITMENT_FEE}` })
+      .where(and(eq(walletsTable.guildId, row.guildId), eq(walletsTable.userId, row.ownerId)));
+    await tx.insert(transactionsTable).values({
+      guildId: row.guildId, userId: row.ownerId, amount: URA_RECRUITMENT_FEE,
+      reason: `裏航海募集投稿失敗の返金 #${id}`,
+    });
+    return true;
+  });
 }
 
 export async function setUraRecruitmentMessage(id: number, messageId: string) {
@@ -225,7 +273,9 @@ export async function createUraMatch(values: {
   guestId: string;
   channelId: string;
 }) {
-  const [row] = await db.insert(uraMatchesTable).values(values).returning();
+  const [row] = await db.insert(uraMatchesTable).values({
+    ...values, deleteAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  }).returning();
   await db
     .update(uraRecruitmentsTable)
     .set({ vcChannelId: values.channelId })
@@ -270,7 +320,9 @@ export async function listUraMatchesReadyForDeletion(now: Date) {
   return db
     .select()
     .from(uraMatchesTable)
-    .where(and(eq(uraMatchesTable.status, "active"), lte(uraMatchesTable.deleteAt, now)));
+    // Ignore legacy three-minute deleteAt values; all active VCs now last up to 24h.
+    .where(and(eq(uraMatchesTable.status, "active"),
+      lte(uraMatchesTable.createdAt, new Date(now.getTime() - 24 * 60 * 60 * 1000))));
 }
 
 export async function finishUraMatch(id: number) {

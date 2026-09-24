@@ -133,8 +133,8 @@ import {
 import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/calendar";
 import {
   handleUraInteraction,
-  handleUraVoiceStateUpdate,
   runUraRecruitmentCleanup,
+  syncUraCommandRegistration,
   URA_PREFIX,
 } from "./commands/uraRecruitment";
 
@@ -1176,6 +1176,9 @@ client.once(Events.ClientReady, async (readyClient) => {
   runUraRecruitmentCleanup(readyClient).catch((err) =>
     logger.error("[ura] Startup cleanup error", err),
   );
+  syncUraCommandRegistration(readyClient).catch((err) =>
+    logger.error("[ura] Startup command registration failed", err),
+  );
 
   // 起動直後に全高級船室パネルを一括更新（メンバーリスト・期限・ボタンを現在の状態に同期）
   enforceAllExpelledLuxuryVcAccess(readyClient)
@@ -1362,9 +1365,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const userId = newState.member?.id ?? oldState.member?.id;
   if (!userId) return;
   if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
-  await handleUraVoiceStateUpdate(client, oldState.channelId, newState.channelId).catch((err) =>
-    logger.error("[ura] Voice state handling error", err),
-  );
   await handleMultiplayerChinchiroVoiceDeparture(oldState, newState);
   // 追放者は高級船室へ入室できない。古い明示権限が残っていても即時に
   // 権限を削除して切断する（フリールームや砂浜は対象外）。
@@ -2087,8 +2087,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             r.name === "追放者" && member.roles.cache.has(r.id),
           );
           const hasRestrictedRole = !isExempt && (hasIslandRole || hasExpelledRole);
-          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow", "chinchiro", "ura"]);
-          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow", "chinchiro", "ura"]);
+          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow", "chinchiro", "裏航海"]);
+          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow", "chinchiro", "裏航海"]);
           const allowedCommands = hasIslandRole && !hasExpelledRole
             ? allowedForIsland
             : allowedForExpelled;

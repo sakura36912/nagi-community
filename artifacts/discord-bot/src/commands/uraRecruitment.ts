@@ -13,6 +13,8 @@ import {
   type ChatInputCommandInteraction,
   type Client,
   type Guild,
+  type ApplicationCommandManager,
+  type GuildApplicationCommandManager,
   type ModalSubmitInteraction,
 } from "discord.js";
 import {
@@ -22,8 +24,9 @@ import {
   cancelUraRecruitment,
   createUraApplication,
   createUraMatch,
-  createUraReport,
-  createUraRecruitment,
+  createPaidUraRecruitment,
+  cancelAndRefundUraRecruitment,
+  URA_RECRUITMENT_FEE,
   dismissUraApplication,
   abortUraRecruitment,
   finishUraMatch,
@@ -31,7 +34,6 @@ import {
   getOpenUraRecruitmentByOwner,
   getUraApplication,
   getUraApplicationById,
-  getUraMatchByChannelId,
   getUraMatchById,
   getUraRecruitmentById,
   getUraRecruitmentSettings,
@@ -40,11 +42,8 @@ import {
   listUraApplications,
   listUraBlocks,
   listUraMatchesReadyForDeletion,
-  listUraReports,
-  markUraMatchDeleteAt,
   markUraRecruitmentMatched,
   removeUraBlock,
-  setUraRecruitmentCancelled,
   setUraRecruitmentMessage,
   setUraRecruitmentSettings,
   type UraRecruitmentType,
@@ -54,7 +53,6 @@ import { logger } from "../lib/logger";
 export const URA_PREFIX = "ura:";
 const CREATE_MODAL_PREFIX = `${URA_PREFIX}create:`;
 const APPLY_MODAL_PREFIX = `${URA_PREFIX}apply:`;
-const REPORT_MODAL_PREFIX = `${URA_PREFIX}report:`;
 const lastUraActions = new Map<string, number>();
 const syncedOpenRecruitmentGuilds = new Set<string>();
 
@@ -97,7 +95,7 @@ function recruitmentCard(recruitment: {
   const isOpen = recruitment.status === "open";
   const embed = new EmbedBuilder()
     .setColor(isOpen ? 0x8b5cf6 : 0x6b7280)
-    .setTitle(`${isOpen ? typeLabel(recruitment.type) : "🔒 募集終了"} #${recruitment.id}`)
+    .setTitle(`裏航海｜${isOpen ? typeLabel(recruitment.type) : "🔒 募集終了"} #${recruitment.id}`)
     .addFields(
       { name: "募集者", value: `<@${recruitment.ownerId}>`, inline: true },
       { name: "一言", value: recruitment.note.slice(0, 1024) || "（なし）", inline: false },
@@ -119,6 +117,46 @@ function panelComponents() {
       new ButtonBuilder().setCustomId(`${URA_PREFIX}panel:create:${URA_SLEEP}`).setLabel("🌙 寝落ち募集").setStyle(ButtonStyle.Primary),
     ),
   ];
+}
+
+const panelEmbed = () => new EmbedBuilder()
+  .setColor(0x8b5cf6)
+  .setTitle("裏航海パネル")
+  .setDescription("個通または寝落ちの募集を開始できます。\n募集開始時に30,000引き落とします。専用VCは作成から24時間で削除されます。");
+
+export async function syncUraCommandRegistration(client: Client) {
+  if (!client.application) return;
+  async function sync(manager: ApplicationCommandManager | GuildApplicationCommandManager, scope: string) {
+    const registered = await manager.fetch({});
+    const old = registered.find((command) => command.name === "ura");
+    const current = registered.find((command) => command.name === "裏航海");
+    const data = uraRecruitmentCommand.data.toJSON();
+    if (current) {
+      await manager.edit(current.id, data);
+      if (old) await manager.delete(old.id);
+    } else if (old) {
+      await manager.edit(old.id, data);
+    } else {
+      await manager.create(data);
+    }
+    logger.info(`[ura] 裏航海 command synchronized (${scope})`);
+  }
+  await sync(client.application.commands, "global").catch((error) => logger.error("[ura] global command sync failed", error));
+  for (const guild of client.guilds.cache.values()) {
+    await sync(guild.commands, guild.id)
+      .catch((error) => logger.error(`[ura] guild command sync failed ${guild.id}`, error));
+  }
+}
+
+async function refreshExistingUraPanel(guild: Guild) {
+  const channel = await configuredPanelChannel(guild);
+  if (!channel || channel.type !== ChannelType.GuildText) return;
+  const messages = await channel.messages.fetch({ limit: 100 });
+  const panel = messages.find((message) =>
+    message.author.id === guild.client.user?.id
+    && ["裏募集パネル", "裏航海パネル"].includes(message.embeds[0]?.title ?? ""),
+  );
+  if (panel) await panel.edit({ embeds: [panelEmbed()], components: panelComponents() });
 }
 
 function recruitmentComponents(id: number, open: boolean) {
@@ -186,16 +224,21 @@ async function getGuildProfile(guild: Guild, userId: string) {
   };
 }
 
-async function postRecruitmentCard(guild: Guild, recruitment: Awaited<ReturnType<typeof createUraRecruitment>>) {
+async function postRecruitmentCard(guild: Guild, recruitment: NonNullable<Awaited<ReturnType<typeof getUraRecruitmentById>>>) {
   const channel = await configuredRecruitmentChannel(guild);
-  if (!channel) throw new Error("裏募集チャンネルが設定されていないか、見つかりません。");
+  if (!channel) throw new Error("裏航海チャンネルが設定されていないか、見つかりません。");
   const profile = await getGuildProfile(guild, recruitment.ownerId);
   const message = await channel.send({
     embeds: [recruitmentCard(recruitment, profile ?? undefined)],
     components: recruitmentComponents(recruitment.id, true),
     allowedMentions: { users: [] },
   });
-  await setUraRecruitmentMessage(recruitment.id, message.id);
+  try {
+    await setUraRecruitmentMessage(recruitment.id, message.id);
+  } catch (error) {
+    await message.delete().catch((deleteError) => logger.error("[ura] failed to remove unrecorded recruitment card", deleteError));
+    throw error;
+  }
   return message;
 }
 
@@ -295,8 +338,8 @@ async function sendMatchNotice(guild: Guild, matchId: number, userId: string, ot
     content: text,
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(`${URA_PREFIX}match:report:${matchId}`).setLabel("🚨 通報する").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId(`${URA_PREFIX}match:block:${matchId}`).setLabel("🚫 ブロック").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${URA_PREFIX}match:delete:${matchId}`).setLabel("🗑️ VCを削除").setStyle(ButtonStyle.Danger),
       ),
     ],
     allowedMentions: { users: [] },
@@ -308,7 +351,7 @@ async function sendMatchNotice(guild: Guild, matchId: number, userId: string, ot
 async function handleCreateSubmit(interaction: ModalSubmitInteraction, type: UraRecruitmentType) {
   if (!interaction.guild) return interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
   const settings = await getUraRecruitmentSettings(interaction.guild.id);
-  if (!settings.enabled) return interaction.reply({ content: "裏募集システムは現在停止中です。", ephemeral: true });
+  if (!settings.enabled) return interaction.reply({ content: "裏航海は現在停止中です。", ephemeral: true });
   if (!settings.recruitmentChannelId) return interaction.reply({ content: "募集チャンネルが設定されていません。", ephemeral: true });
   if (isUraRateLimited(interaction.user.id, "create", 30_000)) {
     return interaction.reply({ content: "募集操作が早すぎます。少し待ってから再度お試しください。", ephemeral: true });
@@ -320,23 +363,26 @@ async function handleCreateSubmit(interaction: ModalSubmitInteraction, type: Ura
     return interaction.reply({ content: "既に募集中です。先に現在の募集を終了してください。", ephemeral: true });
   }
   const note = interaction.fields.getTextInputValue("note").trim() || "（なし）";
-  const recruitment = await createUraRecruitment({
+  await interaction.deferReply({ ephemeral: true });
+  const result = await createPaidUraRecruitment({
     guildId: interaction.guild.id,
     recruitmentChannelId: settings.recruitmentChannelId,
     ownerId: interaction.user.id,
     type,
     note,
   });
+  if (result.status === "already_open") return interaction.editReply("既に募集中です。先に現在の募集を終了してください。");
+  if (result.status === "insufficient") return interaction.editReply(`残高が不足しています。募集には${URA_RECRUITMENT_FEE.toLocaleString()}必要です。`);
+  const recruitment = result.recruitment;
   try {
     await postRecruitmentCard(interaction.guild, recruitment);
   } catch (error) {
-    await setUraRecruitmentCancelled(recruitment.id);
+    await cancelAndRefundUraRecruitment(recruitment.id);
     logger.error("[ura] failed to post recruitment card", error);
-    return interaction.reply({ content: "募集カードの投稿に失敗しました。設定を確認してください。", ephemeral: true });
+    return interaction.editReply("募集カードの投稿に失敗したため、30,000を返金しました。設定を確認してください。");
   }
-  return interaction.reply({
-    content: "募集を開始しました。募集チャンネルを確認してください。\n募集終了ボタンは募集者本人にだけ表示されています。",
-    ephemeral: true,
+  return interaction.editReply({
+    content: "裏航海の募集を開始し、30,000を引き落としました。募集チャンネルを確認してください。\n募集終了ボタンは募集者本人にだけ表示されています。",
     components: recruitmentCancelComponents(recruitment.id),
   });
 }
@@ -407,11 +453,11 @@ async function handleSelectApplication(interaction: ButtonInteraction, client: C
     });
     await deleteRecruitmentMessage(guild, recruitmentId);
     await notifyApplicants(guild, recruitmentId, application.applicantId);
-    await sendMatchNotice(guild, match.id, recruitment.ownerId, application.applicantId, channel.id, `マッチが成立しました。専用VC <#${channel.id}> をご利用ください。`);
-    await sendMatchNotice(guild, match.id, application.applicantId, recruitment.ownerId, channel.id, `マッチが成立しました。専用VC <#${channel.id}> をご利用ください。`);
+    await sendMatchNotice(guild, match.id, recruitment.ownerId, application.applicantId, channel.id, `裏航海のマッチが成立しました。専用VC <#${channel.id}> をご利用ください。VCは作成から24時間後に削除されます。`);
+    await sendMatchNotice(guild, match.id, application.applicantId, recruitment.ownerId, channel.id, `裏航海のマッチが成立しました。専用VC <#${channel.id}> をご利用ください。VCは作成から24時間後に削除されます。`);
     await interaction.editReply({ content: `✅ マッチを成立させ、専用VC <#${channel.id}> を作成しました。` });
   } catch (error) {
-    if (channel) await channel.delete("裏募集マッチ作成失敗").catch(() => undefined);
+    if (channel) await channel.delete("裏航海マッチ作成失敗").catch(() => undefined);
     await abortUraRecruitment(recruitmentId);
     await refreshRecruitmentMessage(guild, recruitmentId);
     logger.error("[ura] failed to create private match", error);
@@ -446,7 +492,7 @@ export async function handleUraInteraction(
       return interaction.showModal(noteModal(`${CREATE_MODAL_PREFIX}${type}`, typeLabel(type), "note", "一言"));
     }
     if (id.startsWith(`${URA_PREFIX}recruitment:apply:`)) {
-      return interaction.showModal(noteModal(`${APPLY_MODAL_PREFIX}${parts[3]}`, "裏募集へ申請", "note", "一言"));
+      return interaction.showModal(noteModal(`${APPLY_MODAL_PREFIX}${parts[3]}`, "裏航海へ申請", "note", "一言"));
     }
     if (id.startsWith(`${URA_PREFIX}recruitment:cancel:`)) {
       if (!interaction.guild) return interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
@@ -462,66 +508,55 @@ export async function handleUraInteraction(
       await interaction.update({ content: "この申請を見送りました。", embeds: [], components: [] });
       return;
     }
+    if (id.startsWith(`${URA_PREFIX}match:delete:`)) {
+      const match = await getUraMatchById(Number(parts[3]));
+      if (!match || match.status !== "active" || (match.hostId !== interaction.user.id && match.guestId !== interaction.user.id)) {
+        return interaction.reply({ content: "このVCは既に終了したか、参加者ではありません。", ephemeral: true });
+      }
+      await interaction.deferReply({ ephemeral: true });
+      let channel = null;
+      if (match.channelId) {
+        try {
+          channel = await client.channels.fetch(match.channelId);
+        } catch (error) {
+          if ((error as { code?: number }).code !== 10003) {
+            logger.error(`[ura] failed to fetch match VC ${match.id}`, error);
+            return interaction.editReply("VCを確認できませんでした。後ほど再度お試しください。");
+          }
+        }
+      }
+      if (channel) {
+        if (channel.type !== ChannelType.GuildVoice || channel.guild.id !== match.guildId) {
+          return interaction.editReply("対象VCを確認できませんでした。管理者に連絡してください。");
+        }
+        try {
+          await channel.delete("裏航海の参加者による削除");
+        } catch (error) {
+          logger.error(`[ura] failed to delete match VC ${match.id}`, error);
+          return interaction.editReply("VCの削除に失敗しました。Botの権限を確認してください。");
+        }
+      }
+      await finishUraMatch(match.id);
+      return interaction.editReply("専用VCを削除しました。");
+    }
     if (id.startsWith(`${URA_PREFIX}match:report:`)) {
-      return interaction.showModal(new ModalBuilder().setCustomId(`${REPORT_MODAL_PREFIX}${parts[3]}`).setTitle("裏募集を通報").addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("reason").setLabel("通報理由").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200)),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("details").setLabel("詳細").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000)),
-      ));
+      return interaction.reply({ content: "通報機能は終了しました。", ephemeral: true });
     }
     if (id.startsWith(`${URA_PREFIX}match:block:`)) {
       const match = await getUraMatchById(Number(parts[3]));
       if (!match || (match.hostId !== interaction.user.id && match.guestId !== interaction.user.id)) return interaction.reply({ content: "この操作は参加者だけが実行できます。", ephemeral: true });
       const otherId = match.hostId === interaction.user.id ? match.guestId : match.hostId;
       await addUraBlock(match.guildId, interaction.user.id, otherId);
-      return interaction.reply({ content: "相手をブロックしました。今後の裏募集で相互に申請・成立できません。", ephemeral: true });
+      return interaction.reply({ content: "相手をブロックしました。今後の裏航海で相互に申請・成立できません。", ephemeral: true });
     }
   }
 
   if (interaction.isModalSubmit()) {
     if (id.startsWith(CREATE_MODAL_PREFIX)) return handleCreateSubmit(interaction, id.slice(CREATE_MODAL_PREFIX.length) as UraRecruitmentType);
     if (id.startsWith(APPLY_MODAL_PREFIX)) return handleApplySubmit(interaction, Number(id.slice(APPLY_MODAL_PREFIX.length)));
-    if (id.startsWith(REPORT_MODAL_PREFIX)) {
-      const match = await getUraMatchById(Number(id.slice(REPORT_MODAL_PREFIX.length)));
-      if (!match || (match.hostId !== interaction.user.id && match.guestId !== interaction.user.id)) return interaction.reply({ content: "この操作は参加者だけが実行できます。", ephemeral: true });
-      const reportedId = match.hostId === interaction.user.id ? match.guestId : match.hostId;
-      const report = await createUraReport({
-        guildId: match.guildId,
-        matchId: match.id,
-        reporterId: interaction.user.id,
-        reportedId,
-        reason: interaction.fields.getTextInputValue("reason").trim(),
-        details: interaction.fields.getTextInputValue("details").trim(),
-      });
-      const guild = client.guilds.cache.get(match.guildId) ?? await client.guilds.fetch(match.guildId).catch(() => null);
-      const settings = guild ? await getUraRecruitmentSettings(guild.id) : null;
-      const logChannel = guild && settings?.logChannelId ? await guild.channels.fetch(settings.logChannelId).catch(() => null) : null;
-      if (logChannel?.isTextBased() && !logChannel.isDMBased()) {
-        await logChannel.send({ embeds: [new EmbedBuilder().setColor(0xef4444).setTitle("🚨 裏募集通報").addFields(
-          { name: "通報者", value: `<@${report.reporterId}>`, inline: true },
-          { name: "対象者", value: `<@${report.reportedId}>`, inline: true },
-          { name: "マッチID", value: String(report.matchId), inline: true },
-          { name: "理由", value: report.reason },
-          { name: "詳細", value: report.details },
-        ).setTimestamp()] });
-      }
-      return interaction.reply({ content: "通報を管理者へ送信しました。相手には通知されません。", ephemeral: true });
-    }
+    if (id.startsWith(`${URA_PREFIX}report:`)) return interaction.reply({ content: "通報機能は終了しました。", ephemeral: true });
   }
   return undefined;
-}
-
-export async function handleUraVoiceStateUpdate(client: Client, oldChannelId: string | null, newChannelId: string | null) {
-  const channelId = oldChannelId ?? newChannelId;
-  if (!channelId) return;
-  const match = await getUraMatchByChannelId(channelId);
-  if (!match) return;
-  const channel = client.channels.cache.get(match.channelId!) ?? await client.channels.fetch(match.channelId!).catch(() => null);
-  if (!channel || channel.type !== ChannelType.GuildVoice) return;
-  if (newChannelId === match.channelId) {
-    await markUraMatchDeleteAt(match.id, null);
-  } else if (channel.members.size === 0) {
-    await markUraMatchDeleteAt(match.id, new Date(Date.now() + 3 * 60 * 1000));
-  }
 }
 
 export async function runUraRecruitmentCleanup(client: Client) {
@@ -530,6 +565,7 @@ export async function runUraRecruitmentCleanup(client: Client) {
     try {
       const openRecruitments = await listOpenUraRecruitments(guild.id);
       await Promise.all(openRecruitments.map((recruitment) => refreshRecruitmentMessage(guild, recruitment.id)));
+      await refreshExistingUraPanel(guild);
       syncedOpenRecruitmentGuilds.add(guild.id);
     } catch (error) {
       logger.warn(`[ura] failed to sync open recruitment cards for guild ${guild.id}`, error);
@@ -538,40 +574,54 @@ export async function runUraRecruitmentCleanup(client: Client) {
 
   const matches = await listUraMatchesReadyForDeletion(new Date());
   for (const match of matches) {
-    const channel = match.channelId ? await client.channels.fetch(match.channelId).catch(() => null) : null;
-    if (channel) await channel.delete("裏募集の参加者退出から3分経過").catch(() => undefined);
+    let channel = null;
+    if (match.channelId) {
+      try {
+        channel = await client.channels.fetch(match.channelId);
+      } catch (error) {
+        if ((error as { code?: number }).code !== 10003) {
+          logger.error(`[ura] failed to fetch expired VC ${match.id}`, error);
+          continue;
+        }
+      }
+    }
+    if (channel) {
+      try {
+        await channel.delete("裏航海の専用VCが作成から24時間経過");
+      } catch (error) {
+        logger.error(`[ura] failed to delete expired VC ${match.id}`, error);
+        continue;
+      }
+    }
     await finishUraMatch(match.id);
   }
 }
 
 export const uraRecruitmentCommand = {
   data: new SlashCommandBuilder()
-    .setName("ura")
-    .setDescription("個通・寝落ちの裏募集を管理します")
-    .addSubcommand((sub) => sub.setName("setup").setDescription("裏募集を設定します")
+    .setName("裏航海")
+    .setDescription("個通・寝落ちの裏航海を管理します")
+    .addSubcommand((sub) => sub.setName("setup").setDescription("裏航海を設定します")
       .addChannelOption((option) => option.setName("panel_channel").setDescription("募集パネルを置くチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
       .addChannelOption((option) => option.setName("channel").setDescription("募集カードを投稿するチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(true))
-      .addChannelOption((option) => option.setName("category").setDescription("成立後に作る専用VCのカテゴリ").addChannelTypes(ChannelType.GuildCategory).setRequired(true))
-      .addChannelOption((option) => option.setName("log_channel").setDescription("通報ログチャンネル").addChannelTypes(ChannelType.GuildText).setRequired(false)))
+      .addChannelOption((option) => option.setName("category").setDescription("成立後に作る専用VCのカテゴリ").addChannelTypes(ChannelType.GuildCategory).setRequired(true)))
     .addSubcommand((sub) => sub.setName("panel").setDescription("設定済みチャンネルへ募集パネルを投稿します"))
-    .addSubcommand((sub) => sub.setName("enable").setDescription("裏募集を有効化します"))
-    .addSubcommand((sub) => sub.setName("disable").setDescription("裏募集を停止します"))
+    .addSubcommand((sub) => sub.setName("enable").setDescription("裏航海を有効化します"))
+    .addSubcommand((sub) => sub.setName("disable").setDescription("裏航海を停止します"))
     .addSubcommand((sub) => sub.setName("block").setDescription("相手をブロックします").addUserOption((option) => option.setName("user").setDescription("ブロックする相手").setRequired(true)))
     .addSubcommand((sub) => sub.setName("unblock").setDescription("相手のブロックを解除します").addUserOption((option) => option.setName("user").setDescription("ブロック解除する相手").setRequired(true)))
     .addSubcommand((sub) => sub.setName("blocks").setDescription("自分がブロックしている相手を確認します"))
-    .addSubcommand((sub) => sub.setName("list").setDescription("現在の募集一覧を確認します"))
-    .addSubcommand((sub) => sub.setName("reports").setDescription("通報履歴を確認します")),
+    .addSubcommand((sub) => sub.setName("list").setDescription("現在の募集一覧を確認します")),
   async execute(interaction: ChatInputCommandInteraction) {
     if (!interaction.guild) return interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
     const subcommand = interaction.options.getSubcommand();
-    if (["setup", "panel", "enable", "disable", "list", "reports"].includes(subcommand) && !adminOnly(interaction)) {
+    if (["setup", "panel", "enable", "disable", "list"].includes(subcommand) && !adminOnly(interaction)) {
       return interaction.reply({ content: "管理者のみ実行できます。", ephemeral: true });
     }
     if (subcommand === "setup") {
       const panelChannel = interaction.options.getChannel("panel_channel", true);
       const channel = interaction.options.getChannel("channel", true);
       const category = interaction.options.getChannel("category", true);
-      const log = interaction.options.getChannel("log_channel", false);
       if (panelChannel.id === channel.id) {
         return interaction.reply({ content: "パネルチャンネルと募集投稿チャンネルは別々に指定してください。", ephemeral: true });
       }
@@ -579,7 +629,6 @@ export const uraRecruitmentCommand = {
         panelChannelId: panelChannel.id,
         recruitmentChannelId: channel.id,
         vcCategoryId: category.id,
-        logChannelId: log?.id ?? null,
         enabled: true,
       });
       return interaction.reply({
@@ -592,20 +641,16 @@ export const uraRecruitmentCommand = {
       if (!settings.panelChannelId || !settings.recruitmentChannelId) return interaction.reply({ content: "先に `/ura setup` を実行してください。", ephemeral: true });
       const channel = await configuredPanelChannel(interaction.guild);
       if (!channel) return interaction.reply({ content: "パネルチャンネルが見つかりません。", ephemeral: true });
-      await channel.send({ embeds: [new EmbedBuilder().setColor(0x8b5cf6).setTitle("裏募集パネル").setDescription("個通または寝落ちの募集を開始できます。\n年齢情報は取得・表示しません。")], components: panelComponents() });
+      await channel.send({ embeds: [panelEmbed()], components: panelComponents() });
       return interaction.reply({ content: `✅ <#${channel.id}> にパネルを設置しました。`, ephemeral: true });
     }
     if (subcommand === "enable" || subcommand === "disable") {
       await setUraRecruitmentSettings(interaction.guild.id, { enabled: subcommand === "enable" });
-      return interaction.reply({ content: subcommand === "enable" ? "✅ 裏募集を有効化しました。" : "✅ 裏募集を停止しました。", ephemeral: true });
+      return interaction.reply({ content: subcommand === "enable" ? "✅ 裏航海を有効化しました。" : "✅ 裏航海を停止しました。", ephemeral: true });
     }
     if (subcommand === "list") {
       const rows = await listOpenUraRecruitments(interaction.guild.id);
       return interaction.reply({ content: rows.length ? rows.map((row) => `#${row.id} ${typeLabel(row.type as UraRecruitmentType)} <@${row.ownerId}>`).join("\n") : "募集中の募集はありません。", ephemeral: true });
-    }
-    if (subcommand === "reports") {
-      const rows = await listUraReports(interaction.guild.id);
-      return interaction.reply({ content: rows.length ? rows.slice(0, 20).map((row) => `#${row.id} マッチ#${row.matchId} <@${row.reporterId}> → <@${row.reportedId}>: ${row.reason}`).join("\n") : "通報履歴はありません。", ephemeral: true });
     }
     if (subcommand === "blocks") {
       const blocks = await listUraBlocks(interaction.guild.id, interaction.user.id);
