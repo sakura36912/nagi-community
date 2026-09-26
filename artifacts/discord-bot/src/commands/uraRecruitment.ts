@@ -394,8 +394,15 @@ async function handleCreateSubmit(interaction: ModalSubmitInteraction, type: Ura
     logger.error("[ura] failed to post recruitment card", error);
     return interaction.editReply("募集カードの投稿に失敗したため、30,000を返金しました。設定を確認してください。");
   }
+  const dmSent = await interaction.user.send({
+    content: `裏航海の募集 #${recruitment.id} を開始しました。終了するときは下のボタンを押してください。`,
+    components: recruitmentCancelComponents(recruitment.id),
+  }).then(() => true).catch((error) => {
+    logger.warn(`[ura] failed to send recruitment controls to owner for ${recruitment.id}`, error);
+    return false;
+  });
   return interaction.editReply({
-    content: "裏航海の募集を開始し、30,000を引き落としました。募集チャンネルを確認してください。\n募集終了ボタンは募集者本人にだけ表示されています。",
+    content: `裏航海の募集を開始し、30,000を引き落としました。募集チャンネルを確認してください。\n募集終了ボタンは募集者本人にだけ表示されています。${dmSent ? "DMにも同じボタンを送りました。" : "DMに送れなかったため、後から終了する場合は \`/裏航海 close\` を使ってください。"}`,
     components: recruitmentCancelComponents(recruitment.id),
   });
 }
@@ -479,15 +486,20 @@ async function handleSelectApplication(interaction: ButtonInteraction, client: C
   return undefined;
 }
 
-async function handleCancelRecruitment(interaction: ButtonInteraction, guild: Guild, recruitmentId: number) {
+async function handleCancelRecruitment(interaction: ButtonInteraction, client: Client, recruitmentId: number) {
+  await interaction.deferUpdate();
   const recruitment = await getUraRecruitmentById(recruitmentId);
-  if (!recruitment || recruitment.ownerId !== interaction.user.id) return interaction.reply({ content: "募集者だけが終了できます。", ephemeral: true });
+  if (!recruitment || recruitment.ownerId !== interaction.user.id) {
+    return interaction.followUp({ content: "募集者だけが終了できます。", flags: MessageFlags.Ephemeral });
+  }
+  const guild = client.guilds.cache.get(recruitment.guildId) ?? await client.guilds.fetch(recruitment.guildId).catch(() => null);
+  if (!guild) return interaction.followUp({ content: "サーバーが見つかりません。後ほどお試しください。", flags: MessageFlags.Ephemeral });
   const cancelled = await cancelUraRecruitment(recruitmentId, interaction.user.id);
-  if (!cancelled) return interaction.reply({ content: "この募集はすでに終了しています。", ephemeral: true });
-  await interaction.update({
-    content: "募集を終了しました。",
+  await interaction.editReply({
+    content: cancelled ? "募集を終了しました。" : "この募集はすでに終了しています。",
     components: recruitmentCancelComponents(recruitmentId, true),
   });
+  if (!cancelled) return;
   await deleteRecruitmentMessage(guild, recruitmentId);
   await notifyApplicants(guild, recruitmentId);
   return undefined;
@@ -574,8 +586,7 @@ export async function handleUraInteraction(
       return interaction.showModal(noteModal(`${APPLY_MODAL_PREFIX}${parts[3]}`, "裏航海へ申請", "note", "一言"));
     }
     if (id.startsWith(`${URA_PREFIX}recruitment:cancel:`)) {
-      if (!interaction.guild) return interaction.reply({ content: "サーバー内でのみ使用できます。", ephemeral: true });
-      return handleCancelRecruitment(interaction, interaction.guild, Number(parts[3]));
+      return handleCancelRecruitment(interaction, client, Number(parts[3]));
     }
     if (id.startsWith(`${URA_PREFIX}application:select:`)) {
       return handleSelectApplication(interaction, client, Number(parts[3]), Number(parts[4]));
@@ -690,6 +701,7 @@ export const uraRecruitmentCommand = {
     .addSubcommand((sub) => sub.setName("block").setDescription("相手をブロックします").addUserOption((option) => option.setName("user").setDescription("ブロックする相手").setRequired(true)))
     .addSubcommand((sub) => sub.setName("unblock").setDescription("相手のブロックを解除します").addUserOption((option) => option.setName("user").setDescription("ブロック解除する相手").setRequired(true)))
     .addSubcommand((sub) => sub.setName("blocks").setDescription("自分がブロックしている相手を確認します"))
+    .addSubcommand((sub) => sub.setName("close").setDescription("自分の裏航海募集を終了します"))
     .addSubcommand((sub) => sub.setName("list").setDescription("現在の募集一覧を確認します"))
     .addSubcommand((sub) => sub.setName("purge-matches").setDescription("マッチVCと履歴を一括削除（管理者・確認必須）")),
   async execute(interaction: ChatInputCommandInteraction) {
@@ -700,6 +712,15 @@ export const uraRecruitmentCommand = {
     }
     // Acknowledge before database or Discord API calls; slash commands expire after 3s.
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    if (subcommand === "close") {
+      const recruitment = await getOpenUraRecruitmentByOwner(interaction.guild.id, interaction.user.id);
+      if (!recruitment) return interaction.editReply("現在募集中の裏航海はありません。");
+      const cancelled = await cancelUraRecruitment(recruitment.id, interaction.user.id);
+      if (!cancelled) return interaction.editReply("この募集はすでに終了しています。");
+      await deleteRecruitmentMessage(interaction.guild, recruitment.id);
+      await notifyApplicants(interaction.guild, recruitment.id);
+      return interaction.editReply("募集を終了しました。");
+    }
     if (subcommand === "purge-matches") {
       const cutoff = new Date();
       const matches = await listUraMatchesForGuildBefore(interaction.guild.id, cutoff);
