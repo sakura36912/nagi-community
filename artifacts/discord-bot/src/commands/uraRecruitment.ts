@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
+  ComponentType,
   EmbedBuilder,
   ModalBuilder,
   MessageFlags,
@@ -194,6 +195,36 @@ function recruitmentCancelComponents(id: number, disabled = false) {
         .setDisabled(disabled),
     ),
   ];
+}
+
+function recruitmentOwnerControls(id: number, existing = false) {
+  return {
+    content: existing
+      ? `現在募集中の裏航海 #${id} を終了するときは、下のボタンを押してください。`
+      : `裏航海の募集 #${id} を開始しました。終了するときは下のボタンを押してください。`,
+    components: recruitmentCancelComponents(id),
+  };
+}
+
+async function ensureOpenRecruitmentOwnerControls(guild: Guild, recruitment: NonNullable<Awaited<ReturnType<typeof getUraRecruitmentById>>>) {
+  const owner = await guild.client.users.fetch(recruitment.ownerId);
+  const dm = await owner.createDM();
+  const buttonId = `${URA_PREFIX}recruitment:cancel:${recruitment.id}`;
+  let before: string | undefined;
+  while (true) {
+    const messages = await dm.messages.fetch({ limit: 100, before });
+    if (messages.some((message) =>
+      message.author.id === guild.client.user?.id
+      && message.components.some((row) => row.type === ComponentType.ActionRow && row.components.some((component) =>
+        "customId" in component && component.customId === buttonId)),
+    )) return;
+    if (messages.size < 100 || (messages.last()?.createdTimestamp ?? 0) < recruitment.createdAt.getTime()) break;
+    before = messages.lastKey();
+    if (!before) break;
+  }
+  // The recruitment may have ended while its DM history was being checked.
+  if ((await getUraRecruitmentById(recruitment.id))?.status !== "open") return;
+  await dm.send(recruitmentOwnerControls(recruitment.id, true));
 }
 
 function noteModal(customId: string, title: string, inputId: string, label: string) {
@@ -394,10 +425,7 @@ async function handleCreateSubmit(interaction: ModalSubmitInteraction, type: Ura
     logger.error("[ura] failed to post recruitment card", error);
     return interaction.editReply("募集カードの投稿に失敗したため、30,000を返金しました。設定を確認してください。");
   }
-  const dmSent = await interaction.user.send({
-    content: `裏航海の募集 #${recruitment.id} を開始しました。終了するときは下のボタンを押してください。`,
-    components: recruitmentCancelComponents(recruitment.id),
-  }).then(() => true).catch((error) => {
+  const dmSent = await interaction.user.send(recruitmentOwnerControls(recruitment.id)).then(() => true).catch((error) => {
     logger.warn(`[ura] failed to send recruitment controls to owner for ${recruitment.id}`, error);
     return false;
   });
@@ -656,6 +684,10 @@ export async function runUraRecruitmentCleanup(client: Client) {
       const openRecruitments = await listOpenUraRecruitments(guild.id);
       await Promise.all(openRecruitments.map((recruitment) => refreshRecruitmentMessage(guild, recruitment.id)));
       await refreshExistingUraPanel(guild);
+      for (const recruitment of openRecruitments) {
+        await ensureOpenRecruitmentOwnerControls(guild, recruitment).catch((error) =>
+          logger.warn(`[ura] failed to send private close button for recruitment ${recruitment.id}`, error));
+      }
       syncedOpenRecruitmentGuilds.add(guild.id);
     } catch (error) {
       logger.warn(`[ura] failed to sync open recruitment cards for guild ${guild.id}`, error);

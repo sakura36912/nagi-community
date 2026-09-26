@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MessageFlags, type ButtonInteraction, type ChatInputCommandInteraction, type Client } from "discord.js";
+import { ComponentType, MessageFlags, type ButtonInteraction, type ChatInputCommandInteraction, type Client } from "discord.js";
 
 vi.mock("@workspace/db", () => ({
   URA_TALK: "talk",
@@ -12,13 +12,16 @@ vi.mock("@workspace/db", () => ({
   getOpenUraRecruitmentByOwner: vi.fn(),
   cancelUraRecruitment: vi.fn(),
   listUraApplications: vi.fn(),
+  listOpenUraRecruitments: vi.fn(),
+  listUraMatchesReadyForDeletion: vi.fn(),
 }));
 
 import {
   cancelUraRecruitment, getActiveUraMatchForUser, getOpenUraRecruitmentByOwner, getUraRecruitmentById,
-  getUraRecruitmentSettings, listUraApplications, listUraMatchesForGuildBefore, removeUraMatch,
+  getUraRecruitmentSettings, listOpenUraRecruitments, listUraApplications,
+  listUraMatchesForGuildBefore, listUraMatchesReadyForDeletion, removeUraMatch,
 } from "@workspace/db";
-import { handleUraInteraction, uraRecruitmentCommand } from "../commands/uraRecruitment";
+import { handleUraInteraction, runUraRecruitmentCleanup, uraRecruitmentCommand } from "../commands/uraRecruitment";
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -139,5 +142,47 @@ describe("募集者専用の募集終了", () => {
     expect(getOpenUraRecruitmentByOwner).toHaveBeenCalledWith("test-guild", "test-owner");
     expect(cancelUraRecruitment).toHaveBeenCalledWith(7, "test-owner");
     expect(editReply).toHaveBeenCalledWith("募集を終了しました。");
+  });
+});
+
+describe("既存の募集中カードの非公開終了ボタン", () => {
+  it("既存募集の所有者へDMし、すでに同じボタンがある場合は再送しない", async () => {
+    const recruitment = {
+      id: 105, guildId: "existing-guild", ownerId: "existing-owner", status: "open",
+      messageId: null, createdAt: new Date(Date.now() - 60_000),
+    };
+    vi.mocked(listOpenUraRecruitments).mockResolvedValue([recruitment] as Awaited<ReturnType<typeof listOpenUraRecruitments>>);
+    vi.mocked(listUraMatchesReadyForDeletion).mockResolvedValue([]);
+    vi.mocked(getUraRecruitmentSettings).mockResolvedValue({ panelChannelId: null } as Awaited<ReturnType<typeof getUraRecruitmentSettings>>);
+    vi.mocked(getUraRecruitmentById).mockResolvedValue(recruitment as Awaited<ReturnType<typeof getUraRecruitmentById>>);
+    const send = vi.fn(async (_options: unknown) => undefined);
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ size: 0, some: () => false })
+      .mockResolvedValueOnce({
+        size: 1,
+        some: (predicate: (message: unknown) => boolean) => predicate({
+          author: { id: "test-bot" },
+          components: [{ type: ComponentType.ActionRow, components: [{ customId: "ura:recruitment:cancel:105" }] }],
+        }),
+      });
+    const dm = { messages: { fetch }, send };
+    const owner = { createDM: vi.fn(async () => dm) };
+    const guild = {
+      id: "existing-guild",
+      client: { user: { id: "test-bot" }, users: { fetch: vi.fn(async () => owner) } },
+    };
+    const client = { guilds: { cache: { values: () => [guild] } } } as unknown as Client;
+
+    await runUraRecruitmentCleanup(client);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      components: [expect.objectContaining({ components: [expect.objectContaining({ data: expect.objectContaining({ custom_id: "ura:recruitment:cancel:105" }) })] })],
+    }));
+
+    // Simulate a fresh startup with another guild ID: a matching bot DM must not be resent.
+    guild.id = "another-guild";
+    await runUraRecruitmentCleanup(client);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
