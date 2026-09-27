@@ -306,6 +306,38 @@ async function purchaseAndApplyEffect(
   return result;
 }
 
+const privateVcPurchasesInProgress = new Set<string>();
+
+async function findOwnedLuxuryVc(guild: Guild, member: GuildMember, categoryIds: string[]): Promise<string | "unknown" | null> {
+  const sessions = await getActivePrivateVcSessionsByGuild(guild.id);
+  const sessionByChannel = new Map(sessions.map((session) => [session.channelId, session]));
+  // Fetch the full list rather than trusting a potentially incomplete guild cache.
+  const channels = await guild.channels.fetch();
+  for (const session of sessions) {
+    if (session.category === "vc" && session.userId === member.id && channels.has(session.channelId)) {
+      return session.channelId;
+    }
+  }
+  for (const channel of channels.values()) {
+    if (!channel || channel.type !== ChannelType.GuildVoice) continue;
+    const session = sessionByChannel.get(channel.id);
+    if (session && isFreeRoomCategory(session.category)) continue;
+    if (!channel.permissionOverwrites.cache.get(member.id)?.allow.has(PermissionFlagsBits.ViewChannel)) continue;
+    if (!categoryIds.includes(channel.parentId ?? "") && !channel.name.startsWith("🔒 ")) continue;
+
+    const isLuxuryPanel = (message: import("discord.js").Message) =>
+      message.author.id === guild.client.user?.id &&
+      (message.embeds[0]?.title === VC_PANEL_TITLE ||
+        message.embeds[0]?.title === "🔒 非公開VC コントロールパネル");
+    const oldest = await channel.messages.fetch({ limit: 10, after: "0" });
+    const panel = oldest.find(isLuxuryPanel)
+      ?? (await channel.messages.fetch({ limit: 50 })).find(isLuxuryPanel);
+    if (!panel) return "unknown"; // Do not charge if this could be an untracked, ownerless-looking room.
+    if (panel.embeds[0]?.description?.match(/<@!?(\d+)>/)?.[1] === member.id) return channel.id;
+  }
+  return null;
+}
+
 async function purchaseAndCreatePrivateVc(
   guild: Guild,
   member: GuildMember,
@@ -317,13 +349,37 @@ async function purchaseAndCreatePrivateVc(
   roomCategory: PrivateVcRoomCategory = "vc",
   accessChannelId?: string | null,
 ): Promise<{ ok: true; item: ShopItem; channelId: string; expiresAt?: Date } | { ok: false; reason: string }> {
-  const me = guild.members.me;
-  if (!me?.permissions.has("ManageChannels")) {
-    return { ok: false, reason: "BotにManageChannels権限がないため、VCを作成できません。" };
+  const purchaseKey = `${guild.id}:${member.id}:${roomCategory}`;
+  if (privateVcPurchasesInProgress.has(purchaseKey)) {
+    return { ok: false, reason: "船室の購入処理中です。完了をお待ちください。" };
   }
+  privateVcPurchasesInProgress.add(purchaseKey);
+  try {
+    const me = guild.members.me;
+    if (!me?.permissions.has("ManageChannels")) {
+      return { ok: false, reason: "BotにManageChannels権限がないため、VCを作成できません。" };
+    }
 
-  const result = await buyItem(guild.id, member.id, itemId, currencyName);
-  if (!result.ok) return result;
+    if (roomCategory === "vc") {
+      let existing: string | "unknown" | null;
+      try {
+        existing = await findOwnedLuxuryVc(guild, member, vcCategoryIds);
+      } catch (error) {
+        logger.error(`[privateVC] Could not check existing luxury VC for ${member.id}`, error);
+        return { ok: false, reason: "既存の高級船室を確認できませんでした。請求はしていません。しばらくしてからお試しください。" };
+      }
+      if (existing) {
+        return {
+          ok: false,
+          reason: existing === "unknown"
+            ? "高級船室の所有者を確認できませんでした。請求はしていません。管理者に連絡してください。"
+            : `既に高級船室 <#${existing}> を所有しています。1人1室までです。${durationMs !== undefined ? "期限を延ばす場合は延長券をご利用ください。" : "既存の部屋をご利用ください。"}`,
+        };
+      }
+    }
+
+    const result = await buyItem(guild.id, member.id, itemId, currencyName);
+    if (!result.ok) return result;
 
   try {
     const isFreeRoom = isFreeRoomCategory(roomCategory);
@@ -422,8 +478,23 @@ async function purchaseAndCreatePrivateVc(
 
     // ボイステキストにコントロールパネルを投稿（期限あり・無期限どちらでも）
     // memberIds=[] because the channel was just created — only the owner has access so far.
-    channel.send(buildVcPanelMessage(channel.id, member.id, expiresAt, [], undefined, isFreeRoom))
-      .catch((err) => logger.error("[privateVC] Failed to send VC panel to text", err));
+    const panel = buildVcPanelMessage(channel.id, member.id, expiresAt, [], undefined, isFreeRoom);
+    if (roomCategory === "vc" && !expiresAt) {
+      // Permanent rooms have no DB session; their owner panel must exist before another purchase can be checked.
+      try {
+        await channel.send(panel);
+      } catch (panelError) {
+        try {
+          await channel.delete("高級船室の所有者パネルを設置できなかったため購入を取り消し");
+        } catch (deleteError) {
+          logger.error(`[privateVC] Could not remove room ${channel.id} after panel failure; purchase retained`, deleteError);
+          return { ok: false, reason: "高級船室は作成されましたが、パネルを設置できませんでした。返金はしていません。管理者に連絡して部屋を確認してください。" };
+        }
+        throw panelError;
+      }
+    } else {
+      channel.send(panel).catch((err) => logger.error("[privateVC] Failed to send VC panel to text", err));
+    }
 
     return { ok: true, item: result.item, channelId: channel.id, expiresAt };
   } catch (err) {
@@ -434,6 +505,9 @@ async function purchaseAndCreatePrivateVc(
       return { ok: false, reason: "VCの作成と返金の両方に失敗しました。管理者にご連絡ください。" };
     }
     return { ok: false, reason: "VCの作成に失敗したため、購入を取り消し、返金しました。" };
+  }
+  } finally {
+    privateVcPurchasesInProgress.delete(purchaseKey);
   }
 }
 

@@ -9,13 +9,14 @@
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
-import { PermissionFlagsBits } from "discord.js";
+import { ChannelType, Collection, PermissionFlagsBits } from "discord.js";
 
 // ─── Hoist mocks ─────────────────────────────────────────────────────────────
 const mocks = vi.hoisted(() => ({
   getShopItem:                vi.fn(),
   getGuildSettings:           vi.fn(),
   getActivePrivateVcSession:  vi.fn(),
+  getActivePrivateVcSessionsByGuild: vi.fn(),
   buyItem:                    vi.fn(),
   addShopItem:                vi.fn(),
   listShopItems:              vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("../lib/economy.js", () => ({
   getShopItem:               mocks.getShopItem,
   getGuildSettings:          mocks.getGuildSettings,
   getActivePrivateVcSession: mocks.getActivePrivateVcSession,
+  getActivePrivateVcSessionsByGuild: mocks.getActivePrivateVcSessionsByGuild,
   buyItem:                   mocks.buyItem,
   addShopItem:               mocks.addShopItem,
   listShopItems:             mocks.listShopItems,
@@ -57,7 +59,7 @@ vi.mock("../lib/economy.js", () => ({
   PERM_ROLE_EFFECT:          "perm_role",
   EVAL_RESURFACE_EFFECT:     "eval_resurface",
   SHOP_LICENSE_EFFECT:       "shop_license",
-  TIMED_VC_DURATIONS:        {},
+  TIMED_VC_DURATIONS:        { private_vc_1d: 86_400_000 },
   // ── Stubs (not under test) ───────────────────────────────────────────────
   extendCommunitySheet:      vi.fn(),
   getLatestEvalSheet:        vi.fn(),
@@ -809,6 +811,134 @@ function makeShopSelectMenuInteraction() {
     editReply:  vi.fn().mockResolvedValue(undefined),
   };
 }
+
+describe("高級船室は1人1室", () => {
+  function preparePurchase(interaction: ReturnType<typeof makeShopBuyBtnInteraction> | ReturnType<typeof makeShopSelectMenuInteraction>) {
+    const guild = interaction.guild as typeof interaction.guild & {
+      client: { user: { id: string } };
+      members: typeof interaction.guild.members & { me: { permissions: { has: () => boolean }; id: string } };
+    };
+    guild.client = { user: { id: BOT_ID } };
+    guild.members.me = { permissions: { has: () => true }, id: BOT_ID };
+    guild.members.fetch.mockResolvedValue({ id: USER_ID, displayName: "購入者" });
+    mocks.getShopItem.mockResolvedValue({
+      id: ITEM_ID, guildId: GUILD_ID, category: "vc",
+      effectType: "private_vc_1d", name: "高級船室（1日）", price: 1000,
+    });
+    mocks.getGuildSettings.mockResolvedValue({ ...makeSettings(), vcCategoryId: "luxury-category" });
+    mocks.getActivePrivateVcSessionsByGuild.mockResolvedValue([]);
+    guild.channels.fetch.mockResolvedValue(new Collection());
+    return guild;
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it("期限付き船室がある場合、購入ボタンで請求せずに止める", async () => {
+    const interaction = makeShopBuyBtnInteraction();
+    const guild = preparePurchase(interaction);
+    guild.channels.fetch.mockResolvedValue(new Collection([["owned-vc", { id: "owned-vc", type: ChannelType.GuildVoice }]]));
+    mocks.getActivePrivateVcSessionsByGuild.mockResolvedValue([{
+      guildId: GUILD_ID, userId: USER_ID, channelId: "owned-vc", category: "vc",
+    }]);
+
+    await handleShopBuyButton(interaction as never);
+
+    expect(mocks.buyItem).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("1人1室まで"));
+  });
+
+  it("無期限船室がある場合、セレクトメニューでも所有者パネルを見て請求を止める", async () => {
+    const interaction = makeShopSelectMenuInteraction();
+    const guild = preparePurchase(interaction);
+    const ownerId = "111111111111111111";
+    interaction.user.id = ownerId;
+    guild.members.fetch.mockResolvedValue({ id: ownerId, displayName: "購入者" });
+    const panel = {
+      author: { id: BOT_ID },
+      embeds: [{ title: "🔒 高級船室 コントロールパネル", description: `<@${ownerId}> の高級船室です。` }],
+    };
+    const messages = new Collection([["panel-message", panel]]);
+    const vc = {
+      id: "permanent-vc", type: ChannelType.GuildVoice, parentId: "luxury-category", name: "🔒 永久船室",
+      permissionOverwrites: { cache: new Map([[ownerId, { allow: { has: () => true } }]]) },
+      messages: { fetch: vi.fn().mockResolvedValue(messages) },
+    };
+    guild.channels.fetch.mockResolvedValue(new Collection([[vc.id, vc]]));
+    mocks.getShopItem.mockResolvedValue({
+      id: ITEM_ID, guildId: GUILD_ID, category: "vc",
+      effectType: "private_vc", name: "高級船室（無期限）", price: 1000,
+    });
+
+    await handleShopSelectMenu(interaction as never);
+
+    expect(mocks.buyItem).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("1人1室まで"));
+  });
+
+  it("他人の高級船室に招待されているだけなら購入を妨げない", async () => {
+    const interaction = makeShopBuyBtnInteraction();
+    const guild = preparePurchase(interaction);
+    const panel = {
+      author: { id: BOT_ID },
+      embeds: [{ title: "🔒 高級船室 コントロールパネル", description: "<@222222222222222222> の高級船室です。" }],
+    };
+    const vc = {
+      id: "guest-vc", type: ChannelType.GuildVoice, parentId: "luxury-category", name: "🔒 他人の部屋",
+      permissionOverwrites: { cache: new Map([[USER_ID, { allow: { has: () => true } }]]) },
+      messages: { fetch: vi.fn().mockResolvedValue(new Collection([["panel", panel]])) },
+    };
+    guild.channels.fetch.mockResolvedValue(new Collection([[vc.id, vc]]));
+    mocks.buyItem.mockResolvedValue({ ok: false, reason: "残高不足" });
+
+    await handleShopBuyButton(interaction as never);
+
+    expect(mocks.buyItem).toHaveBeenCalledOnce();
+    expect(interaction.editReply).toHaveBeenCalledWith("残高不足");
+  });
+
+  it("フリールームの購入には高級船室の1室制限を適用しない", async () => {
+    const interaction = makeShopBuyBtnInteraction();
+    const guild = preparePurchase(interaction);
+    guild.channels.cache = new Collection([["island-category", {
+      id: "island-category", type: ChannelType.GuildCategory, name: "オチテモータ島",
+    }]]);
+    guild.roles.cache = {
+      some: vi.fn().mockReturnValue(false),
+      values: () => [],
+    } as unknown as typeof guild.roles.cache;
+    mocks.listShopItems.mockResolvedValue([]);
+    mocks.getShopItem.mockResolvedValue({
+      id: ITEM_ID, guildId: GUILD_ID, category: "island",
+      effectType: "private_vc_1d", name: "フリールーム", price: 1000,
+    });
+    mocks.buyItem.mockResolvedValue({ ok: false, reason: "残高不足" });
+
+    await handleShopBuyButton(interaction as never);
+
+    expect(mocks.getActivePrivateVcSessionsByGuild).not.toHaveBeenCalled();
+    expect(mocks.buyItem).toHaveBeenCalledOnce();
+    expect(interaction.editReply).toHaveBeenCalledWith("残高不足");
+  });
+
+  it("同じ人の購入が進行中なら連打を請求前に止め、完了後は再試行できる", async () => {
+    const first = makeShopBuyBtnInteraction();
+    preparePurchase(first);
+    const second = makeShopBuyBtnInteraction();
+    preparePurchase(second);
+    let finishPurchase!: (result: { ok: false; reason: string }) => void;
+    mocks.buyItem.mockReturnValue(new Promise((resolve) => { finishPurchase = resolve; }));
+
+    const pending = handleShopBuyButton(first as never);
+    await vi.waitFor(() => expect(mocks.buyItem).toHaveBeenCalledTimes(1));
+    await handleShopBuyButton(second as never);
+    expect(mocks.buyItem).toHaveBeenCalledTimes(1);
+    expect(second.editReply).toHaveBeenCalledWith(expect.stringContaining("購入処理中"));
+    finishPurchase({ ok: false, reason: "残高不足" });
+    await pending;
+    await handleShopBuyButton(second as never);
+    expect(mocks.buyItem).toHaveBeenCalledTimes(2);
+  });
+});
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
