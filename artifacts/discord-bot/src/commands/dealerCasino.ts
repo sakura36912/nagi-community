@@ -64,6 +64,7 @@ import {
 } from "../lib/dealerCasinoRules";
 import { getGuildSettings } from "../lib/economy";
 import { buildBlackjackCardStrip } from "../lib/casinoCardImages";
+import { isConfiguredHubVoice } from "../lib/configuredHubVoice";
 import { logger } from "../lib/logger";
 
 export const DEALER_CASINO_PREFIX = "dealer-casino:";
@@ -144,8 +145,8 @@ async function requireDealer(
   if (!member || !settings || !isDealer(member, settings)) {
     throw new Error("賭博師・賭博統領・指定管理者のみ操作できます。");
   }
-  if (member.voice.channelId !== settings.voiceChannelId) {
-    throw new Error("操作する賭博師は、設定された賭博場VCに入室してください。");
+  if (!await isConfiguredHubVoice(interaction.guildId ?? "", member.voice.channelId, settings.voiceChannelId)) {
+    throw new Error("操作する賭博師は、設定された賭博場VCまたはその転送先VCに入室してください。");
   }
   return member;
 }
@@ -669,7 +670,8 @@ async function createGame(interaction: ChatInputCommandInteraction, gameType: De
   const settings = await getDealerCasinoSettings(guildId);
   const dealer = await requireDealer(interaction, settings);
   if (!settings?.voiceChannelId) throw new Error("賭博場VCが未設定です。管理者に設定を依頼してください。");
-  if (dealer.voice.channelId !== settings.voiceChannelId) throw new Error("設定された賭博場VCに入室してから開始してください。");
+  const gameVoiceId = dealer.voice.channelId;
+  if (!gameVoiceId) throw new Error("設定された賭博場VCまたはその転送先VCに入室してください。");
   if (settings.maxPlayers === null) throw new Error("最大参加人数が未設定です。");
   if (gameType === "poker" && settings.maxPlayers > 16) throw new Error("スリーカードポーカーは52枚デッキの都合で最大16名です。");
   if (gameType === "poker" && settings.pokerAceLowEnabled === null) throw new Error("A-2-3の扱いが未設定です。管理者が `/casino setup dealer_rule` で設定してください。");
@@ -678,21 +680,33 @@ async function createGame(interaction: ChatInputCommandInteraction, gameType: De
     gameType,
     dealerId: interaction.user.id,
     channelId: interaction.channelId,
-    voiceChannelId: settings.voiceChannelId,
+    voiceChannelId: gameVoiceId,
   });
   await postPanel(interaction, game);
 }
 
-async function requireOwnedActiveGame(interaction: ChatInputCommandInteraction, settings: DealerCasinoSettings | null): Promise<DealerCasinoGame> {
+async function requireOwnedActiveGame(
+  interaction: ChatInputCommandInteraction,
+  settings: DealerCasinoSettings | null,
+  allowAdminRecovery = false,
+): Promise<DealerCasinoGame> {
   const guildId = interaction.guildId;
   if (!guildId) throw new Error("サーバー内でのみ利用できます。");
   const game = await getActiveDealerCasinoGame(guildId);
   if (!game) throw new Error("進行中の賭博場ゲームはありません。");
   const member = await requireDealer(interaction, settings);
+  // Generated rooms may be deleted when empty. Only administrators can
+  // cancel/refund from another configured room; play remains room-bound.
+  const adminRecovery = allowAdminRecovery && isAdmin(member);
+  if (member.voice.channelId !== game.voiceChannelId && !adminRecovery) {
+    throw new Error("このゲームが進行しているVCに入室してください。");
+  }
   if (member.id !== game.dealerId && !isAdmin(member) && !memberHasRole(member, settings?.directorRoleId) && !memberHasRole(member, settings?.adminRoleId)) {
     throw new Error("このゲームを開始したディーラーのみ操作できます。");
   }
-  if (game.voiceChannelId !== settings?.voiceChannelId) throw new Error("このゲームのVCは現在の設定と一致しません。管理者に確認してください。");
+  if (!adminRecovery && !await isConfiguredHubVoice(guildId, game.voiceChannelId, settings?.voiceChannelId ?? null)) {
+    throw new Error("このゲームのVCは現在の設定と一致しません。管理者に確認してください。");
+  }
   return game;
 }
 
@@ -1074,7 +1088,7 @@ export async function handleDealerCasinoInteraction(
 }
 
 async function cancelGameForDealer(interaction: ChatInputCommandInteraction, settings: DealerCasinoSettings | null): Promise<DealerCasinoGame> {
-  const game = await requireOwnedActiveGame(interaction, settings);
+  const game = await requireOwnedActiveGame(interaction, settings, true);
   await cancelDealerCasinoGame(game.id);
   const cancelled = await getDealerCasinoGame(game.id);
   if (!cancelled) throw new Error("キャンセル済みゲームを取得できません。");
@@ -1101,7 +1115,7 @@ async function endDealerSession(
   let refundedActiveGame = false;
   const active = await getActiveDealerCasinoGame(guildId);
   if (active) {
-    const owned = await requireOwnedActiveGame(interaction, settings);
+    const owned = await requireOwnedActiveGame(interaction, settings, true);
     const cancelled = await cancelDealerCasinoGame(owned.id);
     latest = cancelled.game;
     refundedActiveGame = true;
@@ -1120,7 +1134,6 @@ async function startNextGame(interaction: ChatInputCommandInteraction): Promise<
   const member = await requireDealer(interaction, settings);
   const prior = await getActiveDealerCasinoGame(guildId);
   if (prior) throw new Error("現在のゲームがまだ終了していません。先に結果確定と精算を完了してください。");
-  if (!settings?.voiceChannelId || member.voice.channelId !== settings.voiceChannelId) throw new Error("設定された賭博場VCに入室してください。");
   const finished = await getLatestDealerCasinoGame(guildId);
   if (!finished || (finished.state !== "FINISHED" && finished.state !== "CANCELLED")) {
     throw new Error("次ゲームの種類を特定できる終了済みゲームがありません。");
@@ -1147,7 +1160,7 @@ export async function handleDealerCasinoSlash(interaction: ChatInputCommandInter
           throw new Error("賭博場VCに指定できるのは音声チャンネルのみです。");
         }
         const active = await getActiveDealerCasinoGame(interaction.guildId);
-        if (active && active.voiceChannelId !== voice.id) {
+        if (active && settings?.voiceChannelId !== voice.id) {
           throw new Error("進行中の丁半またはポーカーがあります。精算またはキャンセル後にVCを変更してください。");
         }
         if (sub === "game_vc") {
@@ -1272,10 +1285,12 @@ export async function handleDealerCasinoVoiceDeparture(oldState: VoiceState, new
     logger.error(`[dealer-casino] failed to load settings for voice departure ${userId}`, error);
     return null;
   });
-  if (settings?.voiceChannelId !== oldState.channelId) return;
-  await resetDealerCasinoChohanStreak(oldState.guild.id, userId).catch((error) => {
-    logger.error(`[dealer-casino] failed to reset streak for user ${userId}`, error);
-  });
+  if (!await isConfiguredHubVoice(oldState.guild.id, oldState.channelId, settings?.voiceChannelId ?? null)) return;
+  if (!await isConfiguredHubVoice(oldState.guild.id, newState.channelId, settings?.voiceChannelId ?? null)) {
+    await resetDealerCasinoChohanStreak(oldState.guild.id, userId).catch((error) => {
+      logger.error(`[dealer-casino] failed to reset streak for user ${userId}`, error);
+    });
+  }
   const active = await getActiveDealerCasinoGame(oldState.guild.id).catch((error) => {
     logger.error(`[dealer-casino] failed to check voice departure for user ${userId}`, error);
     return null;

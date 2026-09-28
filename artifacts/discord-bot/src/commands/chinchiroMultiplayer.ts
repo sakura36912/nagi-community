@@ -8,8 +8,9 @@ import {
 import { and, asc, eq, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
 import {
   chinchiroMultiplayerSettingsTable, chinchiroTablePlayersTable, chinchiroTablesTable,
-  db, getHubChannelById, getHubSession, type ChinchiroTable, type ChinchiroTablePlayer,
+  db, type ChinchiroTable, type ChinchiroTablePlayer,
 } from "@workspace/db";
+import { isConfiguredHubVoice } from "../lib/configuredHubVoice";
 import { getGuildSettings } from "../lib/economy";
 import { logger } from "../lib/logger";
 import {
@@ -473,15 +474,7 @@ export async function isConfiguredChinchiroVoice(
   channelId: string | null,
   configuredVoiceId: string | null,
 ): Promise<boolean> {
-  if (!channelId || !configuredVoiceId) return false;
-  if (channelId === configuredVoiceId) return true;
-
-  // A VC Hub creates a new channel and records the source hub in
-  // vc_hub_sessions. Treat that generated VC as the configured VC too.
-  const session = await getHubSession(channelId).catch(() => null);
-  if (!session || session.guildId !== guildId) return false;
-  const hub = await getHubChannelById(session.hubId).catch(() => null);
-  return hub?.guildId === guildId && hub.hubChannelId === configuredVoiceId;
+  return isConfiguredHubVoice(guildId, channelId, configuredVoiceId);
 }
 
 async function inConfiguredVoice(

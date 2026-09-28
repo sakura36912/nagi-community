@@ -103,6 +103,7 @@ import {
   handleHubJoin,
   handleHubLeave,
   handlePanelOnlyHubTransfer,
+  recordPanelOnlyHubTransfer,
   refreshExistingBeachHubPanels,
   HUB_PANEL_BTN_RENAME,
   HUB_PANEL_BTN_STREAM,
@@ -1378,6 +1379,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const userId = newState.member?.id ?? oldState.member?.id;
   if (!userId) return;
   if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
+  // Panel-only Hubs are transferred by another bot. Record the destination
+  // before casino/chinchiro departure checks so Hub -> child is not treated as leaving.
+  if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+    await recordPanelOnlyHubTransfer(oldState, newState).catch((err) =>
+      logger.error(`[vcHub] recordPanelOnlyHubTransfer error for ${userId}`, err),
+    );
+  }
   await handleDealerCasinoVoiceDeparture(oldState, newState);
   await handleMultiplayerChinchiroVoiceDeparture(oldState, newState);
   // 追放者は高級船室へ入室できない。古い明示権限が残っていても即時に

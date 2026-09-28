@@ -701,30 +701,25 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
   }
 }
 
-/**
- * パネルのみ Hub（panel_only=true）から別VCへ移動したとき:
- *   別の Bot が作成した転送先 VC にパネルを送信する。
- *   呼び出し元: index.ts の「Moved between VCs」セクション
- */
-export async function handlePanelOnlyHubTransfer(
+/** 別Botによる転送先を、退出判定より先に元Hubと紐付ける。 */
+export async function recordPanelOnlyHubTransfer(
   oldState: VoiceState,
   newState: VoiceState,
-): Promise<void> {
-  if (!oldState.channelId || !newState.channelId) return;
+) {
+  if (!oldState.channelId || !newState.channelId) return null;
 
   const hub = await getHubByChannelId(oldState.channelId);
-  if (!hub?.panelOnly) return;
+  if (!hub?.panelOnly) return null;
 
   const guild  = newState.guild;
   const member = newState.member;
-  if (!member) return;
+  if (!member) return null;
 
   const vc = guild.channels.cache.get(newState.channelId)
     ?? await guild.channels.fetch(newState.channelId).catch(() => null);
-  if (!vc || vc.type !== ChannelType.GuildVoice) return;
+  if (!vc || vc.type !== ChannelType.GuildVoice) return null;
 
-  // The external bot owns this generated VC, but Chinchiro still needs a
-  // durable source-Hub mapping so it can accept members in the transfer target.
+  // The external bot owns this room; record only its source Hub.
   const existingSession = await getHubSession(vc.id).catch(() => null);
   if (!existingSession) {
     await createHubSession(guild.id, vc.id, member.id, hub.id).catch((err) =>
@@ -734,6 +729,17 @@ export async function handlePanelOnlyHubTransfer(
       ),
     );
   }
+  return { hub, guild, member, vc };
+}
+
+/** パネルのみHubの転送先VCに操作パネルを送信する。 */
+export async function handlePanelOnlyHubTransfer(
+  oldState: VoiceState,
+  newState: VoiceState,
+): Promise<void> {
+  const transfer = await recordPanelOnlyHubTransfer(oldState, newState);
+  if (!transfer) return;
+  const { hub, guild, member, vc } = transfer;
 
   const sourceChannel = oldState.channel
     ?? await guild.channels.fetch(hub.hubChannelId).catch(() => null);
