@@ -23,6 +23,10 @@ import {
   updateDealerCasinoBet,
   withdrawDealerCasinoBet,
   DealerCasinoError,
+  addHubChannel,
+  createHubSession,
+  vcHubChannelsTable,
+  vcHubSessionsTable,
   transactionsTable,
   walletsTable,
   type DealerCasinoOutcome,
@@ -52,6 +56,12 @@ const dealerCasinoSchemaAvailable = Boolean(
   schemaProbe.rows[0]?.dealer_casino_schema_available,
 );
 const integrationDescribe = dealerCasinoSchemaAvailable ? describe : describe.skip;
+const hubSchemaProbe = await db.execute(sql`
+  SELECT to_regclass('public.vc_hub_channels') IS NOT NULL
+     AND to_regclass('public.vc_hub_sessions') IS NOT NULL
+     AS hub_schema_available
+`);
+const hubSchemaAvailable = Boolean(hubSchemaProbe.rows[0]?.hub_schema_available);
 
 function userId(): string {
   return `test-user-${randomUUID()}`;
@@ -159,6 +169,12 @@ afterEach(async () => {
       .where(inArray(dealerCasinoGamesTable.id, testGameIds));
   }
   if (testGuildIds.length) {
+    if (hubSchemaAvailable) {
+      await db.delete(vcHubSessionsTable)
+        .where(inArray(vcHubSessionsTable.guildId, testGuildIds));
+      await db.delete(vcHubChannelsTable)
+        .where(inArray(vcHubChannelsTable.guildId, testGuildIds));
+    }
     await db.delete(dealerCasinoStatsTable)
       .where(inArray(dealerCasinoStatsTable.guildId, testGuildIds));
     await db.delete(dealerCasinoStreaksTable)
@@ -172,6 +188,32 @@ afterEach(async () => {
   }
   testGameIds.length = 0;
   testGuildIds.length = 0;
+});
+
+const hubIntegrationDescribe = dealerCasinoSchemaAvailable && hubSchemaAvailable ? describe : describe.skip;
+
+hubIntegrationDescribe("dealer casino Hub transfer persistence", () => {
+  it.each(["chohan", "poker"] as const)("%s can start in the configured Hub's transfer room only", async (gameType) => {
+    const guildId = `test-dealer-hub-${randomUUID()}`;
+    testGuildIds.push(guildId);
+    const { dealerId, channelId, voiceChannelId: configuredHubId } = await configureGuild(guildId, gameType);
+    const hub = await addHubChannel(guildId, configuredHubId, null, "test-room", null);
+    const destinationId = `test-transfer-${randomUUID()}`;
+    await createHubSession(guildId, destinationId, dealerId, hub.id);
+    const otherHub = await addHubChannel(guildId, `test-other-hub-${randomUUID()}`, null, "other-room", null);
+    const otherDestinationId = `test-other-transfer-${randomUUID()}`;
+    await createHubSession(guildId, otherDestinationId, dealerId, otherHub.id);
+
+    const input = { guildId, dealerId, channelId, gameType };
+    await expect(createDealerCasinoGame({ ...input, voiceChannelId: otherDestinationId }))
+      .rejects.toMatchObject({ code: "VOICE_CHANNEL_MISMATCH" });
+    await expect(createDealerCasinoGame({ ...input, voiceChannelId: "untracked-room" }))
+      .rejects.toMatchObject({ code: "VOICE_CHANNEL_MISMATCH" });
+
+    const game = await createDealerCasinoGame({ ...input, voiceChannelId: destinationId });
+    testGameIds.push(game.id);
+    expect(game.voiceChannelId).toBe(destinationId);
+  });
 });
 
 integrationDescribe("dealer casino DB persistence", () => {

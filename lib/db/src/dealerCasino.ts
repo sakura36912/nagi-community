@@ -24,6 +24,7 @@ import type {
   DealerCasinoGame,
   DealerCasinoSettings,
 } from "./schema/dealerCasino";
+import { vcHubChannelsTable, vcHubSessionsTable } from "./schema/vcHub";
 
 export type DealerCasinoType = "chohan" | "poker";
 export type DealerCasinoState =
@@ -266,7 +267,20 @@ export async function createDealerCasinoGame(
       .limit(1);
     assertConfiguredSettings(settings, input.gameType);
     if (input.voiceChannelId !== settings.voiceChannelId) {
-      throw new DealerCasinoError("The dealer is not in the configured casino voice channel.", "VOICE_CHANNEL_MISMATCH");
+      const [transferred] = await tx
+        .select({ id: vcHubSessionsTable.id })
+        .from(vcHubSessionsTable)
+        .innerJoin(vcHubChannelsTable, eq(vcHubSessionsTable.hubId, vcHubChannelsTable.id))
+        .where(and(
+          eq(vcHubSessionsTable.channelId, input.voiceChannelId),
+          eq(vcHubSessionsTable.guildId, input.guildId),
+          eq(vcHubChannelsTable.guildId, input.guildId),
+          eq(vcHubChannelsTable.hubChannelId, settings.voiceChannelId),
+        ))
+        .limit(1);
+      if (!transferred) {
+        throw new DealerCasinoError("The dealer is not in the configured casino voice channel or its transfer destination.", "VOICE_CHANNEL_MISMATCH");
+      }
     }
 
     const [existing] = await tx
