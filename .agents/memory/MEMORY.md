@@ -20,3 +20,4 @@
 - [Forum purchase panels](forum-purchase-panels.md) — フォーラム投稿ごとに商品・価格・購入効果を完全に分離した購入ボタンを使う。
 - [Ura recruitment rules](ura-recruitment.md) — 裏募集は募集者が申請者を選び、DM通知・年齢情報なし・双方限定VCで運用する。
 - [Shift unavailability](shift-unavailability.md) — シフトパネルの「出れません」は対象週全体の不可状態として保存し、一覧に表示する。
+- [Discord command registration](discord-command-registration.md) — Botの公開とスラッシュコマンドのDiscord登録は別。個別更新で専用コマンドを守る。
