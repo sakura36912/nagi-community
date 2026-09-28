@@ -22,3 +22,4 @@
 - [Shift unavailability](shift-unavailability.md) — シフトパネルの「出れません」は対象週全体の不可状態として保存し、一覧に表示する。
 - [Discord command registration](discord-command-registration.md) — Botの公開とスラッシュコマンドのDiscord登録は別。個別更新で専用コマンドを守る。
 - [Dealer casino Hub rooms](dealer-casino-hub-rooms.md) — 賭博場の設定VCがHubでも、個々のゲームは実際の転送先VC内に限定する。
+- [Bounty accrual during bot outages](bounty-outage-policy.md) — Bot停止中のVC時間は推定加算しない。月次の遅延付与ではロールの過去状態を断定しない。

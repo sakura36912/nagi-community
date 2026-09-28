@@ -1,0 +1,601 @@
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
+  EmbedBuilder,
+  ModalBuilder,
+  PermissionFlagsBits,
+  SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  UserSelectMenuBuilder,
+  ChannelSelectMenuBuilder,
+  RoleSelectMenuBuilder,
+  type ChatInputCommandInteraction,
+  type ButtonInteraction,
+  type Client,
+  type GuildMember,
+  type ModalSubmitInteraction,
+  type UserSelectMenuInteraction,
+  type ChannelSelectMenuInteraction,
+  type RoleSelectMenuInteraction,
+  type Guild,
+} from "discord.js";
+import {
+  applyBountyPoints,
+  getBountyPoints,
+  getBountySettings,
+  listPendingBountyAudits,
+  markBountyAuditSent,
+  resetBountyVoicePresences,
+  setBountyMonthlyRate,
+  setBountySettings,
+  setBountyVcRate,
+} from "@workspace/db";
+import { logger } from "../lib/logger";
+
+export const BOUNTY_GUILD_ID = "1526418867335725247";
+export const BOUNTY_AUDIT_CHANNEL_ID = "1554169897959952454";
+
+const TIERS = [
+  { minimum: 500, name: "懸賞金1千万＄" },
+  { minimum: 1_000, name: "懸賞金5千万＄" },
+  { minimum: 2_500, name: "懸賞金1億＄" },
+  { minimum: 5_000, name: "懸賞金5億＄" },
+  { minimum: 10_000, name: "懸賞金10億＄" },
+] as const;
+const USER_PICKER_ID = "bounty:manual:user";
+const MANUAL_SIGN_BUTTON_PREFIX = "bounty:manual:sign:";
+const VC_PICKER_ID = "bounty:vc:channel";
+const MONTHLY_ROLE_PICKER_ID = "bounty:monthly:role";
+const MANUAL_MODAL_PREFIX = "bounty:manual:modal:";
+const VC_MODAL_PREFIX = "bounty:vc:modal:";
+const MONTHLY_MODAL_PREFIX = "bounty:monthly:modal:";
+
+const setupInProgress = new Map<string, Promise<string[]>>();
+const completeSetupInProgress = new Map<string, Promise<{
+  crewRoleId: string;
+  tierRoleIds: string[];
+  voiceSeedError?: string;
+}>>();
+
+type BountyInteraction = ChatInputCommandInteraction | ButtonInteraction | UserSelectMenuInteraction
+  | ChannelSelectMenuInteraction | RoleSelectMenuInteraction | ModalSubmitInteraction;
+
+function isStaff(interaction: { memberPermissions: { has: (permission: bigint) => boolean } | null }): boolean {
+  return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild));
+}
+
+function isTargetGuild(interaction: { guildId: string | null }): boolean {
+  return interaction.guildId === BOUNTY_GUILD_ID;
+}
+
+function privateReply(interaction: BountyInteraction, content: string) {
+  const options = { content, allowedMentions: { parse: [] } };
+  if (interaction.deferred || interaction.replied) return interaction.editReply(options);
+  return interaction.reply({ ...options, ephemeral: true });
+}
+
+async function validateStaffInteraction(interaction: BountyInteraction): Promise<boolean> {
+  if (!isTargetGuild(interaction)) {
+    await privateReply(interaction, `この操作はサーバー ${BOUNTY_GUILD_ID} 専用です。`);
+    return false;
+  }
+  if (!isStaff(interaction)) {
+    await privateReply(interaction, "この操作にはサーバー管理権限（ManageGuild）が必要です。");
+    return false;
+  }
+  if (!interaction.guild) {
+    await privateReply(interaction, "サーバー情報を取得できません。");
+    return false;
+  }
+  const settings = await getBountySettings(interaction.guildId!);
+  if (!settings) {
+    await privateReply(interaction, "先に `/bounty setup` を実行してください。");
+    return false;
+  }
+  return true;
+}
+
+function tierFor(points: number): number {
+  for (let i = TIERS.length - 1; i >= 0; i -= 1) {
+    if (points >= TIERS[i].minimum) return i;
+  }
+  return -1;
+}
+
+async function ensureTierRoles(guild: NonNullable<ChatInputCommandInteraction["guild"]>): Promise<string[]> {
+  const existingRun = setupInProgress.get(guild.id);
+  if (existingRun) return existingRun;
+  const run = (async () => {
+    const botMember = guild.members.me ?? await guild.members.fetchMe();
+    if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+      throw new Error("Botにロールの管理権限がありません。");
+    }
+    const guildRoles = await guild.roles.fetch();
+    const roleIds: string[] = [];
+    for (const tier of TIERS) {
+      const matches = guildRoles.filter((candidate) => candidate.name === tier.name);
+      if (matches.size > 1) {
+        throw new Error(`「${tier.name}」ロールが複数あります。重複を解消してから再実行してください。`);
+      }
+      let role = matches.first();
+      if (!role) role = await guild.roles.create({ name: tier.name, reason: "賞金ポイント階級の初期設定" });
+      if (role.managed || role.position >= botMember.roles.highest.position) {
+        throw new Error(`「${tier.name}」ロールはBotのロール階層より上にあるため管理できません。Botのロールを上へ移動してください。`);
+      }
+      roleIds.push(role.id);
+    }
+    return roleIds;
+  })();
+  setupInProgress.set(guild.id, run);
+  try {
+    return await run;
+  } finally {
+    setupInProgress.delete(guild.id);
+  }
+}
+
+async function initializeBountySetup(guild: Guild): Promise<{
+  crewRoleId: string;
+  tierRoleIds: string[];
+  voiceSeedError?: string;
+}> {
+  const activeSetup = completeSetupInProgress.get(guild.id);
+  if (activeSetup) return activeSetup;
+  const run = (async () => {
+    const existingSettings = await getBountySettings(guild.id);
+    const guildRoles = await guild.roles.fetch();
+    const crewRoles = guildRoles.filter((role) => role.name === "本船員");
+    if (crewRoles.size > 1) {
+      throw new Error("「本船員」ロールが複数あります。重複を解消してから再実行してください。");
+    }
+    const crewRole = crewRoles.first();
+    if (!crewRole) throw new Error("「本船員」ロールが見つかりません。先に作成してください。");
+
+    const tierRoleIds = await ensureTierRoles(guild);
+    const auditChannel = await guild.channels.fetch(BOUNTY_AUDIT_CHANNEL_ID);
+    if (!auditChannel?.isTextBased()) {
+      throw new Error(`監査ログチャンネル ${BOUNTY_AUDIT_CHANNEL_ID} が見つかりません。`);
+    }
+    await setBountySettings(guild.id, crewRole.id, BOUNTY_AUDIT_CHANNEL_ID, tierRoleIds);
+
+    let voiceSeedError: string | undefined;
+    if (!existingSettings) {
+      try {
+        const occupants = new Map<string, { channelId: string; eligible: boolean }>();
+        for (const voiceState of guild.voiceStates.cache.values()) {
+          if (!voiceState.channelId) continue;
+          const member = voiceState.member
+            ?? await guild.members.fetch(voiceState.id).catch(() => null);
+          if (!member) {
+            throw new Error(`接続中メンバー ${voiceState.id} のロールを取得できません。`);
+          }
+          occupants.set(voiceState.id, {
+            channelId: voiceState.channelId,
+            eligible: member.roles.cache.has(crewRole.id),
+          });
+        }
+        await resetBountyVoicePresences(guild.id, occupants);
+      } catch (error) {
+        voiceSeedError = error instanceof Error ? error.message : String(error);
+        logger.error("Bounty setup saved but initial voice-presence seeding failed", {
+          guildId: guild.id,
+          error: voiceSeedError,
+        });
+      }
+    }
+    return { crewRoleId: crewRole.id, tierRoleIds, voiceSeedError };
+  })();
+  completeSetupInProgress.set(guild.id, run);
+  try {
+    return await run;
+  } finally {
+    completeSetupInProgress.delete(guild.id);
+  }
+}
+
+async function sendAudit(guild: NonNullable<ChatInputCommandInteraction["guild"]>, content: string): Promise<void> {
+  const channel = await guild.channels.fetch(BOUNTY_AUDIT_CHANNEL_ID);
+  if (!channel?.isTextBased() || !("send" in channel)) {
+    throw new Error(`監査ログチャンネル ${BOUNTY_AUDIT_CHANNEL_ID} が見つからないか、テキストチャンネルではありません。`);
+  }
+  await channel.send({ content, allowedMentions: { parse: [] } });
+}
+
+export async function flushPendingBountyAudits(guild: Guild): Promise<number> {
+  if (guild.id !== BOUNTY_GUILD_ID) {
+    throw new Error(`賞金ポイント監査ログ送信はサーバー ${BOUNTY_GUILD_ID} 専用です。`);
+  }
+  const settings = await getBountySettings(guild.id);
+  if (!settings) throw new Error("賞金ポイント設定がありません。");
+  const channel = await guild.channels.fetch(settings.logChannelId);
+  if (!channel?.isTextBased() || !("send" in channel)) {
+    throw new Error(`監査ログチャンネル ${settings.logChannelId} が見つからないか、テキストチャンネルではありません。`);
+  }
+  let sentCount = 0;
+  while (true) {
+    const pending = await listPendingBountyAudits(guild.id, 100);
+    if (pending.length === 0) return sentCount;
+    for (const audit of pending) {
+      await channel.send({ content: audit.content, allowedMentions: { parse: [] } });
+      await markBountyAuditSent(audit.id);
+      sentCount += 1;
+    }
+    if (pending.length < 100) return sentCount;
+  }
+}
+
+function manualModal(userId: string, sign: "+" | "-"): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`${MANUAL_MODAL_PREFIX}${sign}:${userId}`)
+    .setTitle("賞金ポイントを調整")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder()
+        .setCustomId("amount").setLabel("ポイント数（正の整数）")
+        .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(10)),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder()
+        .setCustomId("reason").setLabel("理由")
+        .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200)),
+    );
+}
+
+function rateModal(kind: "vc" | "monthly", targetId: string): ModalBuilder {
+  const isVc = kind === "vc";
+  return new ModalBuilder()
+    .setCustomId(`${isVc ? VC_MODAL_PREFIX : MONTHLY_MODAL_PREFIX}${targetId}`)
+    .setTitle(isVc ? "VCポイント率を設定" : "月次ポイント率を設定")
+    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder()
+      .setCustomId("rate").setLabel(isVc ? "1時間あたりのポイント（0で無効）" : "月次付与ポイント（0で無効）")
+      .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8)));
+}
+
+function panelComponents(kind: "manual" | "vc" | "monthly") {
+  if (kind === "manual") {
+    return [new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+      new UserSelectMenuBuilder().setCustomId(USER_PICKER_ID).setPlaceholder("ポイントを調整するユーザー").setMinValues(1).setMaxValues(1),
+    )];
+  }
+  if (kind === "vc") {
+    return [new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+      new ChannelSelectMenuBuilder().setCustomId(VC_PICKER_ID).setPlaceholder("対象のボイスチャンネルを選択")
+        .setChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice).setMinValues(1).setMaxValues(1),
+    )];
+  }
+  return [new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
+    new RoleSelectMenuBuilder().setCustomId(MONTHLY_ROLE_PICKER_ID).setPlaceholder("月次付与対象ロールを選択").setMinValues(1).setMaxValues(1),
+  )];
+}
+
+export const bountyCommand = {
+  data: new SlashCommandBuilder()
+    .setName("bounty")
+    .setDescription("賞金ポイント")
+    .addSubcommand((sub) => sub.setName("setup").setDescription("賞金ポイントの初期設定（管理者）"))
+    .addSubcommand((sub) => sub.setName("panels").setDescription("賞金ポイント設定パネルを3つ投稿（管理者）"))
+    .addSubcommand((sub) => sub.setName("balance").setDescription("賞金ポイント残高を表示")),
+  async execute(interaction: ChatInputCommandInteraction) {
+    if (!interaction.guild || !interaction.guildId) {
+      await privateReply(interaction, "サーバー内で実行してください。");
+      return;
+    }
+    if (!isTargetGuild(interaction)) {
+      await privateReply(interaction, `この操作はサーバー ${BOUNTY_GUILD_ID} 専用です。`);
+      return;
+    }
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === "balance") {
+      const points = await getBountyPoints(interaction.guildId, interaction.user.id);
+      await interaction.reply({
+        content: `あなたの賞金ポイント: **${points.toLocaleString("ja-JP")} pt**`,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+    if (!isStaff(interaction)) {
+      await privateReply(interaction, "この操作にはサーバー管理権限（ManageGuild）が必要です。");
+      return;
+    }
+    if (subcommand === "setup") {
+      await interaction.deferReply({ ephemeral: true });
+      const setup = await initializeBountySetup(interaction.guild);
+      if (setup.voiceSeedError) {
+        await interaction.editReply({
+          content: `賞金ポイント設定は保存されましたが、接続中VCの初期化に失敗しました: ${setup.voiceSeedError}\nBotの状態を確認してください。`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+      await interaction.editReply({
+        content: `賞金ポイントを設定しました。\n本船員ロールID: ${setup.crewRoleId}\n階級ロール: ${TIERS.map((tier) => `${tier.minimum.toLocaleString()} pt〜 ${tier.name}`).join("\n")}\n監査ログ: ${BOUNTY_AUDIT_CHANNEL_ID}`,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+    const settings = await getBountySettings(interaction.guildId);
+    if (!settings) {
+      await privateReply(interaction, "先に `/bounty setup` を実行してください。");
+      return;
+    }
+    if (subcommand === "panels") {
+      await interaction.deferReply({ ephemeral: true });
+      const target = interaction.channel;
+      if (!target?.isTextBased() || !("send" in target)) {
+        await interaction.editReply("このチャンネルにはパネルを投稿できません。");
+        return;
+      }
+      const panels = [
+        ["🧾 賞金ポイント手動調整", "ユーザーを選択して、スタッフがポイントを加算・減算します。", "manual"],
+        ["🎙️ VCポイント設定", "VCを選択し、1時間あたりの付与ポイントを設定します。0で無効になります。", "vc"],
+        ["📅 月次ポイント設定", "対象ロールを選択し、月次付与ポイントを設定します。", "monthly"],
+      ] as const;
+      for (const [title, description, kind] of panels) {
+        await target.send({
+          embeds: [new EmbedBuilder().setColor(0xf1c40f).setTitle(title).setDescription(description)],
+          components: panelComponents(kind),
+          allowedMentions: { parse: [] },
+        });
+      }
+      await interaction.editReply("3つの公開パネルを投稿しました。操作できるのはスタッフのみです。");
+      return;
+    }
+  },
+};
+
+/** Update only this guild's bounty command; never replace the full command list. */
+export async function syncBountyCommandRegistration(client: Client): Promise<void> {
+  const guild = client.guilds.cache.get(BOUNTY_GUILD_ID)
+    ?? await client.guilds.fetch(BOUNTY_GUILD_ID);
+  const existing = (await guild.commands.fetch())
+    .find((command) => command.name === bountyCommand.data.name);
+  const definition = bountyCommand.data.toJSON();
+  if (existing) {
+    await guild.commands.edit(existing.id, definition);
+  } else {
+    await guild.commands.create(definition);
+  }
+  logger.info(`[bounty] Guild command synchronized guild=${guild.id}`);
+}
+
+export async function handleBountyUserSelect(interaction: UserSelectMenuInteraction): Promise<boolean> {
+  if (interaction.customId !== USER_PICKER_ID) return false;
+  if (!await validateStaffInteraction(interaction)) return true;
+  const userId = interaction.users.first()?.id;
+  if (!userId) {
+    await privateReply(interaction, "対象ユーザーを選択してください。");
+    return true;
+  }
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`${MANUAL_SIGN_BUTTON_PREFIX}+:${userId}`).setLabel("+ 加算").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`${MANUAL_SIGN_BUTTON_PREFIX}-:${userId}`).setLabel("− 減算").setStyle(ButtonStyle.Danger),
+  );
+  await interaction.reply({
+    content: `対象: <@${userId}>\n次に加算または減算を選択してください。選択後、正のポイント数を入力します。`,
+    components: [row],
+    ephemeral: true,
+    allowedMentions: { parse: [] },
+  });
+  return true;
+}
+
+export async function handleBountyButton(interaction: ButtonInteraction): Promise<boolean> {
+  if (!interaction.customId.startsWith(MANUAL_SIGN_BUTTON_PREFIX)) return false;
+  if (!await validateStaffInteraction(interaction)) return true;
+  const selection = interaction.customId.slice(MANUAL_SIGN_BUTTON_PREFIX.length);
+  const match = /^([+-]):(\d{17,20})$/.exec(selection);
+  if (!match) {
+    await privateReply(interaction, "調整ボタンの情報が不正です。パネルから選び直してください。");
+    return true;
+  }
+  await interaction.showModal(manualModal(match[2], match[1] as "+" | "-"));
+  return true;
+}
+
+export async function handleBountyChannelSelect(interaction: ChannelSelectMenuInteraction): Promise<boolean> {
+  if (interaction.customId !== VC_PICKER_ID) return false;
+  if (!await validateStaffInteraction(interaction)) return true;
+  await interaction.showModal(rateModal("vc", interaction.values[0]));
+  return true;
+}
+
+export async function handleBountyRoleSelect(interaction: RoleSelectMenuInteraction): Promise<boolean> {
+  if (interaction.customId !== MONTHLY_ROLE_PICKER_ID) return false;
+  if (!await validateStaffInteraction(interaction)) return true;
+  await interaction.showModal(rateModal("monthly", interaction.values[0]));
+  return true;
+}
+
+async function replyAfterMutationAudit(
+  interaction: ModalSubmitInteraction,
+  auditText: string,
+  successText: string,
+  auditFailureText: string,
+): Promise<void> {
+  try {
+    await sendAudit(interaction.guild!, auditText);
+  } catch (error) {
+    logger.error("Bounty mutation succeeded but its audit message failed", {
+      guildId: interaction.guildId,
+      actorId: interaction.user.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await privateReply(interaction, auditFailureText);
+    return;
+  }
+  await privateReply(interaction, successText);
+}
+
+export async function handleBountyModalSubmit(interaction: ModalSubmitInteraction): Promise<boolean> {
+  if (!interaction.customId.startsWith(MANUAL_MODAL_PREFIX)
+    && !interaction.customId.startsWith(VC_MODAL_PREFIX)
+    && !interaction.customId.startsWith(MONTHLY_MODAL_PREFIX)) return false;
+  if (!await validateStaffInteraction(interaction)) return true;
+  await interaction.deferReply({ ephemeral: true });
+  if (interaction.customId.startsWith(MANUAL_MODAL_PREFIX)) {
+    const selection = interaction.customId.slice(MANUAL_MODAL_PREFIX.length);
+    const match = /^([+-]):(\d{17,20})$/.exec(selection);
+    if (!match) {
+      await privateReply(interaction, "調整フォームの情報が不正です。パネルから選び直してください。");
+      return true;
+    }
+    const sign = match[1] as "+" | "-";
+    const userId = match[2];
+    const amountText = interaction.fields.getTextInputValue("amount").trim();
+    const reason = interaction.fields.getTextInputValue("reason").trim();
+    if (!/^\d+$/.test(amountText)) {
+      await privateReply(interaction, "ポイント数には正の整数のみ入力してください。");
+      return true;
+    }
+    const amount = Number(amountText);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 2_147_483_647 || !reason) {
+      await privateReply(interaction, "ポイント数には1以上の整数、理由には内容を入力してください。");
+      return true;
+    }
+    const settings = await getBountySettings(interaction.guildId!);
+    if (!settings) {
+      await privateReply(interaction, "先に `/bounty setup` を実行してください。");
+      return true;
+    }
+    const member = await interaction.guild!.members.fetch(userId).catch(() => null);
+    if (!member || !member.roles.cache.has(settings.crewRoleId)) {
+      await privateReply(interaction, "賞金ポイントを受け取れるのは「本船員」ロールのメンバーのみです。");
+      return true;
+    }
+    const delta = sign === "+" ? amount : -amount;
+    const currentPoints = await getBountyPoints(interaction.guildId!, userId);
+    if (currentPoints + delta < 0) {
+      await privateReply(interaction, "ポイント残高が0未満になる調整はできません。");
+      return true;
+    }
+    let result: Awaited<ReturnType<typeof applyBountyPoints>>;
+    try {
+      result = await applyBountyPoints(interaction.guildId!, userId, delta, reason, interaction.user.id, interaction.id);
+    } catch (error) {
+      const latestPoints = await getBountyPoints(interaction.guildId!, userId);
+      if (latestPoints + delta < 0) {
+        await privateReply(interaction, "同時更新後の残高が不足しているため、調整できませんでした。");
+        return true;
+      }
+      throw error;
+    }
+    if (!result.applied) {
+      await privateReply(interaction, "この調整はすでに処理されています。");
+      return true;
+    }
+    const signText = sign === "+" ? "+" : "−";
+    try {
+      await flushPendingBountyAudits(interaction.guild!);
+      await privateReply(interaction, `ポイントを変更しました（${result.before} → ${result.after}）。`);
+    } catch (error) {
+      logger.error("Bounty points changed but the audit outbox could not be flushed", {
+        guildId: interaction.guildId,
+        actorId: interaction.user.id,
+        targetId: userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await privateReply(interaction, `ポイント変更は完了しました（${result.before} → ${result.after}）が、監査ログ送信に失敗しました。ログは再試行待ちです。再調整せず、管理者へ連絡してください。`);
+    }
+    return true;
+  }
+
+  if (interaction.customId.startsWith(VC_MODAL_PREFIX)) {
+    const channelId = interaction.customId.slice(VC_MODAL_PREFIX.length);
+    const rateText = interaction.fields.getTextInputValue("rate").trim();
+    if (!/^\d+$/.test(rateText)) {
+      await privateReply(interaction, "ポイント率は0以上の整数で入力してください。");
+      return true;
+    }
+    const rate = Number(rateText);
+    if (!Number.isSafeInteger(rate) || rate > 2_147_483_647) {
+      await privateReply(interaction, "ポイント率が有効範囲を超えています。");
+      return true;
+    }
+    const accrued = await setBountyVcRate(interaction.guildId!, channelId, rate);
+    let roleSyncFailed = false;
+    for (const item of accrued) {
+      try {
+        const member = await interaction.guild!.members.fetch(item.userId);
+        await syncBountyTierRole(member, item.after);
+      } catch (error) {
+        roleSyncFailed = true;
+        logger.error("Bounty tier role sync failed after VC-rate accrual", {
+          guildId: interaction.guildId,
+          userId: item.userId,
+          points: item.after,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const rateMessage = `VCポイント率を ${rate} pt/時間に設定しました。`;
+    const roleSyncWarning = roleSyncFailed
+      ? " 階級ロール同期に失敗した対象があります。メインスケジューラーが後で再同期します。"
+      : "";
+    await replyAfterMutationAudit(
+      interaction,
+      `賞金ポイントVC設定\n実行者: <@${interaction.user.id}>\nVC: <#${channelId}>\n率: ${rate} pt/時間${rate === 0 ? "（無効）" : ""}`,
+      `${rateMessage}${roleSyncWarning}`,
+      `VCポイント率の設定（${rate} pt/時間）は完了しましたが、監査ログ送信に失敗しました。再実行せず、管理者へ連絡してください。${roleSyncWarning}`,
+    );
+    return true;
+  }
+
+  const roleId = interaction.customId.slice(MONTHLY_MODAL_PREFIX.length);
+  const rateText = interaction.fields.getTextInputValue("rate").trim();
+  if (!/^\d+$/.test(rateText)) {
+    await privateReply(interaction, "月次付与ポイントは0以上の整数で入力してください。");
+    return true;
+  }
+  const rate = Number(rateText);
+  if (!Number.isSafeInteger(rate) || rate > 2_147_483_647) {
+    await privateReply(interaction, "月次付与ポイントが有効範囲を超えています。");
+    return true;
+  }
+  await setBountyMonthlyRate(interaction.guildId!, roleId, rate);
+  await replyAfterMutationAudit(
+    interaction,
+    `賞金ポイント月次設定\n実行者: <@${interaction.user.id}>\n対象ロール: <@&${roleId}>\n付与ポイント: ${rate} pt${rate === 0 ? "（無効）" : ""}`,
+    `月次付与を ${rate} pt に設定しました。`,
+    `月次付与設定（${rate} pt）は完了しましたが、監査ログ送信に失敗しました。再実行せず、管理者へ連絡してください。`,
+  );
+  return true;
+}
+
+export async function syncBountyTierRole(member: GuildMember, points?: number): Promise<void> {
+  if (member.guild.id !== BOUNTY_GUILD_ID) {
+    throw new Error(`賞金ポイント階級同期はサーバー ${BOUNTY_GUILD_ID} 専用です。`);
+  }
+  const settings = await getBountySettings(member.guild.id);
+  if (!settings) throw new Error("賞金ポイント設定がありません。");
+  const configuredTierIds = settings.tierRoleIds;
+  if (configuredTierIds.length !== TIERS.length) {
+    throw new Error(`賞金階級ロールは${TIERS.length}件必要ですが、${configuredTierIds.length}件だけ設定されています。`);
+  }
+  const crewRolePresent = member.roles.cache.has(settings.crewRoleId);
+  const currentPoints = points ?? await getBountyPoints(member.guild.id, member.id);
+  const targetIndex = crewRolePresent ? tierFor(currentPoints) : -1;
+  const targetRoleId = targetIndex >= 0 ? configuredTierIds[targetIndex] : undefined;
+  const botMember = member.guild.members.me ?? await member.guild.members.fetchMe();
+  for (const roleId of configuredTierIds) {
+    const role = member.guild.roles.cache.get(roleId);
+    if (!role) throw new Error(`賞金階級ロール ${roleId} が見つかりません。`);
+    if (role.managed || role.position >= botMember.roles.highest.position) {
+      throw new Error(`賞金階級ロール ${role.name} はBotのロール階層より上にあります。`);
+    }
+    if (roleId === targetRoleId) {
+      if (!member.roles.cache.has(roleId)) await member.roles.add(roleId, "賞金ポイント階級を同期");
+    } else if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId, "賞金ポイント階級を同期");
+    }
+  }
+}
+
+export const bountyInteractionHandlers = {
+  handleBountyUserSelect,
+  handleBountyButton,
+  handleBountyChannelSelect,
+  handleBountyRoleSelect,
+  handleBountyModalSubmit,
+};
+
+export default bountyCommand;

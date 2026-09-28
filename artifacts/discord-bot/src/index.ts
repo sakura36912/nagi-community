@@ -145,6 +145,17 @@ import {
   syncUraCommandRegistration,
   URA_PREFIX,
 } from "./commands/uraRecruitment";
+import {
+  BOUNTY_GUILD_ID,
+  syncBountyCommandRegistration,
+  handleBountyButton,
+  handleBountyChannelSelect,
+  handleBountyModalSubmit,
+  handleBountyRoleSelect,
+  handleBountyUserSelect,
+  flushPendingBountyAudits,
+  syncBountyTierRole,
+} from "./commands/bounty";
 
 import { logger } from "./lib/logger";
 import {
@@ -206,6 +217,12 @@ import {
   baccaratSessionsTable,
   stickyMessagesTable,
   db,
+  getBountySettings,
+  listBountyAccountBalances,
+  recordBountyVoiceState,
+  accrueBountyVoiceForGuild,
+  awardBountyMonth,
+  resetBountyVoicePresences,
 } from "@workspace/db";
 import {
   consumeTimedRoleGrantFromPurchase,
@@ -281,6 +298,223 @@ if (!token) {
 }
 
 const commandsByName = new Map(commands.map((c) => [c.data.name, c]));
+
+let bountyPresenceInitialized = false;
+let bountyPresenceSeeded = false;
+let bountySchedulerRunning = false;
+let bountyTierReconciliationRunning = false;
+let bountyMonthlyProcessedMonth: string | null = null;
+
+async function resetBountyPresenceFromLiveVoiceState(client: Client): Promise<void> {
+  const guild = client.guilds.cache.get(BOUNTY_GUILD_ID)
+    ?? await client.guilds.fetch(BOUNTY_GUILD_ID);
+  const settings = await getBountySettings(guild.id);
+  if (!settings) {
+    bountyPresenceInitialized = true;
+    bountyPresenceSeeded = false;
+    return;
+  }
+  const members = await guild.members.fetch();
+  const presences = new Map<string, { channelId: string; eligible: boolean }>();
+  for (const voiceState of guild.voiceStates.cache.values()) {
+    const member = voiceState.member ?? members.get(voiceState.id);
+    if (!voiceState.channelId || !member || member.user.bot) continue;
+    presences.set(member.id, {
+      channelId: voiceState.channelId,
+      eligible: member.roles.cache.has(settings.crewRoleId)
+        && voiceState.channelId !== guild.afkChannelId,
+    });
+  }
+  await resetBountyVoicePresences(guild.id, presences);
+  bountyPresenceInitialized = true;
+  bountyPresenceSeeded = true;
+  logger.info(`[bounty] Reset voice presence from live state; seeded=${presences.size}`);
+}
+
+function getPreviousJstMonthInfo(now: Date): { monthKey: string; jstDay: number } {
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  return {
+    monthKey: new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth() - 1, 1))
+      .toISOString()
+      .slice(0, 7),
+    jstDay: jst.getUTCDate(),
+  };
+}
+
+function bountyMonthJstCutoff(monthKey: string): Date {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
+  if (!match) throw new Error(`Invalid bounty month key: ${monthKey}`);
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]), 1) - 9 * 60 * 60 * 1000);
+}
+
+async function syncBountyPointChanges(
+  guild: GuildMember["guild"],
+  changes: Array<{ userId: string; before: number; after: number }>,
+): Promise<void> {
+  for (const change of changes) {
+    if (change.before === change.after) continue;
+    try {
+      const member = await guild.members.fetch(change.userId);
+      await syncBountyTierRole(member, change.after);
+    } catch (error) {
+      logger.error(`[bounty] Failed to sync tier role user=${change.userId} guild=${guild.id}`, error);
+    }
+  }
+}
+
+async function handleBountyCrewRoleChange(member: GuildMember): Promise<void> {
+  if (member.guild.id !== BOUNTY_GUILD_ID || member.user.bot) return;
+  try {
+    const settings = await getBountySettings(member.guild.id);
+    if (!settings) return;
+    const channelId = member.guild.voiceStates.cache.get(member.id)?.channelId ?? null;
+    const eligible = Boolean(
+      channelId
+      && channelId !== member.guild.afkChannelId
+      && member.roles.cache.has(settings.crewRoleId),
+    );
+    const change = await recordBountyVoiceState(member.guild.id, member.id, channelId, eligible);
+    await syncBountyTierRole(member, change?.after);
+  } catch (error) {
+    logger.error(`[bounty] Crew role transition failed user=${member.id}`, error);
+  }
+}
+
+async function flushBountyAuditOutbox(client: Client): Promise<void> {
+  try {
+    const guild = client.guilds.cache.get(BOUNTY_GUILD_ID)
+      ?? await client.guilds.fetch(BOUNTY_GUILD_ID);
+    await flushPendingBountyAudits(guild);
+  } catch (error) {
+    logger.error("[bounty] Pending audit outbox flush failed", error);
+  }
+}
+
+async function runBountyTierReconciliation(client: Client): Promise<void> {
+  if (bountyTierReconciliationRunning) return;
+  bountyTierReconciliationRunning = true;
+  try {
+    const guild = client.guilds.cache.get(BOUNTY_GUILD_ID);
+    if (!guild) return;
+    const settings = await getBountySettings(guild.id);
+    if (!settings) return;
+
+    const [members, balances] = await Promise.all([
+      guild.members.fetch(),
+      listBountyAccountBalances(guild.id),
+    ]);
+    if (members.size !== guild.memberCount) {
+      logger.error(
+        `[bounty] Tier reconciliation skipped: fetched ${members.size} of ${guild.memberCount} members`,
+      );
+      return;
+    }
+    const pointsByUser = new Map(balances.map(({ userId, points }) => [userId, points]));
+    const configuredTierIds = new Set(settings.tierRoleIds);
+    const usersToSync = new Set<string>();
+    for (const userId of pointsByUser.keys()) {
+      if (members.has(userId)) usersToSync.add(userId);
+    }
+    for (const member of members.values()) {
+      if (
+        !member.user.bot
+        && member.roles.cache.some((role) => configuredTierIds.has(role.id))
+      ) {
+        usersToSync.add(member.id);
+      }
+    }
+
+    for (const userId of usersToSync) {
+      const member = members.get(userId);
+      if (!member || member.user.bot) continue;
+      try {
+        await syncBountyTierRole(member, pointsByUser.get(userId) ?? 0);
+      } catch (error) {
+        logger.error(`[bounty] Tier reconciliation failed user=${userId}`, error);
+      }
+    }
+    logger.info(`[bounty] Tier reconciliation complete users=${usersToSync.size}`);
+  } catch (error) {
+    logger.error("[bounty] Tier reconciliation failed", error);
+  } finally {
+    bountyTierReconciliationRunning = false;
+  }
+}
+
+async function runBountyScheduler(client: Client): Promise<void> {
+  if (bountySchedulerRunning) return;
+  bountySchedulerRunning = true;
+  try {
+    if (!bountyPresenceInitialized) {
+      await resetBountyPresenceFromLiveVoiceState(client);
+      if (!bountyPresenceInitialized) return;
+    }
+    const guild = client.guilds.cache.get(BOUNTY_GUILD_ID);
+    if (!guild) return;
+    const settings = await getBountySettings(guild.id);
+    if (!settings) return;
+    if (!bountyPresenceSeeded) {
+      // /bounty setup seeds live presences. Accrue those rows before replacing
+      // them so setup performed after startup cannot erase already-tracked time.
+      try {
+        const changes = await accrueBountyVoiceForGuild(guild.id);
+        await syncBountyPointChanges(guild, changes);
+      } catch (error) {
+        logger.error("[bounty] Accrual before initial setup reconciliation failed", error);
+        return;
+      }
+      await resetBountyPresenceFromLiveVoiceState(client);
+      return;
+    }
+
+    try {
+      const changes = await accrueBountyVoiceForGuild(guild.id);
+      await syncBountyPointChanges(guild, changes);
+    } catch (error) {
+      logger.error("[bounty] VC accrual failed", error);
+    }
+
+    const now = new Date();
+    const { monthKey, jstDay } = getPreviousJstMonthInfo(now);
+    if (bountyMonthlyProcessedMonth === monthKey) return;
+    const cutoff = bountyMonthJstCutoff(monthKey);
+    if (settings.createdAt.getTime() >= cutoff.getTime()) {
+      logger.info(
+        `[bounty] Monthly payout skipped month=${monthKey}: settings were created after the JST payout cutoff`,
+      );
+      bountyMonthlyProcessedMonth = monthKey;
+      return;
+    }
+    try {
+      const members = await guild.members.fetch();
+      if (members.size !== guild.memberCount) {
+        logger.error(
+          `[bounty] Monthly payout delayed month=${monthKey}: fetched ${members.size} of ${guild.memberCount} members`,
+        );
+        return;
+      }
+      const awardMembers = new Map<string, string[]>();
+      for (const member of members.values()) {
+        if (!member.user.bot) awardMembers.set(member.id, [...member.roles.cache.keys()]);
+      }
+      if (jstDay > 1) {
+        logger.warn(
+          `[bounty] Late monthly payout month=${monthKey}; current roles are observed now and cannot prove member roles at the JST month boundary`,
+        );
+      }
+      const awards = await awardBountyMonth(guild.id, monthKey, awardMembers);
+      bountyMonthlyProcessedMonth = monthKey;
+      await syncBountyPointChanges(guild, awards);
+      if (awards.length > 0) {
+        logger.info(`[bounty] Monthly awards completed month=${monthKey} users=${awards.length}`);
+      }
+    } catch (error) {
+      logger.error(`[bounty] Monthly award failed month=${monthKey}`, error);
+    }
+  } finally {
+    bountySchedulerRunning = false;
+  }
+}
 
 async function acquireBotInstanceLock(): Promise<boolean> {
   const lockClient = await pool.connect();
@@ -998,6 +1232,14 @@ async function runVcDeleteScheduler(): Promise<void> {
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
+  try {
+    await resetBountyPresenceFromLiveVoiceState(readyClient);
+    await runBountyScheduler(readyClient);
+  } catch (error) {
+    logger.error("[bounty] Startup voice presence reset failed; bounty scheduling is paused", error);
+  }
+  await flushBountyAuditOutbox(readyClient);
+  await runBountyTierReconciliation(readyClient);
   await initializeDealerCasinoForGuild(readyClient).catch((error) =>
     logger.error("[dealer-casino] Initial configuration failed", error),
   );
@@ -1009,6 +1251,9 @@ client.once(Events.ClientReady, async (readyClient) => {
   // Register the renamed command before the other (potentially slow) startup work.
   syncUraCommandRegistration(readyClient).catch((err) =>
     logger.error("[ura] Startup command registration failed", err),
+  );
+  syncBountyCommandRegistration(readyClient).catch((err) =>
+    logger.error("[bounty] Startup command registration failed", err),
   );
 
   // ルーレットGIFを全番号分バックグラウンドで事前生成してキャッシュする。
@@ -1210,6 +1455,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     flushAllTavernSessions().catch((err) => logger.error("[chest] flushAllTavernSessions error", err));
     // 全高級船室パネルのメンバーリスト・期限を最新状態に同期
     refreshAllVcPanels(readyClient).catch((err) => logger.error("[vc-panel-refresh] Periodic panel refresh error", err));
+    runBountyTierReconciliation(readyClient).catch((err) => logger.error("[bounty] Tier reconciliation scheduler error", err));
   }, 10 * 60 * 1000);
 
   // Tick every 60 s; actual payout only happens when an interval has elapsed.
@@ -1222,6 +1468,8 @@ client.once(Events.ClientReady, async (readyClient) => {
     runSheetVcRefreshScheduler(readyClient).catch((err) => logger.error("[sheet-vc] Scheduler error", err));
     runCalendarReminderScheduler(readyClient).catch((err) => logger.error("[calendar] Scheduler error", err));
     runUraRecruitmentCleanup(readyClient).catch((err) => logger.error("[ura] Scheduler error", err));
+    runBountyScheduler(readyClient).catch((err) => logger.error("[bounty] Scheduler error", err));
+    flushBountyAuditOutbox(readyClient).catch((err) => logger.error("[bounty] Audit outbox scheduler error", err));
   }, 60 * 1000);
 
   // ── Weekly shift post — every Monday 00:00 UTC (= 09:00 JST) ─────────────
@@ -1379,6 +1627,31 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const userId = newState.member?.id ?? oldState.member?.id;
   if (!userId) return;
   if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
+  if (
+    newState.guild.id === BOUNTY_GUILD_ID
+    && oldState.channelId !== newState.channelId
+  ) {
+    try {
+      const settings = await getBountySettings(newState.guild.id);
+      if (settings) {
+        const member = newState.member ?? oldState.member;
+        const eligible = Boolean(
+          newState.channelId
+          && newState.channelId !== newState.guild.afkChannelId
+          && member?.roles.cache.has(settings.crewRoleId),
+        );
+        const change = await recordBountyVoiceState(
+          newState.guild.id,
+          userId,
+          newState.channelId,
+          eligible,
+        );
+        if (change) await syncBountyPointChanges(newState.guild, [change]);
+      }
+    } catch (error) {
+      logger.error(`[bounty] Voice state transition failed user=${userId}`, error);
+    }
+  }
   // Panel-only Hubs are transferred by another bot. Record the destination
   // before casino/chinchiro departure checks so Hub -> child is not treated as leaving.
   if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
@@ -1618,6 +1891,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         `[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} — oldMember is partial and no role snapshot exists; skipping to avoid spurious sheet creation`,
       );
       if (!newMember.user.bot) {
+        await handleBountyCrewRoleChange(newMember);
         const currentRoleIds = [...newMember.roles.cache.keys()].filter(
           (roleId) => !consumeTimedRoleGrantFromPurchase(guildId, newMember.id, roleId),
         );
@@ -1656,6 +1930,19 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   const removedRoleIds = [...oldRoles.keys()].filter((id) => !newMember.roles.cache.has(id));
 
   logger.info(`[sheet] GuildMemberUpdate user=${newMember.id} guild=${guildId} addedRoles=[${addedRoleIds.join(",")}] partial=${oldMember.partial}`);
+  if (guildId === BOUNTY_GUILD_ID && !newMember.user.bot) {
+    try {
+      const bountySettings = await getBountySettings(guildId);
+      if (
+        bountySettings
+        && oldRoles.has(bountySettings.crewRoleId) !== newMember.roles.cache.has(bountySettings.crewRoleId)
+      ) {
+        await handleBountyCrewRoleChange(newMember);
+      }
+    } catch (error) {
+      logger.error(`[bounty] Failed to inspect crew role transition user=${newMember.id}`, error);
+    }
+  }
 
   // Notify the advice log when the evaluation-advice role is granted outside
   // the shop flow. Shop purchases already post a purchase log, so consume the
@@ -1790,6 +2077,15 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
 client.on(Events.GuildMemberRemove, async (member) => {
   const guildId = member.guild.id;
+  if (guildId === BOUNTY_GUILD_ID && !member.user.bot) {
+    try {
+      if (await getBountySettings(guildId)) {
+        await recordBountyVoiceState(guildId, member.id, null, false);
+      }
+    } catch (error) {
+      logger.error(`[bounty] Failed to close voice presence for departing user=${member.id}`, error);
+    }
+  }
 
   // ロールスナップショットを削除する。削除しないと再参加後の partial GuildMemberUpdate で
   // 退出前のロールが「既存」と誤判定され、eval sheet が作成されなくなる。
@@ -2115,15 +2411,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
             r.name === "追放者" && member.roles.cache.has(r.id),
           );
           const hasRestrictedRole = !isExempt && (hasIslandRole || hasExpelledRole);
-          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow", "chinchiro", "裏航海"]);
-          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow", "chinchiro", "裏航海"]);
+          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow", "chinchiro", "裏航海", "bounty"]);
+          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow", "chinchiro", "裏航海", "bounty"]);
           const allowedCommands = hasIslandRole && !hasExpelledRole
             ? allowedForIsland
             : allowedForExpelled;
           if (hasRestrictedRole && !allowedCommands.has(interaction.commandName)) {
             const allowedText = hasIslandRole && !hasExpelledRole
-              ? "`/送金`、`/残高確認`、`/slot play`、`/blackjack`、`/baccarat`、`/highlow`、`/chinchiro`"
-              : "`/送金`、`/残高確認`、`/slot`、`/blackjack`、`/highlow`、`/chinchiro`";
+              ? "`/送金`、`/残高確認`、`/slot play`、`/blackjack`、`/baccarat`、`/highlow`、`/chinchiro`、`/bounty`"
+              : "`/送金`、`/残高確認`、`/slot`、`/blackjack`、`/highlow`、`/chinchiro`、`/bounty`";
             await interaction.reply({ content: `このロールでは ${allowedText} のみ使用できます。`, ephemeral: true });
             return;
           }
@@ -2137,6 +2433,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await command.execute(interaction);
       return;
     }
+
+    if (interaction.isUserSelectMenu() && await handleBountyUserSelect(interaction)) return;
+    if (interaction.isChannelSelectMenu() && await handleBountyChannelSelect(interaction)) return;
+    if (interaction.isRoleSelectMenu() && await handleBountyRoleSelect(interaction)) return;
+    if (interaction.isModalSubmit() && await handleBountyModalSubmit(interaction)) {
+      const match = /^bounty:manual:modal:[+-]:(\d{17,20})$/.exec(interaction.customId);
+      if (match && interaction.guild?.id === BOUNTY_GUILD_ID) {
+        try {
+          const member = await interaction.guild.members.fetch(match[1]);
+          await syncBountyTierRole(member);
+        } catch (error) {
+          logger.error(`[bounty] Manual adjustment tier sync failed user=${match[1]}`, error);
+        }
+      }
+      return;
+    }
+    if (interaction.isButton() && await handleBountyButton(interaction)) return;
 
     if (interaction.isButton() && interaction.customId.startsWith(BJ_PREFIX)) {
       await handleBlackjackButton(interaction);
