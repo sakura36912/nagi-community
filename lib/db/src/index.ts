@@ -21,3 +21,4 @@ export * from "./timedRoleGrants";
 export * from "./shopForumPanel";
 export * from "./uraRecruitment";
 export * from "./schema-check";
+export * from "./dealerCasino";

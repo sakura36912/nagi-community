@@ -27,6 +27,7 @@ import {
   type CasinoLimitedGame,
 } from "../lib/casinoPlayLimits";
 import { resolveCasinoLedgerAmounts } from "../lib/casinoResult";
+import { handleDealerCasinoSlash } from "./dealerCasino";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -523,7 +524,6 @@ export const casinoCommand = {
   data: new SlashCommandBuilder()
     .setName("casino")
     .setDescription("カジノコマンド")
-    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("stats")
@@ -581,8 +581,45 @@ export const casinoCommand = {
                 .setMaxValue(10_000)
                 .setRequired(true),
             ),
-        ),
-    ),
+        )
+        .addSubcommand((sub) => sub.setName("dealer_room").setDescription("【管理者】賭博場VCとログ先を指定する")
+          .addChannelOption((opt) => opt.setName("vc").setDescription("開催を許可する賭博場VC").addChannelTypes(2).setRequired(true))
+          .addChannelOption((opt) => opt.setName("log").setDescription("精算ログを投稿するチャンネル").addChannelTypes(0).setRequired(false)))
+        .addSubcommand((sub) => sub.setName("dealer_roles").setDescription("【管理者】賭博師・賭博統領ロールを設定する")
+          .addRoleOption((opt) => opt.setName("dealer").setDescription("賭博師ロール").setRequired(true))
+          .addRoleOption((opt) => opt.setName("leader").setDescription("賭博統領ロール").setRequired(true))
+          .addRoleOption((opt) => opt.setName("manager").setDescription("追加の管理者ロール").setRequired(false)))
+        .addSubcommand((sub) => sub.setName("dealer_rule").setDescription("【管理者】賭博師ゲームのルールを設定する")
+          .addStringOption((opt) => opt.setName("key").setDescription("設定項目").setRequired(true).addChoices(
+            { name: "最低掛け金", value: "min_bet" }, { name: "最高掛け金", value: "max_bet" },
+            { name: "最大参加人数", value: "max_players" }, { name: "丁半の連勝倍率 (カンマ区切り)", value: "streak_multipliers" },
+            { name: "丁半の連勝上限倍率", value: "streak_cap" },
+            { name: "連勝維持時間（分）", value: "streak_minutes" },
+            { name: "ポーカー通常勝利倍率", value: "poker_base_multiplier" },
+            { name: "ポーカー A-2-3 ストレート (on/off)", value: "ace_low_straight" },
+            { name: "ポーカーのフォールド待機秒数", value: "poker_timeout" },
+            { name: "ポーカー役ボーナス (on/off)", value: "bonus_enabled" },
+            { name: "ポーカー役別倍率 (JSON)", value: "bonus_multipliers" },
+            { name: "ディーラー最低役 (off/high_card/..)", value: "dealer_qualification" },
+            { name: "ゲーム稼働 (on/off)", value: "enabled" },
+            { name: "賭博師活動pt換算値", value: "activity_points" },
+          ))
+          .addStringOption((opt) => opt.setName("value").setDescription("設定値").setRequired(true)))
+        .addSubcommand((sub) => sub.setName("dealer_status").setDescription("【管理者】賭博師ゲームの設定を確認する")),
+    )
+    .addSubcommandGroup((group) => group.setName("chohan").setDescription("賭博師が進行する丁半")
+      .addSubcommand((sub) => sub.setName("start").setDescription("丁半の参加受付を開始する"))
+      .addSubcommand((sub) => sub.setName("roll").setDescription("締切後にサイコロを振り結果を確定する")))
+    .addSubcommandGroup((group) => group.setName("poker").setDescription("賭博師が進行するスリーカードポーカー")
+      .addSubcommand((sub) => sub.setName("start").setDescription("スリーカードポーカーの参加受付を開始する"))
+      .addSubcommand((sub) => sub.setName("deal").setDescription("締切後にカードを配る"))
+      .addSubcommand((sub) => sub.setName("reveal").setDescription("ディーラーのカードを公開する"))
+      .addSubcommand((sub) => sub.setName("settle").setDescription("確定結果を一度だけ精算する")))
+    .addSubcommand((sub) => sub.setName("close").setDescription("現在のゲームの募集を締め切る"))
+    .addSubcommand((sub) => sub.setName("next").setDescription("同じゲームで次の募集を開始する"))
+    .addSubcommand((sub) => sub.setName("end").setDescription("賭博場の営業を終了する"))
+    .addSubcommand((sub) => sub.setName("cancel").setDescription("未精算のゲームを中止し賭け金を返す"))
+    .addSubcommand((sub) => sub.setName("status").setDescription("賭博場の進行状況を確認する")),
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const sub   = interaction.options.getSubcommand();
     const group = interaction.options.getSubcommandGroup(false);
@@ -590,6 +627,7 @@ export const casinoCommand = {
     if (sub === "wallet")  { await handleWalletSummary(interaction);  return; }
     if (sub === "average") { await handleAverage(interaction);        return; }
     if (group === "setup" && sub === "max_bet") { await handleSetupMaxBet(interaction); return; }
-    if (group === "setup" && sub === "play_limit") await handleSetupPlayLimit(interaction);
+    if (group === "setup" && sub === "play_limit") { await handleSetupPlayLimit(interaction); return; }
+    await handleDealerCasinoSlash(interaction);
   },
 };

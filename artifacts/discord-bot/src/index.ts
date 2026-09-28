@@ -12,6 +12,12 @@ import {
 
 import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
 import { handlePokerButton, POKER_PREFIX } from "./commands/poker";
+import {
+  DEALER_CASINO_PREFIX,
+  handleDealerCasinoInteraction,
+  handleDealerCasinoVoiceDeparture,
+  startDealerCasinoRecovery,
+} from "./commands/dealerCasino";
 import { handleChinchiroButton, CHINCHIRO_PREFIX } from "./commands/chinchiro";
 import {
   handleMultiplayerChinchiroButton,
@@ -990,6 +996,7 @@ async function runVcDeleteScheduler(): Promise<void> {
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
+  startDealerCasinoRecovery(readyClient);
   startMultiplayerChinchiroRecovery(readyClient);
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
@@ -1367,6 +1374,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const userId = newState.member?.id ?? oldState.member?.id;
   if (!userId) return;
   if (newState.member?.user.bot ?? oldState.member?.user.bot) return;
+  await handleDealerCasinoVoiceDeparture(oldState, newState);
   await handleMultiplayerChinchiroVoiceDeparture(oldState, newState);
   // 追放者は高級船室へ入室できない。古い明示権限が残っていても即時に
   // 権限を削除して切断する（フリールームや砂浜は対象外）。
@@ -2148,6 +2156,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(POKER_PREFIX)) {
       await handlePokerButton(interaction);
+      return;
+    }
+
+    if ((interaction.isButton() || interaction.isModalSubmit()) && interaction.customId.startsWith(DEALER_CASINO_PREFIX)) {
+      await handleDealerCasinoInteraction(interaction);
       return;
     }
 

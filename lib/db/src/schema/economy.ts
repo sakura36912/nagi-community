@@ -7,7 +7,9 @@ import {
   boolean,
   primaryKey,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -212,7 +214,11 @@ export const transactionsTable = pgTable("transactions", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("transactions_session_key_idx")
+    .on(table.sessionKey)
+    .where(sql`${table.sessionKey} IS NOT NULL`),
+]);
 
 export const insertTransactionSchema = createInsertSchema(
   transactionsTable,

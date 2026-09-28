@@ -38,4 +38,5 @@ export * from "./chinchiroDice";
 export * from "./randomMatch";
 export * from "./shopForumPanel";
 export * from "./uraRecruitment";
+export * from "./dealerCasino";
 
