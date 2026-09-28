@@ -19,6 +19,8 @@ export const chinchiroTablesTable = pgTable("chinchiro_tables", {
   parentId: text("parent_id"),
   status: text("status").notNull().default("recruiting"),
   currencyName: text("currency_name").notNull(),
+  /** Snapshot at creation: changing guild settings must not change an open table's accounting. */
+  testMode: integer("test_mode").notNull().default(1),
   round: integer("round").notNull().default(1),
   turnUserId: text("turn_user_id"),
   results: text("results"),

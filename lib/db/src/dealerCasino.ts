@@ -267,6 +267,7 @@ export async function createDealerCasinoGame(
       .limit(1);
     assertConfiguredSettings(settings, input.gameType);
     if (input.voiceChannelId !== settings.voiceChannelId) {
+      const configuredVoiceChannelId = settings.voiceChannelId!;
       const [transferred] = await tx
         .select({ id: vcHubSessionsTable.id })
         .from(vcHubSessionsTable)
@@ -275,7 +276,7 @@ export async function createDealerCasinoGame(
           eq(vcHubSessionsTable.channelId, input.voiceChannelId),
           eq(vcHubSessionsTable.guildId, input.guildId),
           eq(vcHubChannelsTable.guildId, input.guildId),
-          eq(vcHubChannelsTable.hubChannelId, settings.voiceChannelId),
+           eq(vcHubChannelsTable.hubChannelId, configuredVoiceChannelId),
         ))
         .limit(1);
       if (!transferred) {

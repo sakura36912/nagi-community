@@ -8,11 +8,12 @@ import {
 import { and, asc, eq, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
 import {
   chinchiroMultiplayerSettingsTable, chinchiroTablePlayersTable, chinchiroTablesTable,
-  db, type ChinchiroTable, type ChinchiroTablePlayer,
+  dealerCasinoSettingsTable, db, type ChinchiroTable, type ChinchiroTablePlayer,
 } from "@workspace/db";
 import { isConfiguredHubVoice } from "../lib/configuredHubVoice";
 import { getGuildSettings } from "../lib/economy";
 import { logger } from "../lib/logger";
+import { refundOpenRound, reserveBet, settleRound } from "../lib/chinchiroMultiplayerMoney";
 import {
   isChinchiroHandComplete,
   rollChinchiroOnce,
@@ -224,7 +225,8 @@ function dice(outcome: ChinchiroOutcome): string {
   return outcome.dice.map((die) => ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][die - 1]).join(" ");
 }
 export function buildMultiplayerChinchiroPanel(t: ChinchiroTable, ps: ChinchiroTablePlayer[]) {
-  const title = t.status === "recruiting" ? "🎲 チンチロ募集（テストモード）" : "🎲 チンチロ（テストモード）";
+  const suffix = t.testMode === 1 ? "（テストモード）" : "（実残高で精算）";
+  const title = t.status === "recruiting" ? `🎲 チンチロ募集${suffix}` : `🎲 チンチロ${suffix}`;
   const list = ps.map((p) => `${escapeMarkdown(p.displayName)}${p.userId === t.parentId ? " 👑 親" : ""}${p.bet ? ` — ${p.bet.toLocaleString()} ${t.currencyName}` : ""}`).join("\n") || "参加者なし";
   const turn = t.status === "rolling" && t.turnUserId
     ? `\n手番: **${escapeMarkdown(displayNameFor(ps, t.turnUserId))}**（60秒）`
@@ -255,7 +257,7 @@ export function buildMultiplayerChinchiroPanel(t: ChinchiroTable, ps: ChinchiroT
     embed.addFields(
       { name: "【親】", value: parentValue.slice(0, 1024), inline: false },
       { name: "【子】", value: childValue.slice(0, 1024), inline: false },
-      { name: "【金額（予定増減）】", value: amountValue.slice(0, 1024), inline: false },
+      { name: t.testMode === 1 ? "【金額（予定増減）】" : "【金額（確定損益）】", value: amountValue.slice(0, 1024), inline: false },
     );
   } else if (currentRollText) {
     embed.addFields({ name: "現在のロール結果", value: currentRollText.slice(0, 1024), inline: false });
@@ -322,6 +324,13 @@ async function closeTableForDeparture(tableId: number, departedId: string) {
     if (!current || current.status === "closed") {
       return { table: current ?? null, departed: null };
     }
+    const [present] = await tx.select().from(chinchiroTablePlayersTable).where(and(
+      eq(chinchiroTablePlayersTable.tableId, tableId),
+      eq(chinchiroTablePlayersTable.userId, departedId),
+      eq(chinchiroTablePlayersTable.active, 1),
+    )).limit(1);
+    if (!present) return { table: current, departed: null };
+    await refundOpenRound(tx, current);
     const [departed] = await tx.update(chinchiroTablePlayersTable)
       .set({ active: 0 })
       .where(and(
@@ -332,8 +341,6 @@ async function closeTableForDeparture(tableId: number, departedId: string) {
       .returning();
     if (!departed) return { table: current, departed: null };
 
-    // Multiplayer bets are not debited while test mode is active, so closing
-    // the table is the refund: no balance credit is added or money minted.
     const [closed] = await tx.update(chinchiroTablesTable)
       .set({ status: "closed", turnUserId: null })
       .where(and(
@@ -342,6 +349,21 @@ async function closeTableForDeparture(tableId: number, departedId: string) {
       ))
       .returning();
     return { table: closed ?? current, departed };
+  });
+}
+
+async function closeAndRefundTable(tableId: number, expiredAt?: Date) {
+  return db.transaction(async (tx) => {
+    await lockTable(tx, tableId);
+    const [current] = await tx.select().from(chinchiroTablesTable)
+      .where(eq(chinchiroTablesTable.id, tableId)).for("update");
+    if (!current || current.status === "closed" || (expiredAt && current.expiresAt >= expiredAt)) return null;
+    await refundOpenRound(tx, current);
+    const [closed] = await tx.update(chinchiroTablesTable)
+      .set({ status: "closed", turnUserId: null })
+      .where(and(eq(chinchiroTablesTable.id, tableId), eq(chinchiroTablesTable.status, current.status)))
+      .returning();
+    return closed ?? null;
   });
 }
 
@@ -444,6 +466,7 @@ async function takeTurnThrow(
     }
 
     const result = calculateRoundResults(current.parentId!, resolvedPlayers);
+    await settleRound(tx, current, resolvedPlayers, result.net);
     const [finished] = await tx.update(chinchiroTablesTable)
       .set({
         status: "finished",
@@ -501,12 +524,13 @@ async function currentVoiceChannelId(
 }
 
 export const chinchiroRecruitCommand = {
-  data: new SlashCommandBuilder().setName("chinchiro").setDescription("複数人チンチロ（テストモード）")
+  data: new SlashCommandBuilder().setName("chinchiro").setDescription("複数人チンチロ")
     .addSubcommand((s) => s.setName("recruit").setDescription("チンチロ参加者を募集する"))
     .addSubcommand((s) => s.setName("config").setDescription("管理者設定").addChannelOption((o) =>
       o.setName("voice").setDescription("参加必須VC").addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice))
       .addIntegerOption((o) => o.setName("min_bet").setDescription("最低賭け金").setMinValue(1))
       .addIntegerOption((o) => o.setName("max_bet").setDescription("最高賭け金").setMinValue(1))
+      .addBooleanOption((o) => o.setName("live").setDescription("実残高での精算を有効にする（falseでテストモード）"))
       .addChannelOption((o) =>
         o.setName("logs").setDescription("ログ送信先").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)))
     .addSubcommand((s) => s.setName("force-end").setDescription("卓を強制終了").addIntegerOption((o) => o.setName("table").setDescription("卓ID").setRequired(true)))
@@ -524,7 +548,8 @@ export const chinchiroRecruitCommand = {
         const logChannel = interaction.options.getChannel("logs");
         const minBet = interaction.options.getInteger("min_bet");
         const maxBet = interaction.options.getInteger("max_bet");
-        const hasExplicitOption = Boolean(selectedVoiceChannel || logChannel || minBet !== null || maxBet !== null);
+        const live = interaction.options.getBoolean("live");
+        const hasExplicitOption = Boolean(selectedVoiceChannel || logChannel || minBet !== null || maxBet !== null || live !== null);
         const joinedVoiceId = hasExplicitOption ? null : await currentVoiceChannelId(interaction);
         const voiceChannel = selectedVoiceChannel
           ?? (joinedVoiceId ? await interaction.guild!.channels.fetch(joinedVoiceId).catch(() => null) : null);
@@ -543,11 +568,11 @@ export const chinchiroRecruitCommand = {
         }
         await db.update(chinchiroMultiplayerSettingsTable).set({
           voiceChannelId: voice ?? current.voiceChannelId, logChannelId: logs ?? current.logChannelId,
-          minBet: nextMin, maxBet: nextMax, testMode: 1,
+          minBet: nextMin, maxBet: nextMax, testMode: live === null ? current.testMode : live ? 0 : 1,
         }).where(eq(chinchiroMultiplayerSettingsTable.guildId, interaction.guildId));
         const savedVoiceId = voice ?? current.voiceChannelId;
         await interaction.reply({
-          content: `チンチロ設定を保存しました。\n参加必須VC: ${savedVoiceId ? `<#${savedVoiceId}>` : "未設定"}`,
+          content: `チンチロ設定を保存しました。\n参加必須VC: ${savedVoiceId ? `<#${savedVoiceId}>` : "未設定"}\n精算: ${live === null ? (current.testMode === 1 ? "テスト" : "実残高") : (live ? "実残高" : "テスト")}`,
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -565,10 +590,10 @@ export const chinchiroRecruitCommand = {
       const target = await table(interaction.options.getInteger("table", true));
       if (!target || target.guildId !== interaction.guildId) { await interaction.reply({ content: "卓が見つかりません。", flags: MessageFlags.Ephemeral }); return; }
       if (subcommand === "force-end") {
-        await db.update(chinchiroTablesTable).set({ status: "closed", turnUserId: null }).where(eq(chinchiroTablesTable.id, target.id));
-        await refreshStoredPanel(interaction, { ...target, status: "closed", turnUserId: null });
-        await sendConfiguredLog(interaction.guild!, target, "管理者により強制終了");
-        await interaction.reply({ content: `卓 #${target.id} を終了しました（テストモードのため精算なし）。`, flags: MessageFlags.Ephemeral }); return;
+        const closed = await closeAndRefundTable(target.id);
+        if (closed) await refreshStoredPanel(interaction, closed);
+        await sendConfiguredLog(interaction.guild!, closed ?? target, "管理者により強制終了");
+        await interaction.reply({ content: `卓 #${target.id} を終了しました。未精算の預かり金は返金されました。`, flags: MessageFlags.Ephemeral }); return;
       }
       const user = interaction.options.getUser("user", true);
       const departure = await closeTableForDeparture(target.id, user.id);
@@ -577,9 +602,18 @@ export const chinchiroRecruitCommand = {
         return;
       }
       const fresh = departure.table; if (fresh) await refreshStoredPanel(interaction, fresh);
-      await interaction.reply({ content: `<@${user.id}> の退出により卓 #${target.id} を終了しました。賭け金は返金されました。`, flags: MessageFlags.Ephemeral, allowedMentions: { users: [user.id] } }); return;
+      await interaction.reply({ content: `<@${user.id}> の退出により卓 #${target.id} を終了しました。未精算の預かり金は返金されました。`, flags: MessageFlags.Ephemeral, allowedMentions: { users: [user.id] } }); return;
     }
     const config = await settings(interaction.guildId);
+    const [casinoRoles] = await db.select().from(dealerCasinoSettingsTable)
+      .where(eq(dealerCasinoSettingsTable.guildId, interaction.guildId)).limit(1);
+    const dealerMember = await interaction.guild!.members.fetch(interaction.user.id).catch(() => null);
+    const roles = [casinoRoles?.dealerRoleId, casinoRoles?.directorRoleId, casinoRoles?.adminRoleId];
+    if (!dealerMember || (!dealerMember.permissions.has(PermissionFlagsBits.Administrator) &&
+      !roles.some((roleId) => roleId && dealerMember.roles.cache.has(roleId)))) {
+      await interaction.reply({ content: "チンチロの募集主には賭博師・賭博頭領・管理者のロールが必要です。", flags: MessageFlags.Ephemeral });
+      return;
+    }
     if (!await inConfiguredVoice(interaction, config.voiceChannelId)) {
       const currentVoiceId = await currentVoiceChannelId(interaction);
       logger.warn(
@@ -605,7 +639,7 @@ export const chinchiroRecruitCommand = {
       if (open) return null;
       const [created] = await tx.insert(chinchiroTablesTable).values({
         guildId: interaction.guildId!, channelId: interaction.channelId, ownerId: interaction.user.id,
-        currencyName: economy.currencyName, expiresAt: new Date(Date.now() + RECRUIT_MS),
+        currencyName: economy.currencyName, testMode: config.testMode, expiresAt: new Date(Date.now() + RECRUIT_MS),
       }).returning();
       if (!created) throw new Error("Failed to create multiplayer chinchiro table");
       await tx.insert(chinchiroTablePlayersTable).values({ tableId: created.id, userId: interaction.user.id, displayName, joinOrder: 1 });
@@ -628,8 +662,8 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
     await interaction.reply({ content: "卓が見つかりません。", flags: MessageFlags.Ephemeral }); return;
   }
   if (t.expiresAt < new Date() && !["finished", "closed"].includes(t.status)) {
-    await db.update(chinchiroTablesTable).set({ status: "closed" }).where(eq(chinchiroTablesTable.id, id));
-    await interaction.deferUpdate(); await redraw(interaction, { ...t, status: "closed" }); return;
+    const closed = await closeAndRefundTable(id, new Date());
+    await interaction.deferUpdate(); await redraw(interaction, closed ?? (await table(id)) ?? t); return;
   }
   const config = await settings(t.guildId);
   if (action === "bet") {
@@ -674,7 +708,7 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
     const updated = departure.table;
     await interaction.deferUpdate();
     await redraw(interaction, updated ?? t);
-    await interaction.followUp({ content: "退出したためゲームを終了しました。賭け金は返金されました。", flags: MessageFlags.Ephemeral });
+    await interaction.followUp({ content: "退出したためゲームを終了しました。未精算の預かり金は返金されました。", flags: MessageFlags.Ephemeral });
     return;
   }
   // 「募集終了」は募集だけを締め切り、卓をBET入力へ進める。
@@ -718,9 +752,16 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
   }
   if (action === "roll" && t.status === "rolling" && t.turnUserId === interaction.user.id) {
     await interaction.deferUpdate();
-    const throwResult = await takeTurnThrow(id, interaction.user.id, {
-      expectedAttempt: Number.isSafeInteger(expectedAttempt) ? expectedAttempt : undefined,
-    });
+    let throwResult: TurnThrowResult | null;
+    try {
+      throwResult = await takeTurnThrow(id, interaction.user.id, {
+        expectedAttempt: Number.isSafeInteger(expectedAttempt) ? expectedAttempt : undefined,
+      });
+    } catch (error) {
+      logger.error(`[chinchiro-mp] Round settlement failed table=${id}`, error);
+      await interaction.followUp({ content: "残高の精算に失敗したため、結果は確定していません。管理者に連絡してください。", flags: MessageFlags.Ephemeral });
+      return;
+    }
     if (!throwResult) {
       await interaction.followUp({
         content: "この投球ボタンは使用済みか、手番が変わりました。",
@@ -755,11 +796,19 @@ export async function handleMultiplayerChinchiroModal(interaction: ModalSubmitIn
   const id = Number(interaction.customId.split(":")[2]); const t = await table(id);
   if (!t || t.guildId !== interaction.guildId || t.status !== "betting") { await interaction.reply({ content: "賭け金入力の期限が切れています。", flags: MessageFlags.Ephemeral }); return; }
   const config = await settings(t.guildId), bet = Number(interaction.fields.getTextInputValue("bet"));
-  if (!Number.isInteger(bet) || bet < config.minBet || bet > config.maxBet) { await interaction.reply({ content: `賭け金は${config.minBet}〜${config.maxBet}の整数にしてください。`, flags: MessageFlags.Ephemeral }); return; }
-  const updated = await db.transaction(async (tx) => {
+  if (!Number.isSafeInteger(bet) || bet < config.minBet || bet > config.maxBet) { await interaction.reply({ content: `賭け金は${config.minBet}〜${config.maxBet}の整数にしてください。`, flags: MessageFlags.Ephemeral }); return; }
+  let updated: ChinchiroTable | null;
+  try {
+    updated = await db.transaction(async (tx) => {
     await lockTable(tx, id);
     const [current] = await tx.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, id)).for("update");
     if (!current || current.status !== "betting" || current.expiresAt < new Date()) return null;
+    const activeBefore = await tx.select().from(chinchiroTablePlayersTable).where(and(
+      eq(chinchiroTablePlayersTable.tableId, id), eq(chinchiroTablePlayersTable.active, 1),
+    ));
+    const existing = activeBefore.find((p) => p.userId === interaction.user.id);
+    if (!existing) return null;
+    await reserveBet(tx, current, existing, bet, activeBefore.length);
     const [player] = await tx.update(chinchiroTablePlayersTable).set({ bet }).where(and(eq(chinchiroTablePlayersTable.tableId, id), eq(chinchiroTablePlayersTable.userId, interaction.user.id), eq(chinchiroTablePlayersTable.active, 1))).returning();
     if (!player) return null;
     const active = await tx.select().from(chinchiroTablePlayersTable).where(and(eq(chinchiroTablePlayersTable.tableId, id), eq(chinchiroTablePlayersTable.active, 1))).orderBy(asc(chinchiroTablePlayersTable.joinOrder));
@@ -767,7 +816,11 @@ export async function handleMultiplayerChinchiroModal(interaction: ModalSubmitIn
     const [rolling] = await tx.update(chinchiroTablesTable).set({ status: "rolling", turnUserId: rollOrder(current.parentId!, active)[0]!, expiresAt: new Date(Date.now() + TURN_MS) })
       .where(and(eq(chinchiroTablesTable.id, id), eq(chinchiroTablesTable.status, "betting"))).returning();
     return rolling ?? null;
-  });
+    });
+  } catch (error) {
+    await interaction.reply({ content: error instanceof Error ? error.message : "賭け金を預かれませんでした。", flags: MessageFlags.Ephemeral });
+    return;
+  }
   if (!updated) { await interaction.reply({ content: "賭け金入力の期限が切れています。", flags: MessageFlags.Ephemeral }); return; }
   await interaction.reply({ content: "賭け金を受け付けました。", flags: MessageFlags.Ephemeral });
   await redraw(interaction, updated);
@@ -804,7 +857,7 @@ export async function recoverExpiredMultiplayerChinchiro(now = new Date(), clien
   ));
   for (const current of expired) {
     if (current.status !== "rolling" || !current.turnUserId) {
-      const [closed] = await db.update(chinchiroTablesTable).set({ status: "closed", turnUserId: null }).where(and(eq(chinchiroTablesTable.id, current.id), eq(chinchiroTablesTable.status, current.status), lt(chinchiroTablesTable.expiresAt, now))).returning();
+      const closed = await closeAndRefundTable(current.id, now);
       if (closed && client) {
         const guild = await client.guilds.fetch(closed.guildId).catch(() => null);
         if (guild) { await refreshPanelForGuild(guild, closed); await sendConfiguredLog(guild, closed, "期限切れで終了"); }
@@ -827,8 +880,10 @@ export async function recoverExpiredMultiplayerChinchiro(now = new Date(), clien
   return expired.length;
 }
 export function startMultiplayerChinchiroRecovery(client: Client): () => void {
-  const timer = setInterval(() => { void recoverExpiredMultiplayerChinchiro(new Date(), client); }, 30_000);
+  const recover = () => void recoverExpiredMultiplayerChinchiro(new Date(), client)
+    .catch((error) => logger.error("[chinchiro-mp] Expiry recovery failed", error));
+  const timer = setInterval(recover, 30_000);
   timer.unref();
-  void recoverExpiredMultiplayerChinchiro(new Date(), client);
+  recover();
   return () => clearInterval(timer);
 }
