@@ -340,7 +340,7 @@ function statusLabel(state: string): string {
   return labels[state] ?? state;
 }
 
-function gameEmbed(game: DealerCasinoGame, settings: DealerCasinoSettings | null, bets: DealerCasinoBet[]): EmbedBuilder {
+export function gameEmbed(game: DealerCasinoGame, settings: DealerCasinoSettings | null, bets: DealerCasinoBet[]): EmbedBuilder {
   const kind = game.gameType as DealerCasinoType;
   const title = LABELS[kind] ?? "🎲 賭博場ゲーム";
   const description = [
@@ -368,6 +368,10 @@ function gameEmbed(game: DealerCasinoGame, settings: DealerCasinoSettings | null
     if (result.kind === "chohan") {
       description.push(`出目: 🎲 ${result.dice?.[0]} + 🎲 ${result.dice?.[1]} = **${result.total}**（**${result.result === "cho" ? "丁" : "半"}**）`);
     }
+    const dealerTransfer = bets
+      .filter((bet) => bet.state === "LOST" || bet.state === "FOLDED")
+      .reduce((total, bet) => total + bet.betAmount, 0);
+    description.push(`ディーラーへの送金額: **${dealerTransfer.toLocaleString()}＄**`);
     const summaries = result.outcomes.map((outcome) => {
       const player = result.players.find((entry) => entry.userId === outcome.userId);
       const hand = player?.hand ? ` (${handLabel(player.hand)})` : "";

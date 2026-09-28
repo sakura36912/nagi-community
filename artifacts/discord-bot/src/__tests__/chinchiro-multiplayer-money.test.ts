@@ -4,7 +4,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import {
   chinchiroTablePlayersTable, chinchiroTablesTable, db, transactionsTable, walletsTable,
 } from "@workspace/db";
-import { calculateRoundResults } from "../commands/chinchiroMultiplayer";
+import { buildMultiplayerChinchiroPanel, calculateRoundResults } from "../commands/chinchiroMultiplayer";
 import { evaluateChinchiroRoll } from "../commands/chinchiro";
 import { refundOpenRound, reserveBet, settleRound } from "../lib/chinchiroMultiplayerMoney";
 
@@ -95,6 +95,12 @@ describe("multiplayer chinchiro live settlement", () => {
     expect(await balance(guildId, child1)).toBe(19_000);
     expect(await balance(guildId, child2)).toBe(25_000);
     expect(await balance(guildId, ownerId)).toBe(5500);
+    const [finished] = await db.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, table.id));
+    const ps = await db.select().from(chinchiroTablePlayersTable).where(eq(chinchiroTablePlayersTable.tableId, table.id));
+    expect(buildMultiplayerChinchiroPanel(finished!, ps).toJSON().fields?.at(-1)).toMatchObject({
+      name: "【ディーラーへの送金額】",
+      value: `<@${ownerId}>：5,000 円`,
+    });
     const dealerRows = await db.select().from(transactionsTable).where(and(
       eq(transactionsTable.guildId, guildId), eq(transactionsTable.userId, ownerId),
     ));

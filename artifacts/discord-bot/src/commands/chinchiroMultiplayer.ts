@@ -92,6 +92,10 @@ export function calculateRoundResults(parentId: string, activePlayers: Chinchiro
   return { pairs, net };
 }
 
+function dealerTransferAmount(net: Record<string, number>): number {
+  return Object.values(net).reduce((total, change) => total + Math.max(0, -change), 0);
+}
+
 interface StoredRoundResult {
   round: number;
   parentId: string;
@@ -258,6 +262,11 @@ export function buildMultiplayerChinchiroPanel(t: ChinchiroTable, ps: ChinchiroT
       { name: "【親】", value: parentValue.slice(0, 1024), inline: false },
       { name: "【子】", value: childValue.slice(0, 1024), inline: false },
       { name: t.testMode === 1 ? "【金額（予定増減）】" : "【金額（確定損益）】", value: amountValue.slice(0, 1024), inline: false },
+      {
+        name: t.testMode === 1 ? "【ディーラーへの送金予定額（テスト・実送金なし）】" : "【ディーラーへの送金額】",
+        value: `<@${t.ownerId}>：${dealerTransferAmount(result.net).toLocaleString()} ${t.currencyName}`,
+        inline: false,
+      },
     );
   } else if (currentRollText) {
     embed.addFields({ name: "現在のロール結果", value: currentRollText.slice(0, 1024), inline: false });
@@ -277,12 +286,15 @@ function statusLabel(status: string): string {
     closed: "終了",
   }[status] ?? status;
 }
-function resultSummary(raw: string | null, ps: ChinchiroTablePlayer[] = []): string {
+function resultSummary(raw: string | null, ps: ChinchiroTablePlayer[] = [], t?: ChinchiroTable): string {
   if (!raw) return "";
   const result = JSON.parse(raw) as ReturnType<typeof calculateRoundResults>;
-  return Object.entries(result.net).map(([userId, amount]) =>
+  const summary = Object.entries(result.net).map(([userId, amount]) =>
     `${escapeMarkdown(displayNameFor(ps, userId))} ${amount >= 0 ? "+" : ""}${amount}`,
   ).join(" / ");
+  if (!t) return summary;
+  const label = t.testMode === 1 ? "ディーラーへの送金予定（実送金なし）" : "ディーラーへの送金";
+  return `${summary} / ${label}: <@${t.ownerId}> ${dealerTransferAmount(result.net).toLocaleString()} ${t.currencyName}`;
 }
 async function refreshPanelForGuild(guild: Guild, t: ChinchiroTable) {
   if (!t.messageId) return;
@@ -305,7 +317,10 @@ async function sendConfiguredLog(guild: Guild, t: ChinchiroTable, event: string)
   if (!config.logChannelId) return;
   const channel = await guild.channels.fetch(config.logChannelId).catch(() => null);
   const ps = await allPlayers(t.id);
-  if (channel?.isTextBased()) await channel.send(`🎲 チンチロ卓 #${t.id}: ${event}${t.results ? `\n${resultSummary(t.results, ps)}` : ""}`).catch(() => undefined);
+  if (channel?.isTextBased()) await channel.send({
+    content: `🎲 チンチロ卓 #${t.id}: ${event}${t.results ? `\n${resultSummary(t.results, ps, t)}` : ""}`,
+    allowedMentions: { parse: [] },
+  }).catch(() => undefined);
 }
 
 async function resolvedDisplayName(guild: Guild, userId: string): Promise<string> {
@@ -582,7 +597,7 @@ export const chinchiroRecruitCommand = {
         const entries = (await Promise.all(rows.map(async (row) => {
           const names = await allPlayers(row.id);
           return parseHistory(row.history).map((round) =>
-            `#${row.id} round ${round.round}: ${resultSummary(JSON.stringify(round.result), names)}`,
+            `#${row.id} round ${round.round}: ${resultSummary(JSON.stringify(round.result), names, row)}`,
           );
         }))).flat();
         await interaction.reply({ content: entries.length ? entries.join("\n").slice(0, 1900) : "終了済みのラウンドはありません。", flags: MessageFlags.Ephemeral }); return;

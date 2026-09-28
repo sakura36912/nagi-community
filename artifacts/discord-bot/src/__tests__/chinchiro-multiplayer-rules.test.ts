@@ -88,12 +88,19 @@ describe("multiplayer chinchiro planning helpers", () => {
       "【親】",
       "【子】",
       "【金額（予定増減）】",
+      "【ディーラーへの送金予定額（テスト・実送金なし）】",
     ]);
     expect(fields[1]!.value).toContain("親ユーザー");
     expect(fields[1]!.value).toContain("⚁ ⚁ ⚄（5の目）");
     expect(fields[2]!.value).toContain("子ユーザー");
     expect(fields[3]!.value).toContain("親ユーザー：+1,000 $");
     expect(fields[3]!.value).toContain("子ユーザー：-1,000 $");
+    expect(fields[4]!.value).toBe("<@parent>：1,000 $");
+    const liveFields = buildMultiplayerChinchiroPanel({ ...table, testMode: 0 }, ps).toJSON().fields ?? [];
+    expect(liveFields[4]).toMatchObject({
+      name: "【ディーラーへの送金額】",
+      value: "<@parent>：1,000 $",
+    });
   });
 
   it("does not include the rules field in the public table embed", () => {

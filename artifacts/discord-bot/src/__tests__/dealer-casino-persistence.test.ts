@@ -32,6 +32,7 @@ import {
   walletsTable,
   type DealerCasinoOutcome,
 } from "@workspace/db";
+import { gameEmbed } from "../commands/dealerCasino";
 
 interface TestContext {
   guildId: string;
@@ -157,7 +158,10 @@ async function recordChohanResult(
 ): Promise<void> {
   await transitionDealerCasinoGame(gameId, "RECRUITING", "CLOSED");
   await transitionDealerCasinoGame(gameId, "CLOSED", "PLAYING");
-  await recordDealerCasinoResult(gameId, { kind: "chohan", dice: [2, 2], total: 4, result: "cho", outcomes });
+  await recordDealerCasinoResult(gameId, {
+    kind: "chohan", dice: [2, 2], total: 4, result: "cho", outcomes,
+    players: outcomes.map(({ userId, result }) => ({ userId, result })),
+  });
 }
 
 afterEach(async () => {
@@ -241,7 +245,10 @@ integrationDescribe("dealer casino DB persistence", () => {
     }
     const result = gameType === "poker" ? "FOLDED" : "LOST";
     const outcomes = [makeOutcome(playerId, result, 0)];
-    await recordDealerCasinoResult(context.gameId, { kind: gameType, outcomes });
+    await recordDealerCasinoResult(context.gameId, {
+      kind: gameType, outcomes,
+      players: outcomes.map(({ userId, result: outcomeResult }) => ({ userId, result: outcomeResult })),
+    });
     const [first, retry] = await Promise.all([
       settleDealerCasinoGame(context.gameId, outcomes),
       settleDealerCasinoGame(context.gameId, outcomes),
@@ -249,6 +256,10 @@ integrationDescribe("dealer casino DB persistence", () => {
     expect([first.alreadySettled, retry.alreadySettled].sort()).toEqual([false, true]);
     expect(await balance(context.guildId, context.dealerId)).toBe(1250);
     expect(await balance(context.guildId, playerId)).toBe(4000);
+    const finished = await getDealerCasinoGame(context.gameId);
+    const bets = await listDealerCasinoBets(context.gameId);
+    expect(gameEmbed(finished!, null, bets).toJSON().description)
+      .toContain("ディーラーへの送金額: **1,000＄**");
     const dealerCredits = await db.select().from(transactionsTable).where(and(
       eq(transactionsTable.guildId, context.guildId),
       eq(transactionsTable.userId, context.dealerId),
@@ -270,6 +281,10 @@ integrationDescribe("dealer casino DB persistence", () => {
     await settleDealerCasinoGame(context.gameId, outcomes);
     expect(await balance(context.guildId, playerId)).toBe(5000);
     expect(await balance(context.guildId, context.dealerId)).toBe(0);
+    const finished = await getDealerCasinoGame(context.gameId);
+    const bets = await listDealerCasinoBets(context.gameId);
+    expect(gameEmbed(finished!, null, bets).toJSON().description)
+      .toContain("ディーラーへの送金額: **0＄**");
   });
 
   it("rolls back the entire settlement if the dealer wallet would overflow", async () => {
