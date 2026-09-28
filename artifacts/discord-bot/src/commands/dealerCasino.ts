@@ -532,7 +532,7 @@ function settingsStatus(
 ): EmbedBuilder {
   if (!settings) {
     return new EmbedBuilder().setTitle("⚙️ 賭博師ゲーム設定").setColor(COLOR)
-      .setDescription("設定がありません。まず `/casino setup dealer_room` と `/casino setup dealer_roles` を実行してください。");
+      .setDescription("設定がありません。まず `/casino setup game_vc` と `/casino setup dealer_roles` を実行してください。");
   }
   const streaks = settings.chohanMultipliers
     ? Object.entries(settings.chohanMultipliers).sort((a, b) => Number(a[0]) - Number(b[0]))
@@ -1141,10 +1141,19 @@ export async function handleDealerCasinoSlash(interaction: ChatInputCommandInter
     if (group === "setup") {
       const member = await memberFor(interaction);
       if (!member || !isAdmin(member)) throw new Error("賭博場の設定はサーバー管理者のみ変更できます。");
-      if (sub === "dealer_room") {
+      if (sub === "dealer_room" || sub === "game_vc") {
         const voice = interaction.options.getChannel("vc", true);
         if (voice.type !== ChannelType.GuildVoice && voice.type !== ChannelType.GuildStageVoice) {
           throw new Error("賭博場VCに指定できるのは音声チャンネルのみです。");
+        }
+        const active = await getActiveDealerCasinoGame(interaction.guildId);
+        if (active && active.voiceChannelId !== voice.id) {
+          throw new Error("進行中の丁半またはポーカーがあります。精算またはキャンセル後にVCを変更してください。");
+        }
+        if (sub === "game_vc") {
+          await setDealerCasinoSettings(interaction.guildId, { voiceChannelId: voice.id });
+          await replyDealerCommand(interaction, { content: `丁半・スリーカードポーカー共通の開催VCを <#${voice.id}> に設定しました。` });
+          return;
         }
         const log = interaction.options.getChannel("log", false);
         if (log && log.type !== ChannelType.GuildText &&
