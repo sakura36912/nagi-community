@@ -63,6 +63,7 @@ import {
   type PokerHandValue,
 } from "../lib/dealerCasinoRules";
 import { getGuildSettings } from "../lib/economy";
+import { buildBlackjackCardStrip } from "../lib/casinoCardImages";
 import { logger } from "../lib/logger";
 
 export const DEALER_CASINO_PREFIX = "dealer-casino:";
@@ -351,12 +352,17 @@ function gameEmbed(game: DealerCasinoGame, settings: DealerCasinoSettings | null
   } else if (kind === "poker" && game.state === "PLAYING") {
     description.push("カードを確認して「続行」または「フォールド」を選んでください。");
   }
+  if (game.gameType === "poker" && game.result &&
+      (game.state === "RESULT" || game.state === "PAYOUT" || game.state === "FINISHED")) {
+    const result = resultFromGame(game);
+    if (result.kind === "poker" && result.dealerCards && result.dealerHand) {
+      description.push(`公開されたディーラーの手札: ${formatCards(result.dealerCards.map(parseCard))} — **${handLabel(result.dealerHand)}**`);
+    }
+  }
   if (game.state === "FINISHED" && game.result) {
     const result = resultFromGame(game);
     if (result.kind === "chohan") {
       description.push(`出目: 🎲 ${result.dice?.[0]} + 🎲 ${result.dice?.[1]} = **${result.total}**（**${result.result === "cho" ? "丁" : "半"}**）`);
-    } else if (result.dealerCards && result.dealerHand) {
-      description.push(`ディーラー: ${formatCards(result.dealerCards.map(parseCard))} — **${handLabel(result.dealerHand)}**`);
     }
     const summaries = result.outcomes.map((outcome) => {
       const player = result.players.find((entry) => entry.userId === outcome.userId);
@@ -372,6 +378,13 @@ function gameEmbed(game: DealerCasinoGame, settings: DealerCasinoSettings | null
     .setDescription(description.join("\n"))
     .setFooter({ text: `Game #${game.id} • ${statusLabel(game.state)}` })
     .setTimestamp(game.createdAt);
+}
+
+async function publicDealerCardStrip(game: DealerCasinoGame) {
+  if (game.gameType !== "poker" || !game.result) return null;
+  const result = resultFromGame(game);
+  if (result.kind !== "poker" || !result.dealerCards) return null;
+  return buildBlackjackCardStrip(game.guildId, result.dealerCards.map(parseCard), `poker-dealer-${game.id}.png`);
 }
 
 function resultText(result: string): string {
@@ -426,9 +439,14 @@ async function editPanel(client: Client, game: DealerCasinoGame): Promise<void> 
   if (!channel?.isTextBased() || !("messages" in channel)) return;
   const message = await channel.messages.fetch(game.panelMessageId).catch(() => null);
   if (!message) return;
+  const dealerStrip = await publicDealerCardStrip(game);
+  const embed = gameEmbed(game, settings, bets);
+  if (dealerStrip) embed.setImage(`attachment://${dealerStrip.filename}`);
   await message.edit({
-    embeds: [gameEmbed(game, settings, bets)],
+    embeds: [embed],
     components: gameComponents(game),
+    files: dealerStrip ? [dealerStrip.attachment] : [],
+    attachments: [],
     allowedMentions: { parse: [] },
   });
 }
@@ -440,8 +458,12 @@ async function postResults(game: DealerCasinoGame, client: Client): Promise<void
   const logChannel = await client.channels.fetch(settings.logChannelId).catch(() => null);
   if (!logChannel?.isTextBased() || !("send" in logChannel)) return;
   const bets = await listDealerCasinoBets(game.id);
+  const dealerStrip = await publicDealerCardStrip(game);
+  const embed = gameEmbed(game, settings, bets).setTitle(`📜 精算ログ — Game #${game.id}`);
+  if (dealerStrip) embed.setImage(`attachment://${dealerStrip.filename}`);
   await logChannel.send({
-    embeds: [gameEmbed(game, settings, bets).setTitle(`📜 精算ログ — Game #${game.id}`)],
+    embeds: [embed],
+    files: dealerStrip ? [dealerStrip.attachment] : [],
     allowedMentions: { parse: [] },
   });
 }
@@ -946,13 +968,16 @@ async function handlePlayerAction(interaction: ButtonInteraction, gameId: number
   if (action === "hand") {
     const cards = bet.cards.map(parseCard);
     const hand = evaluatePokerHand(cards, (await getDealerCasinoSettings(game.guildId))?.pokerAceLowEnabled === 1);
+    const cardStrip = await buildBlackjackCardStrip(game.guildId, cards, `poker-hand-${gameId}-${bet.id}.png`);
     const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}continue:${gameId}`).setLabel("▶️ 続行").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}fold:${gameId}`).setLabel("🏳️ フォールド").setStyle(ButtonStyle.Danger),
     )];
     await interaction.reply({
       embeds: [new EmbedBuilder().setTitle("🎴 あなたの手札").setColor(COLOR)
-        .setDescription(`${formatCards(cards)}\n役: **${handLabel(hand)}**\n\n他の参加者には表示されません。`)],
+        .setDescription(`${formatCards(cards)}\n役: **${handLabel(hand)}**\n\n他の参加者には表示されません。`)
+        .setImage(cardStrip ? `attachment://${cardStrip.filename}` : null)],
+      files: cardStrip ? [cardStrip.attachment] : [],
       components: rows,
       flags: MessageFlags.Ephemeral,
     });
