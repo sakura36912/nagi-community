@@ -18,6 +18,7 @@ import {
   handleDealerCasinoVoiceDeparture,
   startDealerCasinoRecovery,
 } from "./commands/dealerCasino";
+import { initializeDealerCasinoForGuild } from "./lib/dealerCasinoBootstrap";
 import { handleChinchiroButton, CHINCHIRO_PREFIX } from "./commands/chinchiro";
 import {
   handleMultiplayerChinchiroButton,
@@ -996,6 +997,9 @@ async function runVcDeleteScheduler(): Promise<void> {
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
+  await initializeDealerCasinoForGuild(readyClient).catch((error) =>
+    logger.error("[dealer-casino] Initial configuration failed", error),
+  );
   startDealerCasinoRecovery(readyClient);
   startMultiplayerChinchiroRecovery(readyClient);
   dlog(`Logged in as ${readyClient.user.tag}`);

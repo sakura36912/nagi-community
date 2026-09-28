@@ -126,11 +126,14 @@ function memberHasRole(member: GuildMember, roleId: string | null | undefined): 
   return Boolean(roleId && member.roles.cache.has(roleId));
 }
 
+function isCasinoManager(member: GuildMember, settings: DealerCasinoSettings | null): boolean {
+  return isAdmin(member) || memberHasRole(member, settings?.adminRoleId);
+}
+
 function isDealer(member: GuildMember, settings: DealerCasinoSettings): boolean {
-  return isAdmin(member) ||
+  return isCasinoManager(member, settings) ||
     memberHasRole(member, settings.dealerRoleId) ||
-    memberHasRole(member, settings.directorRoleId) ||
-    memberHasRole(member, settings.adminRoleId);
+    memberHasRole(member, settings.directorRoleId);
 }
 
 async function requireDealer(
@@ -539,6 +542,8 @@ function settingsStatus(
     { name: "賭博場VC", value: settings.voiceChannelId ? `<#${settings.voiceChannelId}>` : "未設定", inline: true },
     { name: "ログ", value: settings.logChannelId ? `<#${settings.logChannelId}>` : "未設定", inline: true },
     { name: "利用ロール", value: settings.dealerRoleId ? `<@&${settings.dealerRoleId}>` : "未設定", inline: true },
+    { name: "賭博頭領ロール", value: settings.directorRoleId ? `<@&${settings.directorRoleId}>` : "未設定", inline: true },
+    { name: "進行可能な管理者ロール", value: settings.adminRoleId ? `<@&${settings.adminRoleId}>` : "未設定", inline: true },
     { name: "賭け金範囲", value: `${settings.minBet.toLocaleString()}〜${settings.maxBet.toLocaleString()}`, inline: true },
     { name: "最大参加人数", value: settings.maxPlayers?.toString() ?? "未設定", inline: true },
     { name: "丁半", value: settings.chohanEnabled === 1 ? `有効 — ${streaks}` : "無効または未設定", inline: false },
@@ -1121,7 +1126,7 @@ async function startNextGame(interaction: ChatInputCommandInteraction): Promise<
     throw new Error("次ゲームの種類を特定できる終了済みゲームがありません。");
   }
   if (finished.sessionEnded) throw new Error("この賭博師セッションは /casino end で終了済みです。新しい募集を開始するには、管理者に新しいセッションの開始を依頼してください。");
-  if (finished.dealerId !== interaction.user.id && !isAdmin(member)) throw new Error("前回のディーラーのみ次ゲームを開始できます。");
+  if (finished.dealerId !== interaction.user.id && !isCasinoManager(member, settings)) throw new Error("前回のディーラーのみ次ゲームを開始できます。");
   await createGame(interaction, finished.gameType as DealerCasinoType);
   await replyDealerCommand(interaction, { content: "次の募集パネルを投稿しました。" });
 }
