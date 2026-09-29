@@ -145,6 +145,26 @@ describe("closeOpenSessionsForUser", () => {
     expect(count).toBe(2);
   });
 
+  it("rejects when the bulk session update fails", async () => {
+    const dbError = new Error("session update failed");
+    mocks.returning.mockRejectedValueOnce(dbError);
+
+    await expect(closeOpenSessionsForUser("user-123")).rejects.toBe(dbError);
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+    expect(mocks.returning).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates the bulk update failure through global opt-out", async () => {
+    const dbError = new Error("session update failed");
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+    mocks.returning.mockRejectedValueOnce(dbError);
+
+    await expect(setVcGlobalPrivacyOptOut("user-123", true)).rejects.toBe(dbError);
+    expect(mocks.onConflictDoUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+    expect(mocks.returning).toHaveBeenCalledTimes(1);
+  });
+
   it("targets the vc sessions table", async () => {
     mocks.returning.mockResolvedValueOnce([]);
     await closeOpenSessionsForUser("user-abc");
