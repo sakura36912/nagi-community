@@ -133,6 +133,31 @@ export const bountyMonthlyPayoutsTable = pgTable(
   (table) => [primaryKey({ columns: [table.guildId, table.monthKey] })],
 );
 
+/** A cutoff is either observed or awaits an explicit staff review; never infer past roles. */
+export const bountyMonthlySnapshotsTable = pgTable(
+  "bounty_monthly_snapshots",
+  {
+    guildId: text("guild_id").notNull(),
+    monthKey: text("month_key").notNull(),
+    status: text("status").notNull(), // pending | captured | approved
+    capturedAt: timestamp("captured_at", { withTimezone: true }),
+    approvedBy: text("approved_by"),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+  },
+  (table) => [primaryKey({ columns: [table.guildId, table.monthKey] })],
+);
+
+export const bountyMonthlySnapshotMembersTable = pgTable(
+  "bounty_monthly_snapshot_members",
+  {
+    guildId: text("guild_id").notNull(),
+    monthKey: text("month_key").notNull(),
+    userId: text("user_id").notNull(),
+    roleIds: text("role_ids").array().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.guildId, table.monthKey, table.userId] })],
+);
+
 /** Durable audit messages remain pending until the bot confirms delivery. */
 export const bountyAuditOutboxTable = pgTable(
   "bounty_audit_outbox",

@@ -6,6 +6,13 @@ import {
   accrueBountyVoiceForGuild,
   applyBountyPoints,
   awardBountyMonth,
+  captureBountyMonthSnapshot,
+  holdBountyMonthForReview,
+  addBountyMonthReviewMember,
+  approveBountyMonthReview,
+  getBountyMonthReview,
+  listBountyMonthsNeedingAttention,
+  markBountyMonthReviewNotified,
   db,
   getBountyPoints,
   listBountyAccountBalances,
@@ -21,6 +28,8 @@ import {
 import {
   bountyAuditOutboxTable,
   bountyMonthlyPayoutsTable,
+  bountyMonthlySnapshotsTable,
+  bountyMonthlySnapshotMembersTable,
   bountyMonthlyRateHistoryTable,
   bountyMonthlyRatesTable,
   bountyPointLedgerTable,
@@ -45,6 +54,8 @@ async function createGuild() {
 
 async function cleanGuild(guildId: string) {
   await db.delete(bountyMonthlyPayoutsTable).where(eq(bountyMonthlyPayoutsTable.guildId, guildId));
+  await db.delete(bountyMonthlySnapshotMembersTable).where(eq(bountyMonthlySnapshotMembersTable.guildId, guildId));
+  await db.delete(bountyMonthlySnapshotsTable).where(eq(bountyMonthlySnapshotsTable.guildId, guildId));
   await db.delete(bountyMonthlyRateHistoryTable).where(eq(bountyMonthlyRateHistoryTable.guildId, guildId));
   await db.delete(bountyMonthlyRatesTable).where(eq(bountyMonthlyRatesTable.guildId, guildId));
   await db.delete(bountyAuditOutboxTable).where(eq(bountyAuditOutboxTable.guildId, guildId));
@@ -54,6 +65,12 @@ async function cleanGuild(guildId: string) {
   await db.delete(bountyVcRatesTable).where(eq(bountyVcRatesTable.guildId, guildId));
   await db.delete(bountyPointsTable).where(eq(bountyPointsTable.guildId, guildId));
   await db.delete(bountySettingsTable).where(eq(bountySettingsTable.guildId, guildId));
+}
+
+async function captureTestMonth(guildId: string, monthKey: string, members: Map<string, string[]>) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const cutoff = new Date(Date.UTC(year!, month!, 1) - 9 * 60 * 60_000);
+  return captureBountyMonthSnapshot(guildId, monthKey, members, cutoff);
 }
 
 describe("bounty points", () => {
@@ -165,10 +182,11 @@ describe("bounty points", () => {
     futureMonth.setUTCFullYear(futureMonth.getUTCFullYear() + 2);
     const monthKey = `${futureMonth.getUTCFullYear()}-${String(futureMonth.getUTCMonth() + 1).padStart(2, "0")}`;
 
-    assert.deepEqual(await awardBountyMonth(guildId, monthKey, new Map()), []);
+    assert.equal(await captureTestMonth(guildId, monthKey, new Map()), true);
+    assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
     await setBountyMonthlyRate(guildId, "salary-role", 50);
     assert.deepEqual(
-      await awardBountyMonth(guildId, monthKey, new Map([[userId, ["crew-role", "salary-role"]]])),
+      await awardBountyMonth(guildId, monthKey),
       [],
     );
     assert.equal(await getBountyPoints(guildId, userId), 0);
@@ -176,9 +194,10 @@ describe("bounty points", () => {
     const nextMonthDate = new Date(Date.UTC(futureMonth.getUTCFullYear(), futureMonth.getUTCMonth() + 1, 1));
     const nextMonthKey = `${nextMonthDate.getUTCFullYear()}-${String(nextMonthDate.getUTCMonth() + 1).padStart(2, "0")}`;
     const nextMonthMembers = new Map([[userId, ["crew-role", "salary-role"]]]);
-    assert.equal((await awardBountyMonth(guildId, nextMonthKey, nextMonthMembers))[0]?.delta, 50);
+    await captureTestMonth(guildId, nextMonthKey, nextMonthMembers);
+    assert.equal((await awardBountyMonth(guildId, nextMonthKey))[0]?.delta, 50);
     await setBountyMonthlyRate(guildId, "salary-role", 100);
-    assert.deepEqual(await awardBountyMonth(guildId, nextMonthKey, nextMonthMembers), []);
+    assert.deepEqual(await awardBountyMonth(guildId, nextMonthKey), []);
     assert.equal(await getBountyPoints(guildId, userId), 50);
   });
 
@@ -192,8 +211,9 @@ describe("bounty points", () => {
     const [year, month] = monthKey.split("-").map(Number);
     const cutoff = new Date(Date.UTC(year!, month!, 1) - 9 * 60 * 60_000);
 
+    await captureTestMonth(guildId, monthKey, new Map([[userId, ["crew-role", "salary-role"]]]));
     await assert.rejects(
-      awardBountyMonth(guildId, monthKey, new Map([[userId, ["crew-role", "salary-role"]]])),
+      awardBountyMonth(guildId, monthKey),
       /settings were created at or after the JST payout cutoff/,
     );
     assert.equal(await getBountyPoints(guildId, userId), 0);
@@ -208,11 +228,7 @@ describe("bounty points", () => {
       points: 10,
       effectiveAt: new Date(cutoff.getTime() - 1_000),
     });
-    assert.equal((await awardBountyMonth(
-      guildId,
-      monthKey,
-      new Map([[userId, ["crew-role", "salary-role"]]]),
-    ))[0]?.delta, 10);
+    assert.equal((await awardBountyMonth(guildId, monthKey))[0]?.delta, 10);
   });
 
   it("uses the latest pre-cutoff rate for overdue payouts and excludes later roles", async () => {
@@ -243,9 +259,88 @@ describe("bounty points", () => {
     await setBountyMonthlyRate(guildId, "salary-role", 200);
     await setBountyMonthlyRate(guildId, "late-role", 300);
     const members = new Map([[userId, ["crew-role", "salary-role", "late-role"]]]);
-    assert.equal((await awardBountyMonth(guildId, monthKey, members))[0]?.delta, 100);
-    assert.deepEqual(await awardBountyMonth(guildId, monthKey, members), []);
+    await captureTestMonth(guildId, monthKey, members);
+    assert.equal((await awardBountyMonth(guildId, monthKey))[0]?.delta, 100);
+    assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
     assert.equal(await getBountyPoints(guildId, userId), 100);
+  });
+
+  it("holds an unobserved cutoff until staff approve only the verified roster", async () => {
+    const guildId = await createGuild();
+    const approvedUser = `user-${randomUUID()}`;
+    const unapprovedUser = `user-${randomUUID()}`;
+    await setBountySettings(guildId, "crew-role", "log-channel", []);
+    await setBountyMonthlyRate(guildId, "salary-role", 35);
+    const now = new Date();
+    const month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3, 1));
+    const monthKey = month.toISOString().slice(0, 7);
+    const cutoff = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1) - 9 * 60 * 60_000);
+    await db.update(bountySettingsTable)
+      .set({ createdAt: new Date(cutoff.getTime() - 1_000) })
+      .where(eq(bountySettingsTable.guildId, guildId));
+    await db.update(bountyMonthlyRateHistoryTable)
+      .set({ effectiveAt: new Date(cutoff.getTime() - 1_000) })
+      .where(eq(bountyMonthlyRateHistoryTable.guildId, guildId));
+    await db.update(bountyMonthlyRatesTable)
+      .set({ effectiveAt: new Date(cutoff.getTime() - 1_000) })
+      .where(eq(bountyMonthlyRatesTable.guildId, guildId));
+
+    await assert.rejects(awardBountyMonth(guildId, monthKey), /requires a captured or approved snapshot/);
+    await holdBountyMonthForReview(guildId, monthKey);
+    await assert.rejects(awardBountyMonth(guildId, monthKey), /requires a captured or approved snapshot/);
+    assert.deepEqual(await listBountyMonthsNeedingAttention(guildId), [monthKey]);
+    await markBountyMonthReviewNotified(guildId, monthKey);
+    assert.deepEqual(await listBountyMonthsNeedingAttention(guildId), []);
+    await assert.rejects(
+      captureBountyMonthSnapshot(guildId, monthKey, new Map(), new Date(cutoff.getTime() + 60_000)),
+      /not taken at the JST cutoff/,
+    );
+    await assert.rejects(
+      addBountyMonthReviewMember(guildId, monthKey, unapprovedUser, "unknown-role"),
+      /有効な月次付与ポイント/,
+    );
+    await addBountyMonthReviewMember(guildId, monthKey, approvedUser, "salary-role");
+    const roster = (await getBountyMonthReview(guildId, monthKey)).members;
+    assert.equal(roster.length, 1);
+    assert.deepEqual(roster[0]?.roleIds, ["crew-role", "salary-role"]);
+    await assert.rejects(
+      approveBountyMonthReview(guildId, monthKey, "staff-id", []),
+      /対象者が変更/,
+    );
+    await approveBountyMonthReview(guildId, monthKey, "staff-id", roster);
+    assert.deepEqual(await listBountyMonthsNeedingAttention(guildId), [monthKey]);
+    await assert.rejects(
+      addBountyMonthReviewMember(guildId, monthKey, unapprovedUser, "salary-role"),
+      /確認待ちではありません/,
+    );
+    assert.equal((await awardBountyMonth(guildId, monthKey))[0]?.delta, 35);
+    assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
+    assert.equal(await getBountyPoints(guildId, approvedUser), 35);
+    assert.equal(await getBountyPoints(guildId, unapprovedUser), 0);
+    assert.equal((await getBountyMonthReview(guildId, monthKey)).paid, true);
+    assert.deepEqual(await listBountyMonthsNeedingAttention(guildId), []);
+  });
+
+  it("pays the frozen boundary roster, not a later change to member roles", async () => {
+    const guildId = await createGuild();
+    const wasEligible = `user-${randomUUID()}`;
+    const becameEligibleLater = `user-${randomUUID()}`;
+    await setBountySettings(guildId, "crew-role", "log-channel", []);
+    await setBountyMonthlyRate(guildId, "salary-role", 22);
+    const future = new Date();
+    future.setUTCFullYear(future.getUTCFullYear() + 2);
+    const monthKey = future.toISOString().slice(0, 7);
+    const cutoffRoles = new Map([
+      [wasEligible, ["crew-role", "salary-role"]],
+      [becameEligibleLater, ["salary-role"]],
+    ]);
+    assert.equal(await captureTestMonth(guildId, monthKey, cutoffRoles), true);
+    cutoffRoles.set(wasEligible, []);
+    cutoffRoles.set(becameEligibleLater, ["crew-role", "salary-role"]);
+    assert.equal(await captureTestMonth(guildId, monthKey, cutoffRoles), false);
+    assert.deepEqual((await awardBountyMonth(guildId, monthKey)).map(({ userId }) => userId), [wasEligible]);
+    assert.equal(await getBountyPoints(guildId, wasEligible), 22);
+    assert.equal(await getBountyPoints(guildId, becameEligibleLater), 0);
   });
 
   it("writes manual point audits atomically and does not duplicate them on retry", async () => {

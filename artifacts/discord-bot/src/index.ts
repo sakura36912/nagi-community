@@ -222,6 +222,11 @@ import {
   recordBountyVoiceState,
   accrueBountyVoiceForGuild,
   awardBountyMonth,
+  captureBountyMonthSnapshot,
+  getBountyMonthReview,
+  listBountyMonthsNeedingAttention,
+  holdBountyMonthForReview,
+  markBountyMonthReviewNotified,
   resetBountyVoicePresences,
 } from "@workspace/db";
 import {
@@ -303,7 +308,8 @@ let bountyPresenceInitialized = false;
 let bountyPresenceSeeded = false;
 let bountySchedulerRunning = false;
 let bountyTierReconciliationRunning = false;
-let bountyMonthlyProcessedMonth: string | null = null;
+const bountyMonthlyProcessedMonths = new Set<string>();
+let bountyBoundaryConnectionLost = false;
 
 async function resetBountyPresenceFromLiveVoiceState(client: Client): Promise<void> {
   const guild = client.guilds.cache.get(BOUNTY_GUILD_ID)
@@ -339,6 +345,59 @@ function getPreviousJstMonthInfo(now: Date): { monthKey: string; jstDay: number 
       .slice(0, 7),
     jstDay: jst.getUTCDate(),
   };
+}
+
+function scheduleBountyMonthBoundary(client: Client): void {
+  const jst = new Date(Date.now() + 9 * 60 * 60_000);
+  const monthKey = `${jst.getUTCFullYear()}-${String(jst.getUTCMonth() + 1).padStart(2, "0")}`;
+  const cutoff = bountyMonthJstCutoff(monthKey);
+  const preparationTime = cutoff.getTime() - 2 * 60_000;
+  const remaining = preparationTime - Date.now();
+  if (remaining > 60 * 60_000) {
+    setTimeout(() => scheduleBountyMonthBoundary(client), Math.min(remaining - 30_000, 60 * 60_000));
+    return;
+  }
+  // Starting too close to midnight cannot establish a complete pre-boundary view.
+  const delay = Math.max(0, remaining);
+  setTimeout(async () => {
+    let prepared = false;
+    bountyBoundaryConnectionLost = false;
+    try {
+      const guild = client.guilds.cache.get(BOUNTY_GUILD_ID);
+      if (guild?.available && await getBountySettings(guild.id)) {
+        const members = await guild.members.fetch();
+        prepared = members.size === guild.memberCount && Date.now() < cutoff.getTime();
+      }
+    } catch (error) {
+      logger.error("[bounty] Month-boundary member preparation failed", error);
+    }
+    setTimeout(async () => {
+      try {
+        const guild = client.guilds.cache.get(BOUNTY_GUILD_ID);
+        if (!guild || !await getBountySettings(guild.id)) return;
+        const capturedAt = new Date();
+        if (prepared && !bountyBoundaryConnectionLost && guild.available
+          && guild.members.cache.size === guild.memberCount
+          && capturedAt.getTime() >= cutoff.getTime()
+          && capturedAt.getTime() <= cutoff.getTime() + 5_000) {
+          const members = new Map<string, string[]>();
+          for (const member of guild.members.cache.values()) {
+            if (!member.user.bot) members.set(member.id, [...member.roles.cache.keys()]);
+          }
+          await captureBountyMonthSnapshot(guild.id, monthKey, members, capturedAt);
+          logger.info(`[bounty] Cutoff role snapshot captured month=${monthKey} members=${members.size}`);
+        } else {
+          await holdBountyMonthForReview(guild.id, monthKey);
+          logger.warn(`[bounty] Month boundary unobserved month=${monthKey}; staff review required`);
+        }
+        await runBountyScheduler(client);
+      } catch (error) {
+        logger.error(`[bounty] Month-boundary capture failed month=${monthKey}`, error);
+      } finally {
+        scheduleBountyMonthBoundary(client);
+      }
+    }, Math.max(0, cutoff.getTime() - Date.now()));
+  }, delay);
 }
 
 function bountyMonthJstCutoff(monthKey: string): Date {
@@ -441,7 +500,7 @@ async function runBountyTierReconciliation(client: Client): Promise<void> {
   }
 }
 
-async function runBountyScheduler(client: Client): Promise<void> {
+async function runBountyScheduler(client: Client, recoverMissedMonths = false): Promise<void> {
   if (bountySchedulerRunning) return;
   bountySchedulerRunning = true;
   try {
@@ -475,41 +534,65 @@ async function runBountyScheduler(client: Client): Promise<void> {
     }
 
     const now = new Date();
-    const { monthKey, jstDay } = getPreviousJstMonthInfo(now);
-    if (bountyMonthlyProcessedMonth === monthKey) return;
-    const cutoff = bountyMonthJstCutoff(monthKey);
-    if (settings.createdAt.getTime() >= cutoff.getTime()) {
-      logger.info(
-        `[bounty] Monthly payout skipped month=${monthKey}: settings were created after the JST payout cutoff`,
-      );
-      bountyMonthlyProcessedMonth = monthKey;
-      return;
+    const { monthKey: latestMonth } = getPreviousJstMonthInfo(now);
+    const monthKeys = [latestMonth];
+    if (recoverMissedMonths) {
+      const jstCreated = new Date(settings.createdAt.getTime() + 9 * 60 * 60_000);
+      const start = Date.UTC(jstCreated.getUTCFullYear(), jstCreated.getUTCMonth(), 1);
+      const latest = Date.UTC(Number(latestMonth.slice(0, 4)), Number(latestMonth.slice(5)) - 1, 1);
+      monthKeys.length = 0;
+      for (let day = start; day <= latest; day = new Date(Date.UTC(
+        new Date(day).getUTCFullYear(), new Date(day).getUTCMonth() + 1, 1,
+      )).getTime()) {
+        monthKeys.push(new Date(day).toISOString().slice(0, 7));
+      }
+    } else {
+      const attention = await listBountyMonthsNeedingAttention(guild.id);
+      for (const monthKey of attention) {
+        if (!monthKeys.includes(monthKey)) monthKeys.push(monthKey);
+      }
     }
-    try {
-      const members = await guild.members.fetch();
-      if (members.size !== guild.memberCount) {
-        logger.error(
-          `[bounty] Monthly payout delayed month=${monthKey}: fetched ${members.size} of ${guild.memberCount} members`,
-        );
-        return;
+    for (const monthKey of monthKeys) {
+      if (bountyMonthlyProcessedMonths.has(monthKey)) continue;
+      const cutoff = bountyMonthJstCutoff(monthKey);
+      if (settings.createdAt.getTime() >= cutoff.getTime()) {
+        bountyMonthlyProcessedMonths.add(monthKey);
+        continue;
       }
-      const awardMembers = new Map<string, string[]>();
-      for (const member of members.values()) {
-        if (!member.user.bot) awardMembers.set(member.id, [...member.roles.cache.keys()]);
+      try {
+      let review = await getBountyMonthReview(guild.id, monthKey);
+      if (review.paid) {
+        bountyMonthlyProcessedMonths.add(monthKey);
+        continue;
       }
-      if (jstDay > 1) {
-        logger.warn(
-          `[bounty] Late monthly payout month=${monthKey}; current roles are observed now and cannot prove member roles at the JST month boundary`,
-        );
+      if (!review.snapshot && now.getTime() >= cutoff.getTime() + 10_000) {
+        await holdBountyMonthForReview(guild.id, monthKey);
+        review = await getBountyMonthReview(guild.id, monthKey);
       }
-      const awards = await awardBountyMonth(guild.id, monthKey, awardMembers);
-      bountyMonthlyProcessedMonth = monthKey;
+      if (!review.snapshot) continue; // The boundary timer still has a chance to capture.
+      if (review.snapshot.status === "pending") {
+        if (!review.snapshot.notifiedAt) {
+          const channel = await guild.channels.fetch(settings.logChannelId);
+          if (!channel?.isTextBased() || !("send" in channel)) {
+            throw new Error("Monthly review notice channel is not sendable.");
+          }
+          await channel.send({
+            content: `⚠️ ${monthKey} の懸賞金月次付与は保留中です。月初00:00 JST時点のロールを確認できませんでした。現在のロールで自動精算はしません。管理者は \`/bounty review-status\` → \`/bounty review-add\` → \`/bounty review-confirm\` を使ってください。`,
+            allowedMentions: { parse: [] },
+          });
+          await markBountyMonthReviewNotified(guild.id, monthKey);
+        }
+        continue;
+      }
+      const awards = await awardBountyMonth(guild.id, monthKey);
+      bountyMonthlyProcessedMonths.add(monthKey);
       await syncBountyPointChanges(guild, awards);
       if (awards.length > 0) {
         logger.info(`[bounty] Monthly awards completed month=${monthKey} users=${awards.length}`);
       }
-    } catch (error) {
-      logger.error(`[bounty] Monthly award failed month=${monthKey}`, error);
+      } catch (error) {
+        logger.error(`[bounty] Monthly award failed month=${monthKey}`, error);
+      }
     }
   } finally {
     bountySchedulerRunning = false;
@@ -1231,10 +1314,18 @@ async function runVcDeleteScheduler(): Promise<void> {
   }
 }
 
+client.on(Events.ShardDisconnect, () => {
+  bountyBoundaryConnectionLost = true;
+});
+client.on(Events.GuildUnavailable, (guild) => {
+  if (guild.id === BOUNTY_GUILD_ID) bountyBoundaryConnectionLost = true;
+});
+
 client.once(Events.ClientReady, async (readyClient) => {
+  scheduleBountyMonthBoundary(readyClient);
   try {
     await resetBountyPresenceFromLiveVoiceState(readyClient);
-    await runBountyScheduler(readyClient);
+    await runBountyScheduler(readyClient, true);
   } catch (error) {
     logger.error("[bounty] Startup voice presence reset failed; bounty scheduling is paused", error);
   }

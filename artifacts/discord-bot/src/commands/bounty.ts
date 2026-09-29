@@ -24,16 +24,22 @@ import {
 } from "discord.js";
 import {
   applyBountyPoints,
+  addBountyMonthReviewMember,
+  approveBountyMonthReview,
+  awardBountyMonth,
+  getBountyMonthReview,
   getBountyPoints,
   getBountySettings,
   listPendingBountyAudits,
   markBountyAuditSent,
+  removeBountyMonthReviewMember,
   resetBountyVoicePresences,
   setBountyMonthlyRate,
   setBountySettings,
   setBountyVcRate,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { createHash } from "node:crypto";
 
 export const BOUNTY_GUILD_ID = "1526418867335725247";
 export const BOUNTY_AUDIT_CHANNEL_ID = "1554169897959952454";
@@ -52,6 +58,15 @@ const MONTHLY_ROLE_PICKER_ID = "bounty:monthly:role";
 const MANUAL_MODAL_PREFIX = "bounty:manual:modal:";
 const VC_MODAL_PREFIX = "bounty:vc:modal:";
 const MONTHLY_MODAL_PREFIX = "bounty:monthly:modal:";
+const REVIEW_CONFIRM_PREFIX = "bounty:review:confirm:";
+const REVIEW_MONTH_OPTION = (option: import("discord.js").SlashCommandStringOption) =>
+  option.setName("month").setDescription("対象月（例: 2026-09。10月1日付与分）").setRequired(true);
+function reviewRosterHash(members: Array<{ userId: string; roleIds: string[] }>): string {
+  return createHash("sha256").update(JSON.stringify(
+    members.map(({ userId, roleIds }) => ({ userId, roleIds }))
+      .sort((a, b) => a.userId.localeCompare(b.userId)),
+  )).digest("hex").slice(0, 16);
+}
 
 const setupInProgress = new Map<string, Promise<string[]>>();
 const completeSetupInProgress = new Map<string, Promise<{
@@ -274,7 +289,19 @@ export const bountyCommand = {
     .setDescription("賞金ポイント")
     .addSubcommand((sub) => sub.setName("setup").setDescription("賞金ポイントの初期設定（管理者）"))
     .addSubcommand((sub) => sub.setName("panels").setDescription("賞金ポイント設定パネルを3つ投稿（管理者）"))
-    .addSubcommand((sub) => sub.setName("balance").setDescription("賞金ポイント残高を表示")),
+    .addSubcommand((sub) => sub.setName("balance").setDescription("賞金ポイント残高を表示"))
+    .addSubcommand((sub) => sub.setName("review-status").setDescription("月次保留・精算状況を確認（管理者）")
+      .addStringOption(REVIEW_MONTH_OPTION)
+      .addIntegerOption((o) => o.setName("page").setDescription("対象者一覧のページ（1から）").setMinValue(1)))
+    .addSubcommand((sub) => sub.setName("review-add").setDescription("月初に対象だったユーザーとロールを登録（管理者）")
+      .addStringOption(REVIEW_MONTH_OPTION)
+      .addStringOption((o) => o.setName("user_id").setDescription("月初時点の対象ユーザーID").setRequired(true))
+      .addStringOption((o) => o.setName("role_id").setDescription("月初時点の付与対象ロールID").setRequired(true)))
+    .addSubcommand((sub) => sub.setName("review-remove").setDescription("誤登録した対象ユーザーを削除（管理者）")
+      .addStringOption(REVIEW_MONTH_OPTION)
+      .addStringOption((o) => o.setName("user_id").setDescription("取り消すユーザーID").setRequired(true)))
+    .addSubcommand((sub) => sub.setName("review-confirm").setDescription("確認済みの月次対象者を承認・精算（管理者）")
+      .addStringOption(REVIEW_MONTH_OPTION)),
   async execute(interaction: ChatInputCommandInteraction) {
     if (!interaction.guild || !interaction.guildId) {
       await privateReply(interaction, "サーバー内で実行してください。");
@@ -316,6 +343,66 @@ export const bountyCommand = {
     const settings = await getBountySettings(interaction.guildId);
     if (!settings) {
       await privateReply(interaction, "先に `/bounty setup` を実行してください。");
+      return;
+    }
+    if (subcommand.startsWith("review-")) {
+      await interaction.deferReply({ ephemeral: true });
+      const monthKey = interaction.options.getString("month", true).trim();
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) {
+        await privateReply(interaction, "対象月は YYYY-MM 形式で入力してください。");
+        return;
+      }
+      const review = await getBountyMonthReview(interaction.guildId, monthKey);
+      if (subcommand === "review-status") {
+        const status = review.paid ? "精算済み" : review.snapshot?.status === "pending"
+          ? "管理者確認待ち" : review.snapshot?.status === "approved"
+            ? "承認済み・精算待ち" : review.snapshot?.status === "captured"
+              ? "月初スナップショット保存済み" : "対象記録なし";
+        const page = interaction.options.getInteger("page") ?? 1;
+        const pages = Math.max(1, Math.ceil(review.members.length / 10));
+        if (page > pages) {
+          await privateReply(interaction, `ページは1〜${pages}で指定してください。`);
+          return;
+        }
+        const roster = review.members.slice((page - 1) * 10, page * 10).map(
+          ({ userId, roleIds }) => `${userId}: ${roleIds.filter((id) => id !== settings.crewRoleId).join(", ")}`,
+        ).join("\n").slice(0, 1700);
+        await privateReply(interaction,
+          `${monthKey}: ${status}\n対象: ${review.members.length}人（${page}/${pages}ページ）${roster ? `\n${roster}` : ""}`);
+        return;
+      }
+      if (review.snapshot?.status !== "pending" || review.paid) {
+        await privateReply(interaction, "この月は管理者確認待ちではありません。既に精算済みの場合、再登録はできません。");
+        return;
+      }
+      if (subcommand === "review-add" || subcommand === "review-remove") {
+        const userId = interaction.options.getString("user_id", true).trim();
+        if (!/^\d{17,20}$/.test(userId)) {
+          await privateReply(interaction, "ユーザーIDはDiscordの数値IDを入力してください。");
+          return;
+        }
+        if (subcommand === "review-add") {
+          const roleId = interaction.options.getString("role_id", true).trim();
+          if (!/^\d{17,20}$/.test(roleId)) {
+            await privateReply(interaction, "ロールIDはDiscordの数値IDを入力してください。");
+            return;
+          }
+          await addBountyMonthReviewMember(interaction.guildId, monthKey, userId, roleId);
+          await privateReply(interaction, `${monthKey} の対象者 ${userId} に月初時点の付与対象ロール ${roleId} を登録しました。複数ロールは繰り返し登録してください。まだ精算されていません。`);
+        } else {
+          await removeBountyMonthReviewMember(interaction.guildId, monthKey, userId);
+          await privateReply(interaction, `${monthKey} の対象者 ${userId} の登録を取り消しました。`);
+        }
+        return;
+      }
+      const button = new ButtonBuilder().setStyle(ButtonStyle.Danger)
+        .setLabel(`${review.members.length}人を承認して精算`)
+        .setCustomId(`${REVIEW_CONFIRM_PREFIX}${monthKey}:${interaction.user.id}:${reviewRosterHash(review.members)}`);
+      await interaction.editReply({
+        content: `${monthKey} の月初時点の対象者 ${review.members.length} 人を承認し、月次ポイントを確定します。空の一覧でも「対象者なし」として処理済みになります。月初当時の本船員ロールと付与対象ロールを確認しましたか？`,
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(button)],
+        allowedMentions: { parse: [] },
+      });
       return;
     }
     if (subcommand === "panels") {
@@ -380,6 +467,50 @@ export async function handleBountyUserSelect(interaction: UserSelectMenuInteract
 }
 
 export async function handleBountyButton(interaction: ButtonInteraction): Promise<boolean> {
+  if (interaction.customId.startsWith(REVIEW_CONFIRM_PREFIX)) {
+    if (!await validateStaffInteraction(interaction)) return true;
+    const match = /^(\d{4}-(?:0[1-9]|1[0-2])):(\d{17,20}):([a-f0-9]{16})$/
+      .exec(interaction.customId.slice(REVIEW_CONFIRM_PREFIX.length));
+    if (!match || match[2] !== interaction.user.id) {
+      await privateReply(interaction, "確認した管理者本人のみ実行できます。");
+      return true;
+    }
+    await interaction.deferReply({ ephemeral: true });
+    const review = await getBountyMonthReview(interaction.guildId!, match[1]);
+    if (review.snapshot?.status !== "pending" || review.paid) {
+      await privateReply(interaction, "この月は既に承認または精算されています。");
+      return true;
+    }
+    if (reviewRosterHash(review.members) !== match[3]) {
+      await privateReply(interaction, "確認画面の表示後に対象者が変更されました。`/bounty review-status` を確認し直してください。");
+      return true;
+    }
+    await approveBountyMonthReview(interaction.guildId!, match[1], interaction.user.id, review.members);
+    try {
+      const awards = await awardBountyMonth(interaction.guildId!, match[1]);
+      let roleFailures = 0;
+      for (const award of awards) {
+        try {
+          const member = await interaction.guild!.members.fetch(award.userId);
+          await syncBountyTierRole(member, award.after);
+        } catch (error) {
+          roleFailures++;
+          logger.error(`[bounty] Reviewed monthly tier sync failed user=${award.userId}`, error);
+        }
+      }
+      try {
+        await sendAudit(interaction.guild!,
+          `懸賞金月次精算 ${match[1]}: 管理者 <@${interaction.user.id}> が ${review.members.length} 人を承認。付与 ${awards.length} 人。`);
+      } catch (error) {
+        logger.error("[bounty] Monthly review paid but audit send failed", error);
+      }
+      await privateReply(interaction, `${match[1]} の月次精算が完了しました（付与 ${awards.length} 人）。${roleFailures ? `ロール同期失敗 ${roleFailures} 人は定期処理で再試行されます。` : ""}`);
+    } catch (error) {
+      logger.error(`[bounty] Monthly review approved but payout failed month=${match[1]}`, error);
+      await privateReply(interaction, "承認を保存しましたが精算できませんでした。再実行せず、Botのエラーログを確認してください。定期処理が再試行します。");
+    }
+    return true;
+  }
   if (!interaction.customId.startsWith(MANUAL_SIGN_BUTTON_PREFIX)) return false;
   if (!await validateStaffInteraction(interaction)) return true;
   const selection = interaction.customId.slice(MANUAL_SIGN_BUTTON_PREFIX.length);

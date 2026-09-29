@@ -1,8 +1,10 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { db } from "./index.js";
 import {
   bountyAuditOutboxTable,
   bountyMonthlyPayoutsTable,
+  bountyMonthlySnapshotsTable,
+  bountyMonthlySnapshotMembersTable,
   bountyMonthlyRateHistoryTable,
   bountyMonthlyRatesTable,
   bountyPointLedgerTable,
@@ -45,6 +47,217 @@ function assertText(value: string, name: string): void {
 function nextMonthJstCutoff(monthKey: string): Date {
   const [year, month] = monthKey.split("-").map(Number);
   return new Date(Date.UTC(year, month, 1) - 9 * 60 * 60 * 1_000);
+}
+
+function validateBountyMonthKey(monthKey: string): void {
+  const parsed = /^(\d{4})-(\d{2})$/.exec(monthKey);
+  if (!parsed || Number(parsed[2]) < 1 || Number(parsed[2]) > 12) {
+    throw new Error("monthKey must be a valid YYYY-MM month.");
+  }
+}
+
+export async function getBountyMonthReview(guildId: string, monthKey: string) {
+  validateBountyMonthKey(monthKey);
+  const [snapshot] = await db.select().from(bountyMonthlySnapshotsTable)
+    .where(and(
+      eq(bountyMonthlySnapshotsTable.guildId, guildId),
+      eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+    )).limit(1);
+  const [payout] = await db.select().from(bountyMonthlyPayoutsTable)
+    .where(and(
+      eq(bountyMonthlyPayoutsTable.guildId, guildId),
+      eq(bountyMonthlyPayoutsTable.monthKey, monthKey),
+    )).limit(1);
+  const members = snapshot ? await db.select().from(bountyMonthlySnapshotMembersTable)
+    .where(and(
+      eq(bountyMonthlySnapshotMembersTable.guildId, guildId),
+      eq(bountyMonthlySnapshotMembersTable.monthKey, monthKey),
+    )) : [];
+  return { snapshot: snapshot ?? null, paid: Boolean(payout), members };
+}
+
+export async function listBountyMonthsNeedingAttention(guildId: string): Promise<string[]> {
+  const rows = await db.select({ monthKey: bountyMonthlySnapshotsTable.monthKey })
+    .from(bountyMonthlySnapshotsTable)
+    .leftJoin(bountyMonthlyPayoutsTable, and(
+      eq(bountyMonthlyPayoutsTable.guildId, bountyMonthlySnapshotsTable.guildId),
+      eq(bountyMonthlyPayoutsTable.monthKey, bountyMonthlySnapshotsTable.monthKey),
+    ))
+    .where(and(
+      eq(bountyMonthlySnapshotsTable.guildId, guildId),
+      isNull(bountyMonthlyPayoutsTable.monthKey),
+      or(
+        eq(bountyMonthlySnapshotsTable.status, "approved"),
+        and(
+          eq(bountyMonthlySnapshotsTable.status, "pending"),
+          isNull(bountyMonthlySnapshotsTable.notifiedAt),
+        ),
+      ),
+    ));
+  return rows.map(({ monthKey }) => monthKey);
+}
+
+export async function holdBountyMonthForReview(guildId: string, monthKey: string): Promise<void> {
+  validateBountyMonthKey(monthKey);
+  await db.insert(bountyMonthlySnapshotsTable).values({
+    guildId, monthKey, status: "pending",
+  }).onConflictDoNothing();
+}
+
+export async function markBountyMonthReviewNotified(guildId: string, monthKey: string): Promise<void> {
+  await db.update(bountyMonthlySnapshotsTable).set({ notifiedAt: new Date() })
+    .where(and(
+      eq(bountyMonthlySnapshotsTable.guildId, guildId),
+      eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+      eq(bountyMonthlySnapshotsTable.status, "pending"),
+    ));
+}
+
+/** Persist the complete live role set atomically; a missing/corrupt snapshot can never pay. */
+export async function captureBountyMonthSnapshot(
+  guildId: string, monthKey: string, members: Map<string, string[]>, capturedAt = new Date(),
+): Promise<boolean> {
+  validateBountyMonthKey(monthKey);
+  const cutoff = nextMonthJstCutoff(monthKey);
+  if (capturedAt.getTime() < cutoff.getTime() || capturedAt.getTime() > cutoff.getTime() + 5_000) {
+    throw new Error("Monthly bounty snapshot was not taken at the JST cutoff.");
+  }
+  return db.transaction(async (tx) => {
+    await lockBountyMonthlyGuild(tx, guildId);
+    const [inserted] = await tx.insert(bountyMonthlySnapshotsTable)
+      .values({ guildId, monthKey, status: "captured", capturedAt })
+      .onConflictDoNothing()
+      .returning({ monthKey: bountyMonthlySnapshotsTable.monthKey });
+    if (!inserted) return false;
+    if (members.size > 0) {
+      await tx.insert(bountyMonthlySnapshotMembersTable).values(
+        [...members].map(([userId, roleIds]) => ({
+          guildId, monthKey, userId, roleIds: [...new Set(roleIds)],
+        })),
+      );
+    }
+    return true;
+  });
+}
+
+/** Staff explicitly identify who held the crew role and which payout roles applied at cutoff. */
+export async function addBountyMonthReviewMember(
+  guildId: string, monthKey: string, userId: string, roleId: string,
+): Promise<void> {
+  validateBountyMonthKey(monthKey);
+  assertText(userId, "userId");
+  assertText(roleId, "roleId");
+  await db.transaction(async (tx) => {
+    await lockBountyMonthlyGuild(tx, guildId);
+    const [snapshot] = await tx.select().from(bountyMonthlySnapshotsTable)
+      .where(and(
+        eq(bountyMonthlySnapshotsTable.guildId, guildId),
+        eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+      )).limit(1);
+    if (snapshot?.status !== "pending") throw new Error("この月は確認待ちではありません。");
+    const [settings] = await tx.select().from(bountySettingsTable)
+      .where(eq(bountySettingsTable.guildId, guildId)).limit(1);
+    if (!settings) throw new Error("賞金ポイント設定がありません。");
+    const cutoff = nextMonthJstCutoff(monthKey);
+    const [pastRate] = await tx.select().from(bountyMonthlyRateHistoryTable)
+      .where(and(
+        eq(bountyMonthlyRateHistoryTable.guildId, guildId),
+        eq(bountyMonthlyRateHistoryTable.roleId, roleId),
+        sql`${bountyMonthlyRateHistoryTable.effectiveAt} < ${cutoff}`,
+      ))
+      .orderBy(desc(bountyMonthlyRateHistoryTable.effectiveAt), desc(bountyMonthlyRateHistoryTable.id))
+      .limit(1);
+    const [anyHistory] = await tx.select({ id: bountyMonthlyRateHistoryTable.id })
+      .from(bountyMonthlyRateHistoryTable)
+      .where(and(
+        eq(bountyMonthlyRateHistoryTable.guildId, guildId),
+        eq(bountyMonthlyRateHistoryTable.roleId, roleId),
+      )).limit(1);
+    const [legacyRate] = !anyHistory ? await tx.select().from(bountyMonthlyRatesTable)
+      .where(and(
+        eq(bountyMonthlyRatesTable.guildId, guildId),
+        eq(bountyMonthlyRatesTable.roleId, roleId),
+        sql`${bountyMonthlyRatesTable.effectiveAt} < ${cutoff}`,
+      )).limit(1) : [];
+    if ((pastRate?.points ?? legacyRate?.points ?? 0) <= 0) {
+      throw new Error("このロールには月初時点で有効な月次付与ポイントが設定されていません。");
+    }
+    const [existing] = await tx.select().from(bountyMonthlySnapshotMembersTable)
+      .where(and(
+        eq(bountyMonthlySnapshotMembersTable.guildId, guildId),
+        eq(bountyMonthlySnapshotMembersTable.monthKey, monthKey),
+        eq(bountyMonthlySnapshotMembersTable.userId, userId),
+      )).limit(1);
+    const roleIds = [...new Set([...(existing?.roleIds ?? []), settings.crewRoleId, roleId])];
+    await tx.insert(bountyMonthlySnapshotMembersTable)
+      .values({ guildId, monthKey, userId, roleIds })
+      .onConflictDoUpdate({
+        target: [
+          bountyMonthlySnapshotMembersTable.guildId,
+          bountyMonthlySnapshotMembersTable.monthKey,
+          bountyMonthlySnapshotMembersTable.userId,
+        ],
+        set: { roleIds },
+      });
+  });
+}
+
+export async function removeBountyMonthReviewMember(guildId: string, monthKey: string, userId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await lockBountyMonthlyGuild(tx, guildId);
+    const [snapshot] = await tx.select().from(bountyMonthlySnapshotsTable)
+      .where(and(
+        eq(bountyMonthlySnapshotsTable.guildId, guildId),
+        eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+      )).limit(1);
+    if (snapshot?.status !== "pending") throw new Error("この月は確認待ちではありません。");
+    await tx.delete(bountyMonthlySnapshotMembersTable).where(and(
+      eq(bountyMonthlySnapshotMembersTable.guildId, guildId),
+      eq(bountyMonthlySnapshotMembersTable.monthKey, monthKey),
+      eq(bountyMonthlySnapshotMembersTable.userId, userId),
+    ));
+  });
+}
+
+export async function approveBountyMonthReview(
+  guildId: string, monthKey: string, actorId: string,
+  expectedMembers: Array<{ userId: string; roleIds: string[] }>,
+): Promise<void> {
+  validateBountyMonthKey(monthKey);
+  assertText(actorId, "actorId");
+  await db.transaction(async (tx) => {
+    await lockBountyMonthlyGuild(tx, guildId);
+    const [snapshot] = await tx.select().from(bountyMonthlySnapshotsTable)
+      .where(and(
+        eq(bountyMonthlySnapshotsTable.guildId, guildId),
+        eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+      )).limit(1);
+    if (snapshot?.status !== "pending") throw new Error("この月は確認待ちではありません。");
+    const members = await tx.select().from(bountyMonthlySnapshotMembersTable)
+      .where(and(
+        eq(bountyMonthlySnapshotMembersTable.guildId, guildId),
+        eq(bountyMonthlySnapshotMembersTable.monthKey, monthKey),
+      )).orderBy(asc(bountyMonthlySnapshotMembersTable.userId));
+    if (JSON.stringify(members.map(({ userId, roleIds }) => ({ userId, roleIds })))
+      !== JSON.stringify(expectedMembers.map(({ userId, roleIds }) => ({ userId, roleIds }))
+        .sort((a, b) => a.userId.localeCompare(b.userId)))) {
+      throw new Error("確認画面の表示後に対象者が変更されました。再確認してください。");
+    }
+    const [settings] = await tx.select().from(bountySettingsTable)
+      .where(eq(bountySettingsTable.guildId, guildId)).limit(1);
+    if (!settings || settings.createdAt.getTime() >= nextMonthJstCutoff(monthKey).getTime()) {
+      throw new Error("設定前の月は承認できません。");
+    }
+    if (nextMonthJstCutoff(monthKey).getTime() > Date.now()) {
+      throw new Error("月初前の月は承認できません。");
+    }
+    await tx.update(bountyMonthlySnapshotsTable)
+      .set({ status: "approved", approvedBy: actorId })
+      .where(and(
+        eq(bountyMonthlySnapshotsTable.guildId, guildId),
+        eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+      ));
+  });
 }
 
 export async function getBountySettings(guildId: string) {
@@ -530,14 +743,19 @@ export async function listBountyMonthlyRates(
 export async function awardBountyMonth(
   guildId: string,
   monthKey: string,
-  members: Map<string, string[]>,
 ): Promise<Array<{ userId: string; before: number; after: number; delta: number }>> {
   assertText(guildId, "guildId");
-  const parsedMonth = /^\d{4}-(\d{2})$/.exec(monthKey);
-  if (!parsedMonth || Number(parsedMonth[1]) < 1 || Number(parsedMonth[1]) > 12) {
-    throw new Error("monthKey must be a valid YYYY-MM month.");
-  }
+  validateBountyMonthKey(monthKey);
   return db.transaction(async (tx) => {
+    await lockBountyMonthlyGuild(tx, guildId);
+    const [snapshot] = await tx.select().from(bountyMonthlySnapshotsTable)
+      .where(and(
+        eq(bountyMonthlySnapshotsTable.guildId, guildId),
+        eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+      )).limit(1);
+    if (!snapshot || (snapshot.status !== "captured" && snapshot.status !== "approved")) {
+      throw new Error(`Monthly bounty payout ${monthKey} requires a captured or approved snapshot.`);
+    }
     const [period] = await tx.insert(bountyMonthlyPayoutsTable)
       .values({ guildId, monthKey })
       .onConflictDoNothing()
@@ -545,7 +763,6 @@ export async function awardBountyMonth(
     // The marker is claimed before reading configuration. Concurrent attempts
     // serialize on its unique key; even an empty award set completes the period.
     if (!period) return [];
-    await lockBountyMonthlyGuild(tx, guildId);
 
     const [settings] = await tx.select().from(bountySettingsTable)
       .where(eq(bountySettingsTable.guildId, guildId))
@@ -593,8 +810,12 @@ export async function awardBountyMonth(
       }
     }
     const awards: Array<{ userId: string; before: number; after: number; delta: number }> = [];
-
-    for (const [userId, roleIds] of [...members.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const members = await tx.select().from(bountyMonthlySnapshotMembersTable)
+      .where(and(
+        eq(bountyMonthlySnapshotMembersTable.guildId, guildId),
+        eq(bountyMonthlySnapshotMembersTable.monthKey, monthKey),
+      )).orderBy(asc(bountyMonthlySnapshotMembersTable.userId));
+    for (const { userId, roleIds } of members) {
       assertText(userId, "userId");
       if (!roleIds.includes(settings.crewRoleId)) continue;
       const delta = roleIds.reduce((sum, roleId) => sum + (rates.get(roleId) ?? 0), 0);
