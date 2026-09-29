@@ -6,7 +6,7 @@ import {
 } from "@workspace/db";
 import { buildMultiplayerChinchiroPanel, calculateRoundResults } from "../commands/chinchiroMultiplayer";
 import { evaluateChinchiroRoll } from "../commands/chinchiro";
-import { refundOpenRound, reserveBet, settleRound } from "../lib/chinchiroMultiplayerMoney";
+import { dealerTransferAmount, refundOpenRound, reserveBet, settleRound } from "../lib/chinchiroMultiplayerMoney";
 
 const guildIds: string[] = [];
 const tableIds: number[] = [];
@@ -63,7 +63,7 @@ afterEach(async () => {
 });
 
 describe("multiplayer chinchiro live settlement", () => {
-  it("reserves the worst-case loss, pays the original winner amounts and gives all losses to the table owner once", async () => {
+  it("reserves the worst-case loss, pays original winnings and gives 25% of net losses to the dealer once", async () => {
     const { table, guildId, ownerId, parentId, child1, child2 } = await makeTable();
     for (const userId of [parentId, child1, child2]) await setBet(table.id, userId, 1000);
     expect(await balance(guildId, parentId)).toBe(10_000);
@@ -94,17 +94,22 @@ describe("multiplayer chinchiro live settlement", () => {
     expect(await balance(guildId, parentId)).toBe(16_000);
     expect(await balance(guildId, child1)).toBe(19_000);
     expect(await balance(guildId, child2)).toBe(25_000);
-    expect(await balance(guildId, ownerId)).toBe(5500);
+    expect(await balance(guildId, ownerId)).toBe(1750);
     const [finished] = await db.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, table.id));
     const ps = await db.select().from(chinchiroTablePlayersTable).where(eq(chinchiroTablePlayersTable.tableId, table.id));
     expect(buildMultiplayerChinchiroPanel(finished!, ps).toJSON().fields?.at(-1)).toMatchObject({
       name: "【ディーラーへの送金額】",
-      value: `<@${ownerId}>：5,000 円`,
+      value: `<@${ownerId}>：1,250 円`,
     });
     const dealerRows = await db.select().from(transactionsTable).where(and(
       eq(transactionsTable.guildId, guildId), eq(transactionsTable.userId, ownerId),
     ));
-    expect(dealerRows).toMatchObject([{ amount: 5000, sessionKey: `chinchiro-mp:${table.id}:1:dealer` }]);
+    expect(dealerRows).toMatchObject([{ amount: 1250, sessionKey: `chinchiro-mp:${table.id}:1:dealer` }]);
+  });
+
+  it("rounds each loser's quarter down rather than rounding the total", () => {
+    expect(dealerTransferAmount({ a: -3, b: -3, c: 6 })).toBe(0);
+    expect(dealerTransferAmount({ a: -7, b: -5, c: 12 })).toBe(2);
   });
 
   it("returns every reserved amount on cancellation, including after bet changes", async () => {

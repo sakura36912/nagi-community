@@ -222,7 +222,7 @@ hubIntegrationDescribe("dealer casino Hub transfer persistence", () => {
 });
 
 integrationDescribe("dealer casino DB persistence", () => {
-  it.each(["chohan", "poker"] as const)("%s transfers a lost stake to the dealer exactly once", async (gameType) => {
+  it.each(["chohan", "poker"] as const)("%s credits its dealer share exactly once", async (gameType) => {
     const context = await makeGame(gameType);
     const playerId = userId();
     await setBalance(context.guildId, context.dealerId, 250);
@@ -254,18 +254,19 @@ integrationDescribe("dealer casino DB persistence", () => {
       settleDealerCasinoGame(context.gameId, outcomes),
     ]);
     expect([first.alreadySettled, retry.alreadySettled].sort()).toEqual([false, true]);
-    expect(await balance(context.guildId, context.dealerId)).toBe(1250);
+    const dealerShare = gameType === "chohan" ? 250 : 1000;
+    expect(await balance(context.guildId, context.dealerId)).toBe(250 + dealerShare);
     expect(await balance(context.guildId, playerId)).toBe(4000);
     const finished = await getDealerCasinoGame(context.gameId);
     const bets = await listDealerCasinoBets(context.gameId);
     expect(gameEmbed(finished!, null, bets).toJSON().description)
-      .toContain("ディーラーへの送金額: **1,000＄**");
+      .toContain(`ディーラーへの送金額: **${dealerShare.toLocaleString()}＄**`);
     const dealerCredits = await db.select().from(transactionsTable).where(and(
       eq(transactionsTable.guildId, context.guildId),
       eq(transactionsTable.userId, context.dealerId),
     ));
     expect(dealerCredits).toMatchObject([{
-      amount: 1000,
+      amount: dealerShare,
       relatedUserId: playerId,
       sessionKey: expect.stringContaining(`dealer-casino:${context.gameId}:dealer-loss:`),
     }]);
@@ -290,7 +291,7 @@ integrationDescribe("dealer casino DB persistence", () => {
   it("rolls back the entire settlement if the dealer wallet would overflow", async () => {
     const context = await makeGame();
     const playerId = userId();
-    await setBalance(context.guildId, context.dealerId, 2_147_483_000);
+    await setBalance(context.guildId, context.dealerId, 2_147_483_500);
     await setBalance(context.guildId, playerId, 5000);
     await placeDealerCasinoBet({ gameId: context.gameId, userId: playerId, amount: 1000, choice: "cho" });
     const outcomes = [makeOutcome(playerId, "LOST", 0)];
@@ -298,11 +299,11 @@ integrationDescribe("dealer casino DB persistence", () => {
     await expect(settleDealerCasinoGame(context.gameId, outcomes))
       .rejects.toMatchObject({ code: "WALLET_OVERFLOW" });
     expect((await getDealerCasinoGame(context.gameId))?.state).toBe("RESULT");
-    expect(await balance(context.guildId, context.dealerId)).toBe(2_147_483_000);
+    expect(await balance(context.guildId, context.dealerId)).toBe(2_147_483_500);
     expect(await balance(context.guildId, playerId)).toBe(4000);
     await setBalance(context.guildId, context.dealerId, 0);
     await settleDealerCasinoGame(context.gameId, outcomes);
-    expect(await balance(context.guildId, context.dealerId)).toBe(1000);
+    expect(await balance(context.guildId, context.dealerId)).toBe(250);
   });
 
   it("atomically debits a bet and refunds it only once when cancelled", async () => {

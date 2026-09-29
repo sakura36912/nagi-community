@@ -8,6 +8,12 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 const LIMIT = 2_147_483_647;
 const MAX_MULTIPLIER = 5;
 
+/** Dealer receives a quarter of each participant's net loss, rounded down. */
+export function dealerTransferAmount(net: Record<string, number>): number {
+  return Object.values(net).reduce((total, change) =>
+    total + Math.floor(Math.max(0, -change) / 4), 0);
+}
+
 /** Reserve the full worst-case loss before any dice are rolled. */
 export function exposure(table: ChinchiroTable, playerId: string, bet: number, playerCount: number): number {
   const amount = bet * MAX_MULTIPLIER * (playerId === table.parentId ? playerCount - 1 : 1);
@@ -85,7 +91,7 @@ export async function settleRound(
     if (loss > reserved || !Number.isSafeInteger(credit) || credit > LIMIT) {
       throw new Error("預かり額を超える損失または払戻上限超過です。");
     }
-    dealerIncome += loss;
+    dealerIncome += Math.floor(loss / 4);
     if (credit > 0) {
       await changeBalance(tx, table.guildId, player.userId, credit);
       await tx.insert(transactionsTable).values({
@@ -101,7 +107,7 @@ export async function settleRound(
     await changeBalance(tx, table.guildId, table.ownerId, dealerIncome);
     await tx.insert(transactionsTable).values({
       guildId: table.guildId, userId: table.ownerId, amount: dealerIncome,
-      reason: `複数人チンチロ #${table.id} 第${table.round}回 敗者掛け金受取`,
+      reason: `複数人チンチロ #${table.id} 第${table.round}回 敗者負け額の25%受取`,
       sessionKey: `chinchiro-mp:${table.id}:${table.round}:dealer`,
     });
   }

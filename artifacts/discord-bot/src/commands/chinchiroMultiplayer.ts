@@ -13,7 +13,7 @@ import {
 import { isConfiguredHubVoice } from "../lib/configuredHubVoice";
 import { getGuildSettings } from "../lib/economy";
 import { logger } from "../lib/logger";
-import { refundOpenRound, reserveBet, settleRound } from "../lib/chinchiroMultiplayerMoney";
+import { dealerTransferAmount, refundOpenRound, reserveBet, settleRound } from "../lib/chinchiroMultiplayerMoney";
 import {
   isChinchiroHandComplete,
   rollChinchiroOnce,
@@ -90,10 +90,6 @@ export function calculateRoundResults(parentId: string, activePlayers: Chinchiro
     return { childId: child.userId, ...result, parent: parentRoll, child: JSON.parse(child.roll) as ChinchiroOutcome };
   });
   return { pairs, net };
-}
-
-function dealerTransferAmount(net: Record<string, number>): number {
-  return Object.values(net).reduce((total, change) => total + Math.max(0, -change), 0);
 }
 
 interface StoredRoundResult {

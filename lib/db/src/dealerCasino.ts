@@ -1244,30 +1244,35 @@ export async function settleDealerCasinoGame(
         });
       }
       if (outcome.result === "LOST" || outcome.result === "FOLDED") {
-        // Stakes were already debited on entry. A losing stake belongs to the
-        // dealer, not the system; keep this credit in the same settlement tx.
-        await tx.insert(walletsTable)
-          .values({ guildId: game.guildId, userId: game.dealerId })
-          .onConflictDoNothing();
-        const [dealerWallet] = await tx.update(walletsTable)
-          .set({ balance: sql`${walletsTable.balance} + ${bet.betAmount}` })
-          .where(and(
-            eq(walletsTable.guildId, game.guildId),
-            eq(walletsTable.userId, game.dealerId),
-            sql`${walletsTable.balance} <= ${MAX_POSTGRES_INTEGER - bet.betAmount}`,
-          ))
-          .returning({ balance: walletsTable.balance });
-        if (!dealerWallet) {
-          throw new DealerCasinoError("Dealer credit would exceed the wallet balance limit.", "WALLET_OVERFLOW");
+        // Poker keeps its full-stake dealer credit; 丁半 sends only 25%
+        // of each lost stake (rounded down). Entry already debited the stake.
+        const dealerCredit = game.gameType === "chohan"
+          ? Math.floor(bet.betAmount / 4)
+          : bet.betAmount;
+        if (dealerCredit > 0) {
+          await tx.insert(walletsTable)
+            .values({ guildId: game.guildId, userId: game.dealerId })
+            .onConflictDoNothing();
+          const [dealerWallet] = await tx.update(walletsTable)
+            .set({ balance: sql`${walletsTable.balance} + ${dealerCredit}` })
+            .where(and(
+              eq(walletsTable.guildId, game.guildId),
+              eq(walletsTable.userId, game.dealerId),
+              sql`${walletsTable.balance} <= ${MAX_POSTGRES_INTEGER - dealerCredit}`,
+            ))
+            .returning({ balance: walletsTable.balance });
+          if (!dealerWallet) {
+            throw new DealerCasinoError("Dealer credit would exceed the wallet balance limit.", "WALLET_OVERFLOW");
+          }
+          await tx.insert(transactionsTable).values({
+            guildId: game.guildId,
+            userId: game.dealerId,
+            amount: dealerCredit,
+            reason: `賭場${game.gameType}敗者掛け金受取 (参加者: ${bet.userId})`,
+            relatedUserId: bet.userId,
+            sessionKey: `dealer-casino:${game.id}:dealer-loss:${bet.id}`,
+          });
         }
-        await tx.insert(transactionsTable).values({
-          guildId: game.guildId,
-          userId: game.dealerId,
-          amount: bet.betAmount,
-          reason: `賭場${game.gameType}敗者掛け金受取 (参加者: ${bet.userId})`,
-          relatedUserId: bet.userId,
-          sessionKey: `dealer-casino:${game.id}:dealer-loss:${bet.id}`,
-        });
       }
       if (game.gameType === "chohan" && outcome.result !== "WON") {
         await tx.insert(dealerCasinoStreaksTable).values({

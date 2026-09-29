@@ -95,11 +95,11 @@ describe("multiplayer chinchiro planning helpers", () => {
     expect(fields[2]!.value).toContain("子ユーザー");
     expect(fields[3]!.value).toContain("親ユーザー：+1,000 $");
     expect(fields[3]!.value).toContain("子ユーザー：-1,000 $");
-    expect(fields[4]!.value).toBe("<@parent>：1,000 $");
+    expect(fields[4]!.value).toBe("<@parent>：250 $");
     const liveFields = buildMultiplayerChinchiroPanel({ ...table, testMode: 0 }, ps).toJSON().fields ?? [];
     expect(liveFields[4]).toMatchObject({
       name: "【ディーラーへの送金額】",
-      value: "<@parent>：1,000 $",
+      value: "<@parent>：250 $",
     });
   });
 

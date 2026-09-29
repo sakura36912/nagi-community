@@ -370,7 +370,9 @@ export function gameEmbed(game: DealerCasinoGame, settings: DealerCasinoSettings
     }
     const dealerTransfer = bets
       .filter((bet) => bet.state === "LOST" || bet.state === "FOLDED")
-      .reduce((total, bet) => total + bet.betAmount, 0);
+      .reduce((total, bet) => total + (game.gameType === "chohan"
+        ? Math.floor(bet.betAmount / 4)
+        : bet.betAmount), 0);
     description.push(`ディーラーへの送金額: **${dealerTransfer.toLocaleString()}＄**`);
     const summaries = result.outcomes.map((outcome) => {
       const player = result.players.find((entry) => entry.userId === outcome.userId);
