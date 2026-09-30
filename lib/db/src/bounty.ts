@@ -361,7 +361,10 @@ export async function approveBountyMonthReview(
       throw new Error("月初前の月は承認できません。");
     }
     await tx.update(bountyMonthlySnapshotsTable)
-      .set({ status: "approved", approvedBy: actorId, approvalAuditQueuedAt: new Date() })
+      .set({
+        status: "approved", approvedBy: actorId, approvalAuditQueuedAt: new Date(),
+        approvalAuditChannelId: settings.logChannelId,
+      })
       .where(and(
         eq(bountyMonthlySnapshotsTable.guildId, guildId),
         eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
@@ -372,7 +375,10 @@ export async function approveBountyMonthReview(
 /** An approval remains queued independently of whether its payout has completed. */
 export async function listPendingBountyMonthlyApprovalAudits(
   guildId: string, limit = 100,
-): Promise<Array<{ monthKey: string; actorId: string; memberCount: number; queuedAt: Date; scanBeforeId: string | null }>> {
+): Promise<Array<{
+  monthKey: string; actorId: string; memberCount: number; queuedAt: Date;
+  scanBeforeId: string | null; channelId: string | null;
+}>> {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
     throw new Error("limit must be an integer between 1 and 1000.");
   }
@@ -382,6 +388,7 @@ export async function listPendingBountyMonthlyApprovalAudits(
     memberCount: sql<number>`count(${bountyMonthlySnapshotMembersTable.userId})::integer`,
     queuedAt: bountyMonthlySnapshotsTable.approvalAuditQueuedAt,
     scanBeforeId: bountyMonthlySnapshotsTable.approvalAuditScanBeforeId,
+    channelId: bountyMonthlySnapshotsTable.approvalAuditChannelId,
   }).from(bountyMonthlySnapshotsTable)
     .leftJoin(bountyMonthlySnapshotMembersTable, and(
       eq(bountyMonthlySnapshotMembersTable.guildId, bountyMonthlySnapshotsTable.guildId),
@@ -399,6 +406,7 @@ export async function listPendingBountyMonthlyApprovalAudits(
       bountyMonthlySnapshotsTable.approvedBy,
       bountyMonthlySnapshotsTable.approvalAuditQueuedAt,
       bountyMonthlySnapshotsTable.approvalAuditScanBeforeId,
+      bountyMonthlySnapshotsTable.approvalAuditChannelId,
     )
     .orderBy(asc(bountyMonthlySnapshotsTable.approvalAuditQueuedAt))
     .limit(limit);
@@ -406,16 +414,39 @@ export async function listPendingBountyMonthlyApprovalAudits(
     if (!row.actorId || !row.queuedAt) throw new Error(`承認月 ${row.monthKey} の監査情報が記録されていません。`);
     return {
       monthKey: row.monthKey, actorId: row.actorId, memberCount: row.memberCount,
-      queuedAt: row.queuedAt, scanBeforeId: row.scanBeforeId,
+      queuedAt: row.queuedAt, scanBeforeId: row.scanBeforeId, channelId: row.channelId,
     };
   });
 }
 
-/** Save progress across restarts; clear it before sending so an ambiguous send is rescanned from newest. */
-export async function setBountyMonthlyApprovalAuditScanCursor(
-  guildId: string, monthKey: string, beforeId: string | null,
+/** Switch the reconciliation channel before scanning/sending there; discard the old channel's cursor. */
+export async function setBountyMonthlyApprovalAuditChannel(
+  guildId: string, monthKey: string, expectedChannelId: string | null, channelId: string,
 ): Promise<void> {
   validateBountyMonthKey(monthKey);
+  assertText(channelId, "channelId");
+  const [updated] = await db.update(bountyMonthlySnapshotsTable)
+    .set({ approvalAuditChannelId: channelId, approvalAuditScanBeforeId: null })
+    .where(and(
+      eq(bountyMonthlySnapshotsTable.guildId, guildId),
+      eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+      eq(bountyMonthlySnapshotsTable.status, "approved"),
+      isNotNull(bountyMonthlySnapshotsTable.approvalAuditQueuedAt),
+      isNull(bountyMonthlySnapshotsTable.approvalAuditSentAt),
+      expectedChannelId === null
+        ? isNull(bountyMonthlySnapshotsTable.approvalAuditChannelId)
+        : eq(bountyMonthlySnapshotsTable.approvalAuditChannelId, expectedChannelId),
+    ))
+    .returning({ monthKey: bountyMonthlySnapshotsTable.monthKey });
+  if (!updated) throw new Error(`承認月 ${monthKey} の監査通知の送信先が変更されました。次回再確認します。`);
+}
+
+/** Save progress across restarts; clear it before sending so an ambiguous send is rescanned from newest. */
+export async function setBountyMonthlyApprovalAuditScanCursor(
+  guildId: string, monthKey: string, channelId: string, beforeId: string | null,
+): Promise<void> {
+  validateBountyMonthKey(monthKey);
+  assertText(channelId, "channelId");
   if (beforeId !== null && !/^\d{17,20}$/.test(beforeId)) throw new Error("Discord message ID is invalid.");
   const [updated] = await db.update(bountyMonthlySnapshotsTable)
     .set({ approvalAuditScanBeforeId: beforeId })
@@ -425,6 +456,7 @@ export async function setBountyMonthlyApprovalAuditScanCursor(
       eq(bountyMonthlySnapshotsTable.status, "approved"),
       isNotNull(bountyMonthlySnapshotsTable.approvalAuditQueuedAt),
       isNull(bountyMonthlySnapshotsTable.approvalAuditSentAt),
+      eq(bountyMonthlySnapshotsTable.approvalAuditChannelId, channelId),
     ))
     .returning({ monthKey: bountyMonthlySnapshotsTable.monthKey });
   if (!updated) throw new Error(`承認月 ${monthKey} の送信待ち監査通知が見つかりません。`);

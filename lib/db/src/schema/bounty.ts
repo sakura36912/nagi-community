@@ -149,6 +149,8 @@ export const bountyMonthlySnapshotsTable = pgTable(
     approvalAuditSentAt: timestamp("approval_audit_sent_at", { withTimezone: true }),
     // Checkpoint for a bounded Discord history scan; cleared before every send.
     approvalAuditScanBeforeId: text("approval_audit_scan_before_id"),
+    // The channel whose history must be reconciled before another send attempt.
+    approvalAuditChannelId: text("approval_audit_channel_id"),
   },
   (table) => [primaryKey({ columns: [table.guildId, table.monthKey] })],
 );

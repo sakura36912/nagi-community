@@ -40,6 +40,7 @@ import {
   previewBountyMonthReviewImport,
   removeBountyMonthReviewMember,
   resetBountyVoicePresences,
+  setBountyMonthlyApprovalAuditChannel,
   setBountyMonthlyApprovalAuditScanCursor,
   setBountyMonthlyRate,
   setBountySettings,
@@ -344,9 +345,44 @@ async function flushBountyAuditQueue(guild: Guild): Promise<number> {
       const content = `${legacyContent}\n監査ID: bounty-approval:${guild.id}:${approval.monthKey}`;
       const botId = guild.client.user?.id;
       if (!botId) throw new Error("BotのIDを取得できないため監査履歴を照合できません。");
+      let searchChannelId = approval.channelId;
+      let beforeId = approval.scanBeforeId;
+      if (!searchChannelId) {
+        // A pre-migration pending approval could already have been posted in
+        // any former channel. Guessing the current one risks a duplicate.
+        throw new Error(`承認月 ${approval.monthKey} の以前の監査チャンネルが不明です。旧投稿を手動確認するまで再送しません。`);
+      }
+      if (searchChannelId !== settings.logChannelId) {
+        // An ambiguous send may already be visible in the former destination.
+        // Never send to the new destination until its old history is checked.
+        const previousChannel = await guild.channels.fetch(searchChannelId);
+        if (previousChannel) {
+          if (!previousChannel.isTextBased() || !("messages" in previousChannel)) {
+            throw new Error(`以前の監査チャンネル ${searchChannelId} の投稿履歴を確認できません。`);
+          }
+          const previousFound = await approvalAuditAlreadyPosted(
+            previousChannel, botId, approval.queuedAt, content, legacyContent, beforeId,
+            (cursor) => setBountyMonthlyApprovalAuditScanCursor(guild.id, approval.monthKey, searchChannelId!, cursor),
+          );
+          if (previousFound === "incomplete") {
+            deferred = true;
+            continue;
+          }
+          if (previousFound) {
+            await markBountyMonthlyApprovalAuditSent(guild.id, approval.monthKey);
+            sentCount += 1;
+            continue;
+          }
+        }
+        // No old message (or the old channel was deleted). Bind the next
+        // scan and any subsequent send to the current destination first.
+        await setBountyMonthlyApprovalAuditChannel(guild.id, approval.monthKey, searchChannelId, settings.logChannelId);
+        searchChannelId = settings.logChannelId;
+        beforeId = null;
+      }
       const found = await approvalAuditAlreadyPosted(
-        channel, botId, approval.queuedAt, content, legacyContent, approval.scanBeforeId,
-        (beforeId) => setBountyMonthlyApprovalAuditScanCursor(guild.id, approval.monthKey, beforeId),
+        channel, botId, approval.queuedAt, content, legacyContent, beforeId,
+        (cursor) => setBountyMonthlyApprovalAuditScanCursor(guild.id, approval.monthKey, searchChannelId, cursor),
       );
       if (found === "incomplete") {
         deferred = true;
@@ -355,7 +391,7 @@ async function flushBountyAuditQueue(guild: Guild): Promise<number> {
       if (!found) {
         // A failed/ambiguous send must start its next reconciliation at newest,
         // never resume from a cursor that predates the send.
-        await setBountyMonthlyApprovalAuditScanCursor(guild.id, approval.monthKey, null);
+        await setBountyMonthlyApprovalAuditScanCursor(guild.id, approval.monthKey, searchChannelId, null);
         await channel.send({
           content, nonce: `bounty-approval:${approval.monthKey}`, enforceNonce: true,
           allowedMentions: { parse: [] },

@@ -16,6 +16,7 @@ import {
   listPendingBountyMonthlyApprovalAudits,
   markBountyMonthReviewNotified,
   markBountyMonthlyApprovalAuditSent,
+  setBountyMonthlyApprovalAuditChannel,
   setBountyMonthlyApprovalAuditScanCursor,
   previewBountyMonthReviewImport,
   db,
@@ -81,7 +82,9 @@ async function captureTestMonth(guildId: string, monthKey: string, members: Map<
 async function pendingMonthlyApprovalSummaries(guildId: string) {
   const pending = await listPendingBountyMonthlyApprovalAudits(guildId);
   for (const audit of pending) assert.ok(audit.queuedAt instanceof Date);
-  return pending.map(({ queuedAt: _queuedAt, scanBeforeId: _scanBeforeId, ...summary }) => summary);
+  return pending.map(({
+    queuedAt: _queuedAt, scanBeforeId: _scanBeforeId, channelId: _channelId, ...summary
+  }) => summary);
 }
 
 describe("bounty points", () => {
@@ -359,13 +362,23 @@ describe("bounty points", () => {
       { monthKey, actorId: "new-staff", memberCount: 0 },
     ]);
     await assert.rejects(
-      setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, "invalid"),
+      setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, "log-channel", "invalid"),
       /message ID is invalid/,
     );
-    await setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, "123456789012345678");
+    assert.equal((await listPendingBountyMonthlyApprovalAudits(guildId))[0]?.channelId, "log-channel");
+    await setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, "log-channel", "123456789012345678");
     assert.equal((await listPendingBountyMonthlyApprovalAudits(guildId))[0]?.scanBeforeId, "123456789012345678");
-    await setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, null);
+    await assert.rejects(
+      setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, "wrong-channel", null),
+      /送信待ち監査通知/,
+    );
+    await setBountyMonthlyApprovalAuditChannel(guildId, monthKey, "log-channel", "new-audit");
     assert.equal((await listPendingBountyMonthlyApprovalAudits(guildId))[0]?.scanBeforeId, null);
+    assert.equal((await listPendingBountyMonthlyApprovalAudits(guildId))[0]?.channelId, "new-audit");
+    await assert.rejects(
+      setBountyMonthlyApprovalAuditChannel(guildId, monthKey, "log-channel", "another-audit"),
+      /送信先が変更/,
+    );
     assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
     assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
     assert.deepEqual(await pendingMonthlyApprovalSummaries(guildId), [
