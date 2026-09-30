@@ -147,6 +147,8 @@ export const bountyMonthlySnapshotsTable = pgTable(
     // approvals may already have been announced by the former direct-send path.
     approvalAuditQueuedAt: timestamp("approval_audit_queued_at", { withTimezone: true }),
     approvalAuditSentAt: timestamp("approval_audit_sent_at", { withTimezone: true }),
+    // Checkpoint for a bounded Discord history scan; cleared before every send.
+    approvalAuditScanBeforeId: text("approval_audit_scan_before_id"),
   },
   (table) => [primaryKey({ columns: [table.guildId, table.monthKey] })],
 );

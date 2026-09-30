@@ -7,6 +7,7 @@ const dbMocks = vi.hoisted(() => ({
   listPendingBountyMonthlyApprovalAudits: vi.fn(),
   markBountyAuditSent: vi.fn(),
   markBountyMonthlyApprovalAuditSent: vi.fn(),
+  setBountyMonthlyApprovalAuditScanCursor: vi.fn(),
 }));
 vi.mock("@workspace/db", () => dbMocks);
 
@@ -28,7 +29,7 @@ describe("bounty monthly approval audit retry", () => {
     dbMocks.getBountySettings.mockResolvedValue({ logChannelId: "audit-channel" });
     dbMocks.listPendingBountyAudits.mockResolvedValue([]);
     dbMocks.listPendingBountyMonthlyApprovalAudits.mockResolvedValue([
-      { monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt: new Date() },
+      { monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt: new Date(), scanBeforeId: null },
     ]);
 
     await expect(flushPendingBountyAudits(guild)).rejects.toThrow("Discord unavailable");
@@ -59,7 +60,7 @@ describe("bounty monthly approval audit retry", () => {
     dbMocks.getBountySettings.mockResolvedValue({ logChannelId: "audit-channel" });
     dbMocks.listPendingBountyAudits.mockResolvedValue([]);
     dbMocks.listPendingBountyMonthlyApprovalAudits.mockResolvedValue([
-      { monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt: new Date(Date.now() - 1_000) },
+      { monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt: new Date(Date.now() - 1_000), scanBeforeId: null },
     ]);
     dbMocks.markBountyMonthlyApprovalAuditSent.mockRejectedValueOnce(new Error("DB unavailable"));
 
@@ -86,13 +87,65 @@ describe("bounty monthly approval audit retry", () => {
     dbMocks.getBountySettings.mockResolvedValue({ logChannelId: "audit-channel" });
     dbMocks.listPendingBountyAudits.mockResolvedValue([]);
     dbMocks.listPendingBountyMonthlyApprovalAudits.mockResolvedValue([
-      { monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt: new Date(Date.now() - 1_000) },
+      { monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt: new Date(Date.now() - 1_000), scanBeforeId: null },
     ]);
     await expect(flushPendingBountyAudits(guild)).resolves.toBe(1);
     expect(send).not.toHaveBeenCalled();
     expect(dbMocks.markBountyMonthlyApprovalAuditSent).toHaveBeenCalledExactlyOnceWith(
       BOUNTY_GUILD_ID, "2026-09",
     );
+  });
+
+  it("resumes a search beyond 10,000 messages and rescans from newest after an ambiguous send", async () => {
+    const queuedAt = new Date(Date.now() - 2_000);
+    const base = 100000000000000000n;
+    let scanBeforeId: string | null = null;
+    let posted: { id: string; content: string; author: { id: string }; createdTimestamp: number } | null = null;
+    let completed = false;
+    const send = vi.fn(async ({ content }: { content: string }) => {
+      posted = { id: "200000000000000000", content, author: { id: "bot-id" }, createdTimestamp: Date.now() };
+      return posted;
+    });
+    const fetch = vi.fn(async ({ before }: { before?: string }) => {
+      if (!before && posted) return new Collection([[posted.id, posted]]);
+      const page = before ? Number((base - BigInt(before) + 1n) / 100n) : 0;
+      return new Collection(Array.from({ length: 100 }, (_, i) => {
+        const id = String(base - BigInt(page * 100 + i));
+        return [id, {
+          id, content: "unrelated", author: { id: "bot-id" },
+          createdTimestamp: page === 100 && i === 99 ? queuedAt.getTime() - 61_000 : Date.now(),
+        }] as const;
+      }));
+    });
+    const guild = {
+      id: BOUNTY_GUILD_ID,
+      client: { user: { id: "bot-id" } },
+      channels: { fetch: vi.fn().mockResolvedValue({ isTextBased: () => true, send, messages: { fetch } }) },
+    } as unknown as Guild;
+    dbMocks.getBountySettings.mockResolvedValue({ logChannelId: "audit-channel" });
+    dbMocks.listPendingBountyAudits.mockResolvedValue([]);
+    dbMocks.listPendingBountyMonthlyApprovalAudits.mockImplementation(async () => completed ? [] : [{
+      monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt, scanBeforeId,
+    }]);
+    dbMocks.setBountyMonthlyApprovalAuditScanCursor.mockImplementation(async (
+      _guildId: string, _month: string, beforeId: string | null,
+    ) => { scanBeforeId = beforeId; });
+    dbMocks.markBountyMonthlyApprovalAuditSent
+      .mockRejectedValueOnce(new Error("DB unavailable"))
+      .mockImplementation(async () => { completed = true; });
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(flushPendingBountyAudits(guild)).resolves.toBe(0);
+      expect(scanBeforeId).not.toBeNull();
+      expect(send).not.toHaveBeenCalled();
+    }
+    await expect(flushPendingBountyAudits(guild)).rejects.toThrow("DB unavailable");
+    expect(fetch).toHaveBeenCalledTimes(101);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(scanBeforeId).toBeNull();
+    await expect(flushPendingBountyAudits(guild)).resolves.toBe(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(completed).toBe(true);
   });
 
   it("does not risk a duplicate send when Discord history is inaccessible", async () => {
@@ -108,7 +161,7 @@ describe("bounty monthly approval audit retry", () => {
     dbMocks.getBountySettings.mockResolvedValue({ logChannelId: "audit-channel" });
     dbMocks.listPendingBountyAudits.mockResolvedValue([]);
     dbMocks.listPendingBountyMonthlyApprovalAudits.mockResolvedValue([
-      { monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt: new Date() },
+      { monthKey: "2026-09", actorId: "123456789012345678", memberCount: 3, queuedAt: new Date(), scanBeforeId: null },
     ]);
     await expect(flushPendingBountyAudits(guild)).rejects.toThrow("Missing Read Message History");
     expect(send).not.toHaveBeenCalled();

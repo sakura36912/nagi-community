@@ -40,6 +40,7 @@ import {
   previewBountyMonthReviewImport,
   removeBountyMonthReviewMember,
   resetBountyVoicePresences,
+  setBountyMonthlyApprovalAuditScanCursor,
   setBountyMonthlyRate,
   setBountySettings,
   setBountyVcRate,
@@ -276,24 +277,28 @@ async function approvalAuditAlreadyPosted(
   queuedAt: Date,
   content: string,
   legacyContent: string,
-): Promise<boolean> {
+  initialBeforeId: string | null,
+  checkpoint: (beforeId: string) => Promise<void>,
+): Promise<boolean | "incomplete"> {
   if (!("messages" in channel) || !channel.messages) {
     throw new Error("監査チャンネルの投稿履歴を確認できません。");
   }
   const cutoff = queuedAt.getTime() - 60_000;
-  let before: string | undefined;
-  for (let page = 0; page < 100; page++) {
+  let before: string | undefined = initialBeforeId ?? undefined;
+  // Bound each scheduler invocation, not the total search. The cursor survives
+  // bot restarts so even very busy channels eventually reach the approval time.
+  for (let page = 0; page < 20; page++) {
     const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     for (const message of messages.values()) {
       if (message.createdTimestamp >= cutoff && message.author.id === botId
         && (message.content === content || message.content === legacyContent)) return true;
     }
     const oldest = messages.last();
-    if (!oldest || messages.size < 100 || oldest.createdTimestamp < cutoff) return false;
+    if (!oldest || oldest.createdTimestamp < cutoff) return false;
+    await checkpoint(oldest.id);
     before = oldest.id;
   }
-  // Never send a possibly duplicated message when history could not be fully checked.
-  throw new Error("監査チャンネルの投稿履歴が多すぎて照合できません。送信を保留します。");
+  return "incomplete";
 }
 
 export async function flushPendingBountyAudits(guild: Guild): Promise<number> {
@@ -332,13 +337,25 @@ async function flushBountyAuditQueue(guild: Guild): Promise<number> {
     if (pending.length < 100) break;
     pending = await listPendingBountyAudits(guild.id, 100);
   }
+  let deferred = false;
   while (approvals.length) {
     for (const approval of approvals) {
       const legacyContent = `懸賞金月次承認 ${approval.monthKey}\n実行者: <@${approval.actorId}>\n月初時点の対象: ${approval.memberCount}人\n※承認記録です。精算結果は別途確認してください。`;
       const content = `${legacyContent}\n監査ID: bounty-approval:${guild.id}:${approval.monthKey}`;
       const botId = guild.client.user?.id;
       if (!botId) throw new Error("BotのIDを取得できないため監査履歴を照合できません。");
-      if (!await approvalAuditAlreadyPosted(channel, botId, approval.queuedAt, content, legacyContent)) {
+      const found = await approvalAuditAlreadyPosted(
+        channel, botId, approval.queuedAt, content, legacyContent, approval.scanBeforeId,
+        (beforeId) => setBountyMonthlyApprovalAuditScanCursor(guild.id, approval.monthKey, beforeId),
+      );
+      if (found === "incomplete") {
+        deferred = true;
+        continue;
+      }
+      if (!found) {
+        // A failed/ambiguous send must start its next reconciliation at newest,
+        // never resume from a cursor that predates the send.
+        await setBountyMonthlyApprovalAuditScanCursor(guild.id, approval.monthKey, null);
         await channel.send({
           content, nonce: `bounty-approval:${approval.monthKey}`, enforceNonce: true,
           allowedMentions: { parse: [] },
@@ -347,7 +364,7 @@ async function flushBountyAuditQueue(guild: Guild): Promise<number> {
       await markBountyMonthlyApprovalAuditSent(guild.id, approval.monthKey);
       sentCount += 1;
     }
-    if (approvals.length < 100) break;
+    if (approvals.length < 100 || deferred) break;
     approvals = await listPendingBountyMonthlyApprovalAudits(guild.id, 100);
   }
   return sentCount;

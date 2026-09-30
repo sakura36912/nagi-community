@@ -16,6 +16,7 @@ import {
   listPendingBountyMonthlyApprovalAudits,
   markBountyMonthReviewNotified,
   markBountyMonthlyApprovalAuditSent,
+  setBountyMonthlyApprovalAuditScanCursor,
   previewBountyMonthReviewImport,
   db,
   getBountyPoints,
@@ -80,7 +81,7 @@ async function captureTestMonth(guildId: string, monthKey: string, members: Map<
 async function pendingMonthlyApprovalSummaries(guildId: string) {
   const pending = await listPendingBountyMonthlyApprovalAudits(guildId);
   for (const audit of pending) assert.ok(audit.queuedAt instanceof Date);
-  return pending.map(({ queuedAt: _queuedAt, ...summary }) => summary);
+  return pending.map(({ queuedAt: _queuedAt, scanBeforeId: _scanBeforeId, ...summary }) => summary);
 }
 
 describe("bounty points", () => {
@@ -357,6 +358,14 @@ describe("bounty points", () => {
     assert.deepEqual(await pendingMonthlyApprovalSummaries(guildId), [
       { monthKey, actorId: "new-staff", memberCount: 0 },
     ]);
+    await assert.rejects(
+      setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, "invalid"),
+      /message ID is invalid/,
+    );
+    await setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, "123456789012345678");
+    assert.equal((await listPendingBountyMonthlyApprovalAudits(guildId))[0]?.scanBeforeId, "123456789012345678");
+    await setBountyMonthlyApprovalAuditScanCursor(guildId, monthKey, null);
+    assert.equal((await listPendingBountyMonthlyApprovalAudits(guildId))[0]?.scanBeforeId, null);
     assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
     assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
     assert.deepEqual(await pendingMonthlyApprovalSummaries(guildId), [
