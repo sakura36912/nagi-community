@@ -77,6 +77,12 @@ async function captureTestMonth(guildId: string, monthKey: string, members: Map<
   return captureBountyMonthSnapshot(guildId, monthKey, members, cutoff);
 }
 
+async function pendingMonthlyApprovalSummaries(guildId: string) {
+  const pending = await listPendingBountyMonthlyApprovalAudits(guildId);
+  for (const audit of pending) assert.ok(audit.queuedAt instanceof Date);
+  return pending.map(({ queuedAt: _queuedAt, ...summary }) => summary);
+}
+
 describe("bounty points", () => {
   afterEach(async () => {
     for (const guildId of testGuilds.splice(0)) await cleanGuild(guildId);
@@ -312,7 +318,7 @@ describe("bounty points", () => {
       /対象者が変更/,
     );
     await approveBountyMonthReview(guildId, monthKey, "staff-id", roster);
-    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), [
+    assert.deepEqual(await pendingMonthlyApprovalSummaries(guildId), [
       { monthKey, actorId: "staff-id", memberCount: 1 },
     ]);
     assert.deepEqual(await listBountyMonthsNeedingAttention(guildId), [monthKey]);
@@ -325,7 +331,7 @@ describe("bounty points", () => {
     assert.equal(await getBountyPoints(guildId, approvedUser), 35);
     assert.equal(await getBountyPoints(guildId, unapprovedUser), 0);
     assert.equal((await getBountyMonthReview(guildId, monthKey)).paid, true);
-    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), [
+    assert.deepEqual(await pendingMonthlyApprovalSummaries(guildId), [
       { monthKey, actorId: "staff-id", memberCount: 1 },
     ]);
     await markBountyMonthlyApprovalAuditSent(guildId, monthKey);
@@ -348,12 +354,12 @@ describe("bounty points", () => {
     assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), []);
     await approveBountyMonthReview(guildId, monthKey, "new-staff", []);
     await assert.rejects(approveBountyMonthReview(guildId, monthKey, "new-staff", []), /確認待ち/);
-    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), [
+    assert.deepEqual(await pendingMonthlyApprovalSummaries(guildId), [
       { monthKey, actorId: "new-staff", memberCount: 0 },
     ]);
     assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
     assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
-    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), [
+    assert.deepEqual(await pendingMonthlyApprovalSummaries(guildId), [
       { monthKey, actorId: "new-staff", memberCount: 0 },
     ]);
     await markBountyMonthlyApprovalAuditSent(guildId, monthKey);

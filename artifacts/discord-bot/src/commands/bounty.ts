@@ -22,6 +22,7 @@ import {
   type ChannelSelectMenuInteraction,
   type RoleSelectMenuInteraction,
   type Guild,
+  type GuildTextBasedChannel,
 } from "discord.js";
 import {
   applyBountyPoints,
@@ -268,6 +269,33 @@ async function sendAudit(guild: NonNullable<ChatInputCommandInteraction["guild"]
 
 const activeAuditFlushes = new Map<string, Promise<number>>();
 
+/** Reconcile an ambiguous Discord send before retrying a queued approval. */
+async function approvalAuditAlreadyPosted(
+  channel: GuildTextBasedChannel,
+  botId: string,
+  queuedAt: Date,
+  content: string,
+  legacyContent: string,
+): Promise<boolean> {
+  if (!("messages" in channel) || !channel.messages) {
+    throw new Error("監査チャンネルの投稿履歴を確認できません。");
+  }
+  const cutoff = queuedAt.getTime() - 60_000;
+  let before: string | undefined;
+  for (let page = 0; page < 100; page++) {
+    const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    for (const message of messages.values()) {
+      if (message.createdTimestamp >= cutoff && message.author.id === botId
+        && (message.content === content || message.content === legacyContent)) return true;
+    }
+    const oldest = messages.last();
+    if (!oldest || messages.size < 100 || oldest.createdTimestamp < cutoff) return false;
+    before = oldest.id;
+  }
+  // Never send a possibly duplicated message when history could not be fully checked.
+  throw new Error("監査チャンネルの投稿履歴が多すぎて照合できません。送信を保留します。");
+}
+
 export async function flushPendingBountyAudits(guild: Guild): Promise<number> {
   if (guild.id !== BOUNTY_GUILD_ID) {
     throw new Error(`賞金ポイント監査ログ送信はサーバー ${BOUNTY_GUILD_ID} 専用です。`);
@@ -306,10 +334,16 @@ async function flushBountyAuditQueue(guild: Guild): Promise<number> {
   }
   while (approvals.length) {
     for (const approval of approvals) {
-      await channel.send({
-        content: `懸賞金月次承認 ${approval.monthKey}\n実行者: <@${approval.actorId}>\n月初時点の対象: ${approval.memberCount}人\n※承認記録です。精算結果は別途確認してください。`,
-        allowedMentions: { parse: [] },
-      });
+      const legacyContent = `懸賞金月次承認 ${approval.monthKey}\n実行者: <@${approval.actorId}>\n月初時点の対象: ${approval.memberCount}人\n※承認記録です。精算結果は別途確認してください。`;
+      const content = `${legacyContent}\n監査ID: bounty-approval:${guild.id}:${approval.monthKey}`;
+      const botId = guild.client.user?.id;
+      if (!botId) throw new Error("BotのIDを取得できないため監査履歴を照合できません。");
+      if (!await approvalAuditAlreadyPosted(channel, botId, approval.queuedAt, content, legacyContent)) {
+        await channel.send({
+          content, nonce: `bounty-approval:${approval.monthKey}`, enforceNonce: true,
+          allowedMentions: { parse: [] },
+        });
+      }
       await markBountyMonthlyApprovalAuditSent(guild.id, approval.monthKey);
       sentCount += 1;
     }

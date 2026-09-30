@@ -372,7 +372,7 @@ export async function approveBountyMonthReview(
 /** An approval remains queued independently of whether its payout has completed. */
 export async function listPendingBountyMonthlyApprovalAudits(
   guildId: string, limit = 100,
-): Promise<Array<{ monthKey: string; actorId: string; memberCount: number }>> {
+): Promise<Array<{ monthKey: string; actorId: string; memberCount: number; queuedAt: Date }>> {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
     throw new Error("limit must be an integer between 1 and 1000.");
   }
@@ -380,6 +380,7 @@ export async function listPendingBountyMonthlyApprovalAudits(
     monthKey: bountyMonthlySnapshotsTable.monthKey,
     actorId: bountyMonthlySnapshotsTable.approvedBy,
     memberCount: sql<number>`count(${bountyMonthlySnapshotMembersTable.userId})::integer`,
+    queuedAt: bountyMonthlySnapshotsTable.approvalAuditQueuedAt,
   }).from(bountyMonthlySnapshotsTable)
     .leftJoin(bountyMonthlySnapshotMembersTable, and(
       eq(bountyMonthlySnapshotMembersTable.guildId, bountyMonthlySnapshotsTable.guildId),
@@ -400,8 +401,8 @@ export async function listPendingBountyMonthlyApprovalAudits(
     .orderBy(asc(bountyMonthlySnapshotsTable.approvalAuditQueuedAt))
     .limit(limit);
   return rows.map((row) => {
-    if (!row.actorId) throw new Error(`承認月 ${row.monthKey} の実行者が記録されていません。`);
-    return { monthKey: row.monthKey, actorId: row.actorId, memberCount: row.memberCount };
+    if (!row.actorId || !row.queuedAt) throw new Error(`承認月 ${row.monthKey} の監査情報が記録されていません。`);
+    return { monthKey: row.monthKey, actorId: row.actorId, memberCount: row.memberCount, queuedAt: row.queuedAt };
   });
 }
 
