@@ -159,6 +159,7 @@ import {
 
 import { logger } from "./lib/logger";
 import { syncCasinoCommandRegistration } from "./lib/casinoCommandRegistration";
+import { syncChinchiroCommandRegistration } from "./lib/chinchiroCommandRegistration";
 import {
   getVcRewardSettings,
   recordVcJoin,
@@ -1258,6 +1259,9 @@ client.on(Events.GuildUnavailable, (guild) => {
 client.once(Events.ClientReady, async (readyClient) => {
   syncCasinoCommandRegistration(readyClient).catch((err) =>
     logger.error("[casino] Startup command registration failed", err),
+  );
+  syncChinchiroCommandRegistration(readyClient).catch((err) =>
+    logger.error("[chinchiro] Startup command registration failed", err),
   );
   syncDailyRoleDebitCommandRegistration(readyClient).catch((err) =>
     logger.error("[daily-debit] Startup command registration failed", err),
