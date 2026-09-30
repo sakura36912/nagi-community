@@ -33,6 +33,7 @@ import {
   getBountyMonthReview,
   getBountyPoints,
   getBountySettings,
+  listBountyAccountBalances,
   listPendingBountyAudits,
   listPendingBountyMonthlyApprovalAudits,
   markBountyAuditSent,
@@ -453,7 +454,10 @@ export const bountyCommand = {
     .setDescription("賞金ポイント")
     .addSubcommand((sub) => sub.setName("setup").setDescription("賞金ポイントの初期設定（管理者）"))
     .addSubcommand((sub) => sub.setName("panels").setDescription("賞金ポイント設定パネルを3つ投稿（管理者）"))
-    .addSubcommand((sub) => sub.setName("balance").setDescription("賞金ポイント残高を表示"))
+    .addSubcommand((sub) => sub.setName("balance").setDescription("自分または指定ユーザーの賞金ポイントを表示")
+      .addUserOption((option) => option.setName("user").setDescription("確認するユーザー（他のユーザーは管理者のみ）")))
+    .addSubcommand((sub) => sub.setName("ranking").setDescription("本船員の賞金ポイントランキングを表示")
+      .addIntegerOption((option) => option.setName("page").setDescription("ページ（1から）").setMinValue(1)))
     .addSubcommand((sub) => sub.setName("review-status").setDescription("月次保留・精算状況を確認（管理者）")
       .addStringOption(REVIEW_MONTH_OPTION)
       .addIntegerOption((o) => o.setName("page").setDescription("対象者一覧のページ（1から）").setMinValue(1)))
@@ -480,9 +484,55 @@ export const bountyCommand = {
     }
     const subcommand = interaction.options.getSubcommand();
     if (subcommand === "balance") {
-      const points = await getBountyPoints(interaction.guildId, interaction.user.id);
-      await interaction.reply({
-        content: `あなたの賞金ポイント: **${points.toLocaleString("ja-JP")} pt**`,
+      const user = interaction.options.getUser("user") ?? interaction.user;
+      if (user.id !== interaction.user.id && !isStaff(interaction)) {
+        await privateReply(interaction, "他のユーザーのポイントを確認するにはサーバー管理権限（ManageGuild）が必要です。");
+        return;
+      }
+      const points = await getBountyPoints(interaction.guildId, user.id);
+      if (user.id !== interaction.user.id) {
+        await privateReply(interaction, `<@${user.id}> の賞金ポイント: **${points.toLocaleString("ja-JP")} pt**`);
+      } else {
+        await interaction.reply({
+          content: `あなたの賞金ポイント: **${points.toLocaleString("ja-JP")} pt**`,
+          allowedMentions: { parse: [] },
+        });
+      }
+      return;
+    }
+    if (subcommand === "ranking") {
+      const settings = await getBountySettings(interaction.guildId);
+      if (!settings) {
+        await privateReply(interaction, "先に `/bounty setup` を実行してください。");
+        return;
+      }
+      await interaction.deferReply();
+      const members = await interaction.guild.members.fetch();
+      if (members.size !== interaction.guild.memberCount) {
+        await interaction.editReply("サーバーの全メンバーを取得できなかったため、ランキングを表示できません。もう一度お試しください。");
+        return;
+      }
+      const balances = await listBountyAccountBalances(interaction.guildId);
+      const pointsByUser = new Map(balances.map(({ userId, points }) => [userId, points]));
+      const ranking = [...members.values()]
+        .filter((member) => !member.user.bot && member.roles.cache.has(settings.crewRoleId))
+        .map((member) => ({ userId: member.id, points: pointsByUser.get(member.id) ?? 0 }))
+        .sort((a, b) => b.points - a.points || a.userId.localeCompare(b.userId));
+      if (!ranking.length) {
+        await interaction.editReply("現在、本船員ロールを持つユーザーはいません。");
+        return;
+      }
+      const page = interaction.options.getInteger("page") ?? 1;
+      const pages = Math.ceil(ranking.length / 10);
+      if (page > pages) {
+        await interaction.editReply(`ページは1〜${pages}で指定してください。`);
+        return;
+      }
+      const lines = ranking.slice((page - 1) * 10, page * 10)
+        .map(({ userId, points }, index) =>
+          `${(page - 1) * 10 + index + 1}位 <@${userId}> — ${points.toLocaleString("ja-JP")} pt`);
+      await interaction.editReply({
+        content: `本船員の賞金ポイントランキング（${ranking.length}人・${page}/${pages}ページ）\n${lines.join("\n")}`,
         allowedMentions: { parse: [] },
       });
       return;
