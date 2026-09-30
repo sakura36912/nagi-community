@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildHubVcPanelMessage, isBeachTransferHub, vcCommand } from "../commands/vc.js";
+import { Collection, PermissionFlagsBits, PermissionsBitField, type VoiceChannel } from "discord.js";
+import { buildHubVcPanelMessage, hubVoiceOverwrites, isBeachTransferHub, vcCommand } from "../commands/vc.js";
 import {
   buildShiftEmbeds,
   buildShiftPanelComponents,
@@ -8,6 +9,26 @@ import {
 } from "../commands/shift.js";
 
 describe("Hub VCインチャットパネル", () => {
+  it("転送先に Hub の島民・賭博師・賭博頭領の権限上書きをそのまま複製する", () => {
+    const source = {
+      permissionOverwrites: {
+        cache: new Collection([
+          ["everyone", { id: "everyone", type: 0, allow: new PermissionsBitField(), deny: new PermissionsBitField(PermissionFlagsBits.UseApplicationCommands) }],
+          ["island", { id: "island", type: 0, allow: new PermissionsBitField(PermissionFlagsBits.ViewChannel), deny: new PermissionsBitField() }],
+          ["dealer", { id: "dealer", type: 0, allow: new PermissionsBitField(PermissionFlagsBits.UseApplicationCommands), deny: new PermissionsBitField() }],
+          ["director", { id: "director", type: 0, allow: new PermissionsBitField(PermissionFlagsBits.UseApplicationCommands), deny: new PermissionsBitField() }],
+        ]),
+      },
+    } as unknown as VoiceChannel;
+
+    expect(hubVoiceOverwrites(source)).toEqual([
+      { id: "everyone", type: 0, allow: 0n, deny: PermissionFlagsBits.UseApplicationCommands },
+      { id: "island", type: 0, allow: PermissionFlagsBits.ViewChannel, deny: 0n },
+      { id: "dealer", type: 0, allow: PermissionFlagsBits.UseApplicationCommands, deny: 0n },
+      { id: "director", type: 0, allow: PermissionFlagsBits.UseApplicationCommands, deny: 0n },
+    ]);
+  });
+
   it("通常のHubでは画面共有コントロールを表示する", () => {
     const message = buildHubVcPanelMessage("channel-1", "owner-1", true);
     const row = message.components[0]!;

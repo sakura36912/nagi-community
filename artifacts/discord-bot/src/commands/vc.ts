@@ -23,6 +23,7 @@ import {
   type GuildChannel,
   type ModalSubmitInteraction,
   type TextBasedChannel,
+  type VoiceChannel,
   type VoiceState,
 } from "discord.js";
 import {
@@ -625,6 +626,16 @@ async function handleRename(interaction: ChatInputCommandInteraction): Promise<v
 
 // ─── Hub join / leave (called from index.ts voiceStateUpdate) ────────────────
 
+/** Copy the source Hub's channel-specific role/member rules into its new room. */
+export function hubVoiceOverwrites(source: VoiceChannel) {
+  return source.permissionOverwrites.cache.map(({ id, type, allow, deny }) => ({
+    id,
+    type,
+    allow: allow.bitfield,
+    deny: deny.bitfield,
+  }));
+}
+
 /**
  * メンバーが Hub チャンネルに入ったとき:
  *   1. 新しいVCを生成
@@ -649,7 +660,12 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
   const channelName = hub.nameTemplate.replace("{user}", displayName).slice(0, 100);
 
   // 生成先カテゴリ: hub 設定 → hub 自身の親カテゴリ → なし
-  const hubChannel = guild.channels.cache.get(newState.channelId);
+  // カテゴリと Hub の権限は異なる場合があるため、転送元を最新状態で取得する。
+  const hubChannel = await guild.channels.fetch(hub.hubChannelId, { force: true });
+  if (!hubChannel || hubChannel.type !== ChannelType.GuildVoice) {
+    logger.error(`[vcHub] Source voice channel missing hub=${hub.hubChannelId}`);
+    return;
+  }
   const categoryId = hub.categoryId ?? hubChannel?.parentId ?? undefined;
 
   try {
@@ -660,13 +676,13 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
     const tavernNames = await getTavernChannelNames(guild.id);
     const isTavern = tavernNames.has(hub.nameTemplate);
 
-    // チャンネル作成時に permissionOverwrites を指定しないことでカテゴリの権限が
-    // 完全継承（同期）される。@everyone への上書きを含めると Discord が「非同期」状態に
-    // なり、カテゴリの他のロール設定（島民.ViewChannel: ALLOW など）が引き継がれなくなる。
+    // カテゴリだけを継承すると、Hub 独自の賭博師・賭博頭領などの
+    // UseApplicationCommands 許可が落ちる。Hub の上書きを全件コピーする。
     const newVc = await guild.channels.create({
       name: channelName,
       type: ChannelType.GuildVoice,
       parent: categoryId,
+      permissionOverwrites: hubVoiceOverwrites(hubChannel),
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
     });
 
