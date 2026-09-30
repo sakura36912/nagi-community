@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { db } from "./index.js";
 import {
   bountyAuditOutboxTable,
@@ -361,12 +361,72 @@ export async function approveBountyMonthReview(
       throw new Error("月初前の月は承認できません。");
     }
     await tx.update(bountyMonthlySnapshotsTable)
-      .set({ status: "approved", approvedBy: actorId })
+      .set({ status: "approved", approvedBy: actorId, approvalAuditQueuedAt: new Date() })
       .where(and(
         eq(bountyMonthlySnapshotsTable.guildId, guildId),
         eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
       ));
   });
+}
+
+/** An approval remains queued independently of whether its payout has completed. */
+export async function listPendingBountyMonthlyApprovalAudits(
+  guildId: string, limit = 100,
+): Promise<Array<{ monthKey: string; actorId: string; memberCount: number }>> {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+    throw new Error("limit must be an integer between 1 and 1000.");
+  }
+  const rows = await db.select({
+    monthKey: bountyMonthlySnapshotsTable.monthKey,
+    actorId: bountyMonthlySnapshotsTable.approvedBy,
+    memberCount: sql<number>`count(${bountyMonthlySnapshotMembersTable.userId})::integer`,
+  }).from(bountyMonthlySnapshotsTable)
+    .leftJoin(bountyMonthlySnapshotMembersTable, and(
+      eq(bountyMonthlySnapshotMembersTable.guildId, bountyMonthlySnapshotsTable.guildId),
+      eq(bountyMonthlySnapshotMembersTable.monthKey, bountyMonthlySnapshotsTable.monthKey),
+    ))
+    .where(and(
+      eq(bountyMonthlySnapshotsTable.guildId, guildId),
+      eq(bountyMonthlySnapshotsTable.status, "approved"),
+      isNotNull(bountyMonthlySnapshotsTable.approvalAuditQueuedAt),
+      isNull(bountyMonthlySnapshotsTable.approvalAuditSentAt),
+    ))
+    .groupBy(
+      bountyMonthlySnapshotsTable.guildId,
+      bountyMonthlySnapshotsTable.monthKey,
+      bountyMonthlySnapshotsTable.approvedBy,
+      bountyMonthlySnapshotsTable.approvalAuditQueuedAt,
+    )
+    .orderBy(asc(bountyMonthlySnapshotsTable.approvalAuditQueuedAt))
+    .limit(limit);
+  return rows.map((row) => {
+    if (!row.actorId) throw new Error(`承認月 ${row.monthKey} の実行者が記録されていません。`);
+    return { monthKey: row.monthKey, actorId: row.actorId, memberCount: row.memberCount };
+  });
+}
+
+export async function markBountyMonthlyApprovalAuditSent(guildId: string, monthKey: string): Promise<void> {
+  validateBountyMonthKey(monthKey);
+  const [marked] = await db.update(bountyMonthlySnapshotsTable)
+    .set({ approvalAuditSentAt: new Date() })
+    .where(and(
+      eq(bountyMonthlySnapshotsTable.guildId, guildId),
+      eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+      eq(bountyMonthlySnapshotsTable.status, "approved"),
+      isNotNull(bountyMonthlySnapshotsTable.approvalAuditQueuedAt),
+      isNull(bountyMonthlySnapshotsTable.approvalAuditSentAt),
+    ))
+    .returning({ monthKey: bountyMonthlySnapshotsTable.monthKey });
+  if (marked) return;
+  const [existing] = await db.select({
+    sentAt: bountyMonthlySnapshotsTable.approvalAuditSentAt,
+  }).from(bountyMonthlySnapshotsTable).where(and(
+    eq(bountyMonthlySnapshotsTable.guildId, guildId),
+    eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+    eq(bountyMonthlySnapshotsTable.status, "approved"),
+    isNotNull(bountyMonthlySnapshotsTable.approvalAuditQueuedAt),
+  )).limit(1);
+  if (!existing?.sentAt) throw new Error(`承認月 ${monthKey} の監査通知が見つかりません。`);
 }
 
 export async function getBountySettings(guildId: string) {

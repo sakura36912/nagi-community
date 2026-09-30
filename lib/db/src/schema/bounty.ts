@@ -143,6 +143,10 @@ export const bountyMonthlySnapshotsTable = pgTable(
     capturedAt: timestamp("captured_at", { withTimezone: true }),
     approvedBy: text("approved_by"),
     notifiedAt: timestamp("notified_at", { withTimezone: true }),
+    // Only approvals made after this queue was introduced are retried; old
+    // approvals may already have been announced by the former direct-send path.
+    approvalAuditQueuedAt: timestamp("approval_audit_queued_at", { withTimezone: true }),
+    approvalAuditSentAt: timestamp("approval_audit_sent_at", { withTimezone: true }),
   },
   (table) => [primaryKey({ columns: [table.guildId, table.monthKey] })],
 );

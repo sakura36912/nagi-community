@@ -13,7 +13,9 @@ import {
   commitBountyMonthReviewImport,
   getBountyMonthReview,
   listBountyMonthsNeedingAttention,
+  listPendingBountyMonthlyApprovalAudits,
   markBountyMonthReviewNotified,
+  markBountyMonthlyApprovalAuditSent,
   previewBountyMonthReviewImport,
   db,
   getBountyPoints,
@@ -310,6 +312,9 @@ describe("bounty points", () => {
       /対象者が変更/,
     );
     await approveBountyMonthReview(guildId, monthKey, "staff-id", roster);
+    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), [
+      { monthKey, actorId: "staff-id", memberCount: 1 },
+    ]);
     assert.deepEqual(await listBountyMonthsNeedingAttention(guildId), [monthKey]);
     await assert.rejects(
       addBountyMonthReviewMember(guildId, monthKey, unapprovedUser, "salary-role"),
@@ -320,7 +325,39 @@ describe("bounty points", () => {
     assert.equal(await getBountyPoints(guildId, approvedUser), 35);
     assert.equal(await getBountyPoints(guildId, unapprovedUser), 0);
     assert.equal((await getBountyMonthReview(guildId, monthKey)).paid, true);
+    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), [
+      { monthKey, actorId: "staff-id", memberCount: 1 },
+    ]);
+    await markBountyMonthlyApprovalAuditSent(guildId, monthKey);
+    await markBountyMonthlyApprovalAuditSent(guildId, monthKey);
+    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), []);
     assert.deepEqual(await listBountyMonthsNeedingAttention(guildId), []);
+  });
+
+  it("queues zero-member approval atomically, without replaying old approvals or repeating payouts", async () => {
+    const guildId = await createGuild();
+    const monthKey = "2025-06", oldMonth = "2025-05";
+    await setBountySettings(guildId, "crew-role", "log-channel", []);
+    await db.update(bountySettingsTable).set({ createdAt: new Date("2025-01-01") })
+      .where(eq(bountySettingsTable.guildId, guildId));
+    await holdBountyMonthForReview(guildId, monthKey);
+    await holdBountyMonthForReview(guildId, oldMonth);
+    await db.update(bountyMonthlySnapshotsTable)
+      .set({ status: "approved", approvedBy: "old-staff" })
+      .where(eq(bountyMonthlySnapshotsTable.monthKey, oldMonth));
+    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), []);
+    await approveBountyMonthReview(guildId, monthKey, "new-staff", []);
+    await assert.rejects(approveBountyMonthReview(guildId, monthKey, "new-staff", []), /確認待ち/);
+    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), [
+      { monthKey, actorId: "new-staff", memberCount: 0 },
+    ]);
+    assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
+    assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
+    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), [
+      { monthKey, actorId: "new-staff", memberCount: 0 },
+    ]);
+    await markBountyMonthlyApprovalAuditSent(guildId, monthKey);
+    assert.deepEqual(await listPendingBountyMonthlyApprovalAudits(guildId), []);
   });
 
   it("previews CSV changes and atomically imports only verified users before one-time approval", async () => {

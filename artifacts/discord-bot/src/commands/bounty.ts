@@ -33,7 +33,9 @@ import {
   getBountyPoints,
   getBountySettings,
   listPendingBountyAudits,
+  listPendingBountyMonthlyApprovalAudits,
   markBountyAuditSent,
+  markBountyMonthlyApprovalAuditSent,
   previewBountyMonthReviewImport,
   removeBountyMonthReviewMember,
   resetBountyVoicePresences,
@@ -264,10 +266,28 @@ async function sendAudit(guild: NonNullable<ChatInputCommandInteraction["guild"]
   await channel.send({ content, allowedMentions: { parse: [] } });
 }
 
+const activeAuditFlushes = new Map<string, Promise<number>>();
+
 export async function flushPendingBountyAudits(guild: Guild): Promise<number> {
   if (guild.id !== BOUNTY_GUILD_ID) {
     throw new Error(`賞金ポイント監査ログ送信はサーバー ${BOUNTY_GUILD_ID} 専用です。`);
   }
+  const active = activeAuditFlushes.get(guild.id);
+  if (active) return active;
+  const run = flushBountyAuditQueue(guild);
+  activeAuditFlushes.set(guild.id, run);
+  try {
+    return await run;
+  } finally {
+    activeAuditFlushes.delete(guild.id);
+  }
+}
+
+async function flushBountyAuditQueue(guild: Guild): Promise<number> {
+  // An unconfigured guild with no queued work should not log an error every minute.
+  let pending = await listPendingBountyAudits(guild.id, 100);
+  let approvals = await listPendingBountyMonthlyApprovalAudits(guild.id, 100);
+  if (!pending.length && !approvals.length) return 0;
   const settings = await getBountySettings(guild.id);
   if (!settings) throw new Error("賞金ポイント設定がありません。");
   const channel = await guild.channels.fetch(settings.logChannelId);
@@ -275,16 +295,28 @@ export async function flushPendingBountyAudits(guild: Guild): Promise<number> {
     throw new Error(`監査ログチャンネル ${settings.logChannelId} が見つからないか、テキストチャンネルではありません。`);
   }
   let sentCount = 0;
-  while (true) {
-    const pending = await listPendingBountyAudits(guild.id, 100);
-    if (pending.length === 0) return sentCount;
+  while (pending.length) {
     for (const audit of pending) {
       await channel.send({ content: audit.content, allowedMentions: { parse: [] } });
       await markBountyAuditSent(audit.id);
       sentCount += 1;
     }
-    if (pending.length < 100) return sentCount;
+    if (pending.length < 100) break;
+    pending = await listPendingBountyAudits(guild.id, 100);
   }
+  while (approvals.length) {
+    for (const approval of approvals) {
+      await channel.send({
+        content: `懸賞金月次承認 ${approval.monthKey}\n実行者: <@${approval.actorId}>\n月初時点の対象: ${approval.memberCount}人\n※承認記録です。精算結果は別途確認してください。`,
+        allowedMentions: { parse: [] },
+      });
+      await markBountyMonthlyApprovalAuditSent(guild.id, approval.monthKey);
+      sentCount += 1;
+    }
+    if (approvals.length < 100) break;
+    approvals = await listPendingBountyMonthlyApprovalAudits(guild.id, 100);
+  }
+  return sentCount;
 }
 
 function manualModal(userId: string, sign: "+" | "-"): ModalBuilder {
@@ -616,13 +648,14 @@ export async function handleBountyButton(interaction: ButtonInteraction): Promis
           logger.error(`[bounty] Reviewed monthly tier sync failed user=${award.userId}`, error);
         }
       }
+      let auditPending = false;
       try {
-        await sendAudit(interaction.guild!,
-          `懸賞金月次精算 ${match[1]}: 管理者 <@${interaction.user.id}> が ${review.members.length} 人を承認。付与 ${awards.length} 人。`);
+        await flushPendingBountyAudits(interaction.guild!);
       } catch (error) {
-        logger.error("[bounty] Monthly review paid but audit send failed", error);
+        auditPending = true;
+        logger.error("[bounty] Monthly approval audit queued; delivery will retry", error);
       }
-      await privateReply(interaction, `${match[1]} の月次精算が完了しました（付与 ${awards.length} 人）。${roleFailures ? `ロール同期失敗 ${roleFailures} 人は定期処理で再試行されます。` : ""}`);
+      await privateReply(interaction, `${match[1]} の月次精算が完了しました（付与 ${awards.length} 人）。${auditPending ? "承認の監査通知は送信待ちです。定期処理で再試行します。" : ""}${roleFailures ? `ロール同期失敗 ${roleFailures} 人は定期処理で再試行されます。` : ""}`);
     } catch (error) {
       logger.error(`[bounty] Monthly review approved but payout failed month=${match[1]}`, error);
       await privateReply(interaction, "承認を保存しましたが精算できませんでした。再実行せず、Botのエラーログを確認してください。定期処理が再試行します。");
