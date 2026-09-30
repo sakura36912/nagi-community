@@ -3374,6 +3374,31 @@ describe("setVcGlobalPrivacyOptOut – multi-guild session close", () => {
     vi.clearAllMocks();
   });
 
+  it("does not close open sessions in any guild when the user re-opts in", async () => {
+    const userId = "user-mg-optin";
+    const openSessions = [
+      { id: 50, guildId: "guild-A", userId, leftAt: null },
+      { id: 51, guildId: "guild-B", userId, leftAt: null },
+      { id: 52, guildId: "guild-C", userId, leftAt: null },
+    ];
+    mocks.onConflictDoUpdate.mockResolvedValueOnce([]);
+
+    // If the close path runs, these are the open rows its UPDATE would find.
+    // Keep the fixture scoped to this test so an unconsumed response cannot
+    // affect the later opt-out tests.
+    await mocks.returning.withImplementation(async () => openSessions, async () => {
+      const closed = await setVcGlobalPrivacyOptOut(userId, false);
+
+      expect(closed).toBe(0);
+      expect(mocks.insert).toHaveBeenCalledTimes(1);
+      expect(mocks.values).toHaveBeenCalledWith(expect.objectContaining({ userId, optedOut: false }));
+      expect(mocks.onConflictDoUpdate).toHaveBeenCalledTimes(1);
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.returning).not.toHaveBeenCalled();
+      expect(openSessions.every((session) => session.leftAt === null)).toBe(true);
+    });
+  });
+
   it("returns the total count of sessions closed across all guilds", async () => {
     // Simulate 3 open sessions belonging to 3 different guilds
     mocks.onConflictDoUpdate.mockResolvedValueOnce([]); // global opt-out upsert
