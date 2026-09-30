@@ -8,14 +8,13 @@ import {
 import { commands } from "../commands";
 import { logger } from "./logger";
 
-const dailyDebitCommand = commands.find((command) => command.data.name === "日額引き落とし");
-
-/** Upsert only the daily-debit command, without replacing unrelated commands. */
-export async function syncDailyRoleDebitCommandRegistration(client: Client): Promise<void> {
-  if (!dailyDebitCommand || !client.application) {
-    throw new Error("[daily-debit] Cannot register command without its definition or application");
+/** Upsert just the selected debit command; never replace unrelated commands. */
+async function syncDebitCommandRegistration(client: Client, name: string, tag: string): Promise<void> {
+  const target = commands.find((command) => command.data.name === name);
+  if (!target || !client.application) {
+    throw new Error(`[${tag}] Cannot register command without its definition or application`);
   }
-  const definition = dailyDebitCommand.data.toJSON() as ApplicationCommandData;
+  const definition = target.data.toJSON() as ApplicationCommandData;
   const scopes: Array<{
     label: string;
     manager: ApplicationCommandManager | GuildApplicationCommandManager;
@@ -33,14 +32,22 @@ export async function syncDailyRoleDebitCommandRegistration(client: Client): Pro
       : await manager.create(definition);
     const verified = await manager.fetch(saved.id, { force: true });
     if (!verified || verified.options.map((option) => option.name).join(",") !== "set,remove,list") {
-      throw new Error(`/日額引き落とし verification failed (${label})`);
+      throw new Error(`/${name} verification failed (${label})`);
     }
-    logger.info(`[daily-debit] Command synchronized (${label})`);
+    logger.info(`[${tag}] Command synchronized (${label})`);
   }));
   const failures = results.flatMap((result, index) => {
     if (result.status === "fulfilled") return [];
-    logger.error(`[daily-debit] Command registration failed (${scopes[index]!.label})`, result.reason);
+    logger.error(`[${tag}] Command registration failed (${scopes[index]!.label})`, result.reason);
     return [result.reason];
   });
-  if (failures.length) throw new AggregateError(failures, "[daily-debit] Command registration failed");
+  if (failures.length) throw new AggregateError(failures, `[${tag}] Command registration failed`);
+}
+
+export async function syncDailyRoleDebitCommandRegistration(client: Client): Promise<void> {
+  await syncDebitCommandRegistration(client, "日額引き落とし", "daily-debit");
+}
+
+export async function syncMonthlyRoleDebitCommandRegistration(client: Client): Promise<void> {
+  await syncDebitCommandRegistration(client, "月額引き落とし", "monthly-debit");
 }

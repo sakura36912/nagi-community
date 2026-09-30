@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApplicationCommandType, Collection, type Client } from "discord.js";
-import { syncDailyRoleDebitCommandRegistration } from "../lib/dailyRoleDebitRegistration.js";
+import {
+  syncDailyRoleDebitCommandRegistration,
+  syncMonthlyRoleDebitCommandRegistration,
+} from "../lib/dailyRoleDebitRegistration.js";
 
-function manager(initial: "existing" | "missing") {
+function manager(initial: "existing" | "missing", name = "日額引き落とし") {
   const verified = { id: "daily-id", options: ["set", "remove", "list"].map((name) => ({ name })) };
-  const existing = { id: "daily-id", name: "日額引き落とし", type: ApplicationCommandType.ChatInput };
-  const other = { id: "other-id", name: "月額引き落とし", type: ApplicationCommandType.ChatInput };
+  const existing = { id: "daily-id", name, type: ApplicationCommandType.ChatInput };
+  const other = { id: "other-id", name: name === "日額引き落とし" ? "月額引き落とし" : "日額引き落とし", type: ApplicationCommandType.ChatInput };
   const fetch = vi.fn(async (id?: unknown) => typeof id === "string"
     ? verified
     : new Collection([
@@ -32,5 +35,17 @@ describe("日額引き落としのDiscord登録", () => {
     expect(guild.set).not.toHaveBeenCalled();
     expect(global.delete).not.toHaveBeenCalled();
     expect(guild.delete).not.toHaveBeenCalled();
+  });
+
+  it("月額コマンドも他のコマンドを消さずに更新する", async () => {
+    const global = manager("existing", "月額引き落とし");
+    const client = {
+      application: { commands: global },
+      guilds: { cache: new Collection() },
+    } as unknown as Client;
+    await syncMonthlyRoleDebitCommandRegistration(client);
+    expect(global.edit).toHaveBeenCalledOnce();
+    expect(global.set).not.toHaveBeenCalled();
+    expect(global.delete).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@ import {
   transactionsTable,
   guildSettingsTable,
   pendingDailyRoleRemovalsTable,
+  monthlyRoleDebitRulesTable,
   roleRewardsTable,
   privateVcSessionsTable,
   squadTreasuriesTable,
@@ -806,28 +807,83 @@ export async function setMonthlyRoleDebit(
   guildId: string,
   roleId: string,
   amount: number,
-  logChannelId: string | null = null,
-): Promise<GuildSettings> {
-  return upsertGuildSetting(guildId, {
-    monthlyDebitRoleId: roleId,
-    monthlyDebitAmount: amount,
-    monthlyDebitLogChannelId: logChannelId,
-  });
-}
-
-export async function clearMonthlyRoleDebit(guildId: string): Promise<GuildSettings> {
-  return upsertGuildSetting(guildId, {
-    monthlyDebitRoleId: null,
-    monthlyDebitAmount: null,
-    monthlyDebitLogChannelId: null,
-    lastMonthlyDebitAt: null,
-  });
-}
-
-export function isDueMonthlyRoleDebit(settings: GuildSettings, now: Date): boolean {
-  if (!settings.monthlyDebitRoleId || !settings.monthlyDebitAmount || settings.monthlyDebitAmount <= 0) {
-    return false;
+  logChannelId: string,
+): Promise<void> {
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 2_147_483_647) {
+    throw new Error("月額引き落とし金額が不正です");
   }
+  await db.transaction(async (tx) => {
+    await tx.insert(guildSettingsTable).values({ guildId }).onConflictDoNothing();
+    const [settings] = await tx.select().from(guildSettingsTable)
+      .where(eq(guildSettingsTable.guildId, guildId)).for("update");
+    if (settings?.monthlyDebitRoleId && settings.monthlyDebitAmount && settings.monthlyDebitAmount > 0) {
+      await tx.insert(monthlyRoleDebitRulesTable).values({
+        guildId,
+        roleId: settings.monthlyDebitRoleId,
+        amount: settings.monthlyDebitAmount,
+        logChannelId: settings.monthlyDebitLogChannelId,
+      }).onConflictDoNothing();
+    }
+    await tx.update(guildSettingsTable).set({
+      monthlyDebitRoleId: null, monthlyDebitAmount: null, monthlyDebitLogChannelId: null,
+    }).where(eq(guildSettingsTable.guildId, guildId));
+    await tx.insert(monthlyRoleDebitRulesTable).values({ guildId, roleId, amount, logChannelId })
+      .onConflictDoUpdate({
+        target: [monthlyRoleDebitRulesTable.guildId, monthlyRoleDebitRulesTable.roleId],
+        set: { amount, logChannelId },
+      });
+  });
+}
+
+export async function clearMonthlyRoleDebit(guildId: string, roleId?: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.insert(guildSettingsTable).values({ guildId }).onConflictDoNothing();
+    const [settings] = await tx.select().from(guildSettingsTable)
+      .where(eq(guildSettingsTable.guildId, guildId)).for("update");
+    await tx.delete(monthlyRoleDebitRulesTable).where(
+      roleId
+        ? and(eq(monthlyRoleDebitRulesTable.guildId, guildId), eq(monthlyRoleDebitRulesTable.roleId, roleId))
+        : eq(monthlyRoleDebitRulesTable.guildId, guildId),
+    );
+    if (!roleId || settings?.monthlyDebitRoleId === roleId) {
+      await tx.update(guildSettingsTable).set({
+        monthlyDebitRoleId: null,
+        monthlyDebitAmount: null,
+        monthlyDebitLogChannelId: null,
+      }).where(eq(guildSettingsTable.guildId, guildId));
+    }
+  });
+}
+
+export interface MonthlyRoleDebitRule {
+  roleId: string;
+  amount: number;
+  logChannelId: string | null;
+}
+
+export async function listMonthlyRoleDebitRules(
+  guildId: string,
+  settings?: GuildSettings,
+): Promise<MonthlyRoleDebitRule[]> {
+  const rows = await db.select().from(monthlyRoleDebitRulesTable)
+    .where(eq(monthlyRoleDebitRulesTable.guildId, guildId));
+  const current = settings ?? await getGuildSettings(guildId);
+  const rules: MonthlyRoleDebitRule[] = rows.map(({ roleId, amount, logChannelId }) =>
+    ({ roleId, amount, logChannelId }));
+  // Old single-role settings continue working until the first edit migrates them.
+  if (current.monthlyDebitRoleId && current.monthlyDebitAmount && current.monthlyDebitAmount > 0
+      && !rules.some((rule) => rule.roleId === current.monthlyDebitRoleId)) {
+    rules.push({
+      roleId: current.monthlyDebitRoleId,
+      amount: current.monthlyDebitAmount,
+      logChannelId: current.monthlyDebitLogChannelId,
+    });
+  }
+  return rules;
+}
+
+export function isDueMonthlyRoleDebit(settings: GuildSettings, now: Date, rules: MonthlyRoleDebitRule[]): boolean {
+  if (rules.length === 0) return false;
   const today = getJstDateParts(now);
   if (today.day !== 25) return false;
   if (!settings.lastMonthlyDebitAt) return true;
@@ -846,21 +902,26 @@ export async function distributeMonthlyRoleDebit(
   guildId: string,
   currencyName: string,
   members: Map<string, string[]>,
-  roleId: string,
-  amount: number,
+  rules: MonthlyRoleDebitRule[],
 ): Promise<{
   chargedCount: number;
   totalCharged: number;
   insufficientCount: number;
-  insufficientUserIds: string[];
+  insufficient: MonthlyDebitCharge[];
 }> {
   let chargedCount = 0;
   let totalCharged = 0;
-  let insufficientCount = 0;
-  const insufficientUserIds: string[] = [];
+  const insufficient: MonthlyDebitCharge[] = [];
 
-  for (const [userId, roleIds] of members) {
-    if (!roleIds.includes(roleId)) continue;
+  // Compute every charge before touching any wallet; a multi-role member
+  // either pays the entire sum once or pays nothing.
+  for (const { userId, amount, rules: heldRules } of collectMonthlyDebitCharges(members, rules)) {
+    // Wallet balances use PostgreSQL integer; no wallet can cover a sum
+    // above its maximum. Do not block unrelated members' monthly charges.
+    if (amount > 2_147_483_647) {
+      insufficient.push({ userId, amount, rules: heldRules });
+      continue;
+    }
     const result = await giveCurrency(
       guildId,
       userId,
@@ -872,12 +933,35 @@ export async function distributeMonthlyRoleDebit(
       chargedCount += 1;
       totalCharged += amount;
     } else {
-      insufficientCount += 1;
-      insufficientUserIds.push(userId);
+      insufficient.push({ userId, amount, rules: heldRules });
     }
   }
 
-  return { chargedCount, totalCharged, insufficientCount, insufficientUserIds };
+  return { chargedCount, totalCharged, insufficientCount: insufficient.length, insufficient };
+}
+
+export interface MonthlyDebitCharge {
+  userId: string;
+  amount: number;
+  rules: MonthlyRoleDebitRule[];
+}
+
+export function collectMonthlyDebitCharges(
+  members: Map<string, string[]>,
+  rules: MonthlyRoleDebitRule[],
+): MonthlyDebitCharge[] {
+  const charges: MonthlyDebitCharge[] = [];
+  for (const [userId, roleIds] of members) {
+    const held = rules.filter((rule) => roleIds.includes(rule.roleId));
+    if (!held.length) continue;
+    const amount = held.reduce((sum, rule) => sum + rule.amount, 0);
+    if (held.some((rule) => !Number.isSafeInteger(rule.amount) || rule.amount < 1)
+        || !Number.isSafeInteger(amount)) {
+      throw new Error(`[monthly-debit] Invalid combined charge for ${userId}`);
+    }
+    charges.push({ userId, amount, rules: held });
+  }
+  return charges;
 }
 
 export async function setDailyRoleDebit(

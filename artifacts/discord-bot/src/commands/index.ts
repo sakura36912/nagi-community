@@ -90,6 +90,7 @@ import {
   setRoleReward,
   setMonthlyRoleDebit,
   clearMonthlyRoleDebit,
+  listMonthlyRoleDebitRules,
   setDailyRoleDebit,
   clearDailyRoleDebit,
   transfer,
@@ -4218,7 +4219,7 @@ const monthlyDebitCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("set")
-        .setDescription("毎月の引き落とし対象ロールと金額を設定")
+        .setDescription("対象ロールの月額を追加・更新（他のロールは維持）")
         .addRoleOption((opt) => opt.setName("role").setDescription("対象ロール").setRequired(true))
         .addIntegerOption((opt) =>
           opt.setName("amount").setDescription("毎月引き落とす金額").setRequired(true).setMinValue(1),
@@ -4231,8 +4232,9 @@ const monthlyDebitCommand: Command = {
             .setRequired(true),
         ),
     )
-    .addSubcommand((sub) => sub.setName("remove").setDescription("毎月の引き落とし設定を解除"))
-    .addSubcommand((sub) => sub.setName("list").setDescription("毎月の引き落とし設定を表示")),
+    .addSubcommand((sub) => sub.setName("remove").setDescription("指定ロール、または全ロールの設定を解除")
+      .addRoleOption((opt) => opt.setName("role").setDescription("解除するロール（省略すると全件解除）")))
+    .addSubcommand((sub) => sub.setName("list").setDescription("毎月の対象ロールと金額を一覧表示")),
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
@@ -4243,19 +4245,29 @@ const monthlyDebitCommand: Command = {
 
     const sub = interaction.options.getSubcommand();
     if (sub === "remove") {
-      await clearMonthlyRoleDebit(guildId);
-      await interaction.reply("毎月のロール引き落とし設定を解除しました。");
+      const role = interaction.options.getRole("role");
+      await clearMonthlyRoleDebit(guildId, role?.id);
+      await interaction.reply({
+        content: role
+          ? `<@&${role.id}> の月額引き落とし設定を解除しました。`
+          : "毎月のロール引き落とし設定をすべて解除しました。",
+        allowedMentions: { parse: [] },
+      });
       return;
     }
 
     const settings = await getGuildSettings(guildId);
     if (sub === "list") {
-      if (!settings.monthlyDebitRoleId || !settings.monthlyDebitAmount) {
+      const rules = await listMonthlyRoleDebitRules(guildId, settings);
+      if (!rules.length) {
         await interaction.reply("毎月のロール引き落としは設定されていません。");
         return;
       }
+      const lines = rules.map(({ roleId, amount, logChannelId }) =>
+        `・<@&${roleId}>：**${amount.toLocaleString()}${settings.currencyName}**／ログ: ${logChannelId ? `<#${logChannelId}>` : "未設定"}`);
+      const body = lines.join("\n");
       await interaction.reply({
-        content: `## 月額引き落とし設定\n対象: <@&${settings.monthlyDebitRoleId}>\n金額: **${settings.monthlyDebitAmount.toLocaleString()}${settings.currencyName}**\nログ先: ${settings.monthlyDebitLogChannelId ? `<#${settings.monthlyDebitLogChannelId}>` : "未設定"}\n実行日: **毎月25日 00:00（日本時間）**`,
+        content: `## 月額引き落とし設定（${rules.length}件）\n${body.slice(0, 1650)}${body.length > 1650 ? "\n…以降は省略" : ""}\n実行日: **毎月25日 00:00（日本時間）**\n複数の対象ロールを持つ人は金額を合算して1回請求します。`,
         allowedMentions: { parse: [] },
       });
       return;
@@ -4265,9 +4277,10 @@ const monthlyDebitCommand: Command = {
     const amount = interaction.options.getInteger("amount", true);
     const logChannel = interaction.options.getChannel("log_channel", true);
     await setMonthlyRoleDebit(guildId, role.id, amount, logChannel.id);
-    await interaction.reply(
-      `<@&${role.id}> の月額引き落としを **${amount.toLocaleString()}${settings.currencyName}** に設定しました。\n残高不足時は <#${logChannel.id}> にログを送り、対象者からロールを剥奪します。\n毎月25日00:00（日本時間）に実行します。`,
-    );
+    await interaction.reply({
+      content: `<@&${role.id}> の月額引き落としを **${amount.toLocaleString()}${settings.currencyName}** に追加・更新しました（他のロールは維持）。\n複数保有者は合計額を1回請求し、残高不足なら請求せず対象ロールを外して <#${logChannel.id}> に通知します。\n毎月25日00:00以降（日本時間）に実行します。`,
+      allowedMentions: { parse: [] },
+    });
   },
 };
 

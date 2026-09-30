@@ -153,6 +153,19 @@ export const pendingDailyRoleRemovalsTable = pgTable(
   (table) => [primaryKey({ columns: [table.guildId, table.userId, table.roleId] })],
 );
 
+// Each guild can charge multiple roles at different monthly prices.
+// Legacy guild_settings monthly debit columns remain readable for existing rules.
+export const monthlyRoleDebitRulesTable = pgTable(
+  "monthly_role_debit_rules",
+  {
+    guildId: text("guild_id").notNull(),
+    roleId: text("role_id").notNull(),
+    amount: integer("amount").notNull(),
+    logChannelId: text("log_channel_id"),
+  },
+  (table) => [primaryKey({ columns: [table.guildId, table.roleId] })],
+);
+
 export const insertWalletSchema = createInsertSchema(walletsTable).omit({
   createdAt: true,
   updatedAt: true,
