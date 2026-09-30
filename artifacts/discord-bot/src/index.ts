@@ -158,6 +158,7 @@ import {
 } from "./commands/bounty";
 
 import { logger } from "./lib/logger";
+import { syncCasinoCommandRegistration } from "./lib/casinoCommandRegistration";
 import {
   getVcRewardSettings,
   recordVcJoin,
@@ -1322,6 +1323,9 @@ client.on(Events.GuildUnavailable, (guild) => {
 });
 
 client.once(Events.ClientReady, async (readyClient) => {
+  syncCasinoCommandRegistration(readyClient).catch((err) =>
+    logger.error("[casino] Startup command registration failed", err),
+  );
   scheduleBountyMonthBoundary(readyClient);
   try {
     await resetBountyPresenceFromLiveVoiceState(readyClient);
