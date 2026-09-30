@@ -8,7 +8,7 @@ vi.mock("../commands/casino", () => ({
     data: {
       toJSON: () => ({
         name: "casino", description: "カジノコマンド", type: ApplicationCommandType.ChatInput,
-        options: [{ name: "chohan", type: 2 }, { name: "poker", type: 2 }],
+        options: [{ name: "chohan", type: 2 }],
       }),
     },
   },
