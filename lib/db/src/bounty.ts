@@ -14,6 +14,7 @@ import {
   bountyVcRatesTable,
   bountyVoicePresenceTable,
 } from "./schema/bounty.js";
+import { vcHubChannelsTable, vcHubSessionsTable } from "./schema/vcHub.js";
 
 const MAX_POINTS = 2_147_483_647;
 const SECONDS_PER_HOUR = 3_600;
@@ -671,7 +672,7 @@ async function getVcRate(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   guildId: string,
   channelId: string,
-): Promise<{ ratePerHour: number; effectiveAt: Date | null }> {
+): Promise<{ ratePerHour: number; effectiveAt: Date | null; progressChannelId: string }> {
   const [entry] = await tx.select({
     ratePerHour: bountyVcRatesTable.ratePerHour,
     effectiveAt: bountyVcRatesTable.effectiveAt,
@@ -682,7 +683,29 @@ async function getVcRate(
       eq(bountyVcRatesTable.channelId, channelId),
     ))
     .limit(1);
-  return entry ?? { ratePerHour: 0, effectiveAt: null };
+  // An explicit destination rate (including zero) takes precedence.
+  if (entry) return { ...entry, progressChannelId: channelId };
+
+  const [hub] = await tx.select({ sourceChannelId: vcHubChannelsTable.hubChannelId })
+    .from(vcHubSessionsTable)
+    .innerJoin(vcHubChannelsTable, eq(vcHubSessionsTable.hubId, vcHubChannelsTable.id))
+    .where(and(
+      eq(vcHubSessionsTable.guildId, guildId),
+      eq(vcHubSessionsTable.channelId, channelId),
+      eq(vcHubChannelsTable.guildId, guildId),
+    ))
+    .limit(1);
+  if (hub) {
+    const [sourceRate] = await tx.select({
+      ratePerHour: bountyVcRatesTable.ratePerHour,
+      effectiveAt: bountyVcRatesTable.effectiveAt,
+    }).from(bountyVcRatesTable).where(and(
+      eq(bountyVcRatesTable.guildId, guildId),
+      eq(bountyVcRatesTable.channelId, hub.sourceChannelId),
+    )).limit(1);
+    if (sourceRate) return { ...sourceRate, progressChannelId: hub.sourceChannelId };
+  }
+  return { ratePerHour: 0, effectiveAt: null, progressChannelId: channelId };
 }
 
 async function accruePresence(
@@ -709,13 +732,13 @@ async function accruePresence(
         await tx.insert(bountyVcProgressTable).values({
           guildId: presence.guildId,
           userId: presence.userId,
-          channelId: presence.channelId,
+          channelId: rateConfig.progressChannelId,
         }).onConflictDoNothing();
         const [progress] = await tx.select().from(bountyVcProgressTable)
           .where(and(
             eq(bountyVcProgressTable.guildId, presence.guildId),
             eq(bountyVcProgressTable.userId, presence.userId),
-            eq(bountyVcProgressTable.channelId, presence.channelId),
+            eq(bountyVcProgressTable.channelId, rateConfig.progressChannelId),
           ))
           .for("update")
           .limit(1);
@@ -754,7 +777,7 @@ async function accruePresence(
           .where(and(
             eq(bountyVcProgressTable.guildId, presence.guildId),
             eq(bountyVcProgressTable.userId, presence.userId),
-            eq(bountyVcProgressTable.channelId, presence.channelId),
+            eq(bountyVcProgressTable.channelId, rateConfig.progressChannelId),
           ));
         if (delta > 0) {
           const account = await ensureAndLockAccount(tx, presence.guildId, presence.userId);

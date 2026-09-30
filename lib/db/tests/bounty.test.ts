@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
+  addHubChannel,
   accrueBountyVoiceForGuild,
   applyBountyPoints,
   awardBountyMonth,
@@ -20,6 +21,7 @@ import {
   setBountyMonthlyApprovalAuditScanCursor,
   previewBountyMonthReviewImport,
   db,
+  createHubSession,
   getBountyPoints,
   listBountyAccountBalances,
   listPendingBountyAudits,
@@ -31,6 +33,7 @@ import {
   setBountySettings,
   setBountyVcRate,
 } from "../src/index.js";
+import { vcHubChannelsTable, vcHubSessionsTable } from "../src/schema/vcHub.js";
 import {
   bountyAuditOutboxTable,
   bountyMonthlyPayoutsTable,
@@ -71,6 +74,8 @@ async function cleanGuild(guildId: string) {
   await db.delete(bountyVcRatesTable).where(eq(bountyVcRatesTable.guildId, guildId));
   await db.delete(bountyPointsTable).where(eq(bountyPointsTable.guildId, guildId));
   await db.delete(bountySettingsTable).where(eq(bountySettingsTable.guildId, guildId));
+  await db.delete(vcHubSessionsTable).where(eq(vcHubSessionsTable.guildId, guildId));
+  await db.delete(vcHubChannelsTable).where(eq(vcHubChannelsTable.guildId, guildId));
 }
 
 async function captureTestMonth(guildId: string, monthKey: string, members: Map<string, string[]>) {
@@ -135,6 +140,59 @@ describe("bounty points", () => {
     await recordBountyVoiceState(guildId, userId, firstVc, true, new Date(start.getTime() + 61 * 60_000));
     await accrueBountyVoiceForGuild(guildId, new Date(start.getTime() + 91 * 60_000));
     assert.equal(await getBountyPoints(guildId, userId), 7);
+  });
+
+  it("inherits a Hub rate and combines time in the source and multiple transfer destinations", async () => {
+    const guildId = await createGuild();
+    const userId = `user-${randomUUID()}`;
+    const source = `hub-${randomUUID()}`;
+    const first = `child-${randomUUID()}`;
+    const second = `child-${randomUUID()}`;
+    const start = new Date("2026-01-06T00:00:00.000Z");
+    const hub = await addHubChannel(guildId, source, null, "{user}のVC", null);
+    await createHubSession(guildId, first, userId, hub.id);
+    await createHubSession(guildId, second, userId, hub.id);
+    await setBountyVcRate(guildId, source, 60, start);
+
+    await recordBountyVoiceState(guildId, userId, source, true, start);
+    await recordBountyVoiceState(guildId, userId, first, true, new Date(start.getTime() + 15 * 60_000));
+    await recordBountyVoiceState(guildId, userId, second, true, new Date(start.getTime() + 45 * 60_000));
+    await recordBountyVoiceState(guildId, userId, null, false, new Date(start.getTime() + 60 * 60_000));
+    assert.equal(await getBountyPoints(guildId, userId), 60);
+  });
+
+  it("follows rate changes on a panel-only Hub while already in its transferred VC", async () => {
+    const guildId = await createGuild();
+    const userId = `user-${randomUUID()}`;
+    const source = `hub-${randomUUID()}`;
+    const child = `child-${randomUUID()}`;
+    const start = new Date("2026-01-07T00:00:00.000Z");
+    const hub = await addHubChannel(guildId, source, null, "{user}のVC", null, null, 1, true);
+    await createHubSession(guildId, child, userId, hub.id);
+    await setBountyVcRate(guildId, source, 60, start);
+
+    await recordBountyVoiceState(guildId, userId, child, true, start);
+    await setBountyVcRate(guildId, source, 120, new Date(start.getTime() + 30 * 60_000));
+    await recordBountyVoiceState(guildId, userId, null, false, new Date(start.getTime() + 60 * 60_000));
+    assert.equal(await getBountyPoints(guildId, userId), 90);
+  });
+
+  it("respects an explicit zero rate on the destination instead of inheriting from the Hub", async () => {
+    const guildId = await createGuild();
+    const userId = `user-${randomUUID()}`;
+    const source = `hub-${randomUUID()}`;
+    const child = `child-${randomUUID()}`;
+    const start = new Date("2026-01-08T00:00:00.000Z");
+    const hub = await addHubChannel(guildId, source, null, "{user}のVC", null);
+    await createHubSession(guildId, child, userId, hub.id);
+    await setBountyVcRate(guildId, source, 60, start);
+    await setBountyVcRate(guildId, child, 0, start);
+    await recordBountyVoiceState(guildId, userId, child, true, start);
+    await accrueBountyVoiceForGuild(guildId, new Date(start.getTime() + 60 * 60_000));
+    assert.equal(await getBountyPoints(guildId, userId), 0);
+    await setBountyVcRate(guildId, child, 30, new Date(start.getTime() + 60 * 60_000));
+    await recordBountyVoiceState(guildId, userId, null, false, new Date(start.getTime() + 120 * 60_000));
+    assert.equal(await getBountyPoints(guildId, userId), 30);
   });
 
   it("starts an existing voice presence at the rate configuration time", async () => {

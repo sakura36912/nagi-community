@@ -25,3 +25,4 @@
 - [Dealer casino Hub rooms](dealer-casino-hub-rooms.md) — 賭博場の設定VCがHubでも、個々のゲームは実際の転送先VC内に限定する。
 - [Hub room permission source](hub-room-permissions.md) — Hub生成VCの権限はカテゴリ同期ではなく転送元のチャンネル固有設定を基準にする。
 - [Bounty accrual during bot outages](bounty-outage-policy.md) — Bot停止中のVC時間は推定加算しない。月初未観測の月次付与は保留し、管理者の確認・承認後に精算する。
+- [Bounty Hub transfer accrual](bounty-hub-transfer-accrual.md) — 転送先は元Hubのポイント率と時間残を共有し、転送先への明示設定があれば0を含めて優先する。
