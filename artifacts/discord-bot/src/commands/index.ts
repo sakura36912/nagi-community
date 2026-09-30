@@ -90,6 +90,8 @@ import {
   setRoleReward,
   setMonthlyRoleDebit,
   clearMonthlyRoleDebit,
+  setDailyRoleDebit,
+  clearDailyRoleDebit,
   transfer,
   getPrivateVcSessionByChannelId,
   getActivePrivateVcSessionsByGuild,
@@ -4269,6 +4271,55 @@ const monthlyDebitCommand: Command = {
   },
 };
 
+const dailyDebitCommand: Command = {
+  data: new SlashCommandBuilder()
+    .setName("日額引き落とし")
+    .setDescription("指定ロールのメンバーから毎日引き落とす設定（管理者専用）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) => sub.setName("set").setDescription("日額の引き落とし対象ロールと金額を設定")
+      .addRoleOption((opt) => opt.setName("role").setDescription("対象ロール").setRequired(true))
+      .addIntegerOption((opt) => opt.setName("amount").setDescription("毎日引き落とす金額").setMinValue(1).setRequired(true))
+      .addChannelOption((opt) => opt.setName("log_channel")
+        .setDescription("残高不足時のロール剥奪ログを送るチャンネル")
+        .addChannelTypes(ChannelType.GuildText).setRequired(true)))
+    .addSubcommand((sub) => sub.setName("remove").setDescription("日額の引き落とし設定を解除"))
+    .addSubcommand((sub) => sub.setName("list").setDescription("日額の引き落とし設定を表示")),
+
+  async execute(interaction) {
+    const guildId = requireGuild(interaction);
+    if (!requireManageGuild(interaction)) {
+      await interaction.reply({ content: "このコマンドはサーバー管理者のみ使用できます。", ephemeral: true });
+      return;
+    }
+    const sub = interaction.options.getSubcommand();
+    if (sub === "remove") {
+      await clearDailyRoleDebit(guildId);
+      await interaction.reply("日額のロール引き落とし設定を解除しました。");
+      return;
+    }
+    const settings = await getGuildSettings(guildId);
+    if (sub === "list") {
+      if (!settings.dailyDebitRoleId || !settings.dailyDebitAmount) {
+        await interaction.reply("日額のロール引き落としは設定されていません。");
+        return;
+      }
+      await interaction.reply({
+        content: `## 日額引き落とし設定\n対象: <@&${settings.dailyDebitRoleId}>\n金額: **${settings.dailyDebitAmount.toLocaleString()}${settings.currencyName}**\nログ先: ${settings.dailyDebitLogChannelId ? `<#${settings.dailyDebitLogChannelId}>` : "未設定"}\n実行: **毎日 00:00以降（日本時間）**`,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+    const role = interaction.options.getRole("role", true);
+    const amount = interaction.options.getInteger("amount", true);
+    const logChannel = interaction.options.getChannel("log_channel", true);
+    await setDailyRoleDebit(guildId, role.id, amount, logChannel.id);
+    await interaction.reply({
+      content: `<@&${role.id}> の日額引き落としを **${amount.toLocaleString()}${settings.currencyName}** に設定しました。\n初回は翌日の00:00以降（日本時間）に実行します。残高不足時は請求せずロールを外し、<#${logChannel.id}> に通知します。`,
+      allowedMentions: { parse: [] },
+    });
+  },
+};
+
 const timedRoleCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("期間限定ロール")
@@ -4449,6 +4500,7 @@ export const commands: Command[] = [
   chestCommand,
   debitCommand,
   monthlyDebitCommand,
+  dailyDebitCommand,
   timedRoleCommand,
   balanceRankingCommand,
   calendarCommand,

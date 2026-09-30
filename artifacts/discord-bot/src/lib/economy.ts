@@ -6,6 +6,7 @@ import {
   inventoryItemsTable,
   transactionsTable,
   guildSettingsTable,
+  pendingDailyRoleRemovalsTable,
   roleRewardsTable,
   privateVcSessionsTable,
   squadTreasuriesTable,
@@ -877,6 +878,120 @@ export async function distributeMonthlyRoleDebit(
   }
 
   return { chargedCount, totalCharged, insufficientCount, insufficientUserIds };
+}
+
+export async function setDailyRoleDebit(
+  guildId: string,
+  roleId: string,
+  amount: number,
+  logChannelId: string,
+): Promise<GuildSettings> {
+  return upsertGuildSetting(guildId, {
+    dailyDebitRoleId: roleId,
+    dailyDebitAmount: amount,
+    dailyDebitLogChannelId: logChannelId,
+    // Setting or changing the rule starts its new schedule tomorrow.
+    lastDailyDebitAt: new Date(),
+  });
+}
+
+export async function clearDailyRoleDebit(guildId: string): Promise<GuildSettings> {
+  return db.transaction(async (tx) => {
+    const [settings] = await tx.insert(guildSettingsTable).values({
+      guildId, dailyDebitRoleId: null, dailyDebitAmount: null,
+      dailyDebitLogChannelId: null, lastDailyDebitAt: null,
+    }).onConflictDoUpdate({
+      target: guildSettingsTable.guildId,
+      set: {
+        dailyDebitRoleId: null, dailyDebitAmount: null,
+        dailyDebitLogChannelId: null, lastDailyDebitAt: null,
+      },
+    }).returning();
+    await tx.delete(pendingDailyRoleRemovalsTable)
+      .where(eq(pendingDailyRoleRemovalsTable.guildId, guildId));
+    return settings!;
+  });
+}
+
+export function isDueDailyRoleDebit(settings: GuildSettings, now: Date): boolean {
+  if (!settings.dailyDebitRoleId || !settings.dailyDebitAmount || settings.dailyDebitAmount <= 0) return false;
+  if (!settings.lastDailyDebitAt) return true;
+  const today = getJstDateParts(now);
+  const last = getJstDateParts(settings.lastDailyDebitAt);
+  return (today.year * 10_000 + today.month * 100 + today.day)
+    > (last.year * 10_000 + last.month * 100 + last.day);
+}
+
+/**
+ * Charge a guild's daily role holders and record the day's completion in one
+ * transaction. Locking the settings row serializes concurrent scheduler ticks;
+ * a failed transaction rolls back every debit and its ledger entry together.
+ */
+export async function processDailyRoleDebit(
+  guildId: string,
+  members: Map<string, string[]>,
+  now: Date,
+): Promise<{
+  roleId: string;
+  amount: number;
+  currencyName: string;
+  logChannelId: string | null;
+  chargedCount: number;
+  totalCharged: number;
+  insufficientUserIds: string[];
+} | null> {
+  return db.transaction(async (tx) => {
+    const [settings] = await tx.select().from(guildSettingsTable)
+      .where(eq(guildSettingsTable.guildId, guildId)).for("update");
+    if (!settings || !isDueDailyRoleDebit(settings, now)) return null;
+    const roleId = settings.dailyDebitRoleId!;
+    const amount = settings.dailyDebitAmount!;
+    let chargedCount = 0;
+    const insufficientUserIds: string[] = [];
+
+    for (const [userId, roles] of members) {
+      if (!roles.includes(roleId)) continue;
+      await tx.insert(walletsTable).values({ guildId, userId }).onConflictDoNothing();
+      const [updated] = await tx.update(walletsTable)
+        .set({ balance: sql`${walletsTable.balance} - ${amount}` })
+        .where(and(
+          eq(walletsTable.guildId, guildId),
+          eq(walletsTable.userId, userId),
+          sql`${walletsTable.balance} >= ${amount}`,
+        ))
+        .returning({ balance: walletsTable.balance });
+      if (!updated) {
+        insufficientUserIds.push(userId);
+        await tx.insert(pendingDailyRoleRemovalsTable)
+          .values({ guildId, userId, roleId }).onConflictDoNothing();
+        continue;
+      }
+      await tx.insert(transactionsTable).values({
+        guildId, userId, amount: -amount, reason: "daily-role-debit",
+      });
+      chargedCount++;
+    }
+    await tx.update(guildSettingsTable).set({ lastDailyDebitAt: now })
+      .where(eq(guildSettingsTable.guildId, guildId));
+    return {
+      roleId, amount, currencyName: settings.currencyName,
+      logChannelId: settings.dailyDebitLogChannelId,
+      chargedCount, totalCharged: chargedCount * amount, insufficientUserIds,
+    };
+  });
+}
+
+export async function listPendingDailyRoleRemovals(guildId: string) {
+  return db.select().from(pendingDailyRoleRemovalsTable)
+    .where(eq(pendingDailyRoleRemovalsTable.guildId, guildId));
+}
+
+export async function clearPendingDailyRoleRemoval(guildId: string, userId: string, roleId: string) {
+  await db.delete(pendingDailyRoleRemovalsTable).where(and(
+    eq(pendingDailyRoleRemovalsTable.guildId, guildId),
+    eq(pendingDailyRoleRemovalsTable.userId, userId),
+    eq(pendingDailyRoleRemovalsTable.roleId, roleId),
+  ));
 }
 
 export const SUB_ACCOUNT_ROLE_NAME = "sub垢";

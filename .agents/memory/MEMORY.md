@@ -11,6 +11,7 @@
 - [Sub-account salary exclusion](sub-account-salary-exclusion.md) — 「sub垢」ロール保有者は定期給与と手動給与の両方から除外する。
 - [Eval sheet extension limit](eval-sheet-extension-limit.md) — 評価シート延長は1週間のみ、サーバー内で1人1回までにする。
 - [Monthly role debit](monthly-role-debit.md) — 指定ロールへの月額引き落としは毎月25日0:00 JSTに1回だけ実行する。
+- [Daily role debit](daily-role-debit.md) — 日額はJSTの翌日から開始し、残高不足時は請求せずロールを外す。
 - [Private VC panel categories](private-vc-panel-category.md) — 旧`ura`と現行`island`はフリールームとして扱い、高級船室`vc`と混同しない。
 - [gathapin36912 calendar](calendar-feature.md) — Discord内の予定告知・参加表明・通知として実装し、日時は日本時間で扱う。
 - [Workflow signal handling](workflow-signal-handling.md) — SIGTERM/SIGINTを監視する場合も必ず終了し、再起動後のBot二重稼働を防ぐ。

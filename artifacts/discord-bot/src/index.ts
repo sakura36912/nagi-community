@@ -185,6 +185,7 @@ import {
   getJstDateKey,
   markRewardDistributed,
   isDueMonthlyRoleDebit,
+  isDueDailyRoleDebit,
   markMonthlyRoleDebitProcessed,
   distributeMonthlyRoleDebit,
   getExcludedUserIds,
@@ -208,6 +209,8 @@ import {
   countPastJoins,
   findWallet,
 } from "./lib/economy";
+import { retryPendingDailyRoleRemovals, runDailyRoleDebitForGuild } from "./lib/dailyRoleDebit";
+import { syncDailyRoleDebitCommandRegistration } from "./lib/dailyRoleDebitRegistration";
 import { buildDepartureRoleSnapshot, buildRejoinLogText } from "./lib/rejoinLog";
 import {
   getEvalSheetConfigsForRoles,
@@ -691,6 +694,7 @@ client.on(Events.Invalidated, () => {
 // Checks every minute whether any guild's reward day has arrived and
 // distributes role-based rewards (salary) if so.
 const monthlyDebitRunningGuilds = new Set<string>();
+const dailyDebitRunningGuilds = new Set<string>();
 const vcPanelRelocationQueues = new Map<string, Promise<void>>();
 
 async function runRewardScheduler(): Promise<void> {
@@ -699,6 +703,19 @@ async function runRewardScheduler(): Promise<void> {
   for (const guild of client.guilds.cache.values()) {
     try {
       const settings = await getGuildSettings(guild.id);
+
+      if (!dailyDebitRunningGuilds.has(guild.id)) {
+        dailyDebitRunningGuilds.add(guild.id);
+        try {
+          if (isDueDailyRoleDebit(settings, new Date())) {
+            await runDailyRoleDebitForGuild(guild);
+          } else {
+            await retryPendingDailyRoleRemovals(guild);
+          }
+        } finally {
+          dailyDebitRunningGuilds.delete(guild.id);
+        }
+      }
 
       if (isDueMonthlyRoleDebit(settings, now)) {
         if (!monthlyDebitRunningGuilds.has(guild.id)) {
@@ -1325,6 +1342,9 @@ client.on(Events.GuildUnavailable, (guild) => {
 client.once(Events.ClientReady, async (readyClient) => {
   syncCasinoCommandRegistration(readyClient).catch((err) =>
     logger.error("[casino] Startup command registration failed", err),
+  );
+  syncDailyRoleDebitCommandRegistration(readyClient).catch((err) =>
+    logger.error("[daily-debit] Startup command registration failed", err),
   );
   scheduleBountyMonthBoundary(readyClient);
   try {

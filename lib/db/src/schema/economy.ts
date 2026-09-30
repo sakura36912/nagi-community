@@ -32,6 +32,11 @@ export const guildSettingsTable = pgTable("guild_settings", {
   // Discord text channel where insufficient-balance role removals are logged.
   monthlyDebitLogChannelId: text("monthly_debit_log_channel_id"),
   lastMonthlyDebitAt: timestamp("last_monthly_debit_at", { withTimezone: true }),
+  // Daily role debit; the last processed date is compared in Japan time.
+  dailyDebitRoleId: text("daily_debit_role_id"),
+  dailyDebitAmount: integer("daily_debit_amount"),
+  dailyDebitLogChannelId: text("daily_debit_log_channel_id"),
+  lastDailyDebitAt: timestamp("last_daily_debit_at", { withTimezone: true }),
   // Discord category channel ID where private VCs (vcshop) are created.
   vcCategoryId: text("vc_category_id"),
   // Optional fallback category used when the primary private-VC category is full.
@@ -134,6 +139,18 @@ export const walletsTable = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [primaryKey({ columns: [table.guildId, table.userId] })],
+);
+
+/** Insufficient-balance role removals awaiting a successful Discord API call. */
+export const pendingDailyRoleRemovalsTable = pgTable(
+  "pending_daily_role_removals",
+  {
+    guildId: text("guild_id").notNull(),
+    userId: text("user_id").notNull(),
+    roleId: text("role_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.guildId, table.userId, table.roleId] })],
 );
 
 export const insertWalletSchema = createInsertSchema(walletsTable).omit({
