@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "./index.js";
 import {
   bountyAuditOutboxTable,
@@ -200,6 +200,115 @@ export async function addBountyMonthReviewMember(
         set: { roleIds },
       });
   });
+}
+
+export type BountyReviewImportRow = { userId: string; roleIds: string[] };
+export type BountyReviewImportChange = { userId: string; before: string[] | null; after: string[] };
+
+/**
+ * Preview and commit take the same monthly advisory lock as review-add and approval.
+ * Import replaces the role list for specified users; it does not delete absent users.
+ */
+async function importBountyMonthReview(
+  guildId: string, monthKey: string, rows: BountyReviewImportRow[],
+  expected?: { members: BountyReviewImportRow[]; changes: BountyReviewImportChange[] },
+): Promise<{ members: BountyReviewImportRow[]; changes: BountyReviewImportChange[] }> {
+  validateBountyMonthKey(monthKey);
+  if (rows.length < 1 || rows.length > 500) throw new Error("対象者は1〜500人を指定してください。");
+  const userIds = new Set<string>();
+  const wantedRoles = new Set<string>();
+  for (const row of rows) {
+    if (!/^\d{17,20}$/.test(row.userId) || userIds.has(row.userId)) {
+      throw new Error("ユーザーIDが不正または重複しています。");
+    }
+    userIds.add(row.userId);
+    if (!row.roleIds.length || new Set(row.roleIds).size !== row.roleIds.length) {
+      throw new Error(`${row.userId} のロール指定が空または重複しています。`);
+    }
+    for (const roleId of row.roleIds) {
+      if (!/^\d{17,20}$/.test(roleId)) throw new Error(`${row.userId} のロールIDが不正です。`);
+      wantedRoles.add(roleId);
+    }
+  }
+  return db.transaction(async (tx) => {
+    await lockBountyMonthlyGuild(tx, guildId);
+    const [snapshot] = await tx.select().from(bountyMonthlySnapshotsTable).where(and(
+      eq(bountyMonthlySnapshotsTable.guildId, guildId),
+      eq(bountyMonthlySnapshotsTable.monthKey, monthKey),
+    )).limit(1);
+    const [paid] = await tx.select().from(bountyMonthlyPayoutsTable).where(and(
+      eq(bountyMonthlyPayoutsTable.guildId, guildId),
+      eq(bountyMonthlyPayoutsTable.monthKey, monthKey),
+    )).limit(1);
+    if (snapshot?.status !== "pending" || paid) throw new Error("この月は管理者確認待ちではありません。");
+    const [settings] = await tx.select().from(bountySettingsTable)
+      .where(eq(bountySettingsTable.guildId, guildId)).limit(1);
+    if (!settings) throw new Error("賞金ポイント設定がありません。");
+    const cutoff = nextMonthJstCutoff(monthKey);
+    if (settings.createdAt.getTime() >= cutoff.getTime() || cutoff.getTime() > Date.now()) {
+      throw new Error("設定前または月初前の月は登録できません。");
+    }
+    const roleIds = [...wantedRoles];
+    const history = await tx.select().from(bountyMonthlyRateHistoryTable).where(and(
+      eq(bountyMonthlyRateHistoryTable.guildId, guildId),
+      inArray(bountyMonthlyRateHistoryTable.roleId, roleIds),
+    )).orderBy(desc(bountyMonthlyRateHistoryTable.effectiveAt), desc(bountyMonthlyRateHistoryTable.id));
+    const legacy = await tx.select().from(bountyMonthlyRatesTable).where(and(
+      eq(bountyMonthlyRatesTable.guildId, guildId),
+      inArray(bountyMonthlyRatesTable.roleId, roleIds),
+    ));
+    for (const roleId of roleIds) {
+      const events = history.filter((event) => event.roleId === roleId);
+      const pastRate = events.find((event) => event.effectiveAt.getTime() < cutoff.getTime());
+      const oldRate = events.length === 0 ? legacy.find((rate) =>
+        rate.roleId === roleId && rate.effectiveAt.getTime() < cutoff.getTime()) : undefined;
+      if ((pastRate?.points ?? oldRate?.points ?? 0) <= 0) {
+        throw new Error(`ロール ${roleId} は月初時点で月次付与ポイントが未設定です。`);
+      }
+    }
+    const current = await tx.select().from(bountyMonthlySnapshotMembersTable).where(and(
+      eq(bountyMonthlySnapshotMembersTable.guildId, guildId),
+      eq(bountyMonthlySnapshotMembersTable.monthKey, monthKey),
+    )).orderBy(asc(bountyMonthlySnapshotMembersTable.userId));
+    const members = current.map(({ userId, roleIds }) => ({ userId, roleIds }));
+    if (expected && JSON.stringify(members) !== JSON.stringify(expected.members)) {
+      throw new Error("プレビュー後に対象者一覧が変更されました。CSVを再確認してください。");
+    }
+    const byUser = new Map(members.map((member) => [member.userId, member.roleIds]));
+    const changes: BountyReviewImportChange[] = rows.map((row) => ({
+      userId: row.userId,
+      before: byUser.get(row.userId) ?? null,
+      after: [settings.crewRoleId, ...row.roleIds.filter((id) => id !== settings.crewRoleId)].sort(),
+    })).filter((change) =>
+      !change.before || JSON.stringify([...change.before].sort()) !== JSON.stringify(change.after));
+    if (expected && JSON.stringify(changes) !== JSON.stringify(expected.changes)) {
+      throw new Error("プレビュー後にロール設定が変更されました。CSVを再確認してください。");
+    }
+    if (expected && changes.length) {
+      await tx.insert(bountyMonthlySnapshotMembersTable).values(changes.map((change) => ({
+        guildId, monthKey, userId: change.userId, roleIds: change.after,
+      }))).onConflictDoUpdate({
+        target: [
+          bountyMonthlySnapshotMembersTable.guildId,
+          bountyMonthlySnapshotMembersTable.monthKey,
+          bountyMonthlySnapshotMembersTable.userId,
+        ],
+        set: { roleIds: sql`excluded.role_ids` },
+      });
+    }
+    return { members, changes };
+  });
+}
+
+export function previewBountyMonthReviewImport(guildId: string, monthKey: string, rows: BountyReviewImportRow[]) {
+  return importBountyMonthReview(guildId, monthKey, rows);
+}
+
+export function commitBountyMonthReviewImport(
+  guildId: string, monthKey: string, rows: BountyReviewImportRow[],
+  expected: { members: BountyReviewImportRow[]; changes: BountyReviewImportChange[] },
+) {
+  return importBountyMonthReview(guildId, monthKey, rows, expected);
 }
 
 export async function removeBountyMonthReviewMember(guildId: string, monthKey: string, userId: string): Promise<void> {

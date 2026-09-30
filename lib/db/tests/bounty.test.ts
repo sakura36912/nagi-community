@@ -10,9 +10,11 @@ import {
   holdBountyMonthForReview,
   addBountyMonthReviewMember,
   approveBountyMonthReview,
+  commitBountyMonthReviewImport,
   getBountyMonthReview,
   listBountyMonthsNeedingAttention,
   markBountyMonthReviewNotified,
+  previewBountyMonthReviewImport,
   db,
   getBountyPoints,
   listBountyAccountBalances,
@@ -319,6 +321,51 @@ describe("bounty points", () => {
     assert.equal(await getBountyPoints(guildId, unapprovedUser), 0);
     assert.equal((await getBountyMonthReview(guildId, monthKey)).paid, true);
     assert.deepEqual(await listBountyMonthsNeedingAttention(guildId), []);
+  });
+
+  it("previews CSV changes and atomically imports only verified users before one-time approval", async () => {
+    const guildId = await createGuild();
+    const monthKey = "2025-08";
+    const first = "123456789012345678", second = "123456789012345679", retained = "123456789012345680";
+    const role = "223456789012345678", otherRole = "223456789012345679";
+    const crew = "323456789012345678";
+    await setBountySettings(guildId, crew, "log-channel", []);
+    await db.update(bountySettingsTable).set({ createdAt: new Date("2025-01-01") })
+      .where(eq(bountySettingsTable.guildId, guildId));
+    await db.insert(bountyMonthlyRateHistoryTable).values([
+      { guildId, roleId: role, points: 35, effectiveAt: new Date("2025-01-01") },
+      { guildId, roleId: otherRole, points: 10, effectiveAt: new Date("2025-01-01") },
+    ]);
+    await holdBountyMonthForReview(guildId, monthKey);
+    await addBountyMonthReviewMember(guildId, monthKey, retained, role);
+    await addBountyMonthReviewMember(guildId, monthKey, first, role);
+    const rows = [
+      { userId: first, roleIds: [otherRole] },
+      { userId: second, roleIds: [role, otherRole] },
+    ];
+    await assert.rejects(previewBountyMonthReviewImport(guildId, monthKey, [
+      { userId: first, roleIds: ["999999999999999999"] },
+    ]), /未設定/);
+    await assert.rejects(previewBountyMonthReviewImport(guildId, monthKey, [rows[0]!, rows[0]!]), /重複/);
+    const preview = await previewBountyMonthReviewImport(guildId, monthKey, rows);
+    assert.equal(preview.changes.length, 2);
+    assert.deepEqual(preview.changes[0]?.before, [crew, role]);
+    assert.deepEqual(preview.changes[0]?.after, [otherRole, crew].sort());
+    assert.equal((await getBountyMonthReview(guildId, monthKey)).members.length, 2);
+    await addBountyMonthReviewMember(guildId, monthKey, retained, otherRole);
+    await assert.rejects(commitBountyMonthReviewImport(guildId, monthKey, rows, preview), /一覧が変更/);
+    const updatedPreview = await previewBountyMonthReviewImport(guildId, monthKey, rows);
+    await commitBountyMonthReviewImport(guildId, monthKey, rows, updatedPreview);
+    assert.equal((await getBountyMonthReview(guildId, monthKey)).members.length, 3);
+    const same = await previewBountyMonthReviewImport(guildId, monthKey, rows);
+    assert.deepEqual(same.changes, []);
+    const roster = (await getBountyMonthReview(guildId, monthKey)).members;
+    await approveBountyMonthReview(guildId, monthKey, "staff-id", roster);
+    await assert.rejects(previewBountyMonthReviewImport(guildId, monthKey, rows), /確認待ち/);
+    assert.equal((await awardBountyMonth(guildId, monthKey)).length, 3);
+    assert.deepEqual(await awardBountyMonth(guildId, monthKey), []);
+    assert.equal(await getBountyPoints(guildId, first), 10);
+    assert.equal(await getBountyPoints(guildId, second), 45);
   });
 
   it("pays the frozen boundary roster, not a later change to member roles", async () => {

@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -27,11 +28,13 @@ import {
   addBountyMonthReviewMember,
   approveBountyMonthReview,
   awardBountyMonth,
+  commitBountyMonthReviewImport,
   getBountyMonthReview,
   getBountyPoints,
   getBountySettings,
   listPendingBountyAudits,
   markBountyAuditSent,
+  previewBountyMonthReviewImport,
   removeBountyMonthReviewMember,
   resetBountyVoicePresences,
   setBountyMonthlyRate,
@@ -39,7 +42,8 @@ import {
   setBountyVcRate,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
-import { createHash } from "node:crypto";
+import { parseBountyReviewCsv } from "../lib/bountyReviewCsv";
+import { createHash, randomUUID } from "node:crypto";
 
 export const BOUNTY_GUILD_ID = "1526418867335725247";
 export const BOUNTY_AUDIT_CHANNEL_ID = "1554169897959952454";
@@ -59,6 +63,47 @@ const MANUAL_MODAL_PREFIX = "bounty:manual:modal:";
 const VC_MODAL_PREFIX = "bounty:vc:modal:";
 const MONTHLY_MODAL_PREFIX = "bounty:monthly:modal:";
 const REVIEW_CONFIRM_PREFIX = "bounty:review:confirm:";
+const REVIEW_IMPORT_PREFIX = "bounty:review:import:";
+type ReviewImportPreview = Awaited<ReturnType<typeof previewBountyMonthReviewImport>>;
+const pendingReviewImports = new Map<string, {
+  guildId: string; userId: string; monthKey: string;
+  rows: ReturnType<typeof parseBountyReviewCsv>;
+  preview: ReviewImportPreview; expiresAt: number; processing: boolean;
+}>();
+
+async function loadReviewCsv(attachment: import("discord.js").Attachment): Promise<string> {
+  if (!attachment.name?.toLowerCase().endsWith(".csv") || attachment.size > 256 * 1024 || attachment.size === 0) {
+    throw new Error("256KB以下の空でない .csv ファイルを添付してください。");
+  }
+  const url = new URL(attachment.url);
+  if (url.protocol !== "https:" || url.hostname !== "cdn.discordapp.com") {
+    throw new Error("Discordの添付ファイルのみ利用できます。");
+  }
+  const response = await fetch(url, { signal: AbortSignal.timeout(10_000), redirect: "error" });
+  if (!response.ok || !response.body) throw new Error("CSVを取得できませんでした。再添付してください。");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > 256 * 1024) throw new Error("CSVが256KBを超えています。");
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+}
+
+function importDiffFile(preview: ReviewImportPreview): AttachmentBuilder {
+  const csv = ["action,user_id,before_role_ids,after_role_ids", ...preview.changes.map((change) =>
+    `${change.before ? "update" : "add"},${change.userId},${change.before?.join("|") ?? ""},${change.after.join("|")}`,
+  )].join("\n");
+  return new AttachmentBuilder(Buffer.from(`\uFEFF${csv}`, "utf8"), { name: "bounty-review-diff.csv" });
+}
 const REVIEW_MONTH_OPTION = (option: import("discord.js").SlashCommandStringOption) =>
   option.setName("month").setDescription("対象月（例: 2026-09。10月1日付与分）").setRequired(true);
 function reviewRosterHash(members: Array<{ userId: string; roleIds: string[] }>): string {
@@ -297,6 +342,9 @@ export const bountyCommand = {
       .addStringOption(REVIEW_MONTH_OPTION)
       .addStringOption((o) => o.setName("user_id").setDescription("月初時点の対象ユーザーID").setRequired(true))
       .addStringOption((o) => o.setName("role_id").setDescription("月初時点の付与対象ロールID").setRequired(true)))
+    .addSubcommand((sub) => sub.setName("review-import").setDescription("月初の対象者と付与対象ロールをCSVで一括登録（管理者）")
+      .addStringOption(REVIEW_MONTH_OPTION)
+      .addAttachmentOption((o) => o.setName("file").setDescription("CSV: user_id,role_ids（複数ロールは | 区切り）").setRequired(true)))
     .addSubcommand((sub) => sub.setName("review-remove").setDescription("誤登録した対象ユーザーを削除（管理者）")
       .addStringOption(REVIEW_MONTH_OPTION)
       .addStringOption((o) => o.setName("user_id").setDescription("取り消すユーザーID").setRequired(true)))
@@ -373,6 +421,38 @@ export const bountyCommand = {
       }
       if (review.snapshot?.status !== "pending" || review.paid) {
         await privateReply(interaction, "この月は管理者確認待ちではありません。既に精算済みの場合、再登録はできません。");
+        return;
+      }
+      if (subcommand === "review-import") {
+        try {
+          const rows = parseBountyReviewCsv(await loadReviewCsv(interaction.options.getAttachment("file", true)));
+          const preview = await previewBountyMonthReviewImport(interaction.guildId, monthKey, rows);
+          for (const [key, pending] of pendingReviewImports) {
+            if (pending.expiresAt < Date.now()) pendingReviewImports.delete(key);
+          }
+          if (pendingReviewImports.size >= 30) throw new Error("確認待ちの一括登録が多すぎます。5分後に再実行してください。");
+          const token = randomUUID();
+          pendingReviewImports.set(token, {
+            guildId: interaction.guildId, userId: interaction.user.id, monthKey,
+            rows, preview, expiresAt: Date.now() + 5 * 60_000, processing: false,
+          });
+          const added = preview.changes.filter((change) => change.before === null).length;
+          const updated = preview.changes.length - added;
+          const sample = preview.changes.slice(0, 12).map((change) =>
+            `${change.before ? "更新" : "追加"} ${change.userId}: ${change.before?.filter((id) => id !== settings.crewRoleId).join("|") || "なし"} → ${change.after.filter((id) => id !== settings.crewRoleId).join("|") || "なし"}`,
+          ).join("\n");
+          const button = new ButtonBuilder().setStyle(ButtonStyle.Primary)
+            .setLabel(`${preview.changes.length}件の変更を登録`)
+            .setCustomId(`${REVIEW_IMPORT_PREFIX}${token}`);
+          await interaction.editReply({
+            content: `${monthKey} CSV確認: ${rows.length}人 / 新規 ${added}人 / 更新 ${updated}人 / 変更なし ${rows.length - preview.changes.length}人\n既存対象者 ${preview.members.length}人は、CSVにない場合も削除しません。ロールはCSV指定で置き換えます。まだ保存していません。\n${sample.slice(0, 1050)}${preview.changes.length > 12 ? "\n（全差分は添付CSVを確認）" : ""}\n5分以内に本人が確定してください。`,
+            files: [importDiffFile(preview)],
+            components: [new ActionRowBuilder<ButtonBuilder>().addComponents(button)],
+            allowedMentions: { parse: [] },
+          });
+        } catch (error) {
+          await privateReply(interaction, error instanceof Error ? error.message : "CSVの確認に失敗しました。");
+        }
         return;
       }
       if (subcommand === "review-add" || subcommand === "review-remove") {
@@ -467,6 +547,44 @@ export async function handleBountyUserSelect(interaction: UserSelectMenuInteract
 }
 
 export async function handleBountyButton(interaction: ButtonInteraction): Promise<boolean> {
+  if (interaction.customId.startsWith(REVIEW_IMPORT_PREFIX)) {
+    if (!await validateStaffInteraction(interaction)) return true;
+    const token = interaction.customId.slice(REVIEW_IMPORT_PREFIX.length);
+    const pending = pendingReviewImports.get(token);
+    if (!pending || pending.expiresAt < Date.now()) {
+      pendingReviewImports.delete(token);
+      await privateReply(interaction, "一括登録の確認期限が切れました。CSVを再添付してください。");
+      return true;
+    }
+    if (pending.guildId !== interaction.guildId || pending.userId !== interaction.user.id) {
+      await privateReply(interaction, "CSVを確認した管理者本人のみ登録できます。");
+      return true;
+    }
+    if (pending.processing) {
+      await privateReply(interaction, "登録処理中です。完了をお待ちください。");
+      return true;
+    }
+    pending.processing = true;
+    await interaction.deferUpdate();
+    try {
+      await commitBountyMonthReviewImport(
+        pending.guildId, pending.monthKey, pending.rows, pending.preview,
+      );
+      pendingReviewImports.delete(token);
+      await interaction.editReply({
+        content: `${pending.monthKey} の対象者を一括登録しました（変更 ${pending.preview.changes.length}人）。精算はまだ行っていません。確認後に \`/bounty review-confirm\` を実行してください。`,
+        components: [], files: [], allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      pendingReviewImports.delete(token);
+      logger.error("[bounty] Monthly review CSV import failed", error);
+      await interaction.editReply({
+        content: `一括登録を保存できませんでした。変更は反映されていません。${error instanceof Error ? error.message : "CSVを再確認してください。"}`,
+        components: [], files: [], allowedMentions: { parse: [] },
+      });
+    }
+    return true;
+  }
   if (interaction.customId.startsWith(REVIEW_CONFIRM_PREFIX)) {
     if (!await validateStaffInteraction(interaction)) return true;
     const match = /^(\d{4}-(?:0[1-9]|1[0-2])):(\d{17,20}):([a-f0-9]{16})$/
