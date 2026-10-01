@@ -37,7 +37,10 @@ function makeInteraction(customId: string, options: {
     guildId: options.guildId ?? BOUNTY_GUILD_ID,
     guild: {
       id: BOUNTY_GUILD_ID,
-      roles: { cache: new Collection([["public-relations", { name: options.roleName ?? "広報部" }]]) },
+      roles: { cache: new Collection([
+        ["public-relations", { name: options.roleName ?? "広報部" }],
+        ["crew-impostor", { name: "本船員" }],
+      ]) },
       members: { fetch: vi.fn(async () => ({ roles: { cache: new Collection([["crew", {}]]) } })) },
       channels: { fetch: vi.fn(async () => ({ isTextBased: () => true, send })) },
     },
@@ -80,9 +83,14 @@ beforeEach(() => {
 });
 
 describe("bounty settings panel permissions", () => {
-  it.each(panelSteps)("allows 広報部 through $id with raw and cached member roles", async ({ id, run }) => {
-    for (const cachedMember of [false, true]) {
-      const interaction = makeInteraction(id, { cachedMember });
+  it.each(panelSteps)("allows 広報部 and configured crew through $id with raw and cached member roles", async ({ id, run }) => {
+    for (const options of [
+      { cachedMember: false, roleIds: ["public-relations"] },
+      { cachedMember: true, roleIds: ["public-relations"] },
+      { cachedMember: false, roleIds: ["crew"] },
+      { cachedMember: true, roleIds: ["crew"] },
+    ]) {
+      const interaction = makeInteraction(id, options);
       expect(await run(interaction)).toBe(true);
       expect(db.getBountySettings).toHaveBeenCalled();
       if (id === "bounty:manual:user") {
@@ -93,8 +101,9 @@ describe("bounty settings panel permissions", () => {
     }
   });
 
-  it.each(modalIds)("allows 広報部 to save %s, retaining audit behavior", async (id) => {
-    const interaction = makeInteraction(id);
+  it.each(modalIds.flatMap((id) => ["public-relations", "crew"].map((role) => ({ id, role }))))(
+    "allows $role to save $id, retaining audit behavior", async ({ id, role }) => {
+    const interaction = makeInteraction(id, { roleIds: [role] });
     await handleBountyModalSubmit(interaction as unknown as ModalSubmitInteraction);
     expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
     if (id.startsWith("bounty:manual:")) {
@@ -113,7 +122,8 @@ describe("bounty settings panel permissions", () => {
 
   it("denies nonmembers, similarly named roles, and other guilds at every stage", async () => {
     for (const opts of [
-      { roleIds: [] }, { roleName: "広報部補佐" }, { guildId: "other-guild" },
+      { roleIds: [] }, { roleName: "広報部補佐" }, { roleIds: ["crew-impostor"] },
+      { guildId: "other-guild" }, { guildId: "other-guild", roleIds: ["crew"] },
     ]) {
       for (const { id, run } of panelSteps) {
         const interaction = makeInteraction(id, opts);
@@ -128,14 +138,13 @@ describe("bounty settings panel permissions", () => {
         expect(interaction.reply.mock.calls[0][0].ephemeral).toBe(true);
       }
     }
-    expect(db.getBountySettings).not.toHaveBeenCalled();
     expect(db.applyBountyPoints).not.toHaveBeenCalled();
     expect(db.setBountyVcRate).not.toHaveBeenCalled();
     expect(db.setBountyMonthlyRate).not.toHaveBeenCalled();
   });
 
-  it("rechecks authorization when a role is removed before modal submission", async () => {
-    const select = makeInteraction("bounty:vc:channel");
+  it.each(["public-relations", "crew"])("rechecks authorization when %s is removed before modal submission", async (role) => {
+    const select = makeInteraction("bounty:vc:channel", { roleIds: [role] });
     await handleBountyChannelSelect(select as unknown as ChannelSelectMenuInteraction);
     expect(select.showModal).toHaveBeenCalledOnce();
     const submit = makeInteraction(`bounty:vc:modal:${targetId}`, { roleIds: [] });
@@ -158,17 +167,27 @@ describe("bounty settings panel permissions", () => {
     }
   });
 
-  it("does not extend setup, panel posting, review approval/import, or other-user balance access", async () => {
+  it.each(["public-relations", "crew"])("does not extend management operations to %s", async (role) => {
     for (const command of ["setup", "panels", "review-status", "review-confirm", "review-import", "balance"]) {
-      const interaction = makeInteraction(command);
+      const interaction = makeInteraction(command, { roleIds: [role] });
       await bountyCommand.execute(interaction as unknown as ChatInputCommandInteraction);
       expect(interaction.reply.mock.calls[0][0].content).toContain("ManageGuild");
     }
     for (const id of ["bounty:review:confirm:2026-09:operator:hash", "bounty:review:import:token"]) {
-      const interaction = makeInteraction(id);
+      const interaction = makeInteraction(id, { roleIds: [role] });
       await handleBountyButton(interaction as unknown as ButtonInteraction);
       expect(interaction.reply.mock.calls[0][0].content).toContain("ManageGuild");
     }
     expect(db.getBountySettings).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured crew role ID rather than an unrelated role with the same name", async () => {
+    db.getBountySettings.mockResolvedValue({ crewRoleId: "new-crew", tierRoleIds: [] });
+    const oldRole = makeInteraction("bounty:vc:channel", { roleIds: ["crew"] });
+    await handleBountyChannelSelect(oldRole as unknown as ChannelSelectMenuInteraction);
+    expect(oldRole.showModal).not.toHaveBeenCalled();
+    const configuredRole = makeInteraction("bounty:vc:channel", { roleIds: ["new-crew"] });
+    await handleBountyChannelSelect(configuredRole as unknown as ChannelSelectMenuInteraction);
+    expect(configuredRole.showModal).toHaveBeenCalledOnce();
   });
 });

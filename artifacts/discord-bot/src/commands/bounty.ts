@@ -133,13 +133,14 @@ function isStaff(interaction: { memberPermissions: { has: (permission: bigint) =
   return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild));
 }
 
-/** Only the three settings panels allow the public-relations role. */
-function isPanelOperator(interaction: BountyInteraction): boolean {
+/** Role-based access is limited to the three settings panels. */
+function isPanelOperator(interaction: BountyInteraction, crewRoleId?: string): boolean {
   if (isStaff(interaction)) return true;
   const roles = interaction.member?.roles;
   if (!interaction.guild || !roles) return false;
   const roleIds = Array.isArray(roles) ? roles : [...roles.cache.keys()];
-  return roleIds.some((id) => interaction.guild!.roles.cache.get(id)?.name === "広報部");
+  return roleIds.some((id) => id === crewRoleId
+    || interaction.guild!.roles.cache.get(id)?.name === "広報部");
 }
 
 function isTargetGuild(interaction: { guildId: string | null }): boolean {
@@ -157,10 +158,8 @@ async function validateStaffInteraction(interaction: BountyInteraction, allowPan
     await privateReply(interaction, `この操作はサーバー ${BOUNTY_GUILD_ID} 専用です。`);
     return false;
   }
-  if (!(allowPanelRole ? isPanelOperator(interaction) : isStaff(interaction))) {
-    await privateReply(interaction, allowPanelRole
-      ? "この操作にはサーバー管理権限（ManageGuild）または「広報部」ロールが必要です。"
-      : "この操作にはサーバー管理権限（ManageGuild）が必要です。");
+  if (!allowPanelRole && !isStaff(interaction)) {
+    await privateReply(interaction, "この操作にはサーバー管理権限（ManageGuild）が必要です。");
     return false;
   }
   if (!interaction.guild) {
@@ -168,6 +167,10 @@ async function validateStaffInteraction(interaction: BountyInteraction, allowPan
     return false;
   }
   const settings = await getBountySettings(interaction.guildId!);
+  if (allowPanelRole && !isPanelOperator(interaction, settings?.crewRoleId)) {
+    await privateReply(interaction, "この操作にはサーバー管理権限（ManageGuild）、または「広報部」「本船員」のいずれかのロールが必要です。");
+    return false;
+  }
   if (!settings) {
     await privateReply(interaction, "先に `/bounty setup` を実行してください。");
     return false;
@@ -673,7 +676,7 @@ export const bountyCommand = {
         return;
       }
       const panels = [
-        ["🧾 賞金ポイント手動調整", "ユーザーを選択して、スタッフがポイントを加算・減算します。", "manual"],
+        ["🧾 賞金ポイント手動調整", "ユーザーを選択して、管理者・広報部・本船員がポイントを加算・減算します。", "manual"],
         ["🎙️ VCポイント設定", "VCを選択し、1時間あたりの付与ポイントを設定します。0で無効になります。", "vc"],
         ["📅 月次ポイント設定", "対象ロールを選択し、月次付与ポイントを設定します。", "monthly"],
       ] as const;
@@ -684,7 +687,7 @@ export const bountyCommand = {
           allowedMentions: { parse: [] },
         });
       }
-      await interaction.editReply("3つの公開パネルを投稿しました。サーバー管理権限（ManageGuild）または「広報部」ロールを持つユーザーが操作できます。");
+      await interaction.editReply("3つの公開パネルを投稿しました。サーバー管理権限（ManageGuild）、または「広報部」「本船員」のいずれかのロールを持つユーザーが操作できます。");
       return;
     }
   },
