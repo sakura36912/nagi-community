@@ -133,6 +133,15 @@ function isStaff(interaction: { memberPermissions: { has: (permission: bigint) =
   return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild));
 }
 
+/** Only the three settings panels allow the public-relations role. */
+function isPanelOperator(interaction: BountyInteraction): boolean {
+  if (isStaff(interaction)) return true;
+  const roles = interaction.member?.roles;
+  if (!interaction.guild || !roles) return false;
+  const roleIds = Array.isArray(roles) ? roles : [...roles.cache.keys()];
+  return roleIds.some((id) => interaction.guild!.roles.cache.get(id)?.name === "広報部");
+}
+
 function isTargetGuild(interaction: { guildId: string | null }): boolean {
   return interaction.guildId === BOUNTY_GUILD_ID;
 }
@@ -143,13 +152,15 @@ function privateReply(interaction: BountyInteraction, content: string) {
   return interaction.reply({ ...options, ephemeral: true });
 }
 
-async function validateStaffInteraction(interaction: BountyInteraction): Promise<boolean> {
+async function validateStaffInteraction(interaction: BountyInteraction, allowPanelRole = false): Promise<boolean> {
   if (!isTargetGuild(interaction)) {
     await privateReply(interaction, `この操作はサーバー ${BOUNTY_GUILD_ID} 専用です。`);
     return false;
   }
-  if (!isStaff(interaction)) {
-    await privateReply(interaction, "この操作にはサーバー管理権限（ManageGuild）が必要です。");
+  if (!(allowPanelRole ? isPanelOperator(interaction) : isStaff(interaction))) {
+    await privateReply(interaction, allowPanelRole
+      ? "この操作にはサーバー管理権限（ManageGuild）または「広報部」ロールが必要です。"
+      : "この操作にはサーバー管理権限（ManageGuild）が必要です。");
     return false;
   }
   if (!interaction.guild) {
@@ -673,7 +684,7 @@ export const bountyCommand = {
           allowedMentions: { parse: [] },
         });
       }
-      await interaction.editReply("3つの公開パネルを投稿しました。操作できるのはスタッフのみです。");
+      await interaction.editReply("3つの公開パネルを投稿しました。サーバー管理権限（ManageGuild）または「広報部」ロールを持つユーザーが操作できます。");
       return;
     }
   },
@@ -696,7 +707,7 @@ export async function syncBountyCommandRegistration(client: Client): Promise<voi
 
 export async function handleBountyUserSelect(interaction: UserSelectMenuInteraction): Promise<boolean> {
   if (interaction.customId !== USER_PICKER_ID) return false;
-  if (!await validateStaffInteraction(interaction)) return true;
+  if (!await validateStaffInteraction(interaction, true)) return true;
   const userId = interaction.users.first()?.id;
   if (!userId) {
     await privateReply(interaction, "対象ユーザーを選択してください。");
@@ -800,7 +811,7 @@ export async function handleBountyButton(interaction: ButtonInteraction): Promis
     return true;
   }
   if (!interaction.customId.startsWith(MANUAL_SIGN_BUTTON_PREFIX)) return false;
-  if (!await validateStaffInteraction(interaction)) return true;
+  if (!await validateStaffInteraction(interaction, true)) return true;
   const selection = interaction.customId.slice(MANUAL_SIGN_BUTTON_PREFIX.length);
   const match = /^([+-]):(\d{17,20})$/.exec(selection);
   if (!match) {
@@ -813,14 +824,14 @@ export async function handleBountyButton(interaction: ButtonInteraction): Promis
 
 export async function handleBountyChannelSelect(interaction: ChannelSelectMenuInteraction): Promise<boolean> {
   if (interaction.customId !== VC_PICKER_ID) return false;
-  if (!await validateStaffInteraction(interaction)) return true;
+  if (!await validateStaffInteraction(interaction, true)) return true;
   await interaction.showModal(rateModal("vc", interaction.values[0]));
   return true;
 }
 
 export async function handleBountyRoleSelect(interaction: RoleSelectMenuInteraction): Promise<boolean> {
   if (interaction.customId !== MONTHLY_ROLE_PICKER_ID) return false;
-  if (!await validateStaffInteraction(interaction)) return true;
+  if (!await validateStaffInteraction(interaction, true)) return true;
   await interaction.showModal(rateModal("monthly", interaction.values[0]));
   return true;
 }
@@ -849,7 +860,7 @@ export async function handleBountyModalSubmit(interaction: ModalSubmitInteractio
   if (!interaction.customId.startsWith(MANUAL_MODAL_PREFIX)
     && !interaction.customId.startsWith(VC_MODAL_PREFIX)
     && !interaction.customId.startsWith(MONTHLY_MODAL_PREFIX)) return false;
-  if (!await validateStaffInteraction(interaction)) return true;
+  if (!await validateStaffInteraction(interaction, true)) return true;
   await interaction.deferReply({ ephemeral: true });
   if (interaction.customId.startsWith(MANUAL_MODAL_PREFIX)) {
     const selection = interaction.customId.slice(MANUAL_MODAL_PREFIX.length);
