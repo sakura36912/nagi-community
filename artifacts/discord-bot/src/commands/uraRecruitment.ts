@@ -53,12 +53,14 @@ import {
   type UraRecruitmentType,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { syncExistingUraMatchPermissions, uraMatchPermissionOverwrites } from "../lib/uraMatchPermissions";
 
 export const URA_PREFIX = "ura:";
 const CREATE_MODAL_PREFIX = `${URA_PREFIX}create:`;
 const APPLY_MODAL_PREFIX = `${URA_PREFIX}apply:`;
 const lastUraActions = new Map<string, number>();
 const syncedOpenRecruitmentGuilds = new Set<string>();
+const syncedMatchPermissionGuilds = new Set<string>();
 
 const typeLabel = (type: string) => type === URA_TALK ? "🎙️ 個通募集" : "🌙 寝落ち募集";
 const typeEmoji = (type: string) => type === URA_TALK ? "🎙️" : "🌙";
@@ -365,12 +367,7 @@ async function createPrivateMatchChannel(guild: Guild, recruitmentId: number, ho
     name: `${typeEmoji(recruitment.type)}｜裏航海-${String(recruitmentId).padStart(3, "0")}`,
     type: ChannelType.GuildVoice,
     parent: category.id,
-    permissionOverwrites: [
-      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] },
-      { id: hostId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] },
-      { id: guestId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] },
-      ...(guild.client.user ? [{ id: guild.client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.MoveMembers] }] : []),
-    ],
+    permissionOverwrites: uraMatchPermissionOverwrites(guild, hostId, guestId),
   });
   return channel;
 }
@@ -679,6 +676,13 @@ export async function handleUraInteraction(
 
 export async function runUraRecruitmentCleanup(client: Client) {
   for (const guild of client.guilds.cache.values()) {
+    if (!syncedMatchPermissionGuilds.has(guild.id)) {
+      try {
+        if (await syncExistingUraMatchPermissions(guild)) syncedMatchPermissionGuilds.add(guild.id);
+      } catch (error) {
+        logger.warn(`[ura] failed to sync existing VC permissions for guild ${guild.id}`, error);
+      }
+    }
     if (syncedOpenRecruitmentGuilds.has(guild.id)) continue;
     try {
       const openRecruitments = await listOpenUraRecruitments(guild.id);

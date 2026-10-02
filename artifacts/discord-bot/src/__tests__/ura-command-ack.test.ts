@@ -23,7 +23,10 @@ import {
 } from "@workspace/db";
 import { handleUraInteraction, runUraRecruitmentCleanup, uraRecruitmentCommand } from "../commands/uraRecruitment";
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(listUraMatchesForGuildBefore).mockResolvedValue([]);
+});
 
 describe("/裏航海", () => {
   it("データベースの応答を待つ前に非公開の応答を確定する", async () => {
