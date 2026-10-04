@@ -54,6 +54,7 @@ import {
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { syncExistingUraMatchPermissions, uraMatchPermissionOverwrites } from "../lib/uraMatchPermissions";
+import { prefersGlobalCommands } from "../lib/guildCommandScope";
 
 export const URA_PREFIX = "ura:";
 const CREATE_MODAL_PREFIX = `${URA_PREFIX}create:`;
@@ -150,6 +151,7 @@ export async function syncUraCommandRegistration(client: Client) {
   }
   await sync(client.application.commands, "global").catch((error) => logger.error("[ura] global command sync failed", error));
   for (const guild of client.guilds.cache.values()) {
+    if (prefersGlobalCommands(guild.id)) continue;
     await sync(guild.commands, guild.id)
       .catch((error) => logger.error(`[ura] guild command sync failed ${guild.id}`, error));
   }

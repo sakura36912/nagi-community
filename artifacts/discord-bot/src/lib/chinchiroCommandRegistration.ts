@@ -7,6 +7,7 @@ import {
 } from "discord.js";
 import { chinchiroCommand } from "../commands/chinchiro";
 import { logger } from "./logger";
+import { prefersGlobalCommands } from "./guildCommandScope";
 
 type CommandManager = ApplicationCommandManager | GuildApplicationCommandManager;
 
@@ -24,7 +25,7 @@ export async function syncChinchiroCommandRegistration(client: Client): Promise<
   if (!hasLiveOption(definition.options ?? [])) throw new Error("[chinchiro] Code definition is missing config.live");
   const scopes: Array<{ label: string; manager: CommandManager }> = [
     { label: "global", manager: client.application.commands },
-    ...[...client.guilds.cache.values()].map((guild) => ({
+    ...[...client.guilds.cache.values()].filter((guild) => !prefersGlobalCommands(guild.id)).map((guild) => ({
       label: `guild=${guild.id}`, manager: guild.commands,
     })),
   ];

@@ -8,6 +8,7 @@ import {
 } from "discord.js";
 import { casinoCommand } from "../commands/casino";
 import { logger } from "./logger";
+import { prefersGlobalCommands } from "./guildCommandScope";
 
 type CommandManager = ApplicationCommandManager | GuildApplicationCommandManager;
 
@@ -48,7 +49,7 @@ export async function syncCasinoCommandRegistration(client: Client): Promise<voi
   if (!client.application) throw new Error("[casino] Cannot register commands without a Discord application");
   const scopes: Array<{ name: string; manager: CommandManager }> = [
     { name: "global", manager: client.application.commands },
-    ...[...client.guilds.cache.values()].map((guild) => ({
+    ...[...client.guilds.cache.values()].filter((guild) => !prefersGlobalCommands(guild.id)).map((guild) => ({
       name: `guild=${guild.id}`, manager: guild.commands,
     })),
   ];

@@ -160,6 +160,7 @@ import {
 import { logger } from "./lib/logger";
 import { syncCasinoCommandRegistration } from "./lib/casinoCommandRegistration";
 import { syncChinchiroCommandRegistration } from "./lib/chinchiroCommandRegistration";
+import { deleteDuplicateGuildCommands, GLOBAL_PREFERRED_GUILD_ID } from "./lib/guildCommandScope";
 import {
   getVcRewardSettings,
   recordVcJoin,
@@ -1257,18 +1258,20 @@ client.on(Events.GuildUnavailable, (guild) => {
 });
 
 client.once(Events.ClientReady, async (readyClient) => {
-  syncCasinoCommandRegistration(readyClient).catch((err) =>
-    logger.error("[casino] Startup command registration failed", err),
-  );
-  syncChinchiroCommandRegistration(readyClient).catch((err) =>
-    logger.error("[chinchiro] Startup command registration failed", err),
-  );
-  syncDailyRoleDebitCommandRegistration(readyClient).catch((err) =>
-    logger.error("[daily-debit] Startup command registration failed", err),
-  );
-  syncMonthlyRoleDebitCommandRegistration(readyClient).catch((err) =>
-    logger.error("[monthly-debit] Startup command registration failed", err),
-  );
+  const commandRegistrations = Promise.allSettled([
+    syncCasinoCommandRegistration(readyClient).catch((err) =>
+      logger.error("[casino] Startup command registration failed", err),
+    ),
+    syncChinchiroCommandRegistration(readyClient).catch((err) =>
+      logger.error("[chinchiro] Startup command registration failed", err),
+    ),
+    syncDailyRoleDebitCommandRegistration(readyClient).catch((err) =>
+      logger.error("[daily-debit] Startup command registration failed", err),
+    ),
+    syncMonthlyRoleDebitCommandRegistration(readyClient).catch((err) =>
+      logger.error("[monthly-debit] Startup command registration failed", err),
+    ),
+  ]);
   scheduleBountyMonthBoundary(readyClient);
   try {
     await resetBountyPresenceFromLiveVoiceState(readyClient);
@@ -1287,9 +1290,17 @@ client.once(Events.ClientReady, async (readyClient) => {
   logger.info(`Logged in as ${readyClient.user.tag}`);
   // Discord may still show the old command while the new version starts.
   // Register the renamed command before the other (potentially slow) startup work.
-  syncUraCommandRegistration(readyClient).catch((err) =>
+  const uraRegistration = syncUraCommandRegistration(readyClient).catch((err) =>
     logger.error("[ura] Startup command registration failed", err),
   );
+  Promise.all([commandRegistrations, uraRegistration])
+    .then(async () => {
+      const deleted = await deleteDuplicateGuildCommands(
+        readyClient.rest, readyClient.application.id, GLOBAL_PREFERRED_GUILD_ID,
+      );
+      logger.info(`[commands] Removed ${deleted.length} duplicate guild command(s) guild=${GLOBAL_PREFERRED_GUILD_ID}`);
+    })
+    .catch((err) => logger.error("[commands] Duplicate guild command cleanup failed", err));
   syncBountyCommandRegistration(readyClient).catch((err) =>
     logger.error("[bounty] Startup command registration failed", err),
   );

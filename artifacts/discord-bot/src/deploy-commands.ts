@@ -1,6 +1,7 @@
 import { ApplicationCommandType, REST, Routes, type APIApplicationCommand, type RESTPostAPIApplicationCommandsJSONBody } from "discord.js";
 import { commands } from "./commands/index.js";
 import { logger } from "./lib/logger.js";
+import { commandScopeKey, prefersGlobalCommands } from "./lib/guildCommandScope.js";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 const clientId = process.env["DISCORD_CLIENT_ID"];
@@ -20,12 +21,21 @@ async function main() {
     ? Routes.applicationGuildCommands(clientId!, guildId)
     : Routes.applicationCommands(clientId!);
   const registered = await rest.get(collectionRoute) as APIApplicationCommand[];
+  const globalKeys = guildId && prefersGlobalCommands(guildId)
+    ? new Set((await rest.get(Routes.applicationCommands(clientId!)) as APIApplicationCommand[]).map(commandScopeKey))
+    : new Set<string>();
   if (guildId) {
     logger.info(`Upserting ${body.length} guild slash command(s) to guild ${guildId} individually...`);
   } else {
     logger.info(`Upserting ${body.length} global slash command(s) individually...`);
   }
   for (const definition of body) {
+    if (globalKeys.has(commandScopeKey({
+      name: definition.name, type: definition.type ?? ApplicationCommandType.ChatInput,
+    }))) {
+      logger.info(`Skipping guild /${definition.name}: this guild uses its global registration.`);
+      continue;
+    }
     const existing = registered.find((command) =>
       command.name === definition.name && command.type === ApplicationCommandType.ChatInput);
     const itemRoute = existing

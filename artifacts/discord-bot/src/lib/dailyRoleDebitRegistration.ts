@@ -7,6 +7,7 @@ import {
 } from "discord.js";
 import { commands } from "../commands";
 import { logger } from "./logger";
+import { prefersGlobalCommands } from "./guildCommandScope";
 
 /** Upsert just the selected debit command; never replace unrelated commands. */
 async function syncDebitCommandRegistration(client: Client, name: string, tag: string): Promise<void> {
@@ -20,7 +21,7 @@ async function syncDebitCommandRegistration(client: Client, name: string, tag: s
     manager: ApplicationCommandManager | GuildApplicationCommandManager;
   }> = [
     { label: "global", manager: client.application.commands },
-    ...[...client.guilds.cache.values()].map((guild) => ({
+    ...[...client.guilds.cache.values()].filter((guild) => !prefersGlobalCommands(guild.id)).map((guild) => ({
       label: `guild=${guild.id}`, manager: guild.commands,
     })),
   ];
