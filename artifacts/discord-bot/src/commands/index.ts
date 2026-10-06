@@ -2457,6 +2457,7 @@ import { guideCommand } from "./guide";
 import { leavelogCommand } from "./leavelog";
 import { returnlogCommand } from "./returnlog";
 import { bountyCommand } from "./bounty";
+import { forumCopyCommand } from "./forumCopy";
 
 import { interviewCommand } from "./interview";
 import { stickyCommand } from "./sticky";
@@ -4505,6 +4506,7 @@ export const commands: Command[] = [
   leavelogCommand,
   returnlogCommand,
   bountyCommand,
+  forumCopyCommand,
 
   stickyCommand,
   adviceEndCommand,

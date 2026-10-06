@@ -139,6 +139,7 @@ import {
   type ActiveRewardVoiceState,
 } from "./lib/vcRewardPresenceReconciliation";
 import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/calendar";
+import { handleForumCopyButton, syncForumCopyCommandRegistration } from "./commands/forumCopy";
 import {
   handleUraInteraction,
   runUraRecruitmentCleanup,
@@ -1259,6 +1260,9 @@ client.on(Events.GuildUnavailable, (guild) => {
 
 client.once(Events.ClientReady, async (readyClient) => {
   const commandRegistrations = Promise.allSettled([
+    syncForumCopyCommandRegistration(readyClient).catch((err) =>
+      logger.error("[forum-copy] Startup command registration failed", err),
+    ),
     syncCasinoCommandRegistration(readyClient).catch((err) =>
       logger.error("[casino] Startup command registration failed", err),
     ),
@@ -2423,6 +2427,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (command?.autocomplete) await command.autocomplete(interaction);
       return;
     }
+    if (interaction.isButton() && await handleForumCopyButton(interaction)) return;
 
     if (interaction.isChatInputCommand()) {
       const command = commandsByName.get(interaction.commandName);

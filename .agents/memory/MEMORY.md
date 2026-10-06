@@ -27,3 +27,4 @@
 - [Bounty accrual during bot outages](bounty-outage-policy.md) — Bot停止中のVC時間は推定加算しない。月初未観測の月次付与は保留し、管理者の確認・承認後に精算する。
 - [Bounty Hub transfer accrual](bounty-hub-transfer-accrual.md) — 転送先は元Hubのポイント率と時間残を共有し、転送先への明示設定があれば0を含めて優先する。
 - [Bounty panel access scope](bounty-panel-access-scope.md) — 広報部・本船員へのパネル操作の委譲を、初期設定や月次保留精算の承認権限へ自動的に広げない。
+- [Forum copy policy](forum-copy-policy.md) — 別フォーラムへの移行は元投稿を維持するコピーとし、管理者の公開範囲確認後に実行する。
