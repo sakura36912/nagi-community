@@ -6,16 +6,24 @@ import {
 export const FORUM_CAST_PAGE_PREFIX = "shop:forum-cast-page:";
 const PAGE_SIZE = 25;
 
-export function isEligibleForumCast(member: GuildMember | null, roleId: string | null | undefined): boolean {
-  return !!roleId && !!member && !member.user.bot && member.roles.cache.has(roleId);
+export function getForumCastRoleIds(panel: { castRoleId?: string | null; castRoleIds?: readonly string[] | null }): string[] {
+  return [...new Set(panel.castRoleIds?.length ? panel.castRoleIds : panel.castRoleId ? [panel.castRoleId] : [])];
 }
 
-export async function fetchForumCastMembers(guild: Guild, roleId: string): Promise<GuildMember[]> {
-  const role = await guild.roles.fetch(roleId);
-  if (!role || role.id === guild.id) throw new Error("キャスト対象ロールが無効です。管理者にパネルの再設定を依頼してください。");
+export function isEligibleForumCast(member: GuildMember | null, roles: string | readonly string[] | null | undefined): boolean {
+  const roleIds = typeof roles === "string" ? [roles] : roles ?? [];
+  return !!member && !member.user.bot && roleIds.some((roleId) => !!roleId && member.roles.cache.has(roleId));
+}
+
+export async function fetchForumCastMembers(guild: Guild, roles: string | readonly string[]): Promise<GuildMember[]> {
+  const roleIds = [...new Set(typeof roles === "string" ? [roles] : roles)];
+  const resolved = await Promise.all(roleIds.map((roleId) => guild.roles.fetch(roleId)));
+  if (!roleIds.length || resolved.some((role) => !role || role.id === guild.id)) {
+    throw new Error("キャスト対象ロールが無効です。管理者に /shop cast-roles でロールの再設定を依頼してください。");
+  }
   // Use the fetched collection, not role.members: a partial cache can omit eligible members.
   const members = await guild.members.fetch({ withPresences: false });
-  return [...members.values()].filter((member) => isEligibleForumCast(member, roleId))
+  return [...members.values()].filter((member) => isEligibleForumCast(member, roleIds))
     .sort((a, b) => a.displayName.localeCompare(b.displayName, "ja") || a.id.localeCompare(b.id));
 }
 

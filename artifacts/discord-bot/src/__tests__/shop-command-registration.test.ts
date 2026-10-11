@@ -5,7 +5,8 @@ import { GLOBAL_PREFERRED_GUILD_ID } from "../lib/guildCommandScope";
 
 const definition = new SlashCommandBuilder().setName("shop").setDescription("ショップ")
   .addSubcommand((sub) => sub.setName("forum-panel").setDescription("パネル")
-    .addRoleOption((option) => option.setName("cast_role").setDescription("対象ロール"))).toJSON();
+    .addRoleOption((option) => option.setName("cast_role").setDescription("対象ロール")))
+  .addSubcommand((sub) => sub.setName("cast-roles").setDescription("複数ロールを設定")).toJSON();
 function manager(existing = true, valid = true) {
   const command = { id: "shop-id", name: "shop", type: ApplicationCommandType.ChatInput,
     options: valid ? definition.options : [] };

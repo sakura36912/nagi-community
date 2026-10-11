@@ -25,7 +25,8 @@ import {
 import type { ShopItem } from "@workspace/db";
 import type { Client, Guild, VoiceChannel } from "discord.js";
 import { logger } from "../lib/logger";
-import { buildForumCastPicker, fetchForumCastMembers, isEligibleForumCast, FORUM_CAST_PAGE_PREFIX } from "../lib/forumCastPicker";
+import { buildForumCastPicker, fetchForumCastMembers, getForumCastRoleIds, isEligibleForumCast, FORUM_CAST_PAGE_PREFIX } from "../lib/forumCastPicker";
+import { buildForumCastRoleConfig, showForumCastRoleConfig } from "./forumCastRoles";
 import { WAITING_ROLE_NAME } from "../lib/rejoinLog";
 import {
   DEFAULT_DAILY_AMOUNT,
@@ -704,12 +705,13 @@ async function completeForumPurchase(
     return;
   }
 
-  if (!panel.castRoleId) {
-    await interaction.editReply("キャスト対象ロールが未設定です。管理者に `cast_role` を指定してパネルを再設定してもらってください。購入は行っていません。");
+  const castRoleIds = getForumCastRoleIds(panel);
+  if (!castRoleIds.length) {
+    await interaction.editReply("キャスト対象ロールが未設定です。管理者に /shop cast-roles で設定してもらってください。購入は行っていません。");
     return;
   }
   const castMember = await interaction.guild.members.fetch({ user: castId, force: true }).catch(() => null);
-  if (!isEligibleForumCast(castMember, panel.castRoleId)) {
+  if (!isEligibleForumCast(castMember, castRoleIds)) {
     await interaction.editReply("指定されたメンバーはキャスト対象ロールを持っていないか、サーバーから退出しています。購入は行っていません。");
     return;
   }
@@ -805,8 +807,9 @@ async function showForumCastPicker(
     if (!interaction.guild) throw new Error("この操作はサーバー内でのみ使用できます。");
     const panel = await getConfiguredForumPanel(interaction.guild.id, interaction.channelId, itemId);
     if (!panel?.logChannelId) throw new Error("この購入パネルは無効か、購入ログ先が未設定です。");
-    if (!panel.castRoleId) throw new Error("キャスト対象ロールが未設定です。管理者に `cast_role` を指定してパネルを再設定してもらってください。");
-    const members = await fetchForumCastMembers(interaction.guild, panel.castRoleId);
+    const castRoleIds = getForumCastRoleIds(panel);
+    if (!castRoleIds.length) throw new Error("キャスト対象ロールが未設定です。管理者に /shop cast-roles で設定してもらってください。");
+    const members = await fetchForumCastMembers(interaction.guild, castRoleIds);
     await interaction.editReply(buildForumCastPicker(itemId, quantity, members, page));
   } catch (error) {
     logger.warn("[forum-shop] Failed to load cast choices", error);
@@ -1943,11 +1946,16 @@ const shopCommand: Command = {
             .setRequired(false),
         ),
     )
+    .addSubcommand((sub) => sub.setName("cast-roles").setDescription("この投稿のキャスト対象ロールを複数選択して設定します（管理者）"))
     ,
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub     = interaction.options.getSubcommand();
+    if (sub === "cast-roles") {
+      await showForumCastRoleConfig(interaction);
+      return;
+    }
 
     // Resolve cfg for subcommands that carry a category option
     function getCfg(): ShopGroupConfig {
@@ -2238,7 +2246,9 @@ const shopCommand: Command = {
       const existingPanel = await getShopForumPanel(guildId, thread.id);
       const settings = await getGuildSettings(guildId);
       const logChannelId = logChannel?.id ?? existingPanel?.logChannelId ?? null;
-      const castRoleId = interaction.options.getRole("cast_role")?.id ?? existingPanel?.castRoleId ?? null;
+      const selectedCastRole = interaction.options.getRole("cast_role");
+      const castRoleIds = selectedCastRole ? [selectedCastRole.id] : existingPanel ? getForumCastRoleIds(existingPanel) : [];
+      const castRoleId = castRoleIds[0] ?? null;
       if (!castRoleId || castRoleId === guildId) {
         await interaction.reply({
           content: "❌ `cast_role` にキャスト対象ロールを指定してください。@everyone は指定できません。",
@@ -2265,6 +2275,7 @@ const shopCommand: Command = {
           targetRoleId: role?.id ?? null,
           logChannelId,
           castRoleId,
+          castRoleIds,
         },
       );
       const panel = buildForumShopPanel(saved.item.id);
@@ -2281,9 +2292,10 @@ const shopCommand: Command = {
       }
 
       await interaction.reply({
-        content: `✅ このフォーラム投稿の商品を **${saved.item.name}**（${saved.item.price.toLocaleString()}${settings.currencyName}）に設定し、購入ログを <#${logChannelId}> へ送る購入パネルを${panelMessage.id === existingPanel?.panelMessageId ? "更新" : "設置"}しました。\nキャスト選択は <@&${castRoleId}> のメンバーだけを表示します。`,
+        content: `✅ このフォーラム投稿の商品を **${saved.item.name}**（${saved.item.price.toLocaleString()}${settings.currencyName}）に設定し、購入ログを <#${logChannelId}> へ送る購入パネルを${panelMessage.id === existingPanel?.panelMessageId ? "更新" : "設置"}しました。\nキャスト選択は ${castRoleIds.map((id) => `<@&${id}>`).join("、")} のいずれかを持つメンバーだけを表示します。\n下の選択欄から対象ロールを複数選択して変更できます。選択すると保存されます。`,
         ephemeral: true,
         allowedMentions: { parse: [] },
+        components: buildForumCastRoleConfig(saved.item.id, interaction.user.id, castRoleIds.filter((id) => interaction.guild?.roles.cache?.has(id))),
       });
       return;
     }

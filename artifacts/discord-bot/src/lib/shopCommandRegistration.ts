@@ -21,7 +21,8 @@ export async function syncShopCommandRegistration(
     const saved = existing ? await manager.edit(existing.id, definition) : await manager.create(definition);
     const verified = await manager.fetch(saved.id, { force: true });
     const forumPanel = verified.options.find((option) => option.name === "forum-panel");
-    if (!forumPanel || !("options" in forumPanel) || !forumPanel.options?.some((option) => option.name === "cast_role")) {
+    if (!forumPanel || !("options" in forumPanel) || !forumPanel.options?.some((option) => option.name === "cast_role")
+      || !verified.options.some((option) => option.name === "cast-roles")) {
       throw new Error(`/shop cast_role registration verification failed (${label})`);
     }
     logger.info(`[shop] Command synchronized (${label})`);

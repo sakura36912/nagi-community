@@ -105,6 +105,16 @@ describe("forum shop cast-role enforcement", () => {
     await handleForumPurchaseCast(fixture() as unknown as StringSelectMenuInteraction);
     expect(mocks.buy).not.toHaveBeenCalled();
   });
+  it("permits purchase when the cast holds only the second configured role", async () => {
+    mocks.getPanel.mockResolvedValue({ shopItemId: 10, logChannelId: "log", castRoleId: "other-role", castRoleIds: ["other-role", "cast-role"] });
+    await handleForumPurchaseCast(fixture() as unknown as StringSelectMenuInteraction);
+    expect(mocks.buy).toHaveBeenCalledOnce();
+  });
+  it("blocks an old selection if all matching roles were removed from the current configuration", async () => {
+    mocks.getPanel.mockResolvedValue({ shopItemId: 10, logChannelId: "log", castRoleId: "other", castRoleIds: ["other", "new"] });
+    await handleForumPurchaseCast(fixture() as unknown as StringSelectMenuInteraction);
+    expect(mocks.buy).not.toHaveBeenCalled();
+  });
 });
 
 describe("forum panel cast-role configuration", () => {
@@ -133,6 +143,17 @@ describe("forum panel cast-role configuration", () => {
   it("preserves a configured cast role when other panel settings are edited without cast_role", async () => {
     await shop.execute(setup(null) as never);
     expect(mocks.savePanel).toHaveBeenCalledWith("guild", "thread", null, expect.objectContaining({ castRoleId: "cast-role" }));
+  });
+  it("keeps all configured roles when editing product settings and attaches a multi-role selector", async () => {
+    mocks.getPanel.mockResolvedValue({ shopItemId: 10, logChannelId: "log", castRoleId: "cast-role", castRoleIds: ["cast-role", "second-role"] });
+    const interaction = setup(null);
+    await shop.execute(interaction as never);
+    expect(mocks.savePanel).toHaveBeenCalledWith("guild", "thread", null, expect.objectContaining({
+      castRoleIds: ["cast-role", "second-role"],
+    }));
+    const selector = interaction.reply.mock.calls[0][0].components[0].components[0].toJSON();
+    expect(selector.type).toBe(6);
+    expect(selector.max_values).toBe(25);
   });
   it("requires an explicit role for a new panel and rejects @everyone", async () => {
     mocks.getPanel.mockResolvedValue(undefined);

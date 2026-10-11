@@ -141,6 +141,7 @@ import {
 } from "./lib/vcRewardPresenceReconciliation";
 import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/calendar";
 import { FORUM_CAST_PAGE_PREFIX } from "./lib/forumCastPicker";
+import { FORUM_CAST_ROLES_PREFIX, handleForumCastRoleConfig } from "./commands/forumCastRoles";
 import { syncShopCommandRegistration } from "./lib/shopCommandRegistration";
 import { handleForumCopyButton, syncForumCopyCommandRegistration } from "./commands/forumCopy";
 import {
@@ -2584,6 +2585,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(FORUM_CAST_PAGE_PREFIX)) {
       await handleForumCastPage(interaction);
+      return;
+    }
+
+    if (interaction.isRoleSelectMenu() && interaction.customId.startsWith(FORUM_CAST_ROLES_PREFIX)) {
+      await handleForumCastRoleConfig(interaction);
       return;
     }
 

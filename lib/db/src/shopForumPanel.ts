@@ -11,6 +11,7 @@ export type ShopForumPanelConfig = {
   targetRoleId: string | null;
   logChannelId: string | null;
   castRoleId?: string | null;
+  castRoleIds?: string[];
 };
 
 export async function getShopForumPanel(
@@ -92,6 +93,10 @@ export async function upsertShopForumPanel(
       throw new Error("Failed to create the forum shop item");
     }
 
+    const configuredRoles = config.castRoleIds
+      ?? (config.castRoleId ? [config.castRoleId] : existingPanel?.castRoleIds?.length
+        ? existingPanel.castRoleIds : existingPanel?.castRoleId ? [existingPanel.castRoleId] : []);
+    const castRoleIds = [...new Set(configuredRoles)];
     const [panel] = await tx
       .insert(shopForumPanelsTable)
       .values({
@@ -100,7 +105,8 @@ export async function upsertShopForumPanel(
         shopItemId: item.id,
         panelMessageId,
         logChannelId: config.logChannelId,
-        castRoleId: config.castRoleId ?? existingPanel?.castRoleId ?? null,
+        castRoleId: castRoleIds[0] ?? null,
+        castRoleIds,
       })
       .onConflictDoUpdate({
         target: [shopForumPanelsTable.guildId, shopForumPanelsTable.channelId],
@@ -108,7 +114,8 @@ export async function upsertShopForumPanel(
           shopItemId: item.id,
           panelMessageId,
           logChannelId: config.logChannelId,
-          castRoleId: config.castRoleId ?? existingPanel?.castRoleId ?? null,
+          castRoleId: castRoleIds[0] ?? null,
+          castRoleIds,
         },
       })
       .returning();
@@ -119,6 +126,24 @@ export async function upsertShopForumPanel(
 
     return { panel, item };
   });
+}
+
+/** Replace the full role selection atomically; stale panels cannot change another product. */
+export async function setShopForumPanelCastRoles(
+  guildId: string, channelId: string, shopItemId: number, roleIds: string[],
+): Promise<ShopForumPanel | undefined> {
+  const castRoleIds = [...new Set(roleIds)];
+  if (!castRoleIds.length || castRoleIds.length > 25 || castRoleIds.includes(guildId)) {
+    throw new Error("Choose 1–25 cast roles, excluding @everyone");
+  }
+  const [panel] = await db.update(shopForumPanelsTable)
+    .set({ castRoleIds, castRoleId: castRoleIds[0] })
+    .where(and(
+      eq(shopForumPanelsTable.guildId, guildId),
+      eq(shopForumPanelsTable.channelId, channelId),
+      eq(shopForumPanelsTable.shopItemId, shopItemId),
+    )).returning();
+  return panel;
 }
 
 export async function setShopForumPanelMessage(
