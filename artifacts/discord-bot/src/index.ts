@@ -44,6 +44,7 @@ import {
   SHOP_SELECT_ID,
   handleForumPurchaseQuantity,
   handleForumPurchaseCast,
+  handleForumCastPage,
   FORUM_QUANTITY_PREFIX,
   FORUM_CAST_PREFIX,
   NICKNAME_MODAL_PREFIX,
@@ -139,6 +140,8 @@ import {
   type ActiveRewardVoiceState,
 } from "./lib/vcRewardPresenceReconciliation";
 import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/calendar";
+import { FORUM_CAST_PAGE_PREFIX } from "./lib/forumCastPicker";
+import { syncShopCommandRegistration } from "./lib/shopCommandRegistration";
 import { handleForumCopyButton, syncForumCopyCommandRegistration } from "./commands/forumCopy";
 import {
   handleUraInteraction,
@@ -1260,6 +1263,9 @@ client.on(Events.GuildUnavailable, (guild) => {
 
 client.once(Events.ClientReady, async (readyClient) => {
   const commandRegistrations = Promise.allSettled([
+    syncShopCommandRegistration(readyClient, commandsByName.get("shop")!.data.toJSON() as import("discord.js").RESTPostAPIChatInputApplicationCommandsJSONBody).catch((err) =>
+      logger.error("[shop] Startup command registration failed", err),
+    ),
     syncForumCopyCommandRegistration(readyClient).catch((err) =>
       logger.error("[forum-copy] Startup command registration failed", err),
     ),
@@ -2576,7 +2582,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (interaction.isUserSelectMenu() && interaction.customId.startsWith(FORUM_CAST_PREFIX)) {
+    if (interaction.isButton() && interaction.customId.startsWith(FORUM_CAST_PAGE_PREFIX)) {
+      await handleForumCastPage(interaction);
+      return;
+    }
+
+    if ((interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) && interaction.customId.startsWith(FORUM_CAST_PREFIX)) {
       await handleForumPurchaseCast(interaction);
       return;
     }

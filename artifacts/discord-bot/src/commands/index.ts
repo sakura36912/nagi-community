@@ -25,6 +25,7 @@ import {
 import type { ShopItem } from "@workspace/db";
 import type { Client, Guild, VoiceChannel } from "discord.js";
 import { logger } from "../lib/logger";
+import { buildForumCastPicker, fetchForumCastMembers, isEligibleForumCast, FORUM_CAST_PAGE_PREFIX } from "../lib/forumCastPicker";
 import { WAITING_ROLE_NAME } from "../lib/rejoinLog";
 import {
   DEFAULT_DAILY_AMOUNT,
@@ -620,17 +621,6 @@ function buildForumQuantityPicker(itemId: number) {
   };
 }
 
-function buildForumCastPicker(itemId: number, quantity: number) {
-  const select = new UserSelectMenuBuilder()
-    .setCustomId(`${FORUM_CAST_PREFIX}${itemId}:${quantity}`)
-    .setPlaceholder("指定するキャストを選択してください")
-    .setMinValues(1)
-    .setMaxValues(1);
-  return {
-    components: [new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(select)],
-  };
-}
-
 async function getConfiguredForumPanel(
   guildId: string,
   channelId: string,
@@ -689,7 +679,7 @@ const FORUM_SUPPORTED_EFFECTS = new Set([
 ]);
 
 async function completeForumPurchase(
-  interaction: UserSelectMenuInteraction,
+  interaction: UserSelectMenuInteraction | StringSelectMenuInteraction,
   itemId: number,
   quantity: number,
   castId: string,
@@ -714,9 +704,13 @@ async function completeForumPurchase(
     return;
   }
 
-  const castMember = await interaction.guild.members.fetch(castId).catch(() => null);
-  if (!castMember || castMember.user.bot) {
-    await interaction.editReply("指定されたキャストが見つからないか、Botが選択されています。");
+  if (!panel.castRoleId) {
+    await interaction.editReply("キャスト対象ロールが未設定です。管理者に `cast_role` を指定してパネルを再設定してもらってください。購入は行っていません。");
+    return;
+  }
+  const castMember = await interaction.guild.members.fetch({ user: castId, force: true }).catch(() => null);
+  if (!isEligibleForumCast(castMember, panel.castRoleId)) {
+    await interaction.editReply("指定されたメンバーはキャスト対象ロールを持っていないか、サーバーから退出しています。購入は行っていません。");
     return;
   }
 
@@ -799,25 +793,43 @@ export async function handleForumPurchaseQuantity(
     return;
   }
 
-  const panel = interaction.guildId
-    ? await getConfiguredForumPanel(interaction.guildId, interaction.channelId, itemId)
-    : null;
-  if (!panel?.logChannelId) {
-    await interaction.update({
-      content: "この購入パネルは無効か、購入ログ先が未設定です。",
-      components: [],
+  await interaction.deferUpdate();
+  await showForumCastPicker(interaction, itemId, quantity, 0);
+}
+
+async function showForumCastPicker(
+  interaction: StringSelectMenuInteraction | ButtonInteraction,
+  itemId: number, quantity: number, page: number,
+): Promise<void> {
+  try {
+    if (!interaction.guild) throw new Error("この操作はサーバー内でのみ使用できます。");
+    const panel = await getConfiguredForumPanel(interaction.guild.id, interaction.channelId, itemId);
+    if (!panel?.logChannelId) throw new Error("この購入パネルは無効か、購入ログ先が未設定です。");
+    if (!panel.castRoleId) throw new Error("キャスト対象ロールが未設定です。管理者に `cast_role` を指定してパネルを再設定してもらってください。");
+    const members = await fetchForumCastMembers(interaction.guild, panel.castRoleId);
+    await interaction.editReply(buildForumCastPicker(itemId, quantity, members, page));
+  } catch (error) {
+    logger.warn("[forum-shop] Failed to load cast choices", error);
+    await interaction.editReply({
+      content: error instanceof Error ? error.message : "キャスト一覧の取得に失敗しました。購入は行っていません。",
+      components: [], allowedMentions: { parse: [] },
     });
+  }
+}
+
+export async function handleForumCastPage(interaction: ButtonInteraction): Promise<void> {
+  const [itemId, quantity, page] = interaction.customId.slice(FORUM_CAST_PAGE_PREFIX.length).split(":").map(Number);
+  if (!Number.isInteger(itemId) || itemId <= 0 || !Number.isInteger(quantity) || quantity < 1 || quantity > 25
+    || !Number.isInteger(page) || page < 0) {
+    await interaction.update({ content: "不正な購入情報です。", components: [] });
     return;
   }
-
-  await interaction.update({
-    content: "指定するキャストを選択してください。",
-    ...buildForumCastPicker(itemId, quantity),
-  });
+  await interaction.deferUpdate();
+  await showForumCastPicker(interaction, itemId, quantity, page);
 }
 
 export async function handleForumPurchaseCast(
-  interaction: UserSelectMenuInteraction,
+  interaction: UserSelectMenuInteraction | StringSelectMenuInteraction,
 ): Promise<void> {
   const payload = interaction.customId.slice(FORUM_CAST_PREFIX.length).split(":");
   const itemId = Number(payload[0]);
@@ -1915,6 +1927,7 @@ const shopCommand: Command = {
       sub.setName("forum-panel").setDescription("現在のフォーラム投稿に専用の購入パネルを設置します（管理者）")
         .addStringOption((opt) => opt.setName("name").setDescription("このフォーラム専用の商品名").setRequired(true))
         .addIntegerOption((opt) => opt.setName("price").setDescription("このフォーラム専用の価格").setRequired(true).setMinValue(1))
+        .addRoleOption((opt) => opt.setName("cast_role").setDescription("キャスト選択に表示するメンバーの対象ロール（初回は必須）"))
         .addStringOption((opt) => opt.setName("description").setDescription("商品の説明").setRequired(false))
         .addStringOption((opt) =>
           opt.setName("effect").setDescription("購入時の特殊効果").setRequired(false).addChoices(...COMBINED_EFFECT_CHOICES),
@@ -2225,6 +2238,14 @@ const shopCommand: Command = {
       const existingPanel = await getShopForumPanel(guildId, thread.id);
       const settings = await getGuildSettings(guildId);
       const logChannelId = logChannel?.id ?? existingPanel?.logChannelId ?? null;
+      const castRoleId = interaction.options.getRole("cast_role")?.id ?? existingPanel?.castRoleId ?? null;
+      if (!castRoleId || castRoleId === guildId) {
+        await interaction.reply({
+          content: "❌ `cast_role` にキャスト対象ロールを指定してください。@everyone は指定できません。",
+          ephemeral: true,
+        });
+        return;
+      }
       if (!logChannelId) {
         await interaction.reply({
           content: "❌ `log_channel` を指定してください。購入結果を送るテキストチャンネルが必要です。",
@@ -2243,6 +2264,7 @@ const shopCommand: Command = {
           effectType: effect,
           targetRoleId: role?.id ?? null,
           logChannelId,
+          castRoleId,
         },
       );
       const panel = buildForumShopPanel(saved.item.id);
@@ -2259,8 +2281,9 @@ const shopCommand: Command = {
       }
 
       await interaction.reply({
-        content: `✅ このフォーラム投稿の商品を **${saved.item.name}**（${saved.item.price.toLocaleString()}${settings.currencyName}）に設定し、購入ログを <#${logChannelId}> へ送る購入パネルを${panelMessage.id === existingPanel?.panelMessageId ? "更新" : "設置"}しました。`,
+        content: `✅ このフォーラム投稿の商品を **${saved.item.name}**（${saved.item.price.toLocaleString()}${settings.currencyName}）に設定し、購入ログを <#${logChannelId}> へ送る購入パネルを${panelMessage.id === existingPanel?.panelMessageId ? "更新" : "設置"}しました。\nキャスト選択は <@&${castRoleId}> のメンバーだけを表示します。`,
         ephemeral: true,
+        allowedMentions: { parse: [] },
       });
       return;
     }
