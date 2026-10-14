@@ -698,7 +698,9 @@ client.on(Events.ShardResume, (shardId, replayedEvents) => {
 });
 
 client.on(Events.Invalidated, () => {
-  logger.error("[discord] Session invalidated; Discord requires a fresh login");
+  logger.error("[discord] Session invalidated; stopping so the supervisor can restart with a fresh login");
+  releaseBotInstanceLock();
+  process.exit(1);
 });
 
 // Checks every minute whether any guild's reward day has arrived and
@@ -1263,6 +1265,7 @@ client.on(Events.GuildUnavailable, (guild) => {
 });
 
 client.once(Events.ClientReady, async (readyClient) => {
+  logger.info("[discord] Gateway ready; interaction listener is active");
   const commandRegistrations = Promise.allSettled([
     syncShopCommandRegistration(readyClient, commandsByName.get("shop")!.data.toJSON() as import("discord.js").RESTPostAPIChatInputApplicationCommandsJSONBody).catch((err) =>
       logger.error("[shop] Startup command registration failed", err),
@@ -2437,6 +2440,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && await handleForumCopyButton(interaction)) return;
 
     if (interaction.isChatInputCommand()) {
+      logger.info(
+        `[interaction] Received /${interaction.commandName} ` +
+        `subcommand=${interaction.options.getSubcommand(false) ?? "(none)"} ` +
+        `ageMs=${Date.now() - interaction.createdTimestamp} ready=${client.isReady()}`,
+      );
       const command = commandsByName.get(interaction.commandName);
       if (!command) {
         logger.warn(`Unknown command: ${interaction.commandName}`);
@@ -2717,9 +2725,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
   } catch (err) {
-    // 10062 = Unknown interaction (expired before we could respond) — not actionable, skip silently.
+    // Expiry across many commands can reveal gateway/event-loop delays. Do not
+    // silently discard the only diagnostic, or include interaction tokens.
     const code = (err as { code?: number }).code;
-    if (code === 10062) return;
+    if (code === 10062) {
+      logger.warn(
+        `[interaction] Response expired type=${interaction.type} ` +
+        `command=${interaction.isChatInputCommand() ? interaction.commandName : "(component)"} ` +
+        `ageMs=${Date.now() - interaction.createdTimestamp}`,
+      );
+      return;
+    }
 
     logger.error("Error handling interaction", err);
     if (interaction.isRepliable()) {
