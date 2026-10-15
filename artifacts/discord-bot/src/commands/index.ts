@@ -127,6 +127,7 @@ import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { calendarCommand } from "./calendar";
 import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
+import { backupCommand } from "./backup";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -4513,6 +4514,7 @@ const balanceRankingCommand: Command = {
 };
 
 export const commands: Command[] = [
+  backupCommand,
   interviewCommand,
   balanceCommand,
   payCommand,

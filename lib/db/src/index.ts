@@ -23,3 +23,4 @@ export * from "./uraRecruitment";
 export * from "./schema-check";
 export * from "./dealerCasino";
 export * from "./bounty";
+export * from "./jsonBackup";

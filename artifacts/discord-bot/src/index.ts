@@ -1,5 +1,7 @@
 import { AuditLogEvent, ChannelType, Client, DiscordAPIError, Events, FetchMessagesOptions, GatewayIntentBits, GuildMember, MessageFlags, PermissionFlagsBits, VoiceState, TextChannel } from "discord.js";
 import { initRouletteGifCache } from "./lib/rouletteWheel";
+import { handleBackupButton } from "./commands/backup";
+import { syncBackupCommandRegistration } from "./lib/backupCommandRegistration";
 import { handleRolePanelButton, ROLE_PANEL_PREFIX } from "./commands/rolepanel";
 import { handleBlackjackButton, BJ_PREFIX } from "./commands/blackjack";
 import {
@@ -1267,6 +1269,9 @@ client.on(Events.GuildUnavailable, (guild) => {
 client.once(Events.ClientReady, async (readyClient) => {
   logger.info("[discord] Gateway ready; interaction listener is active");
   const commandRegistrations = Promise.allSettled([
+    syncBackupCommandRegistration(readyClient).catch((err) =>
+      logger.error("[backup] Startup command registration failed", err),
+    ),
     syncShopCommandRegistration(readyClient, commandsByName.get("shop")!.data.toJSON() as import("discord.js").RESTPostAPIChatInputApplicationCommandsJSONBody).catch((err) =>
       logger.error("[shop] Startup command registration failed", err),
     ),
@@ -2438,6 +2443,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     if (interaction.isButton() && await handleForumCopyButton(interaction)) return;
+    if (interaction.isButton() && await handleBackupButton(interaction)) return;
 
     if (interaction.isChatInputCommand()) {
       logger.info(
