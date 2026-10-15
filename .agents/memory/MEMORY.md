@@ -29,3 +29,4 @@
 - [Bounty panel access scope](bounty-panel-access-scope.md) — 広報部・本船員へのパネル操作の委譲を、初期設定や月次保留精算の承認権限へ自動的に広げない。
 - [Forum copy policy](forum-copy-policy.md) — 別フォーラムへの移行は元投稿を維持するコピーとし、管理者の公開範囲確認後に実行する。
 - [Database backup scope](database-backup-scope.md) — JSONバックアップは本番・開発の両方を対象にし、全サーバー分の取得権限を通常のサーバー管理者へ広げない。
+- [VPS database migration](vps-database-migration.md) — 移行先はConoHa VPS、移行先DBはSQLite。既存ユーザーデータの引き継ぎが必須。
