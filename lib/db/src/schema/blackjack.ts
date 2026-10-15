@@ -1,4 +1,4 @@
-import { pgTable, text, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, primaryKey } from "../sqliteColumns";
 
 /**
  * ブラックジャック用カード画像テーブル。

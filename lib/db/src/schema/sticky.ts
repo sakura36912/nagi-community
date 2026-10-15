@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, unique } from "../sqliteColumns";
 
 export const stickyMessagesTable = pgTable(
   "sticky_messages",

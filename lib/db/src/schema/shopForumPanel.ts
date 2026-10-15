@@ -5,7 +5,7 @@ import {
   text,
   timestamp,
   unique,
-} from "drizzle-orm/pg-core";
+} from "../sqliteColumns";
 import { createInsertSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { z } from "zod/v4";
@@ -29,7 +29,7 @@ export const shopForumPanelsTable = pgTable(
     panelMessageId: text("panel_message_id"),
     logChannelId: text("log_channel_id"),
     castRoleId: text("cast_role_id"),
-    castRoleIds: text("cast_role_ids").array().notNull().default(sql`'{}'::text[]`),
+    castRoleIds: text("cast_role_ids").array().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

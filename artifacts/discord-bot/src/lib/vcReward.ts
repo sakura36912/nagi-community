@@ -61,9 +61,9 @@ export async function addVcRewardChannel(
     .update(vcRewardSettingsTable)
     .set({
       includedChannelIds: sql`
-        CASE WHEN ${channelId} = ANY(included_channel_ids)
+        CASE WHEN EXISTS (SELECT 1 FROM json_each(included_channel_ids) WHERE value = ${channelId})
           THEN included_channel_ids
-          ELSE array_append(included_channel_ids, ${channelId})
+          ELSE json_insert(included_channel_ids, '$[#]', ${channelId})
         END
       `,
     })
@@ -92,7 +92,7 @@ export async function removeVcRewardChannel(
   const [row] = await db
     .update(vcRewardSettingsTable)
     .set({
-      includedChannelIds: sql`array_remove(included_channel_ids, ${channelId})`,
+      includedChannelIds: sql`(SELECT json_group_array(value) FROM json_each(included_channel_ids) WHERE value <> ${channelId})`,
     })
     .where(eq(vcRewardSettingsTable.guildId, guildId))
     .returning();
@@ -207,7 +207,7 @@ export async function getTotalChestVcSeconds(
   userId: string,
 ): Promise<number> {
   const [row] = await db
-    .select({ total: sql<number>`coalesce(sum(${chestVcAccumTable.accumulatedSeconds}), 0)::int` })
+    .select({ total: sql<number>`coalesce(sum(${chestVcAccumTable.accumulatedSeconds}), 0)` })
     .from(chestVcAccumTable)
     .where(
       and(
@@ -236,7 +236,7 @@ export async function getTavernSessionLogSeconds(
   const channelIds = tavernRows.map((r) => r.channelId);
 
   const [row] = await db
-    .select({ total: sql<number>`coalesce(sum(${vcSessionLogsTable.durationSeconds}), 0)::int` })
+    .select({ total: sql<number>`coalesce(sum(${vcSessionLogsTable.durationSeconds}), 0)` })
     .from(vcSessionLogsTable)
     .where(
       and(
@@ -251,7 +251,7 @@ export async function getTavernSessionLogSeconds(
 /** 累積合計の宝箱開封回数を取得する（全日付の合計）。 */
 export async function getTotalChestOpensCount(guildId: string, userId: string): Promise<number> {
   const [row] = await db
-    .select({ total: sql<number>`coalesce(sum(${chestVcAccumTable.chestOpensCount}), 0)::int` })
+    .select({ total: sql<number>`coalesce(sum(${chestVcAccumTable.chestOpensCount}), 0)` })
     .from(chestVcAccumTable)
     .where(
       and(
@@ -354,7 +354,7 @@ export async function consumeChestBonusOpen(
 ): Promise<boolean> {
   const result = await db
     .update(chestCooldownTable)
-    .set({ bonusOpens: sql`GREATEST(0, ${chestCooldownTable.bonusOpens} - 1)` })
+    .set({ bonusOpens: sql`MAX(0, ${chestCooldownTable.bonusOpens} - 1)` })
     .where(
       and(
         eq(chestCooldownTable.guildId, guildId),
@@ -362,8 +362,9 @@ export async function consumeChestBonusOpen(
         eq(chestCooldownTable.chestType, chestType),
         sql`${chestCooldownTable.bonusOpens} > 0`,
       ),
-    );
-  return (result.rowCount ?? 0) > 0;
+    )
+    .returning({ userId: chestCooldownTable.userId });
+  return result.length > 0;
 }
 
 /**
@@ -382,7 +383,7 @@ export async function addChestBonusOpens(
     .onConflictDoUpdate({
       target: [chestCooldownTable.guildId, chestCooldownTable.userId, chestCooldownTable.chestType],
       set: {
-        bonusOpens: sql`GREATEST(0, ${chestCooldownTable.bonusOpens} + ${count})`,
+        bonusOpens: sql`MAX(0, ${chestCooldownTable.bonusOpens} + ${count})`,
       },
     })
     .returning({ bonusOpens: chestCooldownTable.bonusOpens });
@@ -578,9 +579,9 @@ export async function addVcLogCategory(
     .update(vcSessionLogSettingsTable)
     .set({
       categoryIds: sql`
-        CASE WHEN ${categoryId} = ANY(category_ids)
+        CASE WHEN EXISTS (SELECT 1 FROM json_each(category_ids) WHERE value = ${categoryId})
           THEN category_ids
-          ELSE array_append(category_ids, ${categoryId})
+          ELSE json_insert(category_ids, '$[#]', ${categoryId})
         END`,
     })
     .where(eq(vcSessionLogSettingsTable.guildId, guildId))
@@ -595,7 +596,7 @@ export async function removeVcLogCategory(
   await getVcLogSettings(guildId);
   const [row] = await db
     .update(vcSessionLogSettingsTable)
-    .set({ categoryIds: sql`array_remove(category_ids, ${categoryId})` })
+    .set({ categoryIds: sql`(SELECT json_group_array(value) FROM json_each(category_ids) WHERE value <> ${categoryId})` })
     .where(eq(vcSessionLogSettingsTable.guildId, guildId))
     .returning();
   return row!;

@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { boolean, integer, pgTable, serial, text, timestamp } from "../sqliteColumns";
 
 /** Hub VC 設定: 入ると自動で新VCを作成するトリガーチャンネル */
 export const vcHubChannelsTable = pgTable("vc_hub_channels", {

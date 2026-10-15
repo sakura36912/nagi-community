@@ -34,9 +34,9 @@ export async function addSlotSticker(
     .update(slotSettingsTable)
     .set({
       stickerIds: sql`
-        CASE WHEN ${stickerId} = ANY(sticker_ids)
+        CASE WHEN EXISTS (SELECT 1 FROM json_each(sticker_ids) WHERE value = ${stickerId})
           THEN sticker_ids
-          ELSE array_append(sticker_ids, ${stickerId})
+          ELSE json_insert(sticker_ids, '$[#]', ${stickerId})
         END`,
     })
     .where(eq(slotSettingsTable.guildId, guildId))
@@ -52,8 +52,8 @@ export async function removeSlotSticker(
   const [row] = await db
     .update(slotSettingsTable)
     .set({
-      stickerIds: sql`array_remove(sticker_ids, ${stickerId})`,
-      emojiWeights: sql`emoji_weights - ${stickerId}`,
+      stickerIds: sql`(SELECT json_group_array(value) FROM json_each(sticker_ids) WHERE value <> ${stickerId})`,
+      emojiWeights: sql`json_remove(emoji_weights, ${`$."${stickerId}"`})`,
     })
     .where(eq(slotSettingsTable.guildId, guildId))
     .returning();
@@ -65,7 +65,7 @@ export async function clearSlotStickers(guildId: string): Promise<SlotSettings> 
   const [row] = await db
     .update(slotSettingsTable)
     .set({
-      stickerIds: sql`'{}'::text[]`,
+      stickerIds: [],
     })
     .where(eq(slotSettingsTable.guildId, guildId))
     .returning();
@@ -83,9 +83,9 @@ export async function addSlotEmoji(
     .update(slotSettingsTable)
     .set({
       fixedEmojiIds: sql`
-        CASE WHEN ${emojiId} = ANY(fixed_emoji_ids)
+        CASE WHEN EXISTS (SELECT 1 FROM json_each(fixed_emoji_ids) WHERE value = ${emojiId})
           THEN fixed_emoji_ids
-          ELSE array_append(fixed_emoji_ids, ${emojiId})
+          ELSE json_insert(fixed_emoji_ids, '$[#]', ${emojiId})
         END`,
     })
     .where(eq(slotSettingsTable.guildId, guildId))
@@ -101,8 +101,8 @@ export async function removeSlotEmoji(
   const [row] = await db
     .update(slotSettingsTable)
     .set({
-      fixedEmojiIds: sql`array_remove(fixed_emoji_ids, ${emojiId})`,
-      emojiWeights: sql`emoji_weights - ${emojiId}`,
+      fixedEmojiIds: sql`(SELECT json_group_array(value) FROM json_each(fixed_emoji_ids) WHERE value <> ${emojiId})`,
+      emojiWeights: sql`json_remove(emoji_weights, ${`$."${emojiId}"`})`,
     })
     .where(eq(slotSettingsTable.guildId, guildId))
     .returning();
@@ -114,8 +114,8 @@ export async function clearSlotEmojis(guildId: string): Promise<SlotSettings> {
   const [row] = await db
     .update(slotSettingsTable)
     .set({
-      fixedEmojiIds: sql`'{}'::text[]`,
-      emojiWeights: sql`'{}'::jsonb`,
+      fixedEmojiIds: [],
+      emojiWeights: {},
     })
     .where(eq(slotSettingsTable.guildId, guildId))
     .returning();
@@ -140,8 +140,8 @@ export async function setSlotEmojiWeight(
     .set({
       emojiWeights:
         weight === 1
-          ? sql`emoji_weights - ${emojiId}`
-          : sql`jsonb_set(emoji_weights, ${`{${emojiId}}`}, ${String(weight)}::jsonb)`,
+          ? sql`json_remove(emoji_weights, ${`$."${emojiId}"`})`
+          : sql`json_set(emoji_weights, ${`$."${emojiId}"`}, ${weight})`,
     })
     .where(eq(slotSettingsTable.guildId, guildId))
     .returning();
@@ -162,16 +162,11 @@ export async function setSlotPayout(
   multiplier: number,
 ): Promise<SlotSettings> {
   await getSlotSettings(guildId);
-  // Build a SQL expression that replaces element at position `lines` (1-based index = lines+1).
-  // PostgreSQL arrays are 1-indexed.
+  // SQLite JSON arrays use the same zero-based indices as JavaScript.
   const [row] = await db
     .update(slotSettingsTable)
     .set({
-      payoutMultipliers: sql`
-        payout_multipliers[:${lines}] ||
-        ARRAY[${multiplier}]::integer[] ||
-        payout_multipliers[${lines + 2}:]
-      `,
+      payoutMultipliers: sql`json_set(payout_multipliers, ${`$[${lines}]`}, ${multiplier})`,
     })
     .where(eq(slotSettingsTable.guildId, guildId))
     .returning();

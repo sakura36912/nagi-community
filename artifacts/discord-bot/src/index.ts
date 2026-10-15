@@ -229,6 +229,7 @@ import {
   getExpiredTimedRoleGrants,
   deleteTimedRoleGrant,
   pool,
+  acquireProcessLock,
   checkSchemaDrift,
   baccaratSessionsTable,
   stickyMessagesTable,
@@ -616,27 +617,15 @@ async function runBountyScheduler(client: Client, recoverMissedMonths = false): 
 }
 
 async function acquireBotInstanceLock(): Promise<boolean> {
-  const lockClient = await pool.connect();
-  try {
-    const result = await lockClient.query<{ locked: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
-      ["gathapin36912:discord-bot"],
-    );
-    if (!result.rows[0]?.locked) {
-      lockClient.release();
-      return false;
-    }
-    instanceLockClient = lockClient;
-    return true;
-  } catch (err) {
-    lockClient.release();
-    throw err;
-  }
+  const lock = await acquireProcessLock("discord-bot");
+  if (!lock) return false;
+  instanceLockClient = lock;
+  return true;
 }
 
 /**
  * During a VM deployment rollout, the new process can start before the old
- * process has released its PostgreSQL advisory lock. Waiting here lets the
+ * process has released its OS file lock. Waiting here lets the
  * new process become the owner after the old process receives SIGTERM instead
  * of exiting and leaving the deployment without a Discord bot.
  */
@@ -2763,19 +2752,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // where drizzle-kit push was never run) causes cryptic runtime errors on every
 // query that touches the affected table. Logging a clear warning here makes the
 // root cause immediately visible in bot logs.
-checkSchemaDrift(pool, (msg) => logger.warn(msg)).then((result) => {
-  if (!result.ok) {
-    logger.warn(
-      "[schema-check] ⚠ The bot will continue, but queries against affected tables will fail. " +
-        "Fix: run `pnpm --filter @workspace/db run push-force` then restart the bot.",
-    );
-  }
-}).catch(() => {
-  // Never let a schema check failure block startup.
-});
-
 async function startDiscordBot(): Promise<void> {
   try {
+    if (!(await checkSchemaDrift(pool, (msg) => logger.warn(msg))).ok) {
+      throw new Error("SQLite schema is incomplete. Apply reviewed migrations before starting.");
+    }
     const lockAcquired = await waitForBotInstanceLock();
     if (!lockAcquired) {
       logger.error(

@@ -4089,7 +4089,7 @@ const chestCommand: Command = {
       const rows = await db
         .select({
           userId:       vcSessionLogsTable.userId,
-          totalSeconds: drizzleSql<number>`sum(${vcSessionLogsTable.durationSeconds})::int`,
+          totalSeconds: drizzleSql<number>`sum(${vcSessionLogsTable.durationSeconds})`,
         })
         .from(vcSessionLogsTable)
         .where(

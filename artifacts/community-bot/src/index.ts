@@ -32,7 +32,7 @@ import { resolveIsExile } from "./lib/vc-exile.js";
 import { handleVoiceStateUpdate } from "./lib/vc-session-handler.js";
 import { runPerGuildVcPrune, runOrphanVcPrune } from "./lib/vc-prune-scheduler.js";
 import { runPeriodicMessages } from "./lib/periodic-message-scheduler.js";
-import { getPreban, pool, checkSchemaDrift } from "@workspace/db";
+import { getPreban, pool, checkSchemaDrift, acquireProcessLock } from "@workspace/db";
 import {
   buildEventEmbed,
   buildRankingEmbed,
@@ -605,18 +605,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // where drizzle-kit push was never run) causes cryptic runtime errors on every
 // query that touches the affected table. Logging a clear warning here makes the
 // root cause immediately visible in bot logs.
-checkSchemaDrift(pool, (msg) => logger.warn(msg)).then((result) => {
-  if (!result.ok) {
-    logger.warn(
-      "[schema-check] ⚠ The bot will continue, but queries against affected tables will fail. " +
-        "Fix: run `pnpm --filter @workspace/db run push-force` then restart the bot.",
-    );
+async function startCommunityBot() {
+  if (!(await checkSchemaDrift(pool, (msg) => logger.warn(msg))).ok) {
+    throw new Error("SQLite schema is incomplete. Apply reviewed migrations before starting.");
   }
-}).catch(() => {
-  // Never let a schema check failure block startup.
-});
-
-client.login(token).catch((err) => {
+  const lock = await acquireProcessLock("community-bot");
+  if (!lock) throw new Error("Another community-bot is already running for this SQLite file");
+  await client.login(token);
+}
+startCommunityBot().catch((err) => {
   logger.error("Failed to log in to Discord", err);
   process.exit(1);
 });

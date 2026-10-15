@@ -1,4 +1,4 @@
-import { integer, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
+import { integer, pgTable, primaryKey, text } from "../sqliteColumns";
 
 /** Per-guild daily play cap for each supported casino game. Missing rows mean unlimited. */
 export const casinoPlayLimitsTable = pgTable(

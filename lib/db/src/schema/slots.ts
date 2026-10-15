@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, jsonb, integer } from "../sqliteColumns";
 import { sql } from "drizzle-orm";
 
 /**
@@ -14,7 +14,7 @@ export const slotSettingsTable = pgTable("slot_settings", {
   fixedEmojiIds: text("fixed_emoji_ids")
     .array()
     .notNull()
-    .default(sql`'{}'::text[]`),
+    .default([]),
   /**
    * Ordered list of guild sticker IDs used as slot symbols.
    * When non-empty, sticker mode takes priority over emoji mode.
@@ -22,7 +22,7 @@ export const slotSettingsTable = pgTable("slot_settings", {
   stickerIds: text("sticker_ids")
     .array()
     .notNull()
-    .default(sql`'{}'::text[]`),
+    .default([]),
   /**
    * emojiId/stickerId → weight mapping.
    * Weight controls how many times the symbol appears in the reel pool.
@@ -42,7 +42,7 @@ export const slotSettingsTable = pgTable("slot_settings", {
   payoutMultipliers: integer("payout_multipliers")
     .array()
     .notNull()
-    .default(sql`'{-1,1,5,11,19,34}'::integer[]`),
+    .default([-1, 1, 5, 11, 19, 34]),
   /**
    * Chance of at least one winning payline. NULL keeps the original
    * weight-based random behavior without an explicit win-rate override.

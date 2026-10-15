@@ -237,7 +237,6 @@ export async function setDealerCasinoSettings(
       .select()
       .from(dealerCasinoSettingsTable)
       .where(eq(dealerCasinoSettingsTable.guildId, guildId))
-      .for("update")
       .limit(1);
     const next = { ...(current ?? { guildId }), ...changes };
     if (next.maxBet < next.minBet) {
@@ -367,7 +366,6 @@ export async function endDealerCasinoSession(
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.guildId, guildId))
       .orderBy(desc(dealerCasinoGamesTable.createdAt), desc(dealerCasinoGamesTable.id))
-      .for("update")
       .limit(1);
     if (!latest) throw new DealerCasinoError("No dealer casino game exists for this server.", "GAME_NOT_FOUND");
     if (latest.dealerId !== dealerId) {
@@ -448,7 +446,6 @@ export async function placeDealerCasinoBet(
       .select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, input.gameId))
-      .for("update")
       .limit(1);
     if (!game) throw new DealerCasinoError("Game not found.", "GAME_NOT_FOUND");
     if (game.state !== "RECRUITING") {
@@ -478,7 +475,6 @@ export async function placeDealerCasinoBet(
         eq(dealerCasinoBetsTable.gameId, game.id),
         eq(dealerCasinoBetsTable.userId, input.userId),
       ))
-      .for("update")
       .limit(1);
     if (existingBet) {
       if (existingBet.state === "REFUNDED" && existingBet.result === "WITHDRAWN") {
@@ -488,7 +484,7 @@ export async function placeDealerCasinoBet(
     }
 
     const [{ playerCount }] = await tx
-      .select({ playerCount: sql<number>`count(*)::int` })
+      .select({ playerCount: sql<number>`count(*)` })
       .from(dealerCasinoBetsTable)
       .where(and(
         eq(dealerCasinoBetsTable.gameId, game.id),
@@ -544,7 +540,6 @@ export async function updateDealerCasinoBet(input: {
     const [game] = await tx.select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, input.gameId))
-      .for("update")
       .limit(1);
     if (!game || game.state !== "RECRUITING") {
       throw new DealerCasinoError("This game's entry period is closed.", "GAME_NOT_RECRUITING");
@@ -565,7 +560,6 @@ export async function updateDealerCasinoBet(input: {
         eq(dealerCasinoBetsTable.gameId, game.id),
         eq(dealerCasinoBetsTable.userId, input.userId),
       ))
-      .for("update")
       .limit(1);
     if (!bet || bet.state !== "ACTIVE") {
       throw new DealerCasinoError("Join the game before changing your bet.", "BET_NOT_FOUND");
@@ -631,7 +625,6 @@ export async function withdrawDealerCasinoBet(
     const [game] = await tx.select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, gameId))
-      .for("update")
       .limit(1);
     if (!game || game.state !== "RECRUITING") {
       throw new DealerCasinoError("Participation can only be cancelled during recruitment.", "GAME_NOT_RECRUITING");
@@ -642,7 +635,6 @@ export async function withdrawDealerCasinoBet(
         eq(dealerCasinoBetsTable.gameId, gameId),
         eq(dealerCasinoBetsTable.userId, userId),
       ))
-      .for("update")
       .limit(1);
     if (!bet || bet.state !== "ACTIVE") {
       throw new DealerCasinoError("No active bet was found for this player.", "BET_NOT_FOUND");
@@ -706,7 +698,6 @@ export async function transitionDealerCasinoGame(
       .select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, gameId))
-      .for("update")
       .limit(1);
     if (!game) throw new DealerCasinoError("Game not found.", "GAME_NOT_FOUND");
     if (game.gameType === "poker" && nextState === "PLAYING") {
@@ -759,7 +750,6 @@ export async function recordDealerCasinoResult(
       .select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, gameId))
-      .for("update")
       .limit(1);
     if (!game) throw new DealerCasinoError("Game not found.", "GAME_NOT_FOUND");
     if (game.state !== "PLAYING" || game.result !== null) {
@@ -869,7 +859,6 @@ export async function updateDealerCasinoPlay(
       .select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, gameId))
-      .for("update")
       .limit(1);
     if (!game || game.state !== "PLAYING" || game.gameType !== "poker") {
       throw new DealerCasinoError("Poker is not accepting player actions.", "GAME_NOT_PLAYING");
@@ -881,7 +870,6 @@ export async function updateDealerCasinoPlay(
         eq(dealerCasinoBetsTable.gameId, gameId),
         eq(dealerCasinoBetsTable.userId, userId),
       ))
-      .for("update")
       .limit(1);
     if (!bet || bet.state !== "ACTIVE") {
       throw new DealerCasinoError("This player cannot act in the current game.", "PLAYER_NOT_ACTIVE");
@@ -946,7 +934,6 @@ export async function dealDealerCasinoPoker(
     const [game] = await tx.select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, gameId))
-      .for("update")
       .limit(1);
     if (!game) throw new DealerCasinoError("Game not found.", "GAME_NOT_FOUND");
     if (game.gameType !== "poker" || game.state !== "CLOSED") {
@@ -960,7 +947,7 @@ export async function dealDealerCasinoPoker(
       .from(dealerCasinoBetsTable)
       .where(eq(dealerCasinoBetsTable.gameId, gameId))
       .orderBy(asc(dealerCasinoBetsTable.id))
-      .for("update");
+      ;
     const activeBets = bets.filter((bet) => !(bet.state === "REFUNDED" && bet.result === "WITHDRAWN"));
     if (activeBets.some((bet) => bet.state !== "ACTIVE") || activeBets.length !== playersById.size) {
       throw new DealerCasinoError("A hand is required for every active bet and no other participants.", "PARTICIPANT_MISMATCH");
@@ -1014,7 +1001,6 @@ export async function cancelDealerCasinoGame(
       .select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, gameId))
-      .for("update")
       .limit(1);
     if (!game) throw new DealerCasinoError("Game not found.", "GAME_NOT_FOUND");
     if (game.state === "CANCELLED") {
@@ -1031,7 +1017,7 @@ export async function cancelDealerCasinoGame(
       .select()
       .from(dealerCasinoBetsTable)
       .where(eq(dealerCasinoBetsTable.gameId, gameId))
-      .for("update");
+      ;
     let refundedCount = 0;
     for (const bet of bets) {
       if (bet.state === "REFUNDED") continue;
@@ -1098,7 +1084,6 @@ export async function settleDealerCasinoGame(
       .select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, gameId))
-      .for("update")
       .limit(1);
     if (!game) throw new DealerCasinoError("Game not found.", "GAME_NOT_FOUND");
     if (game.state !== "RESULT" && game.state !== "PAYOUT" && game.state !== "FINISHED") {
@@ -1111,7 +1096,7 @@ export async function settleDealerCasinoGame(
       .from(dealerCasinoBetsTable)
       .where(eq(dealerCasinoBetsTable.gameId, gameId))
       .orderBy(asc(dealerCasinoBetsTable.id))
-      .for("update");
+      ;
     if (allBets.some((bet) => bet.state === "REFUNDED" && bet.result !== "WITHDRAWN")) {
       throw new DealerCasinoError("A non-withdrawal refunded bet cannot be settled.", "BET_ALREADY_REFUNDED");
     }
@@ -1372,7 +1357,6 @@ export async function applyDealerCasinoChohanStreakDecision(
     const [game] = await tx.select()
       .from(dealerCasinoGamesTable)
       .where(eq(dealerCasinoGamesTable.id, gameId))
-      .for("update")
       .limit(1);
     if (!game || game.state !== "FINISHED" || game.gameType !== "chohan") {
       throw new DealerCasinoError("A finished 丁半 game is required.", "GAME_NOT_FINISHED");
@@ -1383,7 +1367,6 @@ export async function applyDealerCasinoChohanStreakDecision(
         eq(dealerCasinoSettlementsTable.gameId, gameId),
         eq(dealerCasinoSettlementsTable.userId, userId),
       ))
-      .for("update")
       .limit(1);
     if (!settlement) throw new DealerCasinoError("Player settlement not found.", "SETTLEMENT_NOT_FOUND");
     const isWin = settlement.result === "WON";
@@ -1425,7 +1408,6 @@ export async function applyDealerCasinoChohanStreakDecision(
         eq(dealerCasinoStreaksTable.guildId, game.guildId),
         eq(dealerCasinoStreaksTable.userId, userId),
       ))
-      .for("update")
       .limit(1);
     const inWindow = current &&
       Date.now() - current.updatedAt.getTime() <= settings.streakRetentionSeconds * 1000;

@@ -7,7 +7,7 @@ import {
   timestamp,
   primaryKey,
   unique,
-} from "drizzle-orm/pg-core";
+} from "../sqliteColumns";
 
 export const randomMatchSettingsTable = pgTable("random_match_settings", {
   guildId: text("guild_id").primaryKey(),

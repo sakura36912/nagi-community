@@ -9,7 +9,7 @@ type TableInfo = { oid: number; schema: string; name: string; kind: string };
 export type DatabaseBackup = Awaited<ReturnType<typeof exportDatabaseJsonBackup>>;
 
 /** A bounded, dedicated connection cannot monopolize the bot's command pool. */
-export async function exportCurrentDatabaseJsonBackup(
+export async function exportPostgresDatabaseJsonBackup(
   options: Omit<Parameters<typeof exportDatabaseJsonBackup>[0], "pool">,
 ) {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not configured");
@@ -22,6 +22,14 @@ export async function exportCurrentDatabaseJsonBackup(
   } finally {
     await backupPool.end();
   }
+}
+
+/** Runtime is SQLite-only. PostgreSQL export remains an offline migration tool. */
+export async function exportCurrentDatabaseJsonBackup(
+  options: Omit<Parameters<typeof exportDatabaseJsonBackup>[0], "pool">,
+) {
+  const { exportSqliteJsonBackup } = await import("./sqliteBackup");
+  return exportSqliteJsonBackup(options);
 }
 
 /** All application schemas; no pg_* or information_schema/system objects. */

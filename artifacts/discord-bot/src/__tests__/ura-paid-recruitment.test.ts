@@ -18,7 +18,7 @@ afterEach(async () => {
   await db.delete(transactionsTable).where(eq(transactionsTable.guildId, guildId));
   await db.delete(walletsTable).where(eq(walletsTable.guildId, guildId));
 });
-afterAll(() => pool.end());
+afterAll(() => pool.close());
 
 describe("裏航海の募集料金", () => {
   it("残高不足では募集も請求も作らない", async () => {

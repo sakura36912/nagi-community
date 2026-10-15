@@ -46,12 +46,9 @@ const testGuildIds: string[] = [];
 const testGameIds: number[] = [];
 
 const schemaProbe = await db.execute(sql`
-  SELECT to_regclass('public.dealer_casino_games') IS NOT NULL
-     AND to_regclass('public.dealer_casino_bets') IS NOT NULL
-     AND to_regclass('public.dealer_casino_settlements') IS NOT NULL
-     AND to_regclass('public.dealer_casino_settings') IS NOT NULL
-     AND to_regclass('public.dealer_casino_stats') IS NOT NULL
-     AND to_regclass('public.dealer_casino_streaks') IS NOT NULL
+  SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN
+    ('dealer_casino_games','dealer_casino_bets','dealer_casino_settlements',
+     'dealer_casino_settings','dealer_casino_stats','dealer_casino_streaks')) = 6
      AS dealer_casino_schema_available
 `);
 const dealerCasinoSchemaAvailable = Boolean(
@@ -59,8 +56,8 @@ const dealerCasinoSchemaAvailable = Boolean(
 );
 const integrationDescribe = dealerCasinoSchemaAvailable ? describe : describe.skip;
 const hubSchemaProbe = await db.execute(sql`
-  SELECT to_regclass('public.vc_hub_channels') IS NOT NULL
-     AND to_regclass('public.vc_hub_sessions') IS NOT NULL
+  SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN
+    ('vc_hub_channels','vc_hub_sessions')) = 2
      AS hub_schema_available
 `);
 const hubSchemaAvailable = Boolean(hubSchemaProbe.rows[0]?.hub_schema_available);

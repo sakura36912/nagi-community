@@ -10,14 +10,14 @@ import {
   text,
   timestamp,
   uniqueIndex,
-} from "drizzle-orm/pg-core";
+} from "../sqliteColumns";
 
 /** Guild configuration for the bounty-point feature. */
 export const bountySettingsTable = pgTable("bounty_settings", {
   guildId: text("guild_id").primaryKey(),
   crewRoleId: text("crew_role_id").notNull(),
   logChannelId: text("log_channel_id").notNull(),
-  tierRoleIds: text("tier_role_ids").array().notNull().default(sql`'{}'::text[]`),
+  tierRoleIds: text("tier_role_ids").array().notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -1,4 +1,4 @@
-import { pgTable, text, integer, timestamp, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, timestamp, primaryKey } from "../sqliteColumns";
 
 /**
  * バカラのドロー待ちセッション。

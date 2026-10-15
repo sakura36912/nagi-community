@@ -66,8 +66,9 @@ async function updateGuideItem(
 async function deleteGuideItem(guildId: string, id: number): Promise<boolean> {
   const result = await db
     .delete(guideItemsTable)
-    .where(and(eq(guideItemsTable.guildId, guildId), eq(guideItemsTable.id, id)));
-  return (result.rowCount ?? 0) > 0;
+    .where(and(eq(guideItemsTable.guildId, guildId), eq(guideItemsTable.id, id)))
+    .returning({ id: guideItemsTable.id });
+  return result.length > 0;
 }
 
 // ── Panel builder ─────────────────────────────────────────────────────────────

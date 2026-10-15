@@ -62,19 +62,19 @@ describe("getAllTempVcDeletions – asymmetric OR-logic (integration, real DB)",
         INSERT INTO community_vc_sessions (guild_id, user_id, channel_id, joined_at, left_at)
         VALUES (
           ${GUILD}, ${USER_GLOBAL_ACTIVE}, 'ch-integ-1',
-          NOW() - INTERVAL '2 hours',
-          NOW() - INTERVAL '1 hour'
+          cast(unixepoch('subsec') * 1000000 as integer) - 7200000000,
+          cast(unixepoch('subsec') * 1000000 as integer) - 3600000000
         )
       `);
       await db.execute(sql`
         INSERT INTO community_vc_privacy_global (user_id, opted_out, updated_at)
-        VALUES (${USER_GLOBAL_ACTIVE}, true, NOW())
-        ON CONFLICT (user_id) DO UPDATE SET opted_out = true, updated_at = NOW()
+        VALUES (${USER_GLOBAL_ACTIVE}, true, cast(unixepoch('subsec') * 1000000 as integer))
+        ON CONFLICT (user_id) DO UPDATE SET opted_out = true, updated_at = cast(unixepoch('subsec') * 1000000 as integer)
       `);
       await db.execute(sql`
         INSERT INTO community_vc_privacy (guild_id, user_id, opted_out, updated_at)
-        VALUES (${GUILD}, ${USER_GLOBAL_ACTIVE}, false, NOW())
-        ON CONFLICT (guild_id, user_id) DO UPDATE SET opted_out = false, updated_at = NOW()
+        VALUES (${GUILD}, ${USER_GLOBAL_ACTIVE}, false, cast(unixepoch('subsec') * 1000000 as integer))
+        ON CONFLICT (guild_id, user_id) DO UPDATE SET opted_out = false, updated_at = cast(unixepoch('subsec') * 1000000 as integer)
       `);
 
       const rows = await getAllTempVcDeletions(GUILD);
@@ -95,15 +95,15 @@ describe("getAllTempVcDeletions – asymmetric OR-logic (integration, real DB)",
         INSERT INTO community_vc_sessions (guild_id, user_id, channel_id, joined_at, left_at)
         VALUES (
           ${GUILD}, ${USER_GUILD_ACTIVE}, 'ch-integ-2',
-          NOW() - INTERVAL '2 hours',
-          NOW() - INTERVAL '1 hour'
+          cast(unixepoch('subsec') * 1000000 as integer) - 7200000000,
+          cast(unixepoch('subsec') * 1000000 as integer) - 3600000000
         )
       `);
       // Deliberately no global row for USER_GUILD_ACTIVE.
       await db.execute(sql`
         INSERT INTO community_vc_privacy (guild_id, user_id, opted_out, updated_at)
-        VALUES (${GUILD}, ${USER_GUILD_ACTIVE}, true, NOW())
-        ON CONFLICT (guild_id, user_id) DO UPDATE SET opted_out = true, updated_at = NOW()
+        VALUES (${GUILD}, ${USER_GUILD_ACTIVE}, true, cast(unixepoch('subsec') * 1000000 as integer))
+        ON CONFLICT (guild_id, user_id) DO UPDATE SET opted_out = true, updated_at = cast(unixepoch('subsec') * 1000000 as integer)
       `);
 
       const rows = await getAllTempVcDeletions(GUILD);

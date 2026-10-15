@@ -81,7 +81,7 @@ export const EVAL_EXTEND_DAYS: Record<string, number> = {
 // Safe to call multiple times — uses a count guard so it never duplicates.
 export async function seedDefaultShopItems(guildId: string): Promise<void> {
   const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(shopItemsTable)
     .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.category, "general")));
 
@@ -316,7 +316,7 @@ export async function recordMemberLeave(
   const roleSnapshot = JSON.stringify(snapshot.roleNames);
   const updated = await db.execute(
     sql`UPDATE member_join_history
-        SET left_at = now(),
+        SET left_at = (cast(unixepoch('subsec') * 1000000 as integer)),
             left_with_waiting_role = ${snapshot.hasWaitingRole},
             left_with_post_island_role = ${snapshot.hasPostIslandRole},
             left_role_snapshot = ${roleSnapshot}
@@ -337,7 +337,7 @@ export async function recordMemberLeave(
           (guild_id, user_id, joined_at, left_at,
            left_with_waiting_role, left_with_post_island_role, left_role_snapshot)
           VALUES (
-            ${guildId}, ${userId}, now(), now(),
+            ${guildId}, ${userId}, (cast(unixepoch('subsec') * 1000000 as integer)), (cast(unixepoch('subsec') * 1000000 as integer)),
             ${snapshot.hasWaitingRole}, ${snapshot.hasPostIslandRole}, ${roleSnapshot}
           )`,
     );
@@ -359,10 +359,10 @@ export async function getRejoinLogStats(
     sql`SELECT
           COUNT(*) FILTER (
             WHERE left_at IS NOT NULL AND left_with_waiting_role = true
-          )::int AS waiting_exit_count,
+          ) AS waiting_exit_count,
           COUNT(*) FILTER (
             WHERE left_at IS NOT NULL AND left_with_post_island_role = true
-          )::int AS post_island_exit_count,
+          ) AS post_island_exit_count,
           (
             SELECT left_role_snapshot
             FROM member_join_history
@@ -407,7 +407,7 @@ export async function getRejoinLogStats(
 /** 退出済み参加履歴の総数を返す。 */
 export async function countPastJoins(guildId: string, userId: string): Promise<number> {
   const result = await db.execute(
-    sql`SELECT COUNT(*)::int AS cnt FROM member_join_history
+    sql`SELECT COUNT(*) AS cnt FROM member_join_history
         WHERE guild_id = ${guildId} AND user_id = ${userId} AND left_at IS NOT NULL`,
   );
   return Number((result.rows[0] as { cnt: number | string } | undefined)?.cnt ?? 0);
@@ -815,7 +815,7 @@ export async function setMonthlyRoleDebit(
   await db.transaction(async (tx) => {
     await tx.insert(guildSettingsTable).values({ guildId }).onConflictDoNothing();
     const [settings] = await tx.select().from(guildSettingsTable)
-      .where(eq(guildSettingsTable.guildId, guildId)).for("update");
+      .where(eq(guildSettingsTable.guildId, guildId));
     if (settings?.monthlyDebitRoleId && settings.monthlyDebitAmount && settings.monthlyDebitAmount > 0) {
       await tx.insert(monthlyRoleDebitRulesTable).values({
         guildId,
@@ -839,7 +839,7 @@ export async function clearMonthlyRoleDebit(guildId: string, roleId?: string): P
   await db.transaction(async (tx) => {
     await tx.insert(guildSettingsTable).values({ guildId }).onConflictDoNothing();
     const [settings] = await tx.select().from(guildSettingsTable)
-      .where(eq(guildSettingsTable.guildId, guildId)).for("update");
+      .where(eq(guildSettingsTable.guildId, guildId));
     await tx.delete(monthlyRoleDebitRulesTable).where(
       roleId
         ? and(eq(monthlyRoleDebitRulesTable.guildId, guildId), eq(monthlyRoleDebitRulesTable.roleId, roleId))
@@ -1026,7 +1026,7 @@ export async function processDailyRoleDebit(
 } | null> {
   return db.transaction(async (tx) => {
     const [settings] = await tx.select().from(guildSettingsTable)
-      .where(eq(guildSettingsTable.guildId, guildId)).for("update");
+      .where(eq(guildSettingsTable.guildId, guildId));
     if (!settings || !isDueDailyRoleDebit(settings, now)) return null;
     const roleId = settings.dailyDebitRoleId!;
     const amount = settings.dailyDebitAmount!;
@@ -1196,7 +1196,7 @@ export async function extendPrivateVcSession(
   const [updated] = await db
     .update(privateVcSessionsTable)
     .set({
-      expiresAt: sql`GREATEST(${privateVcSessionsTable.expiresAt}, NOW()) + (${additionalMs} * interval '1 millisecond')`,
+      expiresAt: sql`MAX(${privateVcSessionsTable.expiresAt}, cast(unixepoch('subsec') * 1000000 as integer)) + ${additionalMs * 1000}`,
     })
     .where(eq(privateVcSessionsTable.id, id))
     .returning();
@@ -1769,7 +1769,7 @@ export async function listSheetsNeedingReminder(): Promise<CommunitySheet[]> {
     .where(
       and(
         // (endDate - reminderDaysBefore days) のJST日付が今日のJST日付と一致
-        sql`((${communitySheetsTable.endDate} - (COALESCE(${communitySheetSettingsTable.reminderDaysBefore}, 0) || ' days')::interval) AT TIME ZONE 'Asia/Tokyo')::date = (now() AT TIME ZONE 'Asia/Tokyo')::date`,
+        sql`date((${communitySheetsTable.endDate} - COALESCE(${communitySheetSettingsTable.reminderDaysBefore}, 0) * 86400000000) / 1000000.0, 'unixepoch', '+9 hours') = date('now', '+9 hours')`,
         sql`${communitySheetsTable.reminderSentAt} IS NULL`,
       ),
     );
@@ -1779,7 +1779,7 @@ export async function listSheetsNeedingReminder(): Promise<CommunitySheet[]> {
 export async function markSheetReminderSent(id: number): Promise<void> {
   await db
     .update(communitySheetsTable)
-    .set({ reminderSentAt: sql`now()` })
+    .set({ reminderSentAt: new Date() })
     .where(eq(communitySheetsTable.id, id));
 }
 
@@ -1791,7 +1791,7 @@ export async function listActiveSheets(): Promise<CommunitySheet[]> {
   return db
     .select()
     .from(communitySheetsTable)
-    .where(sql`${communitySheetsTable.endDate} > now()`);
+    .where(sql`${communitySheetsTable.endDate} > cast(unixepoch('subsec') * 1000000 as integer)`);
 }
 
 /**
@@ -1801,7 +1801,7 @@ export async function listActiveSheets(): Promise<CommunitySheet[]> {
 export async function deactivateSheet(id: number): Promise<void> {
   await db
     .update(communitySheetsTable)
-    .set({ endDate: sql`now()` })
+    .set({ endDate: new Date() })
     .where(eq(communitySheetsTable.id, id));
 }
 
@@ -1813,15 +1813,15 @@ export async function getSheetVcSeconds(
   endDate: Date,
 ): Promise<number> {
   const rows = await db.execute<{ total_seconds: string }>(sql`
-    SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
-      LEAST(COALESCE(left_at, NOW()), ${endDate})
-      - GREATEST(joined_at, ${startDate})
-    ))))::bigint AS total_seconds
+    SELECT round(SUM(MAX(0, (
+      MIN(COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer)), ${endDate})
+      - MAX(joined_at, ${startDate})
+    ) / 1000000.0))) AS total_seconds
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       AND user_id = ${userId}
       AND joined_at < ${endDate}
-      AND COALESCE(left_at, NOW()) > ${startDate}
+      AND COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer)) > ${startDate}
       AND channel_id IN (
         SELECT channel_id FROM community_tavern_channels WHERE guild_id = ${guildId}
       )
@@ -1965,8 +1965,8 @@ export async function getGroupShopSalesSummary(
   const rows = await db
     .select({
       squadRoleId: groupShopSalesTable.squadRoleId,
-      totalAmount: sql<number>`sum(${groupShopSalesTable.amount})::int`,
-      purchaseCount: sql<number>`count(*)::int`,
+      totalAmount: sql<number>`sum(${groupShopSalesTable.amount})`,
+      purchaseCount: sql<number>`count(*)`,
     })
     .from(groupShopSalesTable)
     .where(eq(groupShopSalesTable.guildId, guildId))

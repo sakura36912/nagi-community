@@ -6,7 +6,7 @@ import {
   boolean,
   integer,
   unique,
-} from "drizzle-orm/pg-core";
+} from "../sqliteColumns";
 
 // ─── Events ─────────────────────────────────────────────────────────────────
 

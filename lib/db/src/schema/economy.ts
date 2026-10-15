@@ -8,7 +8,7 @@ import {
   primaryKey,
   unique,
   uniqueIndex,
-} from "drizzle-orm/pg-core";
+} from "../sqliteColumns";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";

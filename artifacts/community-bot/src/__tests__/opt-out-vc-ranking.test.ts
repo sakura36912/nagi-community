@@ -428,8 +428,8 @@ describe("getVcRanking – opt-out then opt-back-in round-trip", () => {
     await getVcRanking(GUILD);
 
     const query = sqlText(mocks.execute);
-    expect(query).toContain("COALESCE(left_at, NOW())");
-    expect(query).toContain("bool_or(left_at IS NULL)");
+    expect(query).toContain("COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer))");
+    expect(query).toContain("MAX(left_at IS NULL)");
   });
 
   // ── Round-trip ranking exclusion / re-inclusion ───────────────────────────

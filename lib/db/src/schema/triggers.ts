@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp } from "../sqliteColumns";
 
 // One row per configured text trigger per guild.
 export const textTriggersTable = pgTable("text_triggers", {

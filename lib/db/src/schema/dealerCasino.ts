@@ -9,7 +9,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
-} from "drizzle-orm/pg-core";
+} from "../sqliteColumns";
 import { sql } from "drizzle-orm";
 
 /**

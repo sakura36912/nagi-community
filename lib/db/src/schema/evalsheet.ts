@@ -1,4 +1,4 @@
-import { integer, pgTable, text, serial, timestamp, unique } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, serial, timestamp, unique } from "../sqliteColumns";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 

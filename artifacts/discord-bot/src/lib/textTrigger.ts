@@ -23,8 +23,9 @@ export async function removeTextTrigger(
 ): Promise<boolean> {
   const result = await db
     .delete(textTriggersTable)
-    .where(and(eq(textTriggersTable.guildId, guildId), eq(textTriggersTable.id, id)));
-  return (result.rowCount ?? 0) > 0;
+    .where(and(eq(textTriggersTable.guildId, guildId), eq(textTriggersTable.id, id)))
+    .returning({ id: textTriggersTable.id });
+  return result.length > 0;
 }
 
 export async function listTextTriggers(guildId: string): Promise<TextTrigger[]> {
