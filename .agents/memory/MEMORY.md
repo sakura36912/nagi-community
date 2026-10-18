@@ -30,3 +30,4 @@
 - [Forum copy policy](forum-copy-policy.md) — 別フォーラムへの移行は元投稿を維持するコピーとし、管理者の公開範囲確認後に実行する。
 - [Database backup scope](database-backup-scope.md) — JSONバックアップは本番・開発の両方を対象にし、全サーバー分の取得権限を通常のサーバー管理者へ広げない。
 - [VPS database migration](vps-database-migration.md) — 移行先はConoHa VPS、移行先DBはSQLite。既存ユーザーデータの引き継ぎが必須。
+- [Discord audit event types](discord-audit-event-types.md) — イベント番号はSDKの名前付き列挙値を使い、メッセージ削除とスレッド削除を区別する。
