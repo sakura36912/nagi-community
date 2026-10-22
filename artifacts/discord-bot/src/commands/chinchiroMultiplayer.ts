@@ -130,14 +130,18 @@ async function lockTable(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   tableId: number,
 ): Promise<void> {
-  // BEGIN IMMEDIATE protects the table and wallets before any reads.
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${tableId})`);
 }
 async function lockUsers(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   guildId: string,
   userIds: string[],
 ): Promise<void> {
-  // Covered by SQLite's write transaction reservation.
+  for (const userId of [...userIds].sort()) {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${guildId}:${userId}`}, 0))`,
+    );
+  }
 }
 async function findOpenTableForUser(
   guildId: string,
@@ -327,7 +331,7 @@ async function closeTableForDeparture(tableId: number, departedId: string) {
     await lockTable(tx, tableId);
     const [current] = await tx.select().from(chinchiroTablesTable)
       .where(eq(chinchiroTablesTable.id, tableId))
-      ;
+      .for("update");
     if (!current || current.status === "closed") {
       return { table: current ?? null, departed: null };
     }
@@ -363,7 +367,7 @@ async function closeAndRefundTable(tableId: number, expiredAt?: Date) {
   return db.transaction(async (tx) => {
     await lockTable(tx, tableId);
     const [current] = await tx.select().from(chinchiroTablesTable)
-      .where(eq(chinchiroTablesTable.id, tableId));
+      .where(eq(chinchiroTablesTable.id, tableId)).for("update");
     if (!current || current.status === "closed" || (expiredAt && current.expiresAt >= expiredAt)) return null;
     await refundOpenRound(tx, current);
     const [closed] = await tx.update(chinchiroTablesTable)
@@ -407,7 +411,7 @@ async function takeTurnThrow(
     await lockTable(tx, tableId);
     const [current] = await tx.select().from(chinchiroTablesTable)
       .where(eq(chinchiroTablesTable.id, tableId))
-      ;
+      .for("update");
     if (!current || current.status !== "rolling" || current.turnUserId !== userId) return null;
     const isExpired = current.expiresAt < now;
     if (options.allowExpired ? !isExpired : isExpired) return null;
@@ -694,7 +698,7 @@ export async function handleMultiplayerChinchiroButton(interaction: ButtonIntera
     const joined = await db.transaction(async (tx) => {
       await lockUsers(tx, t.guildId, [interaction.user.id]);
       await lockTable(tx, id);
-      const [current] = await tx.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, id));
+      const [current] = await tx.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, id)).for("update");
       if (!current || current.status !== "recruiting") return false;
       const active = await tx.select().from(chinchiroTablePlayersTable).where(and(eq(chinchiroTablePlayersTable.tableId, id), eq(chinchiroTablePlayersTable.active, 1)));
       if (active.some((p) => p.userId === interaction.user.id) || active.length >= 6) return false;
@@ -808,7 +812,7 @@ export async function handleMultiplayerChinchiroModal(interaction: ModalSubmitIn
   try {
     updated = await db.transaction(async (tx) => {
     await lockTable(tx, id);
-    const [current] = await tx.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, id));
+    const [current] = await tx.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, id)).for("update");
     if (!current || current.status !== "betting" || current.expiresAt < new Date()) return null;
     const activeBefore = await tx.select().from(chinchiroTablePlayersTable).where(and(
       eq(chinchiroTablePlayersTable.tableId, id), eq(chinchiroTablePlayersTable.active, 1),

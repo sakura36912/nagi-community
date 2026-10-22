@@ -7,7 +7,7 @@ import {
   boolean,
   primaryKey,
   index,
-} from "../sqliteColumns";
+} from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -49,7 +49,7 @@ export const vcRewardSettingsTable = pgTable("vc_reward_settings", {
   includedChannelIds: text("included_channel_ids")
     .array()
     .notNull()
-    .default([]),
+    .default(sql`'{}'::text[]`),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
@@ -71,7 +71,7 @@ export const vcSessionLogSettingsTable = pgTable("vc_session_log_settings", {
   categoryIds: text("category_ids")
     .array()
     .notNull()
-    .default([]),
+    .default(sql`'{}'::text[]`),
   /** Channel ID to post real-time join/leave notifications. Null = disabled. */
   notifyChannelId: text("notify_channel_id"),
 });

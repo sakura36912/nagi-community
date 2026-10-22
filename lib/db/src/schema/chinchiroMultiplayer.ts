@@ -1,4 +1,4 @@
-import { index, integer, pgTable, serial, text, timestamp, uniqueIndex } from "../sqliteColumns";
+import { index, integer, pgTable, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 /** Independent from chinchiro_games so outstanding legacy heads remain playable. */
 export const chinchiroMultiplayerSettingsTable = pgTable("chinchiro_multiplayer_settings", {

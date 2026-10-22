@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, integer, pgTable, primaryKey, text } from "../sqliteColumns";
+import { check, integer, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
 
 export const chinchiroDiceImagesTable = pgTable("chinchiro_dice_images", {
   guildId: text("guild_id").notNull(),

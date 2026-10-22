@@ -52,7 +52,7 @@ async function cleanup() {
 
 beforeEach(cleanup);
 afterEach(cleanup);
-afterAll(() => pool.close());
+afterAll(() => pool.end());
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

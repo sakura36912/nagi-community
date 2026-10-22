@@ -87,7 +87,7 @@ export async function createPaidUraRecruitment(values: {
   note: string;
 }): Promise<{ status: "created"; recruitment: Awaited<ReturnType<typeof createUraRecruitment>> } | { status: "already_open" } | { status: "insufficient" }> {
   return db.transaction(async (tx) => {
-    // SQLite write transactions reserve the writer before checking open rooms.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`ura-recruit:${values.guildId}:${values.ownerId}`}, 0))`);
     const [open] = await tx.select({ id: uraRecruitmentsTable.id }).from(uraRecruitmentsTable)
       .where(and(eq(uraRecruitmentsTable.guildId, values.guildId), eq(uraRecruitmentsTable.ownerId, values.ownerId), eq(uraRecruitmentsTable.status, "open"))).limit(1);
     if (open) return { status: "already_open" } as const;

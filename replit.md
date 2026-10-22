@@ -10,16 +10,15 @@ A Discord bot that gives each server its own virtual currency ("円") economy �
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db sqlite:import /absolute/backup-directory` — import into a NEW persistent SQLITE_PATH file
-- `pnpm start:vps` — supervise both bots on ConoHa; see docs/conoha-vps-sqlite.md
-- Required env: `SQLITE_PATH` — absolute path to the verified SQLite database; `ASSET_DIRECTORY` — VPS image directory
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- Required env: `DATABASE_URL` — Postgres connection string
 - Required secrets: `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID` — from the Discord Developer Portal application
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
 - API: Express 5
-- DB: Node.js 24 SQLite + Drizzle ORM (VPS runtime); PostgreSQL only as an offline migration source
+- DB: PostgreSQL + Drizzle ORM
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)

@@ -152,7 +152,7 @@ export async function tryStartCasinoPlay(
     if (limit !== null) {
       await tx
         .update(casinoDailyPlayCountsTable)
-        .set({ playCount: sql`MAX(0, ${casinoDailyPlayCountsTable.playCount} - 1)` })
+        .set({ playCount: sql`GREATEST(0, ${casinoDailyPlayCountsTable.playCount} - 1)` })
         .where(and(
           eq(casinoDailyPlayCountsTable.guildId, guildId),
           eq(casinoDailyPlayCountsTable.userId, userId),

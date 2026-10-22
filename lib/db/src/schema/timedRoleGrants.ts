@@ -6,7 +6,7 @@ import {
   text,
   timestamp,
   unique,
-} from "../sqliteColumns";
+} from "drizzle-orm/pg-core";
 
 /** ショップアイテム購入で付与された期限付きロールを管理するテーブル */
 export const timedRoleGrantsTable = pgTable(

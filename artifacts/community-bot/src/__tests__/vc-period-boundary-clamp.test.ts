@@ -200,7 +200,7 @@ describe("getVcTimeInPeriod – SQL embeds GREATEST/LEAST boundary clamping", ()
     await getVcTimeInPeriod(GUILD, USER, START, END);
 
     const combined = allSqlStrings();
-    expect(combined).toContain("MAX(joined_at,");
+    expect(combined).toContain("GREATEST(joined_at,");
   });
 
   it("SQL contains LEAST to clamp the upper bound of the session to endDate", async () => {
@@ -209,7 +209,7 @@ describe("getVcTimeInPeriod – SQL embeds GREATEST/LEAST boundary clamping", ()
     await getVcTimeInPeriod(GUILD, USER, START, END);
 
     const combined = allSqlStrings();
-    expect(combined).toContain("MIN(COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer)),");
+    expect(combined).toContain("LEAST(COALESCE(left_at, NOW()),");
   });
 
   it("startDate is passed as a SQL parameter to the GREATEST clamping expression", async () => {
@@ -236,7 +236,7 @@ describe("getVcTimeInPeriod – SQL embeds GREATEST/LEAST boundary clamping", ()
     await getVcTimeInPeriod(GUILD, USER, START, END);
 
     const combined = allSqlStrings();
-    expect(combined).toContain("MAX(0,");
+    expect(combined).toContain("GREATEST(0,");
   });
 });
 

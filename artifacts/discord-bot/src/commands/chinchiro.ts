@@ -317,7 +317,11 @@ async function lockPlayers(
   guildId: string,
   userIds: string[],
 ): Promise<void> {
-  // BEGIN IMMEDIATE protects all participating wallets in this transaction.
+  for (const userId of [...userIds].sort()) {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${guildId}:${userId}`}, 0))`,
+    );
+  }
 }
 
 type CreateChallengeResult =
@@ -436,7 +440,7 @@ async function closeAndRefund(
       .select()
       .from(chinchiroGamesTable)
       .where(eq(chinchiroGamesTable.id, id))
-      ;
+      .for("update");
     if (!current || !statuses.includes(current.status)) return null;
 
     const [closed] = await tx

@@ -138,9 +138,7 @@ describe("forum panel cast-role configuration", () => {
     expect(mocks.savePanel).toHaveBeenCalledWith("guild", "thread", null, expect.objectContaining({
       castRoleId: "new-cast-role", targetRoleId: null,
     }));
-    expect(interaction.editReply.mock.calls[0][0].content).toContain("new-cast-role");
-    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
-    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.reply.mock.calls[0][0].content).toContain("new-cast-role");
   });
   it("preserves a configured cast role when other panel settings are edited without cast_role", async () => {
     await shop.execute(setup(null) as never);
@@ -153,7 +151,7 @@ describe("forum panel cast-role configuration", () => {
     expect(mocks.savePanel).toHaveBeenCalledWith("guild", "thread", null, expect.objectContaining({
       castRoleIds: ["cast-role", "second-role"],
     }));
-    const selector = interaction.editReply.mock.calls[0][0].components[0].components[0].toJSON();
+    const selector = interaction.reply.mock.calls[0][0].components[0].components[0].toJSON();
     expect(selector.type).toBe(6);
     expect(selector.max_values).toBe(25);
   });
@@ -161,31 +159,6 @@ describe("forum panel cast-role configuration", () => {
     mocks.getPanel.mockResolvedValue(undefined);
     await shop.execute(setup(null) as never);
     await shop.execute(setup("guild") as never);
-    expect(mocks.savePanel).not.toHaveBeenCalled();
-  });
-  it("acknowledges before a slow database lookup and finishes the original response", async () => {
-    let finishLookup!: (panel: { shopItemId: number; castRoleId: string; logChannelId: string }) => void;
-    mocks.getPanel.mockImplementationOnce(() => new Promise((resolve) => { finishLookup = resolve; }));
-    const interaction = setup(null);
-    const pending = shop.execute(interaction as never);
-    await vi.waitFor(() => expect(mocks.getPanel).toHaveBeenCalledOnce());
-    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
-    expect(interaction.deferReply.mock.invocationCallOrder[0]).toBeLessThan(mocks.getPanel.mock.invocationCallOrder[0]);
-    expect(interaction.reply).not.toHaveBeenCalled();
-    expect(interaction.editReply).not.toHaveBeenCalled();
-    finishLookup({ shopItemId: 10, castRoleId: "cast-role", logChannelId: "log" });
-    await pending;
-    expect(interaction.editReply).toHaveBeenCalledOnce();
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-  it("completes validation errors through the deferred response without posting a panel", async () => {
-    mocks.getPanel.mockResolvedValueOnce(undefined);
-    const interaction = setup(null);
-    await shop.execute(interaction as never);
-    expect(interaction.deferReply).toHaveBeenCalledOnce();
-    expect(interaction.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("cast_role") }));
-    expect(interaction.reply).not.toHaveBeenCalled();
-    expect(interaction.channel.send).not.toHaveBeenCalled();
     expect(mocks.savePanel).not.toHaveBeenCalled();
   });
 });

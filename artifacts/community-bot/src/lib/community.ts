@@ -657,7 +657,7 @@ export async function deleteUserVcSessions(guildId: string, userId: string): Pro
 /** Count of unique users currently in a tracked VC session for this guild. */
 export async function getActiveSessionCount(guildId: string): Promise<number> {
   const rows = await db.execute<{ cnt: string }>(sql`
-    SELECT COUNT(DISTINCT user_id) AS cnt
+    SELECT COUNT(DISTINCT user_id)::bigint AS cnt
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       AND left_at IS NULL
@@ -690,11 +690,11 @@ export async function getVcRanking(
   }
 
   const periodFilter = periodStart
-    ? sql`AND COALESCE(${communityVcSessionsTable.leftAt}, cast(unixepoch('subsec') * 1000000 as integer)) > ${periodStart}`
+    ? sql`AND COALESCE(${communityVcSessionsTable.leftAt}, NOW()) > ${periodStart}`
     : sql``;
 
   const startClamp = periodStart
-    ? sql`MAX(${communityVcSessionsTable.joinedAt}, ${periodStart})`
+    ? sql`GREATEST(${communityVcSessionsTable.joinedAt}, ${periodStart})`
     : sql`${communityVcSessionsTable.joinedAt}`;
 
   const channelFilter =
@@ -705,12 +705,12 @@ export async function getVcRanking(
         )})`
       : sql``;
 
-  const rows = await db.execute<{ user_id: string; total_seconds: string; is_live: boolean | number }>(sql`
+  const rows = await db.execute<{ user_id: string; total_seconds: string; is_live: boolean }>(sql`
     SELECT user_id,
-      round(SUM(MAX(0, (
-        COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer)) - ${startClamp}
-      ) / 1000000.0))) AS total_seconds,
-      MAX(left_at IS NULL) AS is_live
+      SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+        COALESCE(left_at, NOW()) - ${startClamp}
+      ))))::bigint AS total_seconds,
+      bool_or(left_at IS NULL) AS is_live
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       ${periodFilter}
@@ -736,7 +736,7 @@ export async function getVcRanking(
   return rows.rows.map((r) => ({
     userId: r.user_id,
     totalSeconds: Number(r.total_seconds),
-    isLive: r.is_live === true || r.is_live === 1,
+    isLive: r.is_live === true,
   }));
 }
 
@@ -754,15 +754,15 @@ export async function getVcTimeInPeriod(
     ? sql`AND is_exile = ${isExile}`
     : sql``;
   const rows = await db.execute<{ total_seconds: string }>(sql`
-    SELECT round(SUM(MAX(0, (
-      MIN(COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer)), ${endDate})
-      - MAX(joined_at, ${startDate})
-    ) / 1000000.0))) AS total_seconds
+    SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+      LEAST(COALESCE(left_at, NOW()), ${endDate})
+      - GREATEST(joined_at, ${startDate})
+    ))))::bigint AS total_seconds
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       AND user_id = ${userId}
       AND joined_at < ${endDate}
-      AND COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer)) > ${startDate}
+      AND COALESCE(left_at, NOW()) > ${startDate}
       AND is_privacy_closed = false
       ${exileFilter}
       AND channel_id IN (
@@ -795,9 +795,9 @@ export async function getVcTimeForTavernAndBeach(
 
   // 酒場ハブチャンネル経由のVC時間（community_tavern_channels.hub_name で絞り込み）
   const tavernRows = await db.execute<{ total_seconds: string }>(sql`
-    SELECT round(SUM(MAX(0, (
-      COALESCE(s.left_at, cast(unixepoch('subsec') * 1000000 as integer)) - s.joined_at
-    ) / 1000000.0))) AS total_seconds
+    SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+      COALESCE(s.left_at, NOW()) - s.joined_at
+    ))))::bigint AS total_seconds
     FROM community_vc_sessions s
     JOIN community_tavern_channels ctc
       ON ctc.guild_id = s.guild_id AND ctc.channel_id = s.channel_id
@@ -836,9 +836,9 @@ export async function getVcTimeByChannelIds(
   if (channelIds.length === 0) return 0;
   const idList = sql.join(channelIds.map((id) => sql`${id}`), sql`, `);
   const rows = await db.execute<{ total_seconds: string }>(sql`
-    SELECT round(SUM(MAX(0, (
-      COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer)) - joined_at
-    ) / 1000000.0))) AS total_seconds
+    SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+      COALESCE(left_at, NOW()) - joined_at
+    ))))::bigint AS total_seconds
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       AND user_id = ${userId}
@@ -869,11 +869,11 @@ export async function getUserVcRank(
   channelIds?: string[],
 ): Promise<number | null> {
   const periodFilter = periodStart
-    ? sql`AND COALESCE(${communityVcSessionsTable.leftAt}, cast(unixepoch('subsec') * 1000000 as integer)) > ${periodStart}`
+    ? sql`AND COALESCE(${communityVcSessionsTable.leftAt}, NOW()) > ${periodStart}`
     : sql``;
 
   const startClamp = periodStart
-    ? sql`MAX(${communityVcSessionsTable.joinedAt}, ${periodStart})`
+    ? sql`GREATEST(${communityVcSessionsTable.joinedAt}, ${periodStart})`
     : sql`${communityVcSessionsTable.joinedAt}`;
 
   const channelFilter =
@@ -887,9 +887,9 @@ export async function getUserVcRank(
   const rows = await db.execute<{ rank: string }>(sql`
     SELECT rank FROM (
       SELECT user_id,
-        RANK() OVER (ORDER BY SUM(MAX(0, (
-          COALESCE(left_at, cast(unixepoch('subsec') * 1000000 as integer)) - ${startClamp}
-        ) / 1000000.0)) DESC) AS rank
+        RANK() OVER (ORDER BY SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+          COALESCE(left_at, NOW()) - ${startClamp}
+        )))) DESC) AS rank
       FROM community_vc_sessions
       WHERE guild_id = ${guildId}
         ${periodFilter}
@@ -1116,9 +1116,9 @@ export async function getAllTempVcDeletions(
     guild_id: string;
     user_id: string;
     channel_id: string;
-    joined_at: number | string | Date;
-    left_at: number | string | Date;
-    opted_out: boolean | number;
+    joined_at: string | Date;
+    left_at: string | Date;
+    opted_out: boolean;
   }>(sql`
     SELECT
       s.id,
@@ -1152,9 +1152,9 @@ export async function getAllTempVcDeletions(
     guildId: r.guild_id,
     userId: r.user_id,
     channelId: r.channel_id,
-    joinedAt: new Date(typeof r.joined_at === "number" ? r.joined_at / 1000 : r.joined_at),
-    leftAt: new Date(typeof r.left_at === "number" ? r.left_at / 1000 : r.left_at),
-    optedOut: r.opted_out === true || r.opted_out === 1,
+    joinedAt: new Date(r.joined_at),
+    leftAt: new Date(r.left_at),
+    optedOut: r.opted_out === true,
   }));
 }
 
@@ -1166,7 +1166,7 @@ export async function getAllTempVcDeletions(
 export async function countCompletedSessionsOlderThan(guildId: string, days: number): Promise<number> {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
   const rows = await db.execute<{ cnt: string }>(sql`
-    SELECT COUNT(*) AS cnt
+    SELECT COUNT(*)::bigint AS cnt
     FROM community_vc_sessions
     WHERE guild_id = ${guildId}
       AND left_at IS NOT NULL

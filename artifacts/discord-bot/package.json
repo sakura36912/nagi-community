@@ -4,11 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "assets:export": "tsx src/export-assets.ts",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "deploy": "tsx src/deploy-commands.ts",
-    "backup:export": "tsx src/export-database.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

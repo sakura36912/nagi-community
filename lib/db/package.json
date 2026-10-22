@@ -5,15 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts",
-    "./sqlite-tools": "./src/sqliteMigration.ts",
-    "./sqlite-client": "./src/sqliteClient.ts",
-    "./sqlite-backup": "./src/sqliteBackup.ts"
+    "./schema": "./src/schema/index.ts"
   },
   "scripts": {
-    "backup:postgres": "pnpm --filter @workspace/discord-bot exec tsx ../../lib/db/src/exportPostgresCli.ts",
-    "sqlite:import": "pnpm --filter @workspace/discord-bot exec tsx ../../lib/db/src/sqliteCli.ts import",
-    "sqlite:init": "pnpm --filter @workspace/discord-bot exec tsx ../../lib/db/src/sqliteCli.ts init",
     "push": "drizzle-kit push --config ./drizzle.config.ts",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.ts",
     "migrate:vc-reward-session-key": "pnpm tsx migrate-vc-reward-session-key.ts",
@@ -23,7 +17,6 @@
   "dependencies": {
     "drizzle-orm": "catalog:",
     "drizzle-zod": "^0.8.3",
-    "lossless-json": "^4.3.1",
     "pg": "^8.22.0",
     "zod": "catalog:"
   },

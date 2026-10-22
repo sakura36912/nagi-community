@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
 
-# Supervise all three services, not just the HTTP server. A dead bot must not
-# leave a healthy-looking API process that prevents the VM from restarting.
-exec node scripts/supervise-production.mjs
+echo "[start] Starting Discord Bot..."
+pnpm --filter @workspace/discord-bot run dev &
+
+echo "[start] Starting Community Bot..."
+pnpm --filter @workspace/community-bot run dev &
+
+echo "[start] Starting API Server..."
+exec node --enable-source-maps artifacts/api-server/dist/index.mjs

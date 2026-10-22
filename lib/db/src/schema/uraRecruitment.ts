@@ -6,7 +6,7 @@ import {
   text,
   timestamp,
   unique,
-} from "../sqliteColumns";
+} from "drizzle-orm/pg-core";
 
 export const uraRecruitmentSettingsTable = pgTable("ura_recruitment_settings", {
   guildId: text("guild_id").primaryKey(),

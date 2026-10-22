@@ -40,7 +40,7 @@ async function balance(guildId: string, userId: string) {
 async function setBet(tableId: number, userId: string, amount: number) {
   await db.transaction(async (tx) => {
     const [table] = await tx.select().from(chinchiroTablesTable)
-      .where(eq(chinchiroTablesTable.id, tableId));
+      .where(eq(chinchiroTablesTable.id, tableId)).for("update");
     const participants = await tx.select().from(chinchiroTablePlayersTable)
       .where(eq(chinchiroTablePlayersTable.tableId, tableId));
     await reserveBet(tx, table!, participants.find((p) => p.userId === userId)!, amount, participants.length);
@@ -79,7 +79,7 @@ describe("multiplayer chinchiro live settlement", () => {
     await db.update(chinchiroTablesTable).set({ status: "rolling" }).where(eq(chinchiroTablesTable.id, table.id));
     const settle = () => db.transaction(async (tx) => {
       const [current] = await tx.select().from(chinchiroTablesTable)
-        .where(eq(chinchiroTablesTable.id, table.id));
+        .where(eq(chinchiroTablesTable.id, table.id)).for("update");
       if (current?.status !== "rolling") return false;
       const ps = await tx.select().from(chinchiroTablePlayersTable)
         .where(eq(chinchiroTablePlayersTable.tableId, table.id));
@@ -121,7 +121,7 @@ describe("multiplayer chinchiro live settlement", () => {
     expect(await balance(guildId, child1)).toBe(17_500);
     const close = () => db.transaction(async (tx) => {
       const [current] = await tx.select().from(chinchiroTablesTable)
-        .where(eq(chinchiroTablesTable.id, table.id));
+        .where(eq(chinchiroTablesTable.id, table.id)).for("update");
       if (current?.status === "closed") return;
       await refundOpenRound(tx, current!);
       await tx.update(chinchiroTablesTable).set({ status: "closed" })
@@ -139,7 +139,7 @@ describe("multiplayer chinchiro live settlement", () => {
       eq(walletsTable.guildId, guildId), eq(walletsTable.userId, ownerId),
     ));
     await expect(db.transaction(async (tx) => {
-      const [current] = await tx.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, table.id));
+      const [current] = await tx.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, table.id)).for("update");
       const ps = await tx.select().from(chinchiroTablePlayersTable).where(eq(chinchiroTablePlayersTable.tableId, table.id));
       await settleRound(tx, current!, ps, { [parentId]: 1000, [child1]: -1000, [child2]: 0 });
       await tx.update(chinchiroTablesTable).set({ status: "finished" }).where(eq(chinchiroTablesTable.id, table.id));

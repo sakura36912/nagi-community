@@ -127,7 +127,6 @@ import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { calendarCommand } from "./calendar";
 import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
-import { backupCommand } from "./backup";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -2238,8 +2237,6 @@ const shopCommand: Command = {
         return;
       }
 
-      // Acknowledge before any DB or Discord I/O can exceed the interaction deadline.
-      await interaction.deferReply({ ephemeral: true });
       const name = interaction.options.getString("name", true);
       const price = interaction.options.getInteger("price", true);
       const description = interaction.options.getString("description");
@@ -2253,14 +2250,16 @@ const shopCommand: Command = {
       const castRoleIds = selectedCastRole ? [selectedCastRole.id] : existingPanel ? getForumCastRoleIds(existingPanel) : [];
       const castRoleId = castRoleIds[0] ?? null;
       if (!castRoleId || castRoleId === guildId) {
-        await interaction.editReply({
+        await interaction.reply({
           content: "❌ `cast_role` にキャスト対象ロールを指定してください。@everyone は指定できません。",
+          ephemeral: true,
         });
         return;
       }
       if (!logChannelId) {
-        await interaction.editReply({
+        await interaction.reply({
           content: "❌ `log_channel` を指定してください。購入結果を送るテキストチャンネルが必要です。",
+          ephemeral: true,
         });
         return;
       }
@@ -2292,8 +2291,9 @@ const shopCommand: Command = {
         await setShopForumPanelMessage(guildId, thread.id, panelMessage.id);
       }
 
-      await interaction.editReply({
+      await interaction.reply({
         content: `✅ このフォーラム投稿の商品を **${saved.item.name}**（${saved.item.price.toLocaleString()}${settings.currencyName}）に設定し、購入ログを <#${logChannelId}> へ送る購入パネルを${panelMessage.id === existingPanel?.panelMessageId ? "更新" : "設置"}しました。\nキャスト選択は ${castRoleIds.map((id) => `<@&${id}>`).join("、")} のいずれかを持つメンバーだけを表示します。\n下の選択欄から対象ロールを複数選択して変更できます。選択すると保存されます。`,
+        ephemeral: true,
         allowedMentions: { parse: [] },
         components: buildForumCastRoleConfig(saved.item.id, interaction.user.id, castRoleIds.filter((id) => interaction.guild?.roles.cache?.has(id))),
       });
@@ -4089,7 +4089,7 @@ const chestCommand: Command = {
       const rows = await db
         .select({
           userId:       vcSessionLogsTable.userId,
-          totalSeconds: drizzleSql<number>`sum(${vcSessionLogsTable.durationSeconds})`,
+          totalSeconds: drizzleSql<number>`sum(${vcSessionLogsTable.durationSeconds})::int`,
         })
         .from(vcSessionLogsTable)
         .where(
@@ -4514,7 +4514,6 @@ const balanceRankingCommand: Command = {
 };
 
 export const commands: Command[] = [
-  backupCommand,
   interviewCommand,
   balanceCommand,
   payCommand,

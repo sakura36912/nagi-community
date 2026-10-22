@@ -5,7 +5,7 @@ import {
   serial,
   text,
   timestamp,
-} from "../sqliteColumns";
+} from "drizzle-orm/pg-core";
 
 export const chinchiroGamesTable = pgTable(
   "chinchiro_games",

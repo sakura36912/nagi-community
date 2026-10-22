@@ -10,7 +10,7 @@ export async function getDuePeriodicMessages(): Promise<PeriodicMessage[]> {
     .where(
       sql`${periodicMessagesTable.enabled} = true AND (
         ${periodicMessagesTable.lastPostedAt} IS NULL OR
-        ${periodicMessagesTable.lastPostedAt} <= cast(unixepoch('subsec') * 1000000 as integer) - (${periodicMessagesTable.intervalHours} * 3600000000)
+        ${periodicMessagesTable.lastPostedAt} <= NOW() - (${periodicMessagesTable.intervalHours} * interval '1 hour')
       )`,
     );
 }

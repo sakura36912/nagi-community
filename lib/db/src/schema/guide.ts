@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp } from "../sqliteColumns";
+import { pgTable, serial, text, integer, timestamp } from "drizzle-orm/pg-core";
 
 // ─── Guide Items ──────────────────────────────────────────────────────────────
 

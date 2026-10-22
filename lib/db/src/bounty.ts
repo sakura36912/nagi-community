@@ -23,14 +23,16 @@ async function lockBountyVoiceGuild(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   guildId: string,
 ): Promise<void> {
-  // SQLite BEGIN IMMEDIATE already serializes every writer before any read.
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${guildId}, 0))`);
 }
 
 async function lockBountyMonthlyGuild(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   guildId: string,
 ): Promise<void> {
-  // Covered by the write transaction's database-wide reservation.
+  await tx.execute(sql`select pg_advisory_xact_lock(
+    hashtextextended('bounty-monthly:' || ${guildId}, 0)
+  )`);
 }
 
 function assertNonNegativeInteger(value: number, name: string): void {
@@ -384,7 +386,7 @@ export async function listPendingBountyMonthlyApprovalAudits(
   const rows = await db.select({
     monthKey: bountyMonthlySnapshotsTable.monthKey,
     actorId: bountyMonthlySnapshotsTable.approvedBy,
-    memberCount: sql<number>`count(${bountyMonthlySnapshotMembersTable.userId})`,
+    memberCount: sql<number>`count(${bountyMonthlySnapshotMembersTable.userId})::integer`,
     queuedAt: bountyMonthlySnapshotsTable.approvalAuditQueuedAt,
     scanBeforeId: bountyMonthlySnapshotsTable.approvalAuditScanBeforeId,
     channelId: bountyMonthlySnapshotsTable.approvalAuditChannelId,
@@ -554,6 +556,7 @@ export async function applyBountyPoints(
         eq(bountyPointsTable.guildId, guildId),
         eq(bountyPointsTable.userId, userId),
       ))
+      .for("update")
       .limit(1);
     if (!account) throw new Error("Could not lock bounty points account.");
 
@@ -659,6 +662,7 @@ async function ensureAndLockAccount(tx: Parameters<Parameters<typeof db.transact
       eq(bountyPointsTable.guildId, guildId),
       eq(bountyPointsTable.userId, userId),
     ))
+    .for("update")
     .limit(1);
   if (!account) throw new Error("Could not lock bounty points account.");
   return account;
@@ -736,6 +740,7 @@ async function accruePresence(
             eq(bountyVcProgressTable.userId, presence.userId),
             eq(bountyVcProgressTable.channelId, rateConfig.progressChannelId),
           ))
+          .for("update")
           .limit(1);
         if (!progress) throw new Error("Could not lock bounty VC progress.");
 
@@ -813,7 +818,7 @@ async function accrueGuild(tx: Parameters<Parameters<typeof db.transaction>[0]>[
   await lockBountyVoiceGuild(tx, guildId);
   const presences = await tx.select().from(bountyVoicePresenceTable)
     .where(eq(bountyVoicePresenceTable.guildId, guildId))
-    ;
+    .for("update");
   const results = [];
   for (const presence of presences) {
     const result = await accruePresence(tx, presence, now);
@@ -869,6 +874,7 @@ export async function recordBountyVoiceState(
         eq(bountyVoicePresenceTable.guildId, guildId),
         eq(bountyVoicePresenceTable.userId, userId),
       ))
+      .for("update")
       .limit(1);
 
     let accrued: { userId: string; before: number; after: number } | null = null;
@@ -941,6 +947,7 @@ export async function setBountyMonthlyRate(
         eq(bountyMonthlyRatesTable.guildId, guildId),
         eq(bountyMonthlyRatesTable.roleId, roleId),
       ))
+      .for("update")
       .limit(1);
     const [history] = await tx.select({ id: bountyMonthlyRateHistoryTable.id })
       .from(bountyMonthlyRateHistoryTable)

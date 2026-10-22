@@ -37,7 +37,10 @@ describe("rejoin log persistence", () => {
         latestPostIslandRoles: ["本船員", "島民"],
       });
     } finally {
-      await pool.execute({ sql: "DELETE FROM member_join_history WHERE guild_id = ?", args: [guildId] });
+      await pool.query(
+        "DELETE FROM member_join_history WHERE guild_id = $1",
+        [guildId],
+      );
     }
   });
 });

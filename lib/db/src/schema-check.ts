@@ -1,7 +1,6 @@
-import { getTableConfig } from "drizzle-orm/sqlite-core";
-import type { Client } from "./sqliteClient";
+import { getTableConfig } from "drizzle-orm/pg-core";
+import type { Pool } from "pg";
 import * as schema from "./schema/index.js";
-import { sqliteTables } from "./sqliteSchema";
 
 export interface SchemaDriftResult {
   missingTables: string[];
@@ -19,11 +18,11 @@ export interface SchemaDriftResult {
  *
  * Never throws — any DB failure is caught and returned as `{ ok: false }`.
  *
- * @param pool  SQLite connection to the target database.
+ * @param pool  pg Pool connected to the target database.
  * @param log   Function used to emit warning lines (defaults to console.warn).
  */
 export async function checkSchemaDrift(
-  pool: Pick<Client, "execute">,
+  pool: Pool,
   log: (msg: string) => void = console.warn,
 ): Promise<SchemaDriftResult> {
   try {
@@ -38,7 +37,7 @@ export async function checkSchemaDrift(
           config.columns.map((c) => c.name),
         );
       } catch {
-        // Not a SQLite table — skip types, zod schemas, etc.
+        // Not a PgTable — skip enums, types, zod schemas, etc.
       }
     }
 
@@ -47,10 +46,13 @@ export async function checkSchemaDrift(
     }
 
     // Query the actual columns present in the database for each expected table.
-    const result = await pool.execute(
-      `SELECT m.name AS table_name, p.name AS column_name
-       FROM sqlite_master m JOIN pragma_table_info(m.name) p
-       WHERE m.type = 'table'`,
+    const tableNames = [...expectedTables.keys()];
+    const result = await pool.query<{ table_name: string; column_name: string }>(
+      `SELECT table_name, column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = ANY($1::text[])`,
+      [tableNames],
     );
 
     const existingColumns = new Set(
@@ -60,13 +62,6 @@ export async function checkSchemaDrift(
 
     const missingTables: string[] = [];
     const missingColumns: Array<{ table: string; column: string }> = [];
-    const indexes = await pool.execute("SELECT name FROM sqlite_master WHERE type='index'");
-    const indexNames = new Set(indexes.rows.map((row) => String(row.name)));
-    const missingIndexes = sqliteTables.flatMap((table) => [
-      ...table.indexes.map((index) => index.config.name),
-      ...table.uniqueConstraints.map((unique) => unique.getName()),
-    ]).filter((name): name is string => Boolean(name) && !indexNames.has(name!));
-    for (const name of missingIndexes) log(`[schema-check] Required SQLite index missing: ${name}`);
 
     for (const [table, cols] of expectedTables) {
       if (!existingTables.has(table)) {
@@ -82,14 +77,14 @@ export async function checkSchemaDrift(
       }
     }
 
-    if (missingTables.length === 0 && missingColumns.length === 0 && missingIndexes.length === 0) {
+    if (missingTables.length === 0 && missingColumns.length === 0) {
       return { missingTables: [], missingColumns: [], ok: true };
     }
 
     log(
       `[schema-check] ⚠ Schema drift detected — ${missingTables.length} missing table(s), ` +
         `${missingColumns.length} missing column(s). ` +
-        `Run the reviewed SQLite migrations before starting the bot.`,
+        `Run: pnpm --filter @workspace/db run push-force`,
     );
     return { missingTables, missingColumns, ok: false };
   } catch (err) {
