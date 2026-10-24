@@ -29,3 +29,4 @@
 - [Bounty panel access scope](bounty-panel-access-scope.md) — 広報部・本船員へのパネル操作の委譲を、初期設定や月次保留精算の承認権限へ自動的に広げない。
 - [Forum copy policy](forum-copy-policy.md) — 別フォーラムへの移行は元投稿を維持するコピーとし、管理者の公開範囲確認後に実行する。
 - [GitHub repository scope](github-repository-scope.md) — 凪通貨BOTと多機能BOTは別々の新規非公開リポジトリへ保存する。
+- [KP shop policy](kp-shop-policy.md) — キミノヒトミニKPshopは独立商品とし、購入ログは操作したパネルの設置先へ表示する。

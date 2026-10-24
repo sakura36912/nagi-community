@@ -127,6 +127,7 @@ import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { calendarCommand } from "./calendar";
 import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
+import { KP_SHOP_CATEGORY, KP_SHOP_NAME, purchaseKpItem, supportsKpEffect } from "../lib/kpShop";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -871,6 +872,11 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
     return;
   }
 
+  if (item.category === KP_SHOP_CATEGORY) {
+    await purchaseKpItem(interaction, item);
+    return;
+  }
+
   if (item.category === "forum") {
     const panel = await getConfiguredForumPanel(interaction.guildId, interaction.channelId, itemId);
     if (!panel?.logChannelId) {
@@ -1163,6 +1169,11 @@ async function applyShopPurchase(
   const item = await getShopItem(interaction.guildId, itemId);
   if (!item) {
     await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+    return;
+  }
+
+  if (item.category === KP_SHOP_CATEGORY) {
+    await purchaseKpItem(interaction, item);
     return;
   }
 
@@ -1836,6 +1847,7 @@ const COMBINED_EFFECT_CHOICES: EffectChoice[] = [
 ];
 
 const CATEGORY_CHOICES = [
+  { name: KP_SHOP_NAME, value: KP_SHOP_CATEGORY },
   { name: "🛒 ショップ",               value: "general" },
   { name: "⚔️ 隊別ショップ",          value: "group"   },
   { name: "🔒 高級船室ショップ",       value: "vc"      },
@@ -1850,6 +1862,7 @@ interface ShopGroupConfig {
 }
 
 const SHOP_GROUPS: Record<string, ShopGroupConfig> = {
+  [KP_SHOP_CATEGORY]: { displayName: KP_SHOP_NAME, emoji: "🛒", category: KP_SHOP_CATEGORY, color: 0xf5a623 },
   general: { displayName: "ショップ",               emoji: "🛒", category: "general", color: 0xf5a623 },
   group:   { displayName: "隊別ショップ",           emoji: "⚔️", category: "group",   color: 0xe74c3c },
   vc:      { displayName: "高級船室ショップ",       emoji: "🔒", category: "vc",      color: 0x3498db },
@@ -1985,6 +1998,13 @@ const shopCommand: Command = {
       const description = interaction.options.getString("description");
       const effect      = interaction.options.getString("effect");
       const role        = interaction.options.getRole("role");
+      if (cfg.category === KP_SHOP_CATEGORY && !supportsKpEffect(effect)) {
+        await interaction.reply({
+          content: "キミノヒトミニKPshopでは通常商品と永久ロール付与商品を登録できます。特殊効果は省略するか「永久ロール付与」を選んでください。",
+          ephemeral: true,
+        });
+        return;
+      }
       // role は後から /shop set-role で設定可能なため、省略を許容する
       const [item, settings] = await Promise.all([
         addShopItem(guildId, name, price, description, effect, cfg.category, role?.id ?? null),

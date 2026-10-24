@@ -301,6 +301,29 @@ describe("island shop category", () => {
     );
   });
 
+  it("posts an independent KP shop panel and exposes its category choice", async () => {
+    mocks.listShopItems.mockResolvedValue([{
+      id: ITEM_ID, guildId: GUILD_ID, name: "KP商品", description: null,
+      price: 500, category: "kp", effectType: null, targetRoleId: null,
+    }]);
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+    const interaction = {
+      guildId: GUILD_ID, memberPermissions: { has: () => true },
+      options: { getSubcommand: () => "panel", getString: () => "kp" },
+      channel: { send: vi.fn().mockResolvedValue(undefined) },
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+    await shopCommand.execute(interaction as never);
+    expect(mocks.listShopItems).toHaveBeenCalledWith(GUILD_ID, "kp");
+    expect(interaction.channel.send.mock.calls[0][0].embeds[0].toJSON().title)
+      .toBe("🛒 キミノヒトミニKPshop");
+    const definition = shopCommand.data.toJSON() as { options: { name: string; options?: { name: string; choices?: { name: string; value: string }[] }[] }[] };
+    for (const command of ["add", "list", "panel"]) {
+      expect(definition.options.find(o => o.name === command)?.options?.find(o => o.name === "category")?.choices)
+        .toContainEqual({ name: "キミノヒトミニKPshop", value: "kp" });
+    }
+  });
+
   it("posts an island-only panel for /shop panel", async () => {
     const item = {
       id: ITEM_ID,
