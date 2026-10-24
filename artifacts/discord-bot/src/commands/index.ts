@@ -128,6 +128,7 @@ import { calendarCommand } from "./calendar";
 import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
 import { KP_SHOP_CATEGORY, KP_SHOP_NAME, purchaseKpItem, supportsKpEffect } from "../lib/kpShop";
+import { executeKpTicketCommand, kpTicketPanelSubcommand, kpTicketPricesSubcommand } from "./kpTicket";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -1960,11 +1961,17 @@ const shopCommand: Command = {
         ),
     )
     .addSubcommand((sub) => sub.setName("cast-roles").setDescription("この投稿のキャスト対象ロールを複数選択して設定します（管理者）"))
+    .addSubcommand(kpTicketPanelSubcommand)
+    .addSubcommand(kpTicketPricesSubcommand)
     ,
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub     = interaction.options.getSubcommand();
+    if (sub === "ticket-panel" || sub === "ticket-prices") {
+      await executeKpTicketCommand(interaction);
+      return;
+    }
     if (sub === "cast-roles") {
       await showForumCastRoleConfig(interaction);
       return;

@@ -40,4 +40,5 @@ export * from "./shopForumPanel";
 export * from "./uraRecruitment";
 export * from "./dealerCasino";
 export * from "./bounty";
+export * from "./kpTicket";
 

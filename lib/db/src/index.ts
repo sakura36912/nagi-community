@@ -23,3 +23,5 @@ export * from "./uraRecruitment";
 export * from "./schema-check";
 export * from "./dealerCasino";
 export * from "./bounty";
+export * from "./kpTicket";
+export * from "./kpTicketPricing";

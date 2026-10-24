@@ -114,6 +114,8 @@ import {
   handleHubRenameModal,
 } from "./commands/vc";
 import { getHubSession, getHubChannelById, getHubByChannelId } from "@workspace/db";
+import { handleKpTicketInteraction } from "./commands/kpTicket";
+import { KP_TICKET_PREFIX } from "./lib/kpTicketUi";
 import {
   getExpiredSchedules,
   getSchedulesExpiringSoon,
@@ -2570,6 +2572,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton() && interaction.customId.startsWith(ROLE_PANEL_PREFIX)) {
       await handleRolePanelButton(interaction);
+      return;
+    }
+
+    if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith(KP_TICKET_PREFIX)) {
+      await handleKpTicketInteraction(interaction);
       return;
     }
 
