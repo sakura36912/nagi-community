@@ -50,6 +50,7 @@ Thumbs.db
 
 # Private/generated exports and local credentials
 /generated-artifacts/
+/nagi-community-bot.zip
 .env
 .env.*
 !.env.example

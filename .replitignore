@@ -4,5 +4,6 @@
 # No need to store the pnpm store twice.
 .local
 generated-artifacts
+/nagi-community-bot.zip
 .env
 .env.*
