@@ -47,3 +47,12 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Private/generated exports and local credentials
+/generated-artifacts/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.db
