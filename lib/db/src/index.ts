@@ -15,6 +15,11 @@ export const db = drizzle(pool, { schema });
 export * from "./forgeRules";
 export * from "./forgeSchema";
 export * from "./forge";
+export * from "./bossRules";
+export * from "./bossSchema";
+export * from "./boss";
+export * from "./bossBattle";
+export * from "./bossNotifications";
 
 export * from "./schema";
 export * from "./vcHub";

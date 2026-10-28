@@ -31,3 +31,4 @@
 - [GitHub repository scope](github-repository-scope.md) — 凪通貨BOTと多機能BOTは別々の新規非公開リポジトリへ保存する。
 - [KP shop policy](kp-shop-policy.md) — キミノヒトミニKPshopは独立商品とし、購入ログは操作したパネルの設置先へ表示する。
 - [鍛冶屋統合方針](forge-integration-policy.md) — Replit銀行Botの構成と残高を維持して統合。本船員限定・内部数値非公開・失敗時も費用消費。
+- [ボス討伐方針](boss-event-policy.md) — 攻撃・回復料金は後決め。報酬は均等分配、戦闘数値は開催時に管理者が指定。

@@ -117,7 +117,10 @@ import { getHubSession, getHubChannelById, getHubByChannelId } from "@workspace/
 import { handleKpTicketInteraction } from "./commands/kpTicket";
 import { handleForgeButton } from "./commands/forge";
 import { syncForgeCommandRegistration } from "./lib/forgeCommandRegistration";
-import { ensureForgeSchema } from "@workspace/db";
+import { handleBossButton } from "./commands/boss";
+import { syncBossCommandRegistration } from "./lib/bossCommandRegistration";
+import { startBossRecovery } from "./lib/bossRecovery";
+import { ensureBossSchema } from "@workspace/db";
 import { KP_TICKET_PREFIX } from "./lib/kpTicketUi";
 import {
   getExpiredSchedules,
@@ -1269,6 +1272,9 @@ client.on(Events.GuildUnavailable, (guild) => {
 
 client.once(Events.ClientReady, async (readyClient) => {
   const commandRegistrations = Promise.allSettled([
+    syncBossCommandRegistration(readyClient).catch((err) =>
+      logger.error("[boss] Startup command registration failed", err),
+    ),
     syncForgeCommandRegistration(readyClient).catch((err) =>
       logger.error("[forge] Startup command registration failed", err),
     ),
@@ -1305,6 +1311,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   );
   startDealerCasinoRecovery(readyClient);
   startMultiplayerChinchiroRecovery(readyClient);
+  startBossRecovery(readyClient);
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
   // Discord may still show the old command while the new version starts.
@@ -2437,6 +2444,10 @@ client.on(Events.ChannelDelete, (channel) => { void handleChannelDelete(channel)
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isButton() && interaction.customId.startsWith("boss:")) {
+      await handleBossButton(interaction);
+      return;
+    }
     if (interaction.isButton() && interaction.customId.startsWith("forge:")) {
       await handleForgeButton(interaction);
       return;
@@ -2758,7 +2769,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // where drizzle-kit push was never run) causes cryptic runtime errors on every
 // query that touches the affected table. Logging a clear warning here makes the
 // root cause immediately visible in bot logs.
-ensureForgeSchema().then(() => checkSchemaDrift(pool, (msg) => logger.warn(msg))).then((result) => {
+ensureBossSchema().then(() => checkSchemaDrift(pool, (msg) => logger.warn(msg))).then((result) => {
   if (!result.ok) {
     logger.warn(
       "[schema-check] ⚠ The bot will continue, but queries against affected tables will fail. " +
@@ -2766,7 +2777,7 @@ ensureForgeSchema().then(() => checkSchemaDrift(pool, (msg) => logger.warn(msg))
     );
   }
 }).catch((error) => {
-  logger.error("[forge] Schema initialization or drift check failed; existing bot features continue", error);
+  logger.error("[boss/forge] Schema initialization or drift check failed; existing bot features continue", error);
   // 新機能の初期化失敗で既存機能を停止しない。鍛冶屋操作時にも再検証する。
 });
 
