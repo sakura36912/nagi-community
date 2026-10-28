@@ -128,6 +128,7 @@ import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
 import { KP_SHOP_CATEGORY, KP_SHOP_NAME, purchaseKpItem, supportsKpEffect } from "../lib/kpShop";
 import { executeKpTicketCommand, kpTicketPanelSubcommand, kpTicketPricesSubcommand } from "./kpTicket";
+import { forgeCommands } from "./forge";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -4539,6 +4540,7 @@ const balanceRankingCommand: Command = {
 };
 
 export const commands: Command[] = [
+  ...forgeCommands,
   interviewCommand,
   balanceCommand,
   payCommand,
