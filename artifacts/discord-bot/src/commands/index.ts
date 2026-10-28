@@ -124,7 +124,6 @@ import {
   vcSessionLogsTable,
 } from "@workspace/db";
 import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
-import { calendarCommand } from "./calendar";
 import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
 import { KP_SHOP_CATEGORY, KP_SHOP_NAME, purchaseKpItem, supportsKpEffect } from "../lib/kpShop";
@@ -2510,7 +2509,6 @@ import { blackjackCommand } from "./blackjack";
 import { pokerCommand } from "./poker";
 import { rouletteCommand } from "./roulette";
 import { highlowCommand } from "./highlow";
-import { baccaratCommand } from "./baccarat";
 import { chinchiroCommand } from "./chinchiro";
 import { casinoCommand } from "./casino";
 import { bannotifyCommand } from "./bannotify";
@@ -4557,7 +4555,6 @@ export const commands: Command[] = [
   highlowCommand,
   pokerCommand,
   rouletteCommand,
-  baccaratCommand,
   chinchiroCommand,
   chinchiroDiceCommand,
   casinoCommand,
@@ -4580,6 +4577,5 @@ export const commands: Command[] = [
   dailyDebitCommand,
   timedRoleCommand,
   balanceRankingCommand,
-  calendarCommand,
   uraRecruitmentCommand,
 ];
