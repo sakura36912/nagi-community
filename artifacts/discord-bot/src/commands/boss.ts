@@ -1,6 +1,6 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, MessageFlags,
-  PermissionFlagsBits, SlashCommandBuilder,
+  PermissionFlagsBits, SlashCommandBuilder, escapeMarkdown,
   type ChatInputCommandInteraction, type ButtonInteraction,
 } from "discord.js";
 import {
@@ -8,7 +8,7 @@ import {
   createBossJoinRequest, confirmBossJoin, cancelBossJoinRequest, performBossAction, type BossConfig, type BossType, type BossMode,
 } from "@workspace/db";
 import { requireForgeAccess } from "./forge";
-import { bossActionText, bossEventEmbed, bossMoney, bossSpecialName } from "../lib/bossUi";
+import { bossActionText, bossEventEmbed, bossHp, bossMoney, bossSpecialName } from "../lib/bossUi";
 import { runBossRecovery } from "../lib/bossRecovery";
 import { logger } from "../lib/logger";
 
@@ -101,10 +101,10 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
         { name: "ソロ参加者", value: String(info.members.filter(p => info.battles.find(b => b.id === p.battleId)?.mode === "solo").length), inline: true },
         { name: "パーティ参加者", value: String(info.members.filter(p => info.battles.find(b => b.id === p.battleId)?.mode === "party").length), inline: true },
       );
-      for (const battle of info.battles.slice((page - 1) * 8, page * 8)) {
+      for (const [index, battle] of info.battles.slice((page - 1) * 8, page * 8).entries()) {
         const players = info.members.filter(p => p.battleId === battle.id);
-        embed.addFields({ name: `${battle.mode === "solo" ? "ソロ" : "パーティ"} ${battle.status === "waiting" ? "受付中" : "戦闘中"}／${battle.id}`,
-          value: `ボスHP ${battle.currentHp.toLocaleString()}/${battle.maxHp.toLocaleString()}\n${players.map(p => `${p.displayName}：HP ${p.hp}/${p.maxHp}`).join("\n")}`.slice(0, 1024) });
+        embed.addFields({ name: `${(page - 1) * 8 + index + 1}. ${battle.mode === "solo" ? "ソロ" : "パーティ"} / ${battle.status === "waiting" ? "受付中" : "戦闘中"}`,
+          value: `${bossHp(battle.currentHp, battle.maxHp)}\n${players.map(p => `${escapeMarkdown(p.displayName)}：HP ${p.hp.toLocaleString("ja-JP")} / ${p.maxHp.toLocaleString("ja-JP")}`).join("\n")}`.slice(0, 480) });
       }
       await interaction.editReply({ embeds: [embed.setFooter({ text: `討伐一覧 ${page}/${pages}ページ。ランキングは討伐終了時のみ表示。` })], allowedMentions: { parse: [] } });
       return;
