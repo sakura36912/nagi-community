@@ -9,7 +9,7 @@ import {
 } from "discord.js";
 import { logger } from "./lib/logger.js";
 import { ensureZombieSchema } from "@workspace/db";
-import { handleZombieButton } from "./commands/zombie.js";
+import { handleZombieButton, handleZombieVcSelection } from "./commands/zombie.js";
 import { observeZombieGuild, resetZombieConnection, startZombieRuntime } from "./lib/zombieRuntime.js";
 import { syncZombieCommands } from "./lib/zombieRegistration.js";
 import { ensureBossSchema, isRpgCommandName } from "@workspace/db";
@@ -517,6 +517,7 @@ client.on(Events.GuildAvailable, () => resetZombieConnection(true));
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isChannelSelectMenu() && await handleZombieVcSelection(interaction)) return;
     if (interaction.isChatInputCommand()) {
       const command = commandsByName.get(interaction.commandName);
       if (!command) {

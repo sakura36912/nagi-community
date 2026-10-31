@@ -1,6 +1,6 @@
 import {
-  ChannelType, EmbedBuilder, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, escapeMarkdown,
-  type ButtonInteraction, type ChatInputCommandInteraction, type Guild,
+  ActionRowBuilder, ChannelSelectMenuBuilder, ChannelType, EmbedBuilder, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, escapeMarkdown,
+  type ButtonInteraction, type ChannelSelectMenuInteraction, type ChatInputCommandInteraction, type Guild,
 } from "discord.js";
 import {
   ZombieError, ZOMBIE_REWARDS, beginZombieGame, changeZombieSettingList, decideZombieRequest, endZombieGame,
@@ -61,10 +61,39 @@ async function executeZombie(i: ChatInputCommandInteraction) {
       await updateZombieConfig(guild.id, patch);
       await i.editReply("チャンネル設定を保存しました。次に /zombie vc と /zombie rewards を設定してください。設定変更は次回イベントへ適用されます。");
     } else if (sub === "vc") {
-      const channel = await guild.channels.fetch(i.options.getChannel("対象", true).id);
-      if (!channel || channel.type !== ChannelType.GuildVoice) throw new ZombieError("通常のボイスチャンネルを指定してください。");
-      await changeZombieSettingList(guild.id, "vcIds", channel.id, i.options.getBoolean("有効", true));
-      await i.editReply("対象酒場VCを更新しました。次回イベントへ適用されます。");
+      const target = i.options.getChannel("対象"), enabled = i.options.getBoolean("有効");
+      if (!target && enabled === null) {
+        const config = await getZombieConfig(guild.id);
+        const current = config?.vcIds ?? [], defaults: string[] = [];
+        for (const id of current.slice(0, 25)) {
+          let channel;
+          try { channel = await guild.channels.fetch(id); }
+          catch (error) {
+            if ((error as { code?: number }).code === 10003) continue;
+            throw error;
+          }
+          if (channel?.type === ChannelType.GuildVoice && channel.guildId === guild.id) defaults.push(id);
+        }
+        const menu = new ChannelSelectMenuBuilder()
+          .setCustomId(`zmbvc:${guild.id}:${uid}:${Date.now()}`)
+          .setPlaceholder("対象の酒場VCをまとめて選択（最大25件）")
+          .setChannelTypes(ChannelType.GuildVoice).setMinValues(0).setMaxValues(25);
+        if (defaults.length) menu.setDefaultChannels(...defaults);
+        await i.editReply({
+          content: `現在の設定：${current.length}件。対象の酒場VCを複数選択してください。\n` +
+            "選択を確定すると、選んだVCで設定全体を置き換えます。0件で全解除。次回イベントから適用され、開催中の設定は変わりません。\n" +
+            (current.length > 25 ? "現在は25件を超えています。メニューで保存すると最大25件になります。26件以上を維持する場合は従来の「対象」「有効」オプションで追加・解除してください。\n" : "") +
+            "このメニューは操作した管理者専用で、15分間有効です。",
+          components: [new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(menu)],
+          allowedMentions: { parse: [] },
+        });
+      } else {
+        if (!target || enabled === null) throw new ZombieError("「対象」と「有効」を両方指定するか、両方省略して複数選択してください。");
+        const channel = await guild.channels.fetch(target.id);
+        if (!channel || channel.type !== ChannelType.GuildVoice) throw new ZombieError("通常のボイスチャンネルを指定してください。");
+        await changeZombieSettingList(guild.id, "vcIds", channel.id, enabled);
+        await i.editReply("対象酒場VCを更新しました。次回イベントへ適用されます。");
+      }
     } else if (sub === "exclude") {
       const user = i.options.getUser("ユーザー"), role = i.options.getRole("ロール");
       if ((!user && !role) || (user && role)) throw new ZombieError("ユーザーかロールのどちらか1つだけ指定してください。");
@@ -156,6 +185,38 @@ export async function handleZombieButton(i: ButtonInteraction) {
   } catch (error) { await i.editReply(error instanceof ZombieError ? error.message : "処理を完了できませんでした。管理用設定をご確認ください。"); }
   return true;
 }
+export async function handleZombieVcSelection(i: ChannelSelectMenuInteraction) {
+  if (!i.customId.startsWith("zmbvc:")) return false;
+  await i.deferUpdate();
+  try {
+    if (!i.guild) throw new ZombieError("サーバー内で使用してください。");
+    await requireZombieAdmin(i.guild, i.user.id);
+    const parts = i.customId.split(":"), issuedAt = Number(parts[3]);
+    if (parts.length !== 4 || parts[1] !== i.guild.id || parts[2] !== i.user.id)
+      throw new ZombieError("このメニューを開いた管理者本人のみ操作できます。");
+    if (!Number.isSafeInteger(issuedAt) || issuedAt > Date.now() || Date.now() - issuedAt > 15 * 60000)
+      throw new ZombieError("メニューの期限が切れています。/zombie vc を実行し直してください。");
+    const ids = [...new Set(i.values)];
+    if (ids.length > 25 || ids.length !== i.values.length) throw new ZombieError("VCは重複なしで最大25件まで選択してください。");
+    for (const id of ids) {
+      const channel = await i.guild.channels.fetch(id, { force: true });
+      if (!channel || channel.type !== ChannelType.GuildVoice || channel.guildId !== i.guild.id)
+        throw new ZombieError("選択したVCが存在しないか、通常のボイスチャンネルではありません。設定は保存していません。");
+    }
+    await updateZombieConfig(i.guild.id, { vcIds: ids });
+    await i.editReply({
+      content: `対象酒場VCを${ids.length}件保存しました。${ids.length ? ids.map(id => `<#${id}>`).join(" ") : "対象VCはすべて解除されました。"}\n次回イベントから適用されます。開催中の設定・参加者・同席時間は変わりません。`,
+      components: [], allowedMentions: { parse: [] },
+    });
+  } catch (error) {
+    if (!(error instanceof ZombieError)) logger.warn("[zombie] VC選択の処理結果を確認できませんでした。");
+    await i.followUp({
+      content: error instanceof ZombieError ? error.message : "処理結果を確認できませんでした。/zombie vc で保存内容を確認してください。",
+      flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] },
+    });
+  }
+  return true;
+}
 const zombie = new SlashCommandBuilder().setName("zombie").setDescription("秘密役職のハロウィン感染イベント").setDMPermission(false);
 zombie.addSubcommand(s => {
   s.setName("config").setDescription("管理者：公開3・非公開3チャンネルを設定");
@@ -163,9 +224,9 @@ zombie.addSubcommand(s => {
     s.addChannelOption(o => o.setName(name).setDescription(`${name}用テキストチャンネル`).addChannelTypes(ChannelType.GuildText).setRequired(true));
   return s;
 });
-zombie.addSubcommand(s => s.setName("vc").setDescription("管理者：対象酒場VCを追加・解除")
-  .addChannelOption(o => o.setName("対象").setDescription("酒場VC").addChannelTypes(ChannelType.GuildVoice).setRequired(true))
-  .addBooleanOption(o => o.setName("有効").setDescription("Trueで追加、Falseで解除").setRequired(true)));
+zombie.addSubcommand(s => s.setName("vc").setDescription("管理者：省略で酒場VCを複数選択。個別追加・解除も可能")
+  .addChannelOption(o => o.setName("対象").setDescription("個別変更時の酒場VC").addChannelTypes(ChannelType.GuildVoice))
+  .addBooleanOption(o => o.setName("有効").setDescription("個別変更：Trueで追加、Falseで解除")));
 zombie.addSubcommand(s => s.setName("exclude").setDescription("管理者：開始時の除外ユーザー・ロール")
   .addBooleanOption(o => o.setName("除外").setDescription("Trueで除外、Falseで解除").setRequired(true))
   .addUserOption(o => o.setName("ユーザー").setDescription("除外するユーザー"))
