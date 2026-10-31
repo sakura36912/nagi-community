@@ -22,7 +22,7 @@ import {
   CASINO_NET_LEDGER_MARKER,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
-import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
+import { dailyLimitReachedMessage, tryStartCasinoMemberPlay } from "../lib/casinoPlayLimits";
 import {
   getSlotSettings,
   addSlotSticker,
@@ -600,7 +600,7 @@ async function spinAndReply(
     getSlotSettings(guildId),
   ]);
 
-  const playStart = await tryStartCasinoPlay(guildId, userId, "slot", bet);
+  const playStart = await tryStartCasinoMemberPlay(interaction.guild, userId, "slot", bet);
   if (!playStart.ok && playStart.reason === "daily_limit_reached") {
     await interaction.editReply({
       content: dailyLimitReachedMessage("slot", playStart.limit),

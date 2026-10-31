@@ -1,4 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
+import type { Guild } from "discord.js";
 import {
   casinoDailyPlayCountsTable,
   casinoPlayLimitsTable,
@@ -27,6 +28,28 @@ export const CASINO_GAME_LABELS: Record<CasinoLimitedGame, string> = {
 export interface CasinoPlayLimit {
   game: CasinoLimitedGame;
   dailyLimit: number | null;
+}
+
+/** Role caps override the generic per-game setting. 本船員 takes priority. */
+export function casinoRoleDailyLimit(roleNames: Iterable<string>): 100 | 150 | null {
+  const names = new Set(roleNames);
+  if (names.has("本船員")) return 150;
+  if (names.has("新入り") || names.has("漂流者")) return 100;
+  return null;
+}
+
+/** Fetch current membership for every new round, including replay buttons. Fail closed on lookup errors. */
+export async function tryStartCasinoMemberPlay(
+  guild: Guild | null,
+  userId: string,
+  game: CasinoLimitedGame,
+  bet: number,
+  now = new Date(),
+): Promise<StartCasinoPlayResult> {
+  if (!guild) throw new Error("カジノはサーバー内で使用してください。");
+  const member = await guild.members.fetch({ user: userId, force: true });
+  const roleLimit = casinoRoleDailyLimit(member.roles.cache.map(role => role.name));
+  return tryStartCasinoPlay(guild.id, userId, game, bet, now, roleLimit);
 }
 
 export type StartCasinoPlayResult =
@@ -103,6 +126,7 @@ export async function tryStartCasinoPlay(
   game: CasinoLimitedGame,
   bet: number,
   now = new Date(),
+  roleLimit: 100 | 150 | null = null,
 ): Promise<StartCasinoPlayResult> {
   const date = jstDateString(now);
 
@@ -111,10 +135,11 @@ export async function tryStartCasinoPlay(
       .select({ dailyLimit: casinoPlayLimitsTable.dailyLimit })
       .from(casinoPlayLimitsTable)
       .where(and(eq(casinoPlayLimitsTable.guildId, guildId), eq(casinoPlayLimitsTable.game, game)));
-    const limit = configuredLimit?.dailyLimit ?? null;
+    const limit = roleLimit ?? configuredLimit?.dailyLimit ?? null;
 
     let used: number | null = null;
-    if (limit !== null) {
+    {
+      // Count unlimited rounds too: acquiring/changing a role must not reset today's usage.
       const [count] = await tx
         .insert(casinoDailyPlayCountsTable)
         .values({ guildId, userId, game, date, playCount: 1 })
@@ -126,12 +151,12 @@ export async function tryStartCasinoPlay(
             casinoDailyPlayCountsTable.date,
           ],
           set: { playCount: sql`${casinoDailyPlayCountsTable.playCount} + 1` },
-          where: sql`${casinoDailyPlayCountsTable.playCount} < ${limit}`,
+          where: limit === null ? undefined : sql`${casinoDailyPlayCountsTable.playCount} < ${limit}`,
         })
         .returning({ playCount: casinoDailyPlayCountsTable.playCount });
 
-      if (!count) return { ok: false, reason: "daily_limit_reached", limit };
-      used = count.playCount;
+      if (!count && limit !== null) return { ok: false, reason: "daily_limit_reached", limit };
+      used = limit === null ? null : count!.playCount;
     }
 
     const [wallet] = await tx
@@ -149,7 +174,7 @@ export async function tryStartCasinoPlay(
     // The counter was reserved first, so release it before committing an
     // insufficient-funds result. The row lock from the upsert keeps this safe
     // against concurrent attempts for the same user/game/day.
-    if (limit !== null) {
+    {
       await tx
         .update(casinoDailyPlayCountsTable)
         .set({ playCount: sql`GREATEST(0, ${casinoDailyPlayCountsTable.playCount} - 1)` })

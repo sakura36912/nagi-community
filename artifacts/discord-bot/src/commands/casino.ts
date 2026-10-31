@@ -210,14 +210,14 @@ async function handleSetupPlayLimit(interaction: ChatInputCommandInteraction): P
       new EmbedBuilder()
         .setTitle("🎲 カジノ日次プレイ上限")
         .setColor(COLOR_NEUTRAL)
-        .setDescription(`**${games.map((game) => CASINO_GAME_LABELS[game]).join("・")}** を ${settingText} に設定しました。`)
+        .setDescription(`**${games.map((game) => CASINO_GAME_LABELS[game]).join("・")}** のその他のロール向け上限を ${settingText} に設定しました。\n**本船員：各ゲーム150回 / 日、新入り・漂流者：各ゲーム100回 / 日** が優先されます。複数所持時は本船員を優先します。`)
         .addFields({
-          name: "現在の設定（毎日 0:00 JST リセット）",
+          name: "その他のロール向け設定（毎日 0:00 JST リセット）",
           value: CASINO_LIMITED_GAMES
             .map((game) => `${CASINO_GAME_LABELS[game]}: **${configuredByGame.get(game) ?? "無制限"}**`)
             .join("\n"),
         })
-        .setFooter({ text: "limit を 0 にすると、そのゲームを無制限に戻せます。" }),
+        .setFooter({ text: "limit を 0 にしても、本船員・新入り・漂流者のロール別上限は維持されます。" }),
     ],
     flags: MessageFlags.Ephemeral,
   });

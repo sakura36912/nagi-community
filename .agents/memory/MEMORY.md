@@ -1,6 +1,7 @@
 - [Sticky message dedup fix](sticky-dedup.md) — `message.author.bot` を使う。`client.user?.id` 比較は reconnect 時に null になりループが止まらない。
 - [High-low payout rules](highlow-payout-rules.md) — 1ゲーム単位の固定配当と、引き分け時の掛け金返却を維持する。
 - [Casino control placement](casino-control-placement.md) — 公開Embedに所有者付きボタンを置き、操作位置の安定と本人限定操作を両立する。
+- [Casino role play limits](casino-role-play-limits.md) — ゲームごとに本船員150回、新入り・漂流者100回／日。本船員を優先し、JST 0時にリセット。
 - [Slot setting profiles](slot-setting-profiles.md) — 設定ごとの機械割目安は、固定配当を変えずに当選確率へ換算して表現する。
 - [Beach transfer panel](beach-transfer-panel.md) — 砂浜のパネルのみ画面共有操作を隠し、通常のHubパネルの操作性は維持する。
 - [Panel-only Hub ownership](panel-only-hub-ownership.md) — 別Bot管理の転送先VCはHub由来として追跡するが、このBotから削除しない。

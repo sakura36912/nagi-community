@@ -30,7 +30,7 @@ import {
   buildCasinoResultFields,
   type CasinoResultTotals,
 } from "../lib/casinoResult";
-import { dailyLimitReachedMessage, tryStartCasinoPlay } from "../lib/casinoPlayLimits";
+import { dailyLimitReachedMessage, tryStartCasinoMemberPlay } from "../lib/casinoPlayLimits";
 import { CASINO_DEFAULT_MAX_BET } from "./casino";
 import { getBjCardImages } from "../lib/bjCardImages";
 import { downloadImageAsBuffer } from "../lib/gcsStorage";
@@ -520,7 +520,7 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  const playStart = await tryStartCasinoPlay(guildId, userId, "poker", bet);
+  const playStart = await tryStartCasinoMemberPlay(interaction.guild, userId, "poker", bet);
   if (!playStart.ok && playStart.reason === "daily_limit_reached") {
     await interaction.editReply({
       embeds: [new EmbedBuilder().setTitle("🃏 ポーカー").setDescription(dailyLimitReachedMessage("poker", playStart.limit)).setColor(COLOR_LOSE)],
