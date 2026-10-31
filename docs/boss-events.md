@@ -1,8 +1,8 @@
-# 凪銀行Bot：ボス討伐イベント
+# 多機能Bot：ボス討伐イベント（銀行残高共有）
 
 ## 構成と反映
 
-既存銀行Bot（TypeScript / discord.js / PostgreSQL）の中で動く。
+多機能Bot（TypeScript / discord.js）で動き、既存銀行Botと同じPostgreSQLの残高・武器・戦闘データを共有する。
 鍛冶屋の武器と同じ残高を使い、外部APIやSQLiteへの移行は不要。
 VPS上の旧ボスBot・旧武器DBは変更・移行しない。
 本番へは新コードの再公開・起動が必要。起動時に日本語コマンド8件だけ個別登録する。
@@ -144,9 +144,9 @@ Botの起動時と15秒ごとの復旧処理で、期限が過ぎた状態を評
 既存テーブルや残高を削除・再作成しない。
 
 ```sh
-RUN_BOSS_DB_TESTS=1 pnpm --filter @workspace/discord-bot exec vitest run \
+RUN_BOSS_DB_TESTS=1 pnpm --filter @workspace/community-bot exec vitest run \
   src/__tests__/boss-db.test.ts
-pnpm --filter @workspace/discord-bot exec vitest run \
+pnpm --filter @workspace/community-bot exec vitest run \
   src/__tests__/boss-rules.test.ts src/__tests__/boss-interaction.test.ts
 ```
 

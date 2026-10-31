@@ -144,6 +144,7 @@ vi.mock("discord.js", () => {
     addSubcommand(fn: (s: FakeBuilder) => unknown)      { fn(new FakeBuilder()); return this; }
     addSubcommandGroup(fn: (g: FakeBuilder) => unknown) { fn(new FakeBuilder()); return this; }
     addIntegerOption(fn: (o: FakeOption) => unknown){ fn(new FakeOption()); return this; }
+    addNumberOption(fn: (o: FakeOption) => unknown) { fn(new FakeOption()); return this; }
     addStringOption(fn: (o: FakeOption) => unknown) { fn(new FakeOption()); return this; }
     addChannelOption(fn: (o: FakeOption) => unknown){ fn(new FakeOption()); return this; }
     addBooleanOption(fn: (o: FakeOption) => unknown){ fn(new FakeOption()); return this; }

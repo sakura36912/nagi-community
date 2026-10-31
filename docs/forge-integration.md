@@ -1,8 +1,8 @@
-# 凪銀行Bot：鍛冶屋統合
+# 多機能Bot：武器・鍛冶屋（銀行残高共有）
 
 ## 実行構成
 
-既存の銀行Bot（TypeScript / discord.js）とPostgreSQLを維持する。
+多機能Bot（TypeScript / discord.js）で操作し、既存の銀行Botと同じPostgreSQLの残高・武器データを使う。
 Python製の別Bot・SQLite・外部銀行APIは追加しない。
 本機能の強化代は既存の `wallets` の同一サーバー・同一ユーザーの残高から直接引く。
 VPS側の旧鍛冶屋BotやSQLiteデータは変更・自動移行していない。
@@ -93,13 +93,13 @@ VPS側の旧鍛冶屋BotやSQLiteデータは変更・自動移行していな�
 開発用DBテスト（合成データは終了時に削除）：
 
 ```sh
-RUN_FORGE_DB_TESTS=1 pnpm --filter @workspace/discord-bot exec vitest run \
+RUN_FORGE_DB_TESTS=1 pnpm --filter @workspace/community-bot exec vitest run \
   src/__tests__/forge-db.test.ts
 ```
 
 通常のルール・操作テスト：
 
 ```sh
-pnpm --filter @workspace/discord-bot exec vitest run \
+pnpm --filter @workspace/community-bot exec vitest run \
   src/__tests__/forge-rules.test.ts src/__tests__/forge-interaction.test.ts
 ```

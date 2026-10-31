@@ -2,7 +2,7 @@ import { ApplicationCommandType, type Client } from "discord.js";
 import { bossCommands } from "../commands/boss";
 import { logger } from "./logger";
 
-/** ボス用の日本語コマンドだけ個別登録し、銀行の他の定義を全件置換しない。 */
+/** 多機能Botのボス用コマンドだけ個別登録し、他の定義を全件置換しない。 */
 export async function syncBossCommandRegistration(client: Client) {
   if (!client.application) throw new Error("Discord application is unavailable");
   const manager = client.application.commands;

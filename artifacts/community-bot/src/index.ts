@@ -12,6 +12,10 @@ import { ensureZombieSchema } from "@workspace/db";
 import { handleZombieButton } from "./commands/zombie.js";
 import { observeZombieGuild, resetZombieConnection, startZombieRuntime } from "./lib/zombieRuntime.js";
 import { syncZombieCommands } from "./lib/zombieRegistration.js";
+import { ensureBossSchema, isRpgCommandName } from "@workspace/db";
+import { handleForgeButton } from "./commands/forge.js";
+import { handleBossButton } from "./commands/boss.js";
+import { startRpgRuntime } from "./lib/rpgRuntime.js";
 import {
   closeAllOpenSessions,
   getAllRankingSettings,
@@ -192,6 +196,7 @@ async function runEventReminderScheduler(): Promise<void> {
 
 client.once(Events.ClientReady, async (readyClient) => {
   logger.info(`Community Bot logged in as ${readyClient.user.tag}`);
+  startRpgRuntime(client);
   try {
     await ensureZombieSchema();
     startZombieRuntime(client);
@@ -518,6 +523,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         logger.warn(`Unknown command: ${interaction.commandName}`);
         return;
       }
+      // Preserve the original live 本船員/Administrator checks for transferred RPG commands.
+      if (isRpgCommandName(interaction.commandName)) {
+        await command.execute(interaction);
+        return;
+      }
       // 島民・追放者ロール制限: vc時間のみ許可（スタッフロールは免除）
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
@@ -540,6 +550,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith("forge:")) { await handleForgeButton(interaction); return; }
+      if (interaction.customId.startsWith("boss:")) { await handleBossButton(interaction); return; }
       if (await handleZombieButton(interaction)) return;
       const id = interaction.customId;
 
@@ -628,7 +640,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // where drizzle-kit push was never run) causes cryptic runtime errors on every
 // query that touches the affected table. Logging a clear warning here makes the
 // root cause immediately visible in bot logs.
-ensureZombieSchema().then(() => checkSchemaDrift(pool, (msg) => logger.warn(msg))).then((result) => {
+Promise.all([ensureZombieSchema(), ensureBossSchema()]).then(() => checkSchemaDrift(pool, (msg) => logger.warn(msg))).then((result) => {
   if (!result.ok) {
     logger.warn(
       "[schema-check] ⚠ The bot will continue, but queries against affected tables will fail. " +
