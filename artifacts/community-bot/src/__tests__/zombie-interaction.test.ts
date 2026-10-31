@@ -94,8 +94,14 @@ describe("zombie private commands and channel protection", () => {
     expect(m.end).not.toHaveBeenCalled(); expect(m.start).not.toHaveBeenCalled(); expect(m.setReward).not.toHaveBeenCalled();
   });
   it("shows only the caller's own role without administrator privileges", async () => {
+    m.get.mockResolvedValueOnce({ ...game, players: {
+      ...game.players, other: { ...game.players.user!, id: "other", name: "他人の秘密", role: "zombie" },
+    } });
     const i = fixture("zombie", "me"); await run(i);
     expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("治療班"));
+    expect(i.editReply).not.toHaveBeenCalledWith(expect.stringContaining("他人の秘密"));
+    expect(i.editReply).not.toHaveBeenCalledWith(expect.stringContaining("ゾンビ"));
+    expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(i.guild.members.fetch).not.toHaveBeenCalled();
   });
   it("routes infection and healing through fresh VC observation before creating applications", async () => {

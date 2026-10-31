@@ -8,6 +8,7 @@ import {
   MessageFlags,
 } from "discord.js";
 import { logger } from "./lib/logger.js";
+import { isCommunityCommandBlocked } from "./lib/restrictedCommandAccess.js";
 import { ensureZombieSchema } from "@workspace/db";
 import { handleZombieButton, handleZombieVcSelection } from "./commands/zombie.js";
 import { observeZombieGuild, resetZombieConnection, startZombieRuntime } from "./lib/zombieRuntime.js";
@@ -529,20 +530,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await command.execute(interaction);
         return;
       }
-      // 島民・追放者ロール制限: vc時間のみ許可（スタッフロールは免除）
+      // 島民は /zombie me も許可。追放者・他コマンドの制限とスタッフ免除は維持する。
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
-        const EXEMPT_ROLES    = ["守門卿", "門番", "門番見習い", "航海士", "提督", "大提督"];
-        const RESTRICTED_ROLES = ["島民", "追放者"];
-        const RESTRICTED_ALLOWED = new Set(["vc時間", "vcランク"]);
-        const isExempt = EXEMPT_ROLES.some((name) =>
-          interaction.guild?.roles.cache.some((r) => r.name === name && member.roles.cache.has(r.id)),
-        );
-        const hasRestrictedRole = !isExempt && RESTRICTED_ROLES.some((name) =>
-          interaction.guild?.roles.cache.some((r) => r.name === name && member.roles.cache.has(r.id)),
-        );
-        if (hasRestrictedRole && !RESTRICTED_ALLOWED.has(interaction.commandName)) {
-          await interaction.reply({ content: "このロールでは `/vc時間` のみ使用できます。", ephemeral: true });
+        const roles = interaction.guild?.roles.cache.filter(role => member.roles.cache.has(role.id)).map(role => role.name) ?? [];
+        if (isCommunityCommandBlocked(interaction.commandName,
+          interaction.commandName === "zombie" ? interaction.options.getSubcommand(false) : null, roles)) {
+          await interaction.reply({ content: "このロールではこのコマンドを使用できません。", ephemeral: true });
           return;
         }
       }
