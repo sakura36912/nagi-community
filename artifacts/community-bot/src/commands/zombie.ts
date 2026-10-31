@@ -43,6 +43,7 @@ async function executeZombie(i: ChatInputCommandInteraction) {
         await requestZombieAction(i.id, guild.id, uid, i.options.getUser("対象", true).id, i.commandName);
         await i.editReply("申請を管理者へ送信しました。同席時間だけでは成立せず、会話の確認と管理承認が必要です。対象の役職は開示しません。");
       } else {
+        if (sub === "accept") await observeZombieGuild(guild);
         const game = await getZombieGame(guild.id);
         if (!game) throw new ZombieError("イベントがありません。");
         const rid = i.options.getString("申請", true);
@@ -98,7 +99,7 @@ async function executeZombie(i: ChatInputCommandInteraction) {
       const user = i.options.getUser("ユーザー"), role = i.options.getRole("ロール");
       if ((!user && !role) || (user && role)) throw new ZombieError("ユーザーかロールのどちらか1つだけ指定してください。");
       await changeZombieSettingList(guild.id, user ? "excludedUsers" : "excludedRoles", (user ?? role)!.id, i.options.getBoolean("除外", true));
-      await i.editReply("開始時の除外対象を更新しました。開催済みの参加者は変更しません。");
+      await i.editReply("次回イベントの参加除外設定を更新しました。開催中の参加者・途中参加の条件は変更しません。");
     } else if (sub === "rewards") {
       const key = i.options.getString("項目");
       if (key) {
@@ -134,8 +135,9 @@ async function executeZombie(i: ChatInputCommandInteraction) {
       const game = await getZombieGame(guild.id);
       if (!game) throw new ZombieError("準備中のイベントがありません。");
       await validateChannels(guild, game.config);
+      await observeZombieGuild(guild);
       await beginZombieGame(guild.id); await observeZombieGuild(guild);
-      await i.editReply("ゲームを開始しました。公開の告知・ルールを送信します。参加者や報酬設定はここから固定です。");
+      await i.editReply("ゲームを開始しました。公開の告知・ルールを送信します。対象VCへの途中入室者も人間として自動参加します。報酬・対象VC・除外条件は固定です。");
     } else {
       const game = await getZombieGame(guild.id);
       if (!game) throw new ZombieError("イベントがありません。");
@@ -145,6 +147,7 @@ async function executeZombie(i: ChatInputCommandInteraction) {
         await i.editReply(`あなたの役職：**${zombieRoleName(p.role)}**\nイベント状態：${game.phase}\n役職・感染者情報は公開しないでください。`);
       } else if (sub === "end" || sub === "cancel") {
         if (!i.options.getBoolean("確認", true)) throw new ZombieError("終了／中止する場合は確認をTrueにしてください。");
+        if (sub === "end" && game.phase === "running") await observeZombieGuild(guild);
         const result = await endZombieGame(guild.id, game.id, sub === "cancel", Date.now(), { id: i.id, actor: uid });
         await i.editReply(result.phase === "cancelled" ? "イベントを中止しました。報酬配布はありません。" : "終了と銀行残高への報酬加算が完了しました。再実行しても二重配布しません。");
       } else if (sub === "requests") {
@@ -178,6 +181,7 @@ export async function handleZombieButton(i: ButtonInteraction) {
     await requireZombieAdmin(i.guild, i.user.id);
     const [, action, gameId, requestId] = i.customId.split(":");
     if (!gameId || !requestId || !["accept", "reject"].includes(action!)) throw new ZombieError("申請ボタンが無効です。");
+    if (action === "accept") await observeZombieGuild(i.guild);
     const result = await decideZombieRequest(i.guild.id, gameId, requestId, i.user.id, action === "accept");
     await i.editReply(`申請結果：${result.request.status}（処理済みの場合は再処理しません）`);
     await i.message.edit({ components: [] }).catch(() => undefined);
@@ -227,7 +231,7 @@ zombie.addSubcommand(s => {
 zombie.addSubcommand(s => s.setName("vc").setDescription("管理者：省略で酒場VCを複数選択。個別追加・解除も可能")
   .addChannelOption(o => o.setName("対象").setDescription("個別変更時の酒場VC").addChannelTypes(ChannelType.GuildVoice))
   .addBooleanOption(o => o.setName("有効").setDescription("個別変更：Trueで追加、Falseで解除")));
-zombie.addSubcommand(s => s.setName("exclude").setDescription("管理者：開始時の除外ユーザー・ロール")
+zombie.addSubcommand(s => s.setName("exclude").setDescription("管理者：次回イベントの参加除外ユーザー・ロール")
   .addBooleanOption(o => o.setName("除外").setDescription("Trueで除外、Falseで解除").setRequired(true))
   .addUserOption(o => o.setName("ユーザー").setDescription("除外するユーザー"))
   .addRoleOption(o => o.setName("ロール").setDescription("除外するロール")));

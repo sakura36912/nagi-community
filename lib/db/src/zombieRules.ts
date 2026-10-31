@@ -10,6 +10,7 @@ export interface ZombieConfig {
 }
 export interface ZombiePlayer {
   id: string; name: string; role: ZombieRole; version: number; stateAt: number;
+  joinedAt?: number;
   everInfected: boolean; infectedAt: number | null; infectedUsers: string[]; healedUsers: string[];
 }
 export interface ZombiePresence { channel: string; since: number }

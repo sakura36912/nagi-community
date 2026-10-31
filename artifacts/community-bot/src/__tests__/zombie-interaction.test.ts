@@ -109,6 +109,22 @@ describe("zombie private commands and channel protection", () => {
     expect(m.decide).toHaveBeenCalledWith("guild", "event", "request", "user", true);
     expect(i.message.edit).toHaveBeenCalledWith({ components: [] });
   });
+  it("refreshes late participants before approval and manual reward settlement", async () => {
+    const approval = fixture(); approval.flags.admin = true;
+    await handleZombieButton(approval as unknown as ButtonInteraction);
+    expect(m.observe.mock.invocationCallOrder[0]).toBeLessThan(m.decide.mock.invocationCallOrder[0]!);
+    const end = fixture("zombie", "end"); end.flags.admin = true;
+    await run(end);
+    expect(m.observe.mock.invocationCallOrder.at(-1)).toBeLessThan(m.end.mock.invocationCallOrder[0]!);
+  });
+  it("does not approve or settle if fresh participant observation cannot be verified", async () => {
+    m.observe.mockRejectedValue(new ZombieError("観測失敗"));
+    const approval = fixture(); approval.flags.admin = true;
+    await handleZombieButton(approval as unknown as ButtonInteraction);
+    const end = fixture("zombie", "end"); end.flags.admin = true;
+    await run(end);
+    expect(m.decide).not.toHaveBeenCalled(); expect(m.end).not.toHaveBeenCalled();
+  });
   it("filters bots, explicit exclusions, role exclusions and VC tracking opt-outs at initial registration", async () => {
     const i = fixture("zombie", "start"); i.flags.admin = true;
     for (const id of ["normal", "bot", "excluded", "excluded-role-member", "optout", "elsewhere"])

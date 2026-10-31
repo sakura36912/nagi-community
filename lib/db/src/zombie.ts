@@ -80,7 +80,7 @@ export async function startZombieGame(id: string, guildId: string, participants:
     const unique = [...new Map(participants.map(p => [p.id, p])).values()].filter(p => !config.excludedUsers.includes(p.id));
     if (unique.length < 2) throw new ZombieError("参加対象者が2人以上必要です。");
     const game: ZombieGame = { id, guildId, phase: "preparing", config, players: Object.fromEntries(unique.map(p => [p.id, {
-      ...p, role: "human", version: 0, stateAt: now, everInfected: false, infectedAt: null, infectedUsers: [], healedUsers: [],
+      ...p, role: "human", version: 0, stateAt: now, joinedAt: now, everInfected: false, infectedAt: null, infectedUsers: [], healedUsers: [],
     }])), requests: {}, presence: {}, epoch: "", observedAt: 0, createdAt: Math.max(now, (old?.createdAt ?? 0) + 1), startedAt: null, endedAt: null, winner: null, payouts: [] };
     await tx.insert(games).values({ id, guildId, state: game });
     return game;
@@ -115,10 +115,48 @@ export async function beginZombieGame(guildId: string, now = Date.now()) {
     await save(tx, game); return game;
   });
 }
-export async function syncZombiePresence(guildId: string, epoch: string, voices: Record<string, string>, now = Date.now()) {
+/** Caller verifies current Discord membership, roles, bot status and VC privacy opt-outs. */
+export async function enrollZombieParticipants(guildId: string, gameId: string, candidates: { id: string; name: string; channel: string }[], now = Date.now()) {
+  return locked(guildId, async tx => {
+    const game = await current(tx, guildId), added: string[] = [];
+    if (!game || game.id !== gameId || !["preparing", "running"].includes(game.phase) || now < game.createdAt) return added;
+    for (const candidate of candidates) {
+      if (Object.hasOwn(game.players, candidate.id) || game.config.excludedUsers.includes(candidate.id) ||
+        !game.config.vcIds.includes(candidate.channel)) continue;
+      game.players[candidate.id] = {
+        id: candidate.id, name: candidate.name, role: "human", version: 0, stateAt: now, joinedAt: now,
+        everInfected: false, infectedAt: null, infectedUsers: [], healedUsers: [],
+      };
+      if (game.phase === "running") {
+        try { validateZombieRewardCapacity(game); }
+        catch (error) {
+          if (!(error instanceof ZombieError)) throw error;
+          delete game.players[candidate.id];
+          await job(tx, game, `late-limit:${candidate.id}`, {
+            kind: "audit", channelId: game.config.roleLogId,
+            text: `途中参加を保留：${candidate.name} (${candidate.id})。人数増加後の報酬が整数上限を超えるため、残高・参加状態は変更していません。`,
+          });
+          continue;
+        }
+      }
+      await job(tx, game, `late-join:${candidate.id}`, {
+        kind: "dm", userId: candidate.id, version: 0,
+        text: "🎃 酒場VCへの入室により、ゾンビ感染ゲームへ人間として自動参加しました。\n自分の状態は `/zombie me` で確認できます。役職や感染者情報は公開しないでください。\n感染・治療は同じ対象VCで連続3分以上の会話と管理承認が必要です。参加前・Bot停止中の同席時間は加算しません。",
+      });
+      await job(tx, game, `late-audit:${candidate.id}`, {
+        kind: "audit", channelId: game.config.roleLogId,
+        text: `途中参加：${candidate.name} (${candidate.id}) を人間として登録。VC：<#${candidate.channel}>。既存参加者の役職・感染状態は変更していません。`,
+      });
+      added.push(candidate.id);
+    }
+    await save(tx, game);
+    return added;
+  });
+}
+export async function syncZombiePresence(guildId: string, epoch: string, voices: Record<string, string>, now = Date.now(), gameId?: string) {
   return locked(guildId, async tx => {
     const game = await current(tx, guildId);
-    if (!game || game.phase !== "running" || now < game.observedAt) return;
+    if (!game || (gameId && game.id !== gameId) || game.phase !== "running" || now < game.observedAt) return;
     if (game.epoch !== epoch) game.presence = {};
     for (const userId of Object.keys(game.players)) {
       const channel = voices[userId];

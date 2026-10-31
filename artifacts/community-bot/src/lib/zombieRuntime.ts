@@ -3,12 +3,13 @@ import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, PermissionFlagsBits, escapeMarkdown,
   type Client, type Guild, type TextChannel,
 } from "discord.js";
-import { ZombieError, deliverZombieJob, getZombieGame, getZombieGameById, pendingZombieJobs, syncZombiePresence, type ZombieJob, type ZombieGame } from "@workspace/db";
+import { ZombieError, deliverZombieJob, enrollZombieParticipants, getZombieGame, getZombieGameById, pendingZombieJobs, syncZombiePresence, type ZombieJob, type ZombieGame } from "@workspace/db";
 import { isVcTrackingOptedOut } from "./community.js";
 import { logger } from "./logger.js";
 let epoch = randomUUID();
 let connected = false;
 let delivering = false;
+let observing = false;
 /** Reset after gateway loss/resume. Never credit unobserved time during outages. */
 export function resetZombieConnection(ready: boolean) { epoch = randomUUID(); connected = ready; }
 export async function observeZombieGuild(guild: Guild) {
@@ -16,15 +17,32 @@ export async function observeZombieGuild(guild: Guild) {
   const observedEpoch = epoch;
   try {
     const now = Date.now(), snapshot: Record<string, string> = {};
-    for (const voice of guild.voiceStates.cache.values()) {
-      if (voice.channelId && !voice.mute && !voice.deaf && !voice.member?.user.bot) snapshot[voice.id] = voice.channelId;
-    }
-    // Respect the community Bot's existing global/guild VC privacy opt-outs.
+    const voices = [...guild.voiceStates.cache.values()].map(v => ({
+      id: v.id, channel: v.channelId, muted: v.mute || v.deaf, bot: v.member?.user.bot,
+    }));
     const game = await getZombieGame(guild.id);
-    if (!game || game.phase !== "running") return;
-    for (const id of Object.keys(game.players)) if (snapshot[id] && await isVcTrackingOptedOut(guild.id, id)) delete snapshot[id];
+    if (!game || !["preparing", "running"].includes(game.phase)) return;
+    const candidates: { id: string; name: string; channel: string }[] = [];
+    for (const voice of voices) {
+      if (!voice.channel || voice.bot || !game.config.vcIds.includes(voice.channel)) continue;
+      if (await isVcTrackingOptedOut(guild.id, voice.id)) continue;
+      if (!Object.hasOwn(game.players, voice.id)) {
+        if (game.config.excludedUsers.includes(voice.id)) continue;
+        let member;
+        try { member = await guild.members.fetch({ user: voice.id, force: true }); }
+        catch (error) {
+          if ((error as { code?: number }).code === 10007) continue; // Left the guild during observation.
+          throw error;
+        }
+        if (member.user.bot || game.config.excludedRoles.some(id => member.roles.cache.has(id))) continue;
+        candidates.push({ id: member.id, name: member.displayName, channel: voice.channel });
+      }
+      if (!voice.muted) snapshot[voice.id] = voice.channel;
+    }
     if (!connected || !guild.client.isReady() || observedEpoch !== epoch) throw new ZombieError("VC接続が切り替わりました。");
-    await syncZombiePresence(guild.id, observedEpoch, snapshot, now);
+    if (candidates.length) await enrollZombieParticipants(guild.id, game.id, candidates, now);
+    if (!connected || !guild.client.isReady() || observedEpoch !== epoch) throw new ZombieError("VC接続が切り替わりました。");
+    await syncZombiePresence(guild.id, observedEpoch, snapshot, now, game.id);
     if (!connected || !guild.client.isReady() || observedEpoch !== epoch) throw new ZombieError("VC接続が切り替わりました。");
   } catch {
     // A failed write may have missed a leave/rejoin. Do not retain old continuity.
@@ -93,8 +111,8 @@ async function sendJob(client: Client, id: string, payload: ZombieJob) {
     await channel.send({ embeds: [zombiePublicResult(game)], allowedMentions: { parse: [] }, nonce, enforceNonce: true });
   } else {
     if (["announce", "rules"].includes(payload.kind) && game.phase !== "running") return;
-    const text = payload.kind === "announce" ? `Halloween ゾンビ感染ゲームを開始しました。開始時に登録された${Object.keys(game.players).length}人が参加対象です。\n役職は秘密です。DMとルールを確認してください。途中入室の自動追加はありません。` :
-      payload.kind === "rules" ? "**ゾンビ感染ゲームのルール**\n・指定酒場VCで連続3分以上会話し、管理者の承認を受けます。\n・感染：`/infect request 対象:ユーザー`\n・治療：`/heal request 対象:ユーザー`\n・自分の役職：`/zombie me`（本人限定表示）\n・役職、治療班、感染者情報の公開は禁止です。\n・無言滞在、挨拶だけ、チャット、リアクションは感染・治療の対象外です。\n・ミュート・退出・移動・Bot再接続後は同席時間を数え直します。\n・治療班以外が全員ゾンビになるとゾンビ勝利。管理終了時に人間が残れば人間勝利。\n・録音や会話内容の保存はしません。迷惑行為・無理な感染は禁止です。" : payload.text!;
+    const text = payload.kind === "announce" ? `Halloween ゾンビ感染ゲームを開始しました。現在${Object.keys(game.players).length}人が参加対象です。\n対象の酒場VCに途中入室した方も、除外対象でなければ人間として自動参加します。役職は秘密です。DMとルールを確認してください。` :
+      payload.kind === "rules" ? "**ゾンビ感染ゲームのルール**\n・対象酒場VCへの途中入室も人間として自動参加します（Bot・除外対象・VC記録拒否者を除く）。\n・指定酒場VCで連続3分以上会話し、管理者の承認を受けます。\n・感染：`/infect request 対象:ユーザー`\n・治療：`/heal request 対象:ユーザー`\n・自分の役職：`/zombie me`（本人限定表示）\n・役職、治療班、感染者情報の公開は禁止です。\n・無言滞在、挨拶だけ、チャット、リアクションは感染・治療の対象外です。\n・ミュート・退出・移動・Bot再接続後は同席時間を数え直します。\n・治療班以外が全員ゾンビになるとゾンビ勝利。管理終了時に人間が残れば人間勝利。\n・録音や会話内容の保存はしません。迷惑行為・無理な感染は禁止です。" : payload.text!;
     // Audit text contains private nicknames: disable mentions; send only in verified private channels.
     await channel.send({ content: text.slice(0, 1950), allowedMentions: { parse: [] }, nonce, enforceNonce: true });
   }
@@ -109,7 +127,19 @@ export async function flushZombieJobs(client: Client) {
 }
 export function startZombieRuntime(client: Client) {
   resetZombieConnection(true);
-  void flushZombieJobs(client);
-  const timer = setInterval(() => { void flushZombieJobs(client); }, 15000);
+  const tick = async () => {
+    if (observing) return;
+    observing = true;
+    try {
+      for (const guild of client.guilds.cache.values()) {
+        try { await observeZombieGuild(guild); }
+        catch { logger.warn("[zombie] 自動参加・VC観測を更新できませんでした。次回再試行します。"); }
+      }
+    } finally { observing = false; }
+    await flushZombieJobs(client);
+  };
+  void tick();
+  const timer = setInterval(() => { void tick(); }, 15000);
   timer.unref();
+  return () => clearInterval(timer);
 }

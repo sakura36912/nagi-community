@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import {
+  enrollZombieParticipants,
   db, ensureZombieSchema, updateZombieConfig, startZombieGame, setZombieRole, beginZombieGame,
   syncZombiePresence, requestZombieAction, decideZombieRequest, getZombieGame, endZombieGame, setZombieReward,
   changeZombieSettingList, zombieConfigsTable, zombieGamesTable, zombieJobsTable, zombieOperationsTable,
@@ -45,6 +46,82 @@ describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie even
     expect(Object.keys(game.players)).toEqual(["z", "h"]);
     expect(game.phase).toBe("preparing");
     await expect(startZombieGame(id(), guild, [{ id: "other", name: "other" }])).rejects.toThrow("すでに");
+  });
+  it("automatically admits humans during preparation and running, with a durable join timestamp", async () => {
+    await prepare();
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "late-prep", name: "途中", channel: "small" }], t(1))).toEqual(["late-prep"]);
+    await beginZombieGame(guild, t(2));
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "late-run", name: "途中2", channel: "tavern" }], t(3))).toEqual(["late-run"]);
+    const p = (await getZombieGame(guild))!.players["late-run"]!;
+    expect(p).toMatchObject({ role: "human", version: 0, joinedAt: t(3), stateAt: t(3), everInfected: false });
+    expect(await money("late-run")).toBe(0);
+  });
+  it("does not reset existing zombie or healer state or create duplicate notices on readmission", async () => {
+    await begin(); await infect();
+    const before = (await getZombieGame(guild))!;
+    const candidates = ["z", "h", "doctor"].map(user => ({ id: user, name: "別名", channel: "tavern" }));
+    expect(await enrollZombieParticipants(guild, gameId, candidates, t(190))).toEqual([]);
+    expect((await getZombieGame(guild))!.players).toEqual(before.players);
+    const late = { id: "late", name: "途中", channel: "tavern" };
+    const result = await Promise.all([
+      enrollZombieParticipants(guild, gameId, [late], t(191)),
+      enrollZombieParticipants(guild, gameId, [late], t(192)),
+    ]);
+    expect(result.flat()).toEqual(["late"]);
+    const notices = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    expect(notices.filter(row => row.id === `${gameId}:late-join:late`)).toHaveLength(1);
+    expect(notices.filter(row => row.id === `${gameId}:late-audit:late`)).toHaveLength(1);
+  });
+  it("checks event identity, target VC and excluded users before late admission", async () => {
+    await changeZombieSettingList(guild, "excludedUsers", "excluded", true);
+    await begin();
+    expect(await enrollZombieParticipants(guild, "old-event", [{ id: "late", name: "途中", channel: "tavern" }], t(2))).toEqual([]);
+    expect(await enrollZombieParticipants(guild, gameId, [
+      { id: "outside", name: "別VC", channel: "elsewhere" },
+      { id: "excluded", name: "除外", channel: "tavern" },
+    ], t(2))).toEqual([]);
+    expect(Object.keys((await getZombieGame(guild))!.players)).toHaveLength(4);
+  });
+  it("counts a full 180 seconds only after late registration and supports infection approval", async () => {
+    await begin();
+    await enrollZombieParticipants(guild, gameId, [{ id: "late", name: "途中", channel: "tavern" }], t(100));
+    await syncZombiePresence(guild, "epoch", { z: "tavern", late: "tavern" }, t(100), gameId);
+    await expect(requestZombieAction(id(), guild, "z", "late", "infect", t(279))).rejects.toThrow("179秒");
+    const request = await requestZombieAction(id(), guild, "z", "late", "infect", t(280));
+    await decideZombieRequest(guild, gameId, request.id, "admin", true, t(280));
+    expect((await getZombieGame(guild))!.players.late!.role).toBe("zombie");
+  });
+  it("includes late humans in bank rewards exactly once, without changing frozen event rules", async () => {
+    await begin();
+    const before = (await getZombieGame(guild))!;
+    await updateZombieConfig(guild, { vcIds: ["different"], rewards: { ...rewards, humanSurvival: 999 } });
+    await enrollZombieParticipants(guild, gameId, [{ id: "late", name: "途中", channel: "tavern" }], t(2));
+    expect((await getZombieGame(guild))!.config).toEqual(before.config);
+    await endZombieGame(guild, gameId, false, t(3));
+    expect(await money("late")).toBe(rewards.humanSurvival + rewards.humanVictory + rewards.neverInfected);
+    const balance = await money("late");
+    await endZombieGame(guild, gameId, false, t(4));
+    expect(await money("late")).toBe(balance);
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "after", name: "終了後", channel: "tavern" }], t(5))).toEqual([]);
+  });
+  it("does not resurrect cancelled games or apply stale observations to a new event", async () => {
+    await begin(); await endZombieGame(guild, gameId, true, t(2));
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "late", name: "途中", channel: "tavern" }], t(3))).toEqual([]);
+    const next = await startZombieGame(id(), guild, [{ id: "a", name: "a" }, { id: "b", name: "b" }], t(4));
+    await setZombieRole(guild, "a", "zombie", t(4));
+    await beginZombieGame(guild, t(5));
+    await syncZombiePresence(guild, "epoch", { a: "tavern", b: "tavern" }, t(6), next.id);
+    await syncZombiePresence(guild, "wrong-epoch", {}, t(7), gameId);
+    expect((await getZombieGame(guild))!.presence.a?.channel).toBe("tavern");
+  });
+  it("preserves safe rewards and alerts admins if a late admission would exceed integer limits", async () => {
+    await updateZombieConfig(guild, { rewards: { ...rewards, perHeal: 1000000000 } });
+    await begin(["z", "h"]);
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "third", name: "3人目", channel: "tavern" }], t(2))).toEqual(["third"]);
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "fourth", name: "4人目", channel: "tavern" }], t(3))).toEqual([]);
+    expect((await getZombieGame(guild))!.players.fourth).toBeUndefined();
+    const notices = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    expect(notices.find(row => row.id === `${gameId}:late-limit:fourth`)?.payload.kind).toBe("audit");
   });
   it("allows multiple healers and human corrections only during preparation", async () => {
     await prepare();
