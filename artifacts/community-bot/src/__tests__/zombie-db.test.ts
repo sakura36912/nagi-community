@@ -47,6 +47,58 @@ describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie even
     expect(game.phase).toBe("preparing");
     await expect(startZombieGame(id(), guild, [{ id: "other", name: "other" }])).rejects.toThrow("すでに");
   });
+  it("randomly assigns disjoint initial roles after deduplication/exclusion and queues only private notifications", async () => {
+    await changeZombieSettingList(guild, "excludedUsers", "excluded", true);
+    const participants = ["a", "b", "c", "d", "e", "f", "a", "excluded"].map(id => ({ id, name: `名前-${id}` }));
+    const game = await startZombieGame(gameId, guild, participants, now, { zombies: 2, healers: 2 });
+    const players = Object.values(game.players);
+    expect(players).toHaveLength(6);
+    expect(players.filter(p => p.role === "zombie")).toHaveLength(2);
+    expect(players.filter(p => p.role === "healer")).toHaveLength(2);
+    expect(players.filter(p => p.role === "human")).toHaveLength(2);
+    expect(game.players.excluded).toBeUndefined(); expect(game.phase).toBe("preparing");
+    for (const p of players) {
+      expect(p.everInfected).toBe(p.role === "zombie");
+      expect(p.infectedAt).toBe(p.role === "zombie" ? now : null);
+      expect(p.stateAt).toBe(now);
+    }
+    const jobs = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    expect(jobs.filter(j => j.payload.kind === "dm")).toHaveLength(6);
+    expect(jobs.every(j => j.payload.kind === "dm" || j.payload.kind === "audit" && j.payload.channelId === config.roleLogId)).toBe(true);
+    for (const p of players) expect(jobs.find(j => j.payload.userId === p.id)?.payload.version).toBe(p.version);
+    const running = await beginZombieGame(guild, t(1));
+    expect(running.players).toEqual(game.players); // begin must not draw again.
+    await enrollZombieParticipants(guild, gameId, [{ id: "late", name: "途中", channel: "tavern" }], t(2));
+    expect((await getZombieGame(guild))!.players.late!.role).toBe("human");
+  });
+  it("never redraws or duplicates notifications on concurrent start retries or after recovery", async () => {
+    const people = ["a", "b", "c", "d"].map(id => ({ id, name: id }));
+    const [first, retry] = await Promise.all([
+      startZombieGame(gameId, guild, people, now, { zombies: 1, healers: 2 }),
+      startZombieGame(gameId, guild, people, t(1), { zombies: 1, healers: 2 }),
+    ]);
+    expect(first.players).toEqual(retry.players);
+    expect(Object.values(first.players).filter(p => p.role === "zombie")).toHaveLength(1);
+    expect(Object.values(first.players).filter(p => p.role === "healer")).toHaveLength(2);
+    expect(Object.values(first.players).filter(p => p.role === "human")).toHaveLength(1);
+    expect((await getZombieGame(guild))!.players).toEqual(first.players);
+    const before = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    const replay = await startZombieGame(gameId, guild, [], t(2), { zombies: 20, healers: 20 });
+    expect(replay.players).toEqual(first.players);
+    const after = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    expect(after).toHaveLength(before.length);
+  });
+  it.each([[0, 1], [-1, 1], [1.5, 1], [1, 0], [1, Number.NaN], [2, 2]])(
+    "rejects unsafe role counts (%s zombies, %s healers) without persisting an event or notifications", async (zombies, healers) => {
+      await expect(startZombieGame(gameId, guild, ["a", "b", "c", "d"].map(id => ({ id, name: id })), now, { zombies, healers })).rejects.toThrow();
+      expect(await getZombieGame(guild)).toBeUndefined();
+      expect(await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild))).toHaveLength(0);
+    });
+  it("requires four eligible members for the default random draw, not four raw VC entries", async () => {
+    await changeZombieSettingList(guild, "excludedUsers", "excluded", true);
+    await expect(startZombieGame(gameId, guild, ["a", "b", "c", "a", "excluded"].map(id => ({ id, name: id })), now, { zombies: 1, healers: 2 })).rejects.toThrow("人間を最低1人");
+    expect(await getZombieGame(guild)).toBeUndefined();
+  });
   it("automatically admits humans during preparation and running, with a durable join timestamp", async () => {
     await prepare();
     expect(await enrollZombieParticipants(guild, gameId, [{ id: "late-prep", name: "途中", channel: "small" }], t(1))).toEqual(["late-prep"]);

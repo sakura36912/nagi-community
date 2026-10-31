@@ -69,6 +69,19 @@ describe("zombie private commands and channel protection", () => {
     for (const c of zombieCommands) expect(c.data.toJSON().dm_permission).toBe(false);
     expect(zombieCommands[1]!.data.toJSON().options?.map(o => o.name)).toEqual(["request", "accept", "reject"]);
   });
+  it("offers optional random role counts and passes administrator-specified counts to the atomic start", async () => {
+    const start = zombieCommands[0]!.data.toJSON().options?.find(o => o.name === "start");
+    expect(start).toMatchObject({ options: [
+      { name: "ゾンビ数", min_value: 1 }, { name: "治療班数", min_value: 1 },
+    ] });
+    const i = fixture("zombie", "start"); i.flags.admin = true;
+    i.values["ゾンビ数"] = 2; i.values["治療班数"] = 3;
+    await run(i);
+    expect(m.start).toHaveBeenCalledWith("operation", "guild", [], expect.any(Number), { zombies: 2, healers: 3 });
+    expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("重複なしのランダム抽選"));
+    expect(m.role).not.toHaveBeenCalled();
+    expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
   it("makes every command reply private, and forbids status to non-admins", async () => {
     const i = fixture(); await run(i);
     expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
@@ -131,7 +144,7 @@ describe("zombie private commands and channel protection", () => {
       i.guild.voiceStates.cache.set(id, { id, channelId: id === "elsewhere" ? "other" : "vc" });
     m.privacy.mockImplementation(async (_guild, user) => user === "optout");
     await run(i);
-    expect(m.start).toHaveBeenCalledWith("operation", "guild", [{ id: "normal", name: "nick-normal" }]);
+    expect(m.start).toHaveBeenCalledWith("operation", "guild", [{ id: "normal", name: "nick-normal" }], expect.any(Number), { zombies: 1, healers: 2 });
   });
   it("requires explicit confirmation and records the operation identity on ending", async () => {
     const i = fixture("zombie", "end"); i.flags.admin = true; i.values["確認"] = false;

@@ -126,8 +126,10 @@ async function executeZombie(i: ChatInputCommandInteraction) {
           || await isVcTrackingOptedOut(guild.id, member.id)) continue;
         participants.push({ id: member.id, name: member.displayName });
       }
-      const game = await startZombieGame(i.id, guild.id, participants);
-      await i.editReply(`${Object.keys(game.players).length}人を登録しました（役職設定待ち）。\n/zombie set_zombie・set_healer で秘密の役職を指定し、/zombie begin でゲームを開始してください。`);
+      const counts = { zombies: i.options.getInteger("ゾンビ数") ?? 1, healers: i.options.getInteger("治療班数") ?? 2 };
+      const game = await startZombieGame(i.id, guild.id, participants, Date.now(), counts);
+      const players = Object.values(game.players);
+      await i.editReply(`${players.length}人を登録しました。初期役職は重複なしのランダム抽選です。\nゾンビ${players.filter(p => p.role === "zombie").length}人・治療班${players.filter(p => p.role === "healer").length}人・人間${players.filter(p => p.role === "human").length}人。\n本人DMと管理用ログを送信します。/zombie status で確認し、/zombie begin でゲームを開始してください。再実行による再抽選はしません。`);
     } else if (["set_zombie", "set_healer", "set_human"].includes(sub)) {
       await setZombieRole(guild.id, i.options.getUser("対象", true).id, sub === "set_zombie" ? "zombie" : sub === "set_healer" ? "healer" : "human");
       await i.editReply("秘密の役職を保存しました。本人DMと管理用ログを送信します。DM失敗は /zombie status で確認できます。");
@@ -238,11 +240,14 @@ zombie.addSubcommand(s => s.setName("exclude").setDescription("管理者：次�
 zombie.addSubcommand(s => s.setName("rewards").setDescription("管理者：報酬7項目の設定・確認")
   .addStringOption(o => o.setName("項目").setDescription("報酬項目").addChoices(...Object.entries(labels).map(([value, name]) => ({ name, value }))))
   .addIntegerOption(o => o.setName("金額").setDescription("銀行残高への加算額（無料は0）").setMinValue(0).setMaxValue(2147483647)));
-for (const [name, description] of [["start", "管理者：現在の酒場VC参加者を登録し役職設定待ちへ"], ["begin", "管理者：役職設定後にゲーム開始"], ["me", "自分の秘密役職を本人限定で確認"]] as const)
+zombie.addSubcommand(s => s.setName("start").setDescription("管理者：酒場VC参加者を登録し秘密役職をランダム抽選")
+  .addIntegerOption(o => o.setName("ゾンビ数").setDescription("初期ゾンビの人数（省略時1人）").setMinValue(1))
+  .addIntegerOption(o => o.setName("治療班数").setDescription("治療班の人数（省略時2人）").setMinValue(1)));
+for (const [name, description] of [["begin", "管理者：抽選・報酬を確認してゲーム開始"], ["me", "自分の秘密役職を本人限定で確認"]] as const)
   zombie.addSubcommand(s => s.setName(name).setDescription(description));
 for (const name of ["set_zombie", "set_healer", "set_human"])
   zombie.addSubcommand(s => s.setName(name).setDescription("管理者：準備中の参加者の秘密役職を設定")
-    .addUserOption(o => o.setName("対象").setDescription("開始時に登録された参加者").setRequired(true)));
+    .addUserOption(o => o.setName("対象").setDescription("登録済みの参加者（準備中の修正用）").setRequired(true)));
 for (const name of ["status", "requests"])
   zombie.addSubcommand(s => s.setName(name).setDescription("管理者：非公開の状態・申請一覧")
     .addIntegerOption(o => o.setName("ページ").setDescription("一覧ページ").setMinValue(1)));

@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./index";
 import { walletsTable, transactionsTable } from "./schema/economy";
@@ -27,7 +28,7 @@ async function roleDm(tx: Tx, game: ZombieGame, userId: string, initial = false)
   const p = game.players[userId]!;
   const text = p.role === "healer" ? "🩺 治療班に選ばれました。あなた自身は感染しません。\n感染者と酒場VCで連続3分以上会話して `/heal request 対象:ユーザー` で申請してください。管理承認後に治療が成立します。\n治療班であること・感染者情報は公開禁止です。自分から名乗らないでください。" :
     p.role === "zombie" ? `🧟 ${initial ? "感染源に選ばれました。あなたは最初のゾンビです。" : "あなたは感染しました。これよりゾンビ陣営です。"}\n人間と酒場VCで連続3分以上会話して \`/infect request 対象:ユーザー\` で感染申請してください。管理承認後に成立します。\nゾンビであることは公開禁止。テキスト・リアクション・無言滞在・挨拶だけの感染、迷惑行為や無理な感染は禁止です。` :
-    "治療または管理者の設定により、あなたは人間状態です。イベント終了まで生存してください。役職や感染者の情報を公開しないでください。";
+    `${initial ? "👤 あなたは人間に選ばれました。" : "治療または管理者の設定により、あなたは人間状態です。"}イベント終了まで生存してください。役職や感染者の情報を公開しないでください。`;
   await job(tx, game, `role:${userId}:${p.version}`, { kind: "dm", userId, version: p.version, text });
 }
 export async function getZombieConfig(guildId: string) {
@@ -69,7 +70,8 @@ export async function getZombieGameById(id: string) {
   await ensureZombieSchema();
   return (await db.select().from(games).where(eq(games.id, id)))[0]?.state;
 }
-export async function startZombieGame(id: string, guildId: string, participants: { id: string; name: string }[], now = Date.now()) {
+export async function startZombieGame(id: string, guildId: string, participants: { id: string; name: string }[], now = Date.now(),
+  randomRoles?: { zombies: number; healers: number }) {
   return locked(guildId, async tx => {
     const old = await current(tx, guildId);
     if (old?.id === id) return old;
@@ -78,11 +80,44 @@ export async function startZombieGame(id: string, guildId: string, participants:
     if (!config || !config.vcIds.length || !config.adminId || !config.infectionLogId || !config.roleLogId || !config.announceId || !config.rulesId || !config.resultId)
       throw new ZombieError("公開3チャンネル・管理3チャンネル・対象VCを設定してください。");
     const unique = [...new Map(participants.map(p => [p.id, p])).values()].filter(p => !config.excludedUsers.includes(p.id));
-    if (unique.length < 2) throw new ZombieError("参加対象者が2人以上必要です。");
+    const minimum = randomRoles ? 3 : 2;
+    if (unique.length < minimum) throw new ZombieError(`参加対象者が${minimum}人以上必要です。`);
+    if (randomRoles) {
+      if (![randomRoles.zombies, randomRoles.healers].every(n => Number.isSafeInteger(n) && n >= 1))
+        throw new ZombieError("ゾンビ数・治療班数はそれぞれ1以上の整数で指定してください。");
+      if (randomRoles.zombies + randomRoles.healers >= unique.length)
+        throw new ZombieError(`人間を最低1人残す必要があります。対象者${unique.length}人に対して、ゾンビ${randomRoles.zombies}人・治療班${randomRoles.healers}人は設定できません。`);
+    }
     const game: ZombieGame = { id, guildId, phase: "preparing", config, players: Object.fromEntries(unique.map(p => [p.id, {
       ...p, role: "human", version: 0, stateAt: now, joinedAt: now, everInfected: false, infectedAt: null, infectedUsers: [], healedUsers: [],
     }])), requests: {}, presence: {}, epoch: "", observedAt: 0, createdAt: Math.max(now, (old?.createdAt ?? 0) + 1), startedAt: null, endedAt: null, winner: null, payouts: [] };
+    if (randomRoles) {
+      // Uniform sampling without replacement; never depend on VC/cache iteration order.
+      const ids = unique.map(p => p.id);
+      for (let i = ids.length - 1; i > 0; i--) {
+        const j = randomInt(i + 1);
+        [ids[i], ids[j]] = [ids[j]!, ids[i]!];
+      }
+      for (let i = 0; i < randomRoles.zombies + randomRoles.healers; i++) {
+        const p = game.players[ids[i]!]!;
+        p.role = i < randomRoles.zombies ? "zombie" : "healer"; p.version++;
+        p.everInfected = p.role === "zombie"; p.infectedAt = p.role === "zombie" ? now : null;
+      }
+    }
     await tx.insert(games).values({ id, guildId, state: game });
+    if (randomRoles) {
+      for (const p of Object.values(game.players)) {
+        await roleDm(tx, game, p.id, true);
+        if (p.role !== "human")
+          await job(tx, game, `role-audit:${p.id}:${p.version}`, {
+            kind: "audit", channelId: game.config.roleLogId, text: `初期役職の自動抽選：${p.name} (${p.id}) → ${p.role}`,
+          });
+      }
+      await job(tx, game, "random-role-summary", {
+        kind: "audit", channelId: game.config.roleLogId,
+        text: `初期役職を重複なしで自動抽選しました。ゾンビ${randomRoles.zombies}人・治療班${randomRoles.healers}人・人間${unique.length - randomRoles.zombies - randomRoles.healers}人。本人DMを送信します。役職は公開しないでください。`,
+      });
+    }
     return game;
   });
 }
@@ -91,7 +126,7 @@ export async function setZombieRole(guildId: string, userId: string, role: Zombi
     const game = await current(tx, guildId);
     if (!game || game.phase !== "preparing") throw new ZombieError("役職設定は準備中のみ可能です。");
     const p = game.players[userId];
-    if (!p) throw new ZombieError("開始時に登録された参加者だけ指定できます。");
+    if (!p) throw new ZombieError("登録済みの参加者だけ指定できます。");
     if (p.role === role) return game;
     p.role = role; p.version++; p.stateAt = now; p.everInfected = role === "zombie"; p.infectedAt = role === "zombie" ? now : null;
     await roleDm(tx, game, userId, role === "zombie");
