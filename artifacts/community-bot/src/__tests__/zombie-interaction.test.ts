@@ -120,18 +120,32 @@ describe("zombie private commands and channel protection", () => {
   });
   it("routes infection and healing through fresh VC observation before creating applications", async () => {
     for (const name of ["infect", "heal"]) {
+      expect(isCommunityCommandBlocked(name, ["島民"])).toBe(false);
       const i = fixture(name, "request"); await run(i);
       expect(m.observe).toHaveBeenCalledWith(i.guild);
       expect(m.request).toHaveBeenCalledWith("operation", "guild", "user", "target", name);
       expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("対象の役職は開示しません"));
+      expect(i.guild.members.fetch).not.toHaveBeenCalled();
     }
+  });
+  it.each(["infect", "heal"])("preserves game-role rejection for island members using %s", async name => {
+    expect(isCommunityCommandBlocked(name, ["島民"])).toBe(false);
+    m.request.mockRejectedValueOnce(new ZombieError("この申請はできません。参加状態・自分の役職・対象者を確認してください。"));
+    const i = fixture(name, "request"); await run(i);
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("この申請はできません") }));
+    expect(m.decide).not.toHaveBeenCalled();
   });
   it("does not submit an application when observation cannot be verified", async () => {
     const i = fixture("infect", "request"); m.observe.mockRejectedValueOnce(new ZombieError("接続確認中"));
     await run(i); expect(m.request).not.toHaveBeenCalled();
   });
   it("protects both approval commands and old approval buttons from non-admin users", async () => {
-    await run(fixture("infect", "accept"));
+    for (const name of ["infect", "heal"]) for (const sub of ["accept", "reject"]) {
+      expect(isCommunityCommandBlocked(name, ["島民"])).toBe(false);
+      const command = fixture(name, sub);
+      await run(command);
+      expect(command.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: "管理者のみ操作できます。" }));
+    }
     const i = fixture(); await handleZombieButton(i as unknown as ButtonInteraction);
     expect(m.decide).not.toHaveBeenCalled();
     expect(i.message.edit).not.toHaveBeenCalled();

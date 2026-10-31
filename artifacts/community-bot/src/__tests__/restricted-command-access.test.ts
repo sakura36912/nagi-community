@@ -4,15 +4,16 @@ import { isCommunityCommandBlocked as blocked } from "../lib/restrictedCommandAc
 describe("community restricted-role command access", () => {
   it.each([["島民"], ["島民", "本船員"], ["島民", "任意のロール"]])(
     "allows island members to reach the zombie handler (%s)", (...roles) => {
-      expect(blocked("zombie", roles)).toBe(false);
+      for (const command of ["zombie", "infect", "heal"])
+        expect(blocked(command, roles)).toBe(false);
     },
   );
-  it("does not exempt other commands or request/approval commands", () => {
-    for (const command of ["infect", "heal", "shop", "other"])
+  it("does not exempt unrelated commands", () => {
+    for (const command of ["shop", "other"])
       expect(blocked(command, ["島民"])).toBe(true);
   });
   it.each([["追放者"], ["島民", "追放者"]])("preserves the exile restriction (%s)", (...roles) => {
-    expect(blocked("zombie", roles)).toBe(true);
+    for (const command of ["zombie", "infect", "heal"]) expect(blocked(command, roles)).toBe(true);
   });
   it.each(["守門卿", "門番", "門番見習い", "航海士", "提督", "大提督"])("preserves the %s staff exemption", role => {
     expect(blocked("zombie", ["島民", "追放者", role])).toBe(false);
