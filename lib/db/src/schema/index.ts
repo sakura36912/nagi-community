@@ -1,6 +1,7 @@
 // Export your models here. Add one export per file
 export * from "./forge";
 export * from "./boss";
+export * from "./zombie";
 // export * from "./posts";
 //
 // Each model/table should ideally be split into different files.

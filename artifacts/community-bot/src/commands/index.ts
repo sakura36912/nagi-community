@@ -14,6 +14,7 @@ import {
   type User,
 } from "discord.js";
 import { logger } from "../lib/logger.js";
+import { zombieCommands } from "./zombie.js";
 import {
   addParticipant,
   createEvent,
@@ -2499,6 +2500,7 @@ import { prebanCommand } from "./preban.js";
 import { periodicCommand } from "./periodic.js";
 
 export const commands: Command[] = [
+  ...zombieCommands,
   rankingCommand,
   vcRankCommand,
   mystatsCommand,

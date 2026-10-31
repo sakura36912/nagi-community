@@ -139,6 +139,7 @@ vi.mock("discord.js", () => {
     get name()                                      { return this._name; }
     toJSON()                                        { return { name: this._name }; }
     setDescription()                                { return this; }
+    setDMPermission()                               { return this; }
     setDefaultMemberPermissions()                   { return this; }
     addSubcommand(fn: (s: FakeBuilder) => unknown)      { fn(new FakeBuilder()); return this; }
     addSubcommandGroup(fn: (g: FakeBuilder) => unknown) { fn(new FakeBuilder()); return this; }

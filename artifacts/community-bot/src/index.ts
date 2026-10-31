@@ -8,6 +8,10 @@ import {
   MessageFlags,
 } from "discord.js";
 import { logger } from "./lib/logger.js";
+import { ensureZombieSchema } from "@workspace/db";
+import { handleZombieButton } from "./commands/zombie.js";
+import { observeZombieGuild, resetZombieConnection, startZombieRuntime } from "./lib/zombieRuntime.js";
+import { syncZombieCommands } from "./lib/zombieRegistration.js";
 import {
   closeAllOpenSessions,
   getAllRankingSettings,
@@ -188,6 +192,17 @@ async function runEventReminderScheduler(): Promise<void> {
 
 client.once(Events.ClientReady, async (readyClient) => {
   logger.info(`Community Bot logged in as ${readyClient.user.tag}`);
+  try {
+    await ensureZombieSchema();
+    startZombieRuntime(client);
+    logger.info("[zombie] 秘密役職イベントを準備しました。");
+  } catch {
+    logger.warn("[zombie] 初期化に失敗しました。既存機能は継続します。DBを確認してください。");
+  }
+  try { await syncZombieCommands(client); }
+  catch {
+    logger.warn("[zombie] コマンド3件の個別登録に失敗しました。登録権限・接続を確認してください。");
+  }
 
   // ── Invite URL & per-guild permission check ───────────────────────────────
   // Permissions required for full functionality:
@@ -474,6 +489,8 @@ client.on(Events.GuildMemberRemove, async (member) => {
 // ─── VoiceStateUpdate ────────────────────────────────────────────────────────
 
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  try { await observeZombieGuild(newState.guild); }
+  catch { logger.warn("[zombie] VC観測を更新できませんでした。"); }
   await handleVoiceStateUpdate({
     guildId: newState.guild.id,
     userId: newState.id,
@@ -483,6 +500,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     member: newState.member,
   });
 });
+client.on(Events.ShardDisconnect, () => resetZombieConnection(false));
+client.on(Events.ShardReady, () => resetZombieConnection(true));
+client.on(Events.ShardResume, () => resetZombieConnection(true));
+client.on(Events.GuildUnavailable, () => resetZombieConnection(true));
+client.on(Events.GuildAvailable, () => resetZombieConnection(true));
 
 // ─── Nameboard self-intro lookup ─────────────────────────────────────────────
 
@@ -518,6 +540,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isButton()) {
+      if (await handleZombieButton(interaction)) return;
       const id = interaction.customId;
 
       if (id.startsWith(COMM_EVENT_JOIN_PREFIX)) {
@@ -605,7 +628,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // where drizzle-kit push was never run) causes cryptic runtime errors on every
 // query that touches the affected table. Logging a clear warning here makes the
 // root cause immediately visible in bot logs.
-checkSchemaDrift(pool, (msg) => logger.warn(msg)).then((result) => {
+ensureZombieSchema().then(() => checkSchemaDrift(pool, (msg) => logger.warn(msg))).then((result) => {
   if (!result.ok) {
     logger.warn(
       "[schema-check] ⚠ The bot will continue, but queries against affected tables will fail. " +

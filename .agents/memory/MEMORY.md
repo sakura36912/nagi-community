@@ -32,3 +32,4 @@
 - [KP shop policy](kp-shop-policy.md) — キミノヒトミニKPshopは独立商品とし、購入ログは操作したパネルの設置先へ表示する。
 - [鍛冶屋統合方針](forge-integration-policy.md) — Replit銀行Botの構成と残高を維持して統合。本船員限定・内部数値非公開・失敗時も費用消費。
 - [ボス討伐方針](boss-event-policy.md) — 攻撃・回復料金は後決め。報酬は均等分配、戦闘数値は開催時に管理者が指定。
+- [Halloween感染ゲーム](zombie-event-policy.md) — 多機能Botの秘密役職。治療班は勝敗判定から除外、連続3分＋管理承認、報酬は銀行残高へ。
