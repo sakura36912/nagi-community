@@ -5,7 +5,7 @@ import {
 import {
   ZombieError, ZOMBIE_REWARDS, beginZombieGame, changeZombieSettingList, decideZombieRequest, endZombieGame,
   getZombieConfig, getZombieGame, requestZombieAction, setZombieReward, setZombieRole, startZombieGame,
-  updateZombieConfig, zombieDeliveryFailures, type ZombieConfig,
+  updateZombieConfig, zombieDeliveryFailures, getZombieVoiceIds, type ZombieConfig,
 } from "@workspace/db";
 import { isVcTrackingOptedOut } from "../lib/community.js";
 import { flushZombieJobs, observeZombieGuild, zombieRoleName, zombieTextChannel } from "../lib/zombieRuntime.js";
@@ -83,6 +83,7 @@ async function executeZombie(i: ChatInputCommandInteraction) {
         await i.editReply({
           content: `現在の設定：${current.length}件。対象の酒場VCを複数選択してください。\n` +
             "選択を確定すると、選んだVCで設定全体を置き換えます。0件で全解除。次回イベントから適用され、開催中の設定は変わりません。\n" +
+            "指定したHubの転送先VCも、同じサーバーの対応記録がある場合は自動で対象になります。別々のVCの同席時間は合算しません。\n" +
             (current.length > 25 ? "現在は25件を超えています。メニューで保存すると最大25件になります。26件以上を維持する場合は従来の「対象」「有効」オプションで追加・解除してください。\n" : "") +
             "このメニューは操作した管理者専用で、15分間有効です。",
           components: [new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(menu)],
@@ -119,8 +120,9 @@ async function executeZombie(i: ChatInputCommandInteraction) {
         if (!vc || vc.type !== ChannelType.GuildVoice) throw new ZombieError("対象VCが存在しません。/zombie vc で修正してください。");
       }
       const participants: { id: string; name: string }[] = [];
+      const allowedVoices = await getZombieVoiceIds(guild.id, config.vcIds);
       for (const voice of guild.voiceStates.cache.values()) {
-        if (!voice.channelId || !config.vcIds.includes(voice.channelId)) continue;
+        if (!voice.channelId || !allowedVoices.includes(voice.channelId)) continue;
         const member = await guild.members.fetch({ user: voice.id, force: true });
         if (member.user.bot || config.excludedUsers.includes(member.id) || config.excludedRoles.some(r => member.roles.cache.has(r))
           || await isVcTrackingOptedOut(guild.id, member.id)) continue;

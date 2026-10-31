@@ -3,14 +3,14 @@ import { ChannelType, Collection, MessageFlags, type ChatInputCommandInteraction
 const m = vi.hoisted(() => ({
   get: vi.fn(), config: vi.fn(), update: vi.fn(), start: vi.fn(), role: vi.fn(), begin: vi.fn(),
   end: vi.fn(), request: vi.fn(), decide: vi.fn(), failures: vi.fn(), observe: vi.fn(), flush: vi.fn(),
-  privacy: vi.fn(), warn: vi.fn(), setReward: vi.fn(),
+  privacy: vi.fn(), warn: vi.fn(), setReward: vi.fn(), voices: vi.fn(),
 }));
 vi.mock("@workspace/db", async original => ({
   ...await original<typeof import("@workspace/db")>(),
   getZombieGame: m.get, getZombieConfig: m.config, updateZombieConfig: m.update,
   startZombieGame: m.start, setZombieRole: m.role, beginZombieGame: m.begin, endZombieGame: m.end,
   requestZombieAction: m.request, decideZombieRequest: m.decide, zombieDeliveryFailures: m.failures,
-  setZombieReward: m.setReward,
+  setZombieReward: m.setReward, getZombieVoiceIds: m.voices,
 }));
 vi.mock("../lib/community.js", () => ({ isVcTrackingOptedOut: m.privacy }));
 vi.mock("../lib/logger.js", () => ({ logger: { warn: m.warn, info: vi.fn(), error: vi.fn() } }));
@@ -63,6 +63,7 @@ beforeEach(() => {
   m.privacy.mockResolvedValue(false); m.start.mockResolvedValue(game);
   m.decide.mockResolvedValue({ game, request: { id: "request", status: "accepted" } });
   m.end.mockResolvedValue({ ...game, phase: "ended" });
+  m.voices.mockImplementation(async (_guild, configured) => configured);
 });
 describe("zombie private commands and channel protection", () => {
   it("builds only three new commands, with compatible request and accept subcommands", () => {
@@ -88,6 +89,15 @@ describe("zombie private commands and channel protection", () => {
     expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(m.get).not.toHaveBeenCalled();
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: "管理者のみ操作できます。" }));
+  });
+  it("includes users already inside generated Hub rooms in the initial random draw", async () => {
+    const i = fixture("zombie", "start"); i.flags.admin = true;
+    m.voices.mockResolvedValue(["vc", "generated"]);
+    i.guild.voiceStates.cache.set("member", { id: "member", channelId: "generated" });
+    i.guild.voiceStates.cache.set("unrelated", { id: "unrelated", channelId: "elsewhere" });
+    await run(i);
+    expect(m.voices).toHaveBeenCalledWith("guild", ["vc"]);
+    expect(m.start).toHaveBeenCalledWith("operation", "guild", [{ id: "member", name: "nick-member" }], expect.any(Number), { zombies: 1, healers: 2 });
   });
   it("limits role settings, rewards, beginning and ending to live administrators", async () => {
     expect(isCommunityCommandBlocked("zombie", ["島民"])).toBe(false);

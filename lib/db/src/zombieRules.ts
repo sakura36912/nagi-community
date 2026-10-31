@@ -29,6 +29,11 @@ export interface ZombieGame {
   winner: "human" | "zombie" | null; payouts: { userId: string; amount: number }[];
   movePenalties?: Record<string, { channel: string; until: number; requestId: string }>;
   transferBlocked?: Record<string, boolean>;
+  /** Derived from live Hub records, refreshed by trusted server code, never from user input. */
+  resolvedVcIds?: string[];
+}
+export function isZombieVoice(game: ZombieGame, channel: string) {
+  return game.config.vcIds.includes(channel) || !!game.resolvedVcIds?.includes(channel);
 }
 export function checkZombieHealCooldown(player: ZombiePlayer, now: number) {
   if ((player.healCooldownUntil ?? 0) > now)
@@ -64,7 +69,7 @@ export function validateZombieRewardCapacity(game: ZombieGame) {
 }
 export function zombieProof(game: ZombieGame, actor: ZombiePlayer, target: ZombiePlayer, now: number) {
   const a = game.presence[actor.id], b = game.presence[target.id];
-  if (!a || !b || a.channel !== b.channel || !game.config.vcIds.includes(a.channel))
+  if (!a || !b || a.channel !== b.channel || !isZombieVoice(game, a.channel))
     throw new ZombieError("対象者と設定済みの酒場VCで交流してください。");
   const seconds = Math.floor((now - Math.max(a.since, b.since, actor.stateAt, target.stateAt)) / 1000);
   if (seconds < 180) throw new ZombieError(`連続3分の同席が必要です（現在${Math.max(0, seconds)}秒）。役職変更・移動・ミュート・再接続後は数え直します。`);

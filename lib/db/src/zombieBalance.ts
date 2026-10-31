@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import type { ZombieGame } from "./zombieRules";
+import { isZombieVoice, type ZombieGame } from "./zombieRules";
 
 /** Uses observed continuous presence only; never infer conversation or outage time. */
 export function transferSurroundedHealers(game: ZombieGame, now: number) {
@@ -11,7 +11,7 @@ export function transferSurroundedHealers(game: ZombieGame, now: number) {
     const zombies = Object.values(game.players).filter(p => p.role === "zombie" && presence &&
       game.presence[p.id]?.channel === presence.channel &&
       now - Math.max(p.stateAt, healer.stateAt, presence.since, game.presence[p.id]!.since) >= 180000);
-    if (!presence || !game.config.vcIds.includes(presence.channel) || zombies.length < 2) {
+    if (!presence || !isZombieVoice(game, presence.channel) || zombies.length < 2) {
       if (game.transferBlocked) delete game.transferBlocked[healer.id];
       continue;
     }

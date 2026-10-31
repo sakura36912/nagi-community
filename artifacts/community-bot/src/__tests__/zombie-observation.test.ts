@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Collection } from "discord.js";
-const m = vi.hoisted(() => ({ get: vi.fn(), sync: vi.fn(), privacy: vi.fn(), enroll: vi.fn(), pending: vi.fn() }));
+const m = vi.hoisted(() => ({ get: vi.fn(), sync: vi.fn(), privacy: vi.fn(), enroll: vi.fn(), pending: vi.fn(), voices: vi.fn() }));
 vi.mock("@workspace/db", async original => ({
   ...await original<typeof import("@workspace/db")>(), getZombieGame: m.get, syncZombiePresence: m.sync,
-  enrollZombieParticipants: m.enroll, pendingZombieJobs: m.pending,
+  enrollZombieParticipants: m.enroll, pendingZombieJobs: m.pending, getZombieVoiceIds: m.voices,
 }));
 vi.mock("../lib/community.js", () => ({ isVcTrackingOptedOut: m.privacy }));
 import { observeZombieGuild, resetZombieConnection, startZombieRuntime } from "../lib/zombieRuntime.js";
@@ -29,6 +29,7 @@ beforeEach(() => {
   m.sync.mockResolvedValue(undefined);
   m.enroll.mockResolvedValue([]);
   m.pending.mockResolvedValue([]);
+  m.voices.mockImplementation(async (_guild, configured) => configured);
 });
 describe("zombie VC observation continuity", () => {
   it("excludes muted, deafened, bot and opted-out users from continuous observation", async () => {
@@ -72,6 +73,19 @@ function arriving(people: { id: string; channel?: string; muted?: boolean }[]) {
   })) } };
 }
 describe("zombie automatic late admission", () => {
+  it("observes registered Hub children by actual VC ID and admits new arrivals there", async () => {
+    m.voices.mockResolvedValue(["vc", "second", "generated"]);
+    const g = arriving([{ id: "late", channel: "generated" }]);
+    await observeZombieGuild(g as never);
+    expect(m.voices).toHaveBeenCalledWith("test-guild", ["vc", "second"]);
+    expect(m.enroll).toHaveBeenCalledWith("test-guild", "event", [{ id: "late", name: "名前-late", channel: "generated" }], expect.any(Number));
+    expect(m.sync).toHaveBeenCalledWith("test-guild", expect.any(String), { normal: "vc", late: "generated" }, expect.any(Number), "event");
+  });
+  it("fails closed and resets continuity if the Hub relationship lookup fails", async () => {
+    m.voices.mockRejectedValueOnce(new Error("lookup unavailable"));
+    await expect(observeZombieGuild(guild as never)).rejects.toThrow("数え直す");
+    expect(m.sync).not.toHaveBeenCalled(); expect(m.enroll).not.toHaveBeenCalled();
+  });
   it("registers newcomers in both configured VCs, but does not count muted time", async () => {
     const g = arriving([{ id: "late" }, { id: "quiet", channel: "second", muted: true }]);
     await observeZombieGuild(g as never);

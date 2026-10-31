@@ -7,6 +7,7 @@ import {
   syncZombiePresence, requestZombieAction, decideZombieRequest, getZombieGame, endZombieGame, setZombieReward,
   changeZombieSettingList, zombieConfigsTable, zombieGamesTable, zombieJobsTable, zombieOperationsTable,
   walletsTable, transactionsTable, deliverZombieJob, zombieDeliveryFailures, type ZombieConfig,
+  addHubChannel, createHubSession, deleteHubSession, getZombieVoiceIds, vcHubChannelsTable, vcHubSessionsTable,
 } from "@workspace/db";
 describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie event", () => {
   const guilds: string[] = [];
@@ -21,7 +22,7 @@ describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie even
     await updateZombieConfig(guild, config);
   });
   afterAll(async () => {
-    for (const guildId of guilds) for (const table of [zombieJobsTable, zombieOperationsTable, zombieGamesTable, zombieConfigsTable, walletsTable, transactionsTable])
+    for (const guildId of guilds) for (const table of [vcHubSessionsTable, vcHubChannelsTable, zombieJobsTable, zombieOperationsTable, zombieGamesTable, zombieConfigsTable, walletsTable, transactionsTable])
       await db.delete(table).where(eq(table.guildId, guildId));
   });
   async function prepare(names = ["z", "h", "x", "doctor"]) {
@@ -40,6 +41,77 @@ describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie even
   async function money(user: string) {
     return (await db.select().from(walletsTable).where(and(eq(walletsTable.guildId, guild), eq(walletsTable.userId, user))))[0]?.balance ?? 0;
   }
+  async function hub(panelOnly = false) {
+    const source = `hub-${guild}`;
+    const row = await addHubChannel(guild, source, null, "テストVC", null, null, 1, panelOnly);
+    await updateZombieConfig(guild, { vcIds: [source, "small"] });
+    return row;
+  }
+  it("resolves only verified same-guild rooms of configured Hubs, including panel-only rooms", async () => {
+    const h = await hub(true);
+    await createHubSession(guild, `room-${guild}`, "owner", h.id);
+    const other = `zombie-test-${id()}`; guilds.push(other);
+    await createHubSession(other, `foreign-${guild}`, "owner", h.id); // Deliberately inconsistent guild.
+    const unrelated = await addHubChannel(guild, `other-hub-${guild}`, null, "同名VC", null);
+    await createHubSession(guild, `unrelated-${guild}`, "owner", unrelated.id);
+    expect(await getZombieVoiceIds(guild, [h.hubChannelId, "small"])).toEqual([h.hubChannelId, "small", `room-${guild}`]);
+    expect(await getZombieVoiceIds(other, [h.hubChannelId])).toEqual([h.hubChannelId]);
+    expect(await getZombieVoiceIds(guild, [])).toEqual([]);
+  });
+  it("admits newly generated rooms during a running event and permits infection there after a fresh 180 seconds", async () => {
+    const h = await hub();
+    await prepare(); await beginZombieGame(guild, t(1));
+    const room = `room-${guild}`;
+    await createHubSession(guild, room, "owner", h.id);
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "late", name: "途中参加", channel: room }], t(2))).toEqual(["late"]);
+    await syncZombiePresence(guild, "epoch", { z: room, late: room }, t(2), gameId);
+    await expect(requestZombieAction(id(), guild, "z", "late", "infect", t(181))).rejects.toThrow("連続3分");
+    const request = await requestZombieAction(id(), guild, "z", "late", "infect", t(182));
+    expect(request.channel).toBe(room);
+    expect((await decideZombieRequest(guild, gameId, request.id, "admin", true, t(182))).game.players.late!.role).toBe("zombie");
+  });
+  it("does not combine sibling rooms or carry over time when both players move to another generated room", async () => {
+    const h = await hub();
+    const a = `a-${guild}`, b = `b-${guild}`;
+    await createHubSession(guild, a, "owner", h.id); await createHubSession(guild, b, "owner", h.id);
+    await prepare(); await beginZombieGame(guild, t(1));
+    await syncZombiePresence(guild, "epoch", { z: a, h: b }, t(1), gameId);
+    await expect(requestZombieAction(id(), guild, "z", "h", "infect", t(181))).rejects.toThrow("酒場VC");
+    await syncZombiePresence(guild, "epoch", { z: a, h: a }, t(182), gameId);
+    await syncZombiePresence(guild, "epoch", { z: b, h: b }, t(362), gameId);
+    await expect(requestZombieAction(id(), guild, "z", "h", "infect", t(362))).rejects.toThrow("連続3分");
+    expect((await requestZombieAction(id(), guild, "z", "h", "infect", t(542))).channel).toBe(b);
+  });
+  it("revalidates removed Hub relationships before approval and late admission without trusting a cached room list", async () => {
+    const h = await hub(); const room = `room-${guild}`;
+    await createHubSession(guild, room, "owner", h.id);
+    await prepare(); await beginZombieGame(guild, t(1));
+    await syncZombiePresence(guild, "epoch", { z: room, h: room }, t(1), gameId);
+    const request = await requestZombieAction(id(), guild, "z", "h", "infect", t(181));
+    await deleteHubSession(room);
+    expect((await decideZombieRequest(guild, gameId, request.id, "admin", true, t(182))).request.status).toBe("stale");
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "late", name: "途中", channel: room }], t(183))).toEqual([]);
+    await syncZombiePresence(guild, "epoch", { z: room, h: room }, t(184), gameId);
+    expect((await getZombieGame(guild))!.presence).toEqual({});
+  });
+  it("supports healing, cooldown and healer transfer inside generated rooms while retaining actual room identity", async () => {
+    const h = await hub(true); const room = `room-${guild}`;
+    await createHubSession(guild, room, "owner", h.id);
+    await prepare(); await beginZombieGame(guild, t(1));
+    await syncZombiePresence(guild, "epoch", { z: room, h: room, x: room, doctor: room }, t(1), gameId);
+    await infect();
+    const heal = await requestZombieAction(id(), guild, "doctor", "h", "heal", t(361));
+    const result = await decideZombieRequest(guild, gameId, heal.id, "admin", true, t(361));
+    expect(result.game.players.doctor!.healCooldownUntil).toBe(t(421));
+    const misheal = await requestZombieAction(id(), guild, "doctor", "x", "heal", t(421));
+    const wrong = await decideZombieRequest(guild, gameId, misheal.id, "admin", true, t(421));
+    expect(wrong.game.movePenalties!.x!.channel).toBe(room);
+    await infect("h", 541);
+    await syncZombiePresence(guild, "epoch", { z: room, h: room, x: room, doctor: room }, t(721), gameId);
+    expect((await getZombieGame(guild))!.players.doctor!.role).toBe("human");
+    const jobs = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    expect(jobs.some(j => j.id.includes(":transfer:") && j.payload.text?.includes(room))).toBe(true);
+  });
   it("registers only the supplied initial participants, excludes configured users and prevents parallel events", async () => {
     await changeZombieSettingList(guild, "excludedUsers", "excluded", true);
     const game = await startZombieGame(gameId, guild, ["z", "h", "excluded", "z"].map(id => ({ id, name: id })), now);

@@ -5,6 +5,7 @@ import { walletsTable, transactionsTable } from "./schema/economy";
 import { zombieConfigsTable as configs, zombieGamesTable as games, zombieJobsTable as jobs, zombieOperationsTable as operations, type ZombieJob } from "./schema/zombie";
 import { ensureZombieSchema } from "./zombieSchema";
 import { transferSurroundedHealers } from "./zombieBalance";
+import { getZombieVoiceIds } from "./zombieVoice";
 import { ZombieError, ZOMBIE_REWARDS, zombieAmount, zombiePayouts, zombieWinner, zombieProof, validateZombieRewardCapacity, checkZombieHealCooldown,
   type ZombieConfig, type ZombieGame, type ZombieRole } from "./zombieRules";
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -157,9 +158,10 @@ export async function enrollZombieParticipants(guildId: string, gameId: string, 
   return locked(guildId, async tx => {
     const game = await current(tx, guildId), added: string[] = [];
     if (!game || game.id !== gameId || !["preparing", "running"].includes(game.phase) || now < game.createdAt) return added;
+    game.resolvedVcIds = await getZombieVoiceIds(guildId, game.config.vcIds, tx);
     for (const candidate of candidates) {
       if (Object.hasOwn(game.players, candidate.id) || game.config.excludedUsers.includes(candidate.id) ||
-        !game.config.vcIds.includes(candidate.channel)) continue;
+        !game.resolvedVcIds.includes(candidate.channel)) continue;
       game.players[candidate.id] = {
         id: candidate.id, name: candidate.name, role: "human", version: 0, stateAt: now, joinedAt: now,
         everInfected: false, infectedAt: null, infectedUsers: [], healedUsers: [],
@@ -194,10 +196,11 @@ export async function syncZombiePresence(guildId: string, epoch: string, voices:
   return locked(guildId, async tx => {
     const game = await current(tx, guildId);
     if (!game || (gameId && game.id !== gameId) || game.phase !== "running" || now < game.observedAt) return;
+    game.resolvedVcIds = await getZombieVoiceIds(guildId, game.config.vcIds, tx);
     if (game.epoch !== epoch) game.presence = {};
     for (const userId of Object.keys(game.players)) {
       const channel = voices[userId];
-      if (!channel || !game.config.vcIds.includes(channel)) delete game.presence[userId];
+      if (!channel || !game.resolvedVcIds.includes(channel)) delete game.presence[userId];
       else if (game.presence[userId]?.channel !== channel) game.presence[userId] = { channel, since: now };
     }
     game.epoch = epoch; game.observedAt = now;
@@ -243,6 +246,7 @@ export async function requestZombieAction(id: string, guildId: string, actorId: 
     if (!actor || !target || actorId === targetId || actor.role !== (type === "infect" ? "zombie" : "healer"))
       throw new ZombieError("この申請はできません。参加状態・自分の役職・対象者を確認してください。");
     if (type === "heal") checkZombieHealCooldown(actor, now);
+    game.resolvedVcIds = await getZombieVoiceIds(guildId, game.config.vcIds, tx);
     const proof = zombieProof(game, actor, target, now);
     for (const request of Object.values(game.requests)) if (request.status === "pending" && now - request.createdAt >= 900000) request.status = "stale";
     const pending = Object.values(game.requests).filter(r => r.status === "pending");
@@ -279,7 +283,8 @@ export async function decideZombieRequest(guildId: string, eventId: string, requ
     if (request.status !== "pending") return { game, request };
     if (game.phase !== "running") throw new ZombieError("イベントは開催中ではありません。");
     const actor = game.players[request.actor]!, target = game.players[request.target]!;
-    const valid = now - request.createdAt < 900000 && request.actorVersion === actor.version && request.targetVersion === target.version
+    game.resolvedVcIds = await getZombieVoiceIds(guildId, game.config.vcIds, tx);
+    const valid = game.resolvedVcIds.includes(request.channel) && now - request.createdAt < 900000 && request.actorVersion === actor.version && request.targetVersion === target.version
       && actor.role === (request.type === "infect" ? "zombie" : "healer") && target.role === (request.type === "infect" ? "human" : request.misheal ? "human" : "zombie");
     if (accept && valid && request.type === "heal") checkZombieHealCooldown(actor, now);
     request.status = !valid ? "stale" : accept ? "accepted" : "rejected"; request.decidedBy = adminId;

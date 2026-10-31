@@ -3,7 +3,7 @@ import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, PermissionFlagsBits, escapeMarkdown,
   type Client, type Guild, type TextChannel,
 } from "discord.js";
-import { ZombieError, deliverZombieJob, enrollZombieParticipants, getZombieGame, getZombieGameById, pendingZombieJobs, syncZombiePresence, type ZombieJob, type ZombieGame } from "@workspace/db";
+import { ZombieError, deliverZombieJob, enrollZombieParticipants, getZombieGame, getZombieGameById, getZombieVoiceIds, pendingZombieJobs, syncZombiePresence, type ZombieJob, type ZombieGame } from "@workspace/db";
 import { isVcTrackingOptedOut } from "./community.js";
 import { logger } from "./logger.js";
 import { enforceZombieMovePenalties } from "./zombieMovePenalty.js";
@@ -20,13 +20,14 @@ export async function observeZombieGuild(guild: Guild) {
     const now = Date.now(), snapshot: Record<string, string> = {};
     const game = await getZombieGame(guild.id);
     if (!game || !["preparing", "running"].includes(game.phase)) return;
+    const allowedVoices = await getZombieVoiceIds(guild.id, game.config.vcIds);
     await enforceZombieMovePenalties(guild, game);
     const voices = [...guild.voiceStates.cache.values()].map(v => ({
       id: v.id, channel: v.channelId, muted: v.mute || v.deaf, bot: v.member?.user.bot,
     }));
     const candidates: { id: string; name: string; channel: string }[] = [];
     for (const voice of voices) {
-      if (!voice.channel || voice.bot || !game.config.vcIds.includes(voice.channel)) continue;
+      if (!voice.channel || voice.bot || !allowedVoices.includes(voice.channel)) continue;
       if (await isVcTrackingOptedOut(guild.id, voice.id)) continue;
       if (!Object.hasOwn(game.players, voice.id)) {
         if (game.config.excludedUsers.includes(voice.id)) continue;
@@ -118,7 +119,7 @@ async function sendJob(client: Client, id: string, payload: ZombieJob) {
     const text = payload.kind === "announce" ? `Halloween ゾンビ感染ゲームを開始しました。現在${Object.keys(game.players).length}人が参加対象です。\n対象の酒場VCに途中入室した方も、除外対象でなければ人間として自動参加します。役職は秘密です。DMとルールを確認してください。` :
       payload.kind === "rules" ? "**ゾンビ感染ゲームのルール**\n・対象酒場VCへの途中入室も人間として自動参加します（Bot・除外対象・VC記録拒否者を除く）。\n・指定酒場VCで連続3分以上会話し、管理者の承認を受けます。\n・感染：`/infect request 対象:ユーザー`\n・治療：`/heal request 対象:ユーザー`\n・自分の役職：`/zombie me`（本人限定表示）\n・役職、治療班、感染者情報の公開は禁止です。\n・無言滞在、挨拶だけ、チャット、リアクションは感染・治療の対象外です。\n・ミュート・退出・移動・Bot再接続後は同席時間を数え直します。\n・治療班以外が全員ゾンビになるとゾンビ勝利。管理終了時に人間が残れば人間勝利。\n・録音や会話内容の保存はしません。迷惑行為・無理な感染は禁止です。" : payload.text!;
     // Audit text contains private nicknames: disable mentions; send only in verified private channels.
-    const balanceRules = payload.kind === "rules" ? "\n・治療成功後は60秒間、次の治療申請・承認はできません。\n・人間への誤治療は会話確認・管理承認後に成立し、対象者は60秒間、別VCへ移動すると元のVCへ戻されます。切断は妨げません。\n・治療班とゾンビ2人以上の連続3分同席で、能力は生存中の人間へランダムで自動移譲されます。この移譲だけは管理承認不要です。移譲先がいない場合は保留します。" : "";
+    const balanceRules = payload.kind === "rules" ? "\n・指定Hubから作られた転送先VCも、対応記録があれば自動で対象になります。別々のVCの時間は合算しません。\n・治療成功後は60秒間、次の治療申請・承認はできません。\n・人間への誤治療は会話確認・管理承認後に成立し、対象者は60秒間、別VCへ移動すると元のVCへ戻されます。切断は妨げません。\n・治療班とゾンビ2人以上の連続3分同席で、能力は生存中の人間へランダムで自動移譲されます。この移譲だけは管理承認不要です。移譲先がいない場合は保留します。" : "";
     await channel.send({ content: (text + balanceRules).slice(0, 1950), allowedMentions: { parse: [] }, nonce, enforceNonce: true });
   }
 }
