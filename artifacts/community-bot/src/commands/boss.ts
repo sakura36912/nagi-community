@@ -50,12 +50,11 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
     const guildId = await requireForgeAccess(interaction, ADMIN.has(name) || Boolean(infoAdmin));
     const userId = interaction.user.id;
     if (name === "ボス料金設定" || name === "ボス料金確認") {
-      const attackCost = name === "ボス料金設定" ? interaction.options.getInteger("攻撃料金") : null;
       const healCost = name === "ボス料金設定" ? interaction.options.getInteger("回復料金") : null;
-      const fees = attackCost !== null || healCost !== null
-        ? await configureBossFees(guildId, { ...(attackCost !== null ? { attackCost } : {}), ...(healCost !== null ? { healCost } : {}) })
+      const fees = healCost !== null
+        ? await configureBossFees(guildId, { healCost })
         : await getBossFees(guildId);
-      await interaction.editReply(`攻撃：${bossMoney(fees.attackCost)}／回復：${bossMoney(fees.healCost)}\n両方の設定が必要です。0は明示的な無料です。\n変更は新しい討伐に適用され、受付済みパーティ・戦闘中の料金は変わりません。`);
+      await interaction.editReply(`攻撃：無料（$0）／回復：${fees.healCost && fees.healCost > 0 ? bossMoney(fees.healCost) : "未設定（回復不可）"}\n回復料金は1以上で設定してください。\n回復料金の変更は新しい討伐に適用され、受付済みパーティ・戦闘中の料金は変わりません。`);
       return;
     }
     if (name === "ボス開催") {
@@ -70,7 +69,9 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
         soloHp: integer("ソロhp"), partyHp: integer("パーティhp"), durationSeconds: integer("制限秒"),
         lobbySeconds: integer("受付秒"), reward: integer("報酬"), attack: integer("攻撃力"), defense: integer("防御力"),
         playerHp: integer("プレイヤーhp"), healAmount: integer("回復量"), counterEvery: integer("反撃間隔"),
-        cooldownSeconds: integer("行動間隔秒"), criticalPercent: integer("会心率"),
+        cooldownSeconds: 1, criticalPercent: integer("会心率"),
+        attackCooldownSeconds: interaction.options.getInteger("攻撃間隔秒") ?? 5,
+        healCooldownSeconds: interaction.options.getInteger("回復間隔秒") ?? 30,
         criticalMultiplier: interaction.options.getNumber("会心倍率", true), levelBonusPercent: integer("レベル補正率"),
         special: (interaction.options.getString("特殊イベント") ?? "none") as BossConfig["special"],
         bonusRoleId: role?.id ?? null, roleMultiplier: multiplier ?? 1,
@@ -81,7 +82,7 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
       let announcement = "開催告知を投稿しました。";
       try { await channel.send({ embeds: [bossEventEmbed(event)], allowedMentions: { parse: [] }, nonce: interaction.id, enforceNonce: true }); }
       catch (error) { logger.error("[boss] Event created but announcement failed", error); announcement = "開催は保存済みですが告知に失敗しました。/ボス情報 で確認できます。"; }
-      await interaction.editReply(`${announcement}\n特殊イベント：${bossSpecialName(config.special)}\n攻撃 ${bossMoney(fees.attackCost)}／回復 ${bossMoney(fees.healCost)}${fees.attackCost === null || fees.healCost === null ? "\n料金設定まで参加は停止しています。" : ""}`);
+      await interaction.editReply(`${announcement}\n特殊イベント：${bossSpecialName(config.special)}\n攻撃：無料／回復：${fees.healCost && fees.healCost > 0 ? bossMoney(fees.healCost) : "未設定（回復不可）"}\nクールタイム：攻撃${config.attackCooldownSeconds}秒／回復${config.healCooldownSeconds}秒`);
       return;
     }
     if (name === "ボス終了") {
@@ -111,10 +112,10 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
     }
     if (name === "参加") {
       const { request, event } = await createBossJoinRequest(interaction.id, guildId, userId, interaction.options.getString("モード", true) as BossMode);
-      const embed = bossEventEmbed(event).setTitle("ボス参加 — 料金確認")
-        .setDescription(`モード：${request.mode === "solo" ? "ソロ" : "パーティ（2〜4人）"}\n攻撃1回：${bossMoney(request.attackCost)}\n回復1回：${bossMoney(request.healCost)}\n参加確定だけでは課金しません。/攻撃・/回復 を実行した際に消費します。\n戦闘中の料金は固定。確認は最長2分間、イベント終了まで有効です。`);
+      const embed = bossEventEmbed(event).setTitle("ボス参加 — 条件確認")
+        .setDescription(`モード：${request.mode === "solo" ? "ソロ" : "パーティ（2〜4人）"}\n攻撃：無料（$0）\n回復1回：${request.healCost > 0 ? bossMoney(request.healCost) : "未設定（この討伐では回復不可）"}\n参加・攻撃では課金しません。/回復 が成功した際だけ料金を消費します。\n回復料金は参加時に固定。確認は最長2分間、イベント終了まで有効です。`);
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(`boss:join:${request.id}`).setLabel("料金を確認して参加").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`boss:join:${request.id}`).setLabel("条件を確認して参加").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`boss:cancel:${request.id}`).setLabel("キャンセル").setStyle(ButtonStyle.Secondary));
       await interaction.editReply({ embeds: [embed], components: [row] });
       return;
@@ -167,11 +168,12 @@ for (const [name, description, min, max] of [
   ["プレイヤーhp", "参加者1人の最大HP", 1, 2147483647],
   ["回復量", "回復1回の基本回復量", 1, 2147483647],
   ["反撃間隔", "参加者合計何回の行動ごとにボスが反撃するか", 1, 100],
-  ["行動間隔秒", "1人の行動クールダウン（秒）", 1, 3600],
   ["会心率", "プレイヤーのクリティカル率（%）", 0, 100],
   ["レベル補正率", "武器Lvが1上がるごとの追加ダメージ補正（%）", 0, 100],
 ] as const) host.addIntegerOption(o => o.setName(name).setDescription(description).setRequired(true).setMinValue(min).setMaxValue(max));
 host.addNumberOption(o => o.setName("会心倍率").setDescription("クリティカル倍率（1〜10）").setRequired(true).setMinValue(1).setMaxValue(10))
+  .addIntegerOption(o => o.setName("攻撃間隔秒").setDescription("攻撃専用クールタイム。省略時5秒、0で無制限").setMinValue(0).setMaxValue(3600))
+  .addIntegerOption(o => o.setName("回復間隔秒").setDescription("回復専用クールタイム。省略時30秒").setMinValue(1).setMaxValue(3600))
   .addStringOption(o => o.setName("特殊イベント").setDescription("全ての討伐へ適用する特殊イベント").addChoices(...specials))
   .addRoleOption(o => o.setName("補正ロール").setDescription("追加ダメージ補正を受けるロール"))
   .addNumberOption(o => o.setName("ロール倍率").setDescription("補正ロールのダメージ倍率（1〜10）").setMinValue(1).setMaxValue(10));
@@ -181,13 +183,12 @@ export const bossCommands = [
     .addBooleanOption(o => o.setName("確認").setDescription("全討伐を終了する場合はTrue").setRequired(true)),
   base("ボス情報", "現在開催中のボス・残りHP・時間・参加者を確認")
     .addIntegerOption(o => o.setName("ページ").setDescription("討伐一覧ページ").setMinValue(1)),
-  base("参加", "本船員専用：料金を確認してソロまたはパーティで参加")
+  base("参加", "本船員専用：条件を確認してソロまたはパーティで参加")
     .addStringOption(o => o.setName("モード").setDescription("参加方法").setRequired(true)
       .addChoices({ name: "ソロ", value: "solo" }, { name: "パーティ", value: "party" })),
-  base("攻撃", "参加中のボスへ攻撃（参加時に確認した料金を消費）"),
+  base("攻撃", "参加中のボスへ無料で攻撃（攻撃専用クールタイムあり）"),
   base("回復", "自分のHPを回復（参加時に確認した料金を消費）"),
-  base("ボス料金設定", "管理者専用：新規討伐の攻撃・回復料金を設定。省略時は確認")
-    .addIntegerOption(o => o.setName("攻撃料金").setDescription("攻撃1回の料金。0は無料").setMinValue(0).setMaxValue(2147483647))
-    .addIntegerOption(o => o.setName("回復料金").setDescription("回復1回の料金。0は無料").setMinValue(0).setMaxValue(2147483647)),
-  base("ボス料金確認", "新規討伐の攻撃・回復料金を確認（戦闘中は参加時の料金）"),
+  base("ボス料金設定", "管理者専用：新規討伐の回復料金を設定（攻撃は常に無料）")
+    .addIntegerOption(o => o.setName("回復料金").setDescription("回復1回の料金（1以上）").setMinValue(1).setMaxValue(2147483647)),
+  base("ボス料金確認", "攻撃無料・新規討伐の回復料金を確認（回復料金は参加時に固定）"),
 ].map(data => ({ data, execute: executeBossCommand }));

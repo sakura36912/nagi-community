@@ -71,6 +71,25 @@ describe("boss commands and displays", () => {
       expect(host.options!.find(o => o.name === name)?.required).toBe(true);
     }
     expect(bossCommands.map(c => c.data.name)).toEqual(expect.arrayContaining(["参加", "攻撃", "回復", "ボス情報"]));
+    for (const name of ["攻撃間隔秒", "回復間隔秒"]) {
+      expect(host.options!.find(o => o.name === name)?.required).not.toBe(true);
+    }
+    expect(host.options!.some(o => o.name === "行動間隔秒")).toBe(false);
+    const fees = bossCommands.find(c => c.data.name === "ボス料金設定")!.data.toJSON();
+    expect(fees.options!.map(o => o.name)).toEqual(["回復料金"]);
+  });
+  it.each([{}, { 攻撃間隔秒: 10, 回復間隔秒: 60 }])("passes individual cooldown settings to the hosted event: %j", async overrides => {
+    const i = fixture("ボス開催"); i.flags.admin = true;
+    Object.assign(i.values, {
+      ボス: "kraken", ソロhp: 100, パーティhp: 400, 制限秒: 600, 受付秒: 10, 報酬: 100,
+      攻撃力: 10, 防御力: 0, プレイヤーhp: 100, 回復量: 25, 反撃間隔: 2,
+      会心率: 10, 会心倍率: 2, レベル補正率: 5, ...overrides,
+    });
+    await run(i);
+    expect(m.host).toHaveBeenCalledWith(i.id, "guild", "channel", "kraken", expect.objectContaining({
+      attackCooldownSeconds: overrides.攻撃間隔秒 ?? 5,
+      healCooldownSeconds: overrides.回復間隔秒 ?? 30,
+    }));
   });
   it("rejects non-crew before preparing a participation or charge", async () => {
     const i = fixture(); i.flags.crew = false;
@@ -85,15 +104,15 @@ describe("boss commands and displays", () => {
     expect(m.end).not.toHaveBeenCalled();
     expect(m.configure).not.toHaveBeenCalled();
   });
-  it("keeps unset fees distinct from explicitly free and supports setting each field later", async () => {
+  it("shows free attacks and configures only paid healing", async () => {
     const i = fixture("ボス料金設定"); i.flags.admin = true;
     await run(i);
     expect(m.configure).not.toHaveBeenCalled();
     expect(JSON.stringify(i.editReply.mock.calls)).toContain("未設定");
-    i.values["攻撃料金"] = 0;
-    m.configure.mockResolvedValue({ attackCost: 0, healCost: null });
+    i.values["回復料金"] = 50;
+    m.configure.mockResolvedValue({ attackCost: 0, healCost: 50 });
     await run(i);
-    expect(m.configure).toHaveBeenCalledWith("guild", { attackCost: 0 });
+    expect(m.configure).toHaveBeenCalledWith("guild", { healCost: 50 });
   });
   it("shows both fees and requires participation confirmation, with no charge on preparing", async () => {
     const i = fixture();
@@ -102,8 +121,9 @@ describe("boss commands and displays", () => {
     expect(m.join).not.toHaveBeenCalled();
     expect(m.action).not.toHaveBeenCalled();
     const output = JSON.stringify(i.editReply.mock.calls);
-    expect(output).toContain("$100"); expect(output).toContain("$250");
-    expect(output).toContain("料金を確認して参加");
+    expect(output).toContain("無料（$0）"); expect(output).toContain("$250");
+    expect(output).not.toContain("$100");
+    expect(output).toContain("条件を確認して参加");
   });
   it("uses fresh role eligibility and server nickname at participation confirmation", async () => {
     const i = fixture();
@@ -124,12 +144,16 @@ describe("boss commands and displays", () => {
     expect(m.cancel).toHaveBeenCalledWith("quote", "guild", "user");
     expect(m.join).not.toHaveBeenCalled(); expect(m.action).not.toHaveBeenCalled();
   });
-  it("routes attack and heal to existing-bank transactional actions and displays costs", async () => {
-    const i = fixture("攻撃"); await run(i);
+  it("routes free attacks and paid heals to existing-bank transactional actions", async () => {
+    const i = fixture("攻撃");
+    m.action.mockResolvedValueOnce({ battleId: "battle", mode: "solo", state: "active", bossHp: 50,
+      damage: 25, paid: 0, balance: 1000, userHp: 90, messages: [] });
+    await run(i);
     expect(m.action).toHaveBeenCalledWith(i.id, "guild", "user", "attack");
-    expect(JSON.stringify(i.editReply.mock.calls)).toContain("消費：$100");
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("消費：$0");
     i.commandName = "回復"; await run(i);
     expect(m.action).toHaveBeenCalledWith(i.id, "guild", "user", "heal");
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("消費：$100");
   });
   it("reports insufficient balance and stale/cross-user confirmation errors", async () => {
     const i = fixture("攻撃"); m.action.mockRejectedValue(new BossError("残高が不足しています。"));

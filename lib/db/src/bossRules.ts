@@ -14,11 +14,19 @@ export interface BossConfig {
   counterEvery: number; cooldownSeconds: number; criticalPercent: number;
   criticalMultiplier: number; levelBonusPercent: number;
   special: BossSpecial; bonusRoleId: string | null; roleMultiplier: number;
+  attackCooldownSeconds?: number; healCooldownSeconds?: number;
 }
 export interface BossWeaponSnapshot {
   weaponType: string; weaponLevel: number; attack: number; defense: number; roleMultiplier: number;
 }
-export interface BossEffects { bleedTicks: number; vulnerableTicks: number; shield: boolean }
+export interface BossEffects {
+  bleedTicks: number; vulnerableTicks: number; shield: boolean;
+  attackReadyAt?: number; healReadyAt?: number;
+}
+/** Legacy events have no separate settings; never reuse their shared action timer. */
+export function bossCooldownSeconds(config: BossConfig, action: "attack" | "heal") {
+  return action === "attack" ? config.attackCooldownSeconds ?? 5 : config.healCooldownSeconds ?? 30;
+}
 export interface BossFighter {
   userId: string; displayName: string; hp: number; maxHp: number; damage: number;
   attackCount: number; weapon: BossWeaponSnapshot; effects: BossEffects;
@@ -40,6 +48,8 @@ export function validateBossConfig(type: string, config: BossConfig) {
   bossInteger(config.lobbySeconds, 1, config.durationSeconds);
   bossInteger(config.counterEvery, 1, 100);
   bossInteger(config.cooldownSeconds, 1, 3600);
+  bossInteger(bossCooldownSeconds(config, "attack"), 0, 3600);
+  bossInteger(bossCooldownSeconds(config, "heal"), 1, 3600);
   bossInteger(config.criticalPercent, 0, 100);
   bossInteger(config.levelBonusPercent, 0, 100);
   for (const multiplier of [config.criticalMultiplier, config.roleMultiplier]) {

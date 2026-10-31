@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bossCounter, bossHealing, bossPlayerAttack, splitBossReward, validateBossConfig,
+import { bossCounter, bossHealing, bossPlayerAttack, bossCooldownSeconds, splitBossReward, validateBossConfig,
   type BossConfig, type BossFighter } from "../../../../lib/db/src/bossRules";
 
 const config: BossConfig = {
@@ -14,6 +14,16 @@ function fighter(userId = "user", weaponType = "greatsword"): BossFighter {
     effects: { bleedTicks: 0, vulnerableTicks: 0, shield: false } };
 }
 describe("boss combat rules", () => {
+  it("uses separate cooldown defaults and validates configurable bounds", () => {
+    expect(bossCooldownSeconds(config, "attack")).toBe(5);
+    expect(bossCooldownSeconds(config, "heal")).toBe(30);
+    expect(bossCooldownSeconds({ ...config, attackCooldownSeconds: 0 }, "attack")).toBe(0);
+    expect(() => validateBossConfig("kraken", { ...config, attackCooldownSeconds: 10, healCooldownSeconds: 60 })).not.toThrow();
+    for (const patch of [{ attackCooldownSeconds: -1 }, { attackCooldownSeconds: 3601 },
+      { healCooldownSeconds: 0 }, { healCooldownSeconds: NaN }, { healCooldownSeconds: 1.5 }]) {
+      expect(() => validateBossConfig("kraken", { ...config, ...patch })).toThrow();
+    }
+  });
   it("splits every dollar including remainder, independent of join order", () => {
     const result = splitBossReward(101, ["b", "a", "c"]);
     expect(result).toEqual([{ userId: "a", amount: 34 }, { userId: "b", amount: 34 }, { userId: "c", amount: 33 }]);

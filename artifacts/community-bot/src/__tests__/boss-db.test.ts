@@ -19,7 +19,7 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
   const base: BossConfig = {
     soloHp: 100, partyHp: 200, attack: 10, defense: 0, reward: 101,
     durationSeconds: 1000, lobbySeconds: 10, playerHp: 100, healAmount: 25,
-    counterEvery: 2, cooldownSeconds: 1, criticalPercent: 0, criticalMultiplier: 2,
+    counterEvery: 2, cooldownSeconds: 1, attackCooldownSeconds: 1, healCooldownSeconds: 1, criticalPercent: 0, criticalMultiplier: 2,
     levelBonusPercent: 0, special: "none", bonusRoleId: null, roleMultiplier: 1,
   };
   beforeAll(async () => { await ensureBossSchema(); });
@@ -30,7 +30,7 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
       forgeActionsTable, walletsTable, transactionsTable]) await db.delete(table).where(eq(table.guildId, guildId));
   });
   async function host(patch: Partial<BossConfig> = {}, costs = true) {
-    if (costs) await configureBossFees(guild, { attackCost: 10, healCost: 20 });
+    if (costs) await configureBossFees(guild, { healCost: 20 });
     return createBossEvent(id(), guild, "channel", "kraken", { ...base, ...patch }, now);
   }
   async function wallet(user: string, balance: number) {
@@ -50,16 +50,97 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     return confirmBossJoin(quote.request.id, guild, user, `名前-${user}`, roles, now);
   }
   const attack = (user: string, seconds = 1, operation = id()) => performBossAction(operation, guild, user, "attack", { now: at(seconds), roll: () => 0.5 });
+  const heal = (user: string, seconds: number, operation = id()) =>
+    performBossAction(operation, guild, user, "heal", { now: at(seconds), roll: () => 0.5 });
 
-  it("allows hosting without prices but blocks participation until both fees are set", async () => {
+  it("persists independent attack/heal deadlines and accepts exactly at each boundary", async () => {
+    await host({ soloHp: 10000, attackCooldownSeconds: 5, healCooldownSeconds: 30, counterEvery: 100 });
+    await prepare("a"); const joined = await join("a");
+    await db.update(bossMembersTable).set({ hp: 20 }).where(eq(bossMembersTable.battleId, joined.battleId));
+    await attack("a", 1);
+    await heal("a", 1); // Attack cooldown never blocks healing.
+    await expect(attack("a", 5)).rejects.toThrow("攻撃まで1秒");
+    await attack("a", 6); // Healing cooldown never blocks attacking.
+    await expect(heal("a", 30)).rejects.toThrow("回復まで1秒");
+    const saved = (await getBossBattleBundle(joined.battleId))!.members[0]!.effects;
+    expect(saved.attackReadyAt).toBe(at(11).getTime());
+    expect(saved.healReadyAt).toBe(at(31).getTime());
+    await heal("a", 31);
+    expect(await balance("a")).toBe(960);
+  });
+  it("defaults legacy events to 5-second attacks and 30-second heals, not a shared cooldown", async () => {
+    await host({ soloHp: 10000, attackCooldownSeconds: undefined, healCooldownSeconds: undefined, cooldownSeconds: 999, counterEvery: 100 });
+    await prepare("a"); const joined = await join("a");
+    await db.update(bossMembersTable).set({ hp: 20, actionReadyAt: at(999) }).where(eq(bossMembersTable.battleId, joined.battleId));
+    await attack("a", 1); await heal("a", 1);
+    const saved = (await getBossBattleBundle(joined.battleId))!.members[0]!.effects;
+    expect(saved.attackReadyAt).toBe(at(6).getTime());
+    expect(saved.healReadyAt).toBe(at(31).getTime());
+  });
+  it("charges a paid heal only once on simultaneous duplicate delivery", async () => {
+    await host(); await prepare("a"); const joined = await join("a");
+    await db.update(bossMembersTable).set({ hp: 20 }).where(eq(bossMembersTable.battleId, joined.battleId));
+    const operation = id();
+    const results = await Promise.all([heal("a", 1, operation), heal("a", 1, operation)]);
+    expect(results.filter(r => r.repeated)).toHaveLength(1);
+    expect(await balance("a")).toBe(980);
+    expect((await getBossBattleBundle(joined.battleId))!.members[0]!.hp).toBe(45);
+    const ledger = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `boss-action:${operation}`));
+    expect(ledger).toHaveLength(1); expect(ledger[0]!.amount).toBe(-20);
+  });
+  it("serializes distinct simultaneous heals to enforce the cooldown", async () => {
+    await host(); await prepare("a"); const joined = await join("a");
+    await db.update(bossMembersTable).set({ hp: 20 }).where(eq(bossMembersTable.battleId, joined.battleId));
+    const results = await Promise.allSettled([heal("a", 1), heal("a", 1)]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await balance("a")).toBe(980);
+  });
+  it("does not charge, heal or consume cooldown on insufficient funds; same operation can retry", async () => {
+    await host(); await prepare("a"); const joined = await join("a");
+    await db.update(bossMembersTable).set({ hp: 20 }).where(eq(bossMembersTable.battleId, joined.battleId));
+    await wallet("a", 19);
+    const operation = id();
+    await expect(heal("a", 1, operation)).rejects.toThrow("残高");
+    const player = (await getBossBattleBundle(joined.battleId))!.members[0]!;
+    expect(player.hp).toBe(20); expect(player.effects.healReadyAt).toBeUndefined();
+    expect(await balance("a")).toBe(19);
+    await wallet("a", 20); await heal("a", 1, operation);
+    expect(await balance("a")).toBe(0);
+  });
+  it("never charges attacks from old paid battles, including a missing wallet", async () => {
+    await host(); await prepare("a"); const joined = await join("a");
+    await db.update(bossBattlesTable).set({ attackCost: 999 }).where(eq(bossBattlesTable.id, joined.battleId));
+    await db.delete(walletsTable).where(eq(walletsTable.guildId, guild));
+    expect((await attack("a")).paid).toBe(0);
+    expect(await balance("a")).toBeUndefined();
+  });
+  it("rolls back a paid heal and its cooldown when its ledger insert fails", async () => {
+    await host(); await prepare("a"); const joined = await join("a");
+    await db.update(bossMembersTable).set({ hp: 20 }).where(eq(bossMembersTable.battleId, joined.battleId));
+    const operation = id();
+    await db.insert(transactionsTable).values({ guildId: guild, userId: "a", amount: 0,
+      reason: "synthetic collision", sessionKey: `boss-action:${operation}` });
+    await expect(heal("a", 1, operation)).rejects.toThrow();
+    const player = (await getBossBattleBundle(joined.battleId))!.members[0]!;
+    expect(player.hp).toBe(20); expect(player.effects.healReadyAt).toBeUndefined();
+    expect(await balance("a")).toBe(1000);
+  });
+  it("supports unlimited free attacks with zero attack cooldown but stops at the event deadline", async () => {
+    await host({ soloHp: 10000, attackCooldownSeconds: 0, counterEvery: 100 });
+    await prepare("a"); await join("a"); await wallet("a", 0);
+    for (let i = 0; i < 10; i++) expect((await attack("a", 1)).paid).toBe(0);
+    expect(await balance("a")).toBe(0);
+    await expect(attack("a", 1000)).rejects.toThrow();
+  });
+
+  it("allows free attacks without prices but disables unconfigured healing", async () => {
     await host({}, false); await prepare("a");
-    expect(await getBossFees(guild)).toEqual({ attackCost: null, healCost: null });
-    await expect(createBossJoinRequest(id(), guild, "a", "solo", now)).rejects.toThrow("未設定");
-    await configureBossFees(guild, { attackCost: 0 });
-    await expect(createBossJoinRequest(id(), guild, "a", "solo", now)).rejects.toThrow("未設定");
-    await configureBossFees(guild, { healCost: 0 });
+    expect(await getBossFees(guild)).toEqual({ attackCost: 0, healCost: null });
+    await expect(configureBossFees(guild, { attackCost: 10 })).rejects.toThrow("無料");
+    await expect(configureBossFees(guild, { healCost: 0 })).rejects.toThrow("1以上");
     const joined = await join("a");
     const result = await attack("a");
+    await expect(performBossAction(id(), guild, "a", "heal", { now: at(2) })).rejects.toThrow("未設定");
     expect(joined.state).toBe("active");
     expect(result.paid).toBe(0);
     expect(await balance("a")).toBe(1000);
@@ -113,24 +194,23 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     const results = await Promise.allSettled([confirmBossJoin(solo.request.id, guild, "a", "a", [], now), confirmBossJoin(party.request.id, guild, "a", "a", [], now)]);
     expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
   });
-  it("charges and damages once for duplicate action delivery", async () => {
+  it("damages once without charging for duplicate attack delivery", async () => {
     await host(); await prepare("a"); const joined = await join("a");
     const operation = id();
     const results = await Promise.all([attack("a", 1, operation), attack("a", 1, operation)]);
     expect(results.filter(r => r.repeated)).toHaveLength(1);
-    expect(await balance("a")).toBe(990);
+    expect(await balance("a")).toBe(1000);
     expect((await getBossBattleBundle(joined.battleId))?.battle.currentHp).toBe(84);
     const ledger = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `boss-action:${operation}`));
     expect(ledger).toHaveLength(1);
   });
-  it("does not charge or advance combat for insufficient balance or cooldown", async () => {
+  it("allows attacks with insufficient balance and rejects attack cooldown without damage", async () => {
     await host(); await prepare("a"); const joined = await join("a");
     await wallet("a", 9);
-    await expect(attack("a")).rejects.toThrow("残高");
-    expect((await getBossBattleBundle(joined.battleId))?.battle.currentHp).toBe(100);
-    await wallet("a", 1000); await attack("a");
+    await attack("a");
+    expect((await getBossBattleBundle(joined.battleId))?.battle.currentHp).toBe(84);
     await expect(attack("a", 1)).rejects.toThrow("お待ち");
-    expect(await balance("a")).toBe(990);
+    expect(await balance("a")).toBe(9);
   });
   it("charges healing only when effective and applies boss counters on paid actions", async () => {
     await host({ counterEvery: 1 }); await prepare("a"); await join("a");
@@ -140,7 +220,7 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     expect(hit.userHp).toBeLessThan(100);
     const healed = await performBossAction(id(), guild, "a", "heal", { now: at(3), roll: () => 0.5 });
     expect(healed.healed).toBeGreaterThan(0);
-    expect(await balance("a")).toBe(970);
+    expect(await balance("a")).toBe(980);
   });
   it("atomically splits the reward with exact remainder and never pays twice", async () => {
     await host({ partyHp: 1 }); await prepare("a"); await prepare("b");
@@ -149,11 +229,11 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     const operation = id();
     const result = await attack("a", 12, operation);
     expect(result.state).toBe("won");
-    expect(await balance("a")).toBe(1041);
+    expect(await balance("a")).toBe(1051);
     expect(await balance("b")).toBe(1050);
     const repeat = await attack("a", 13, operation);
     expect(repeat.repeated).toBe(true);
-    expect(await balance("a")).toBe(1041);
+    expect(await balance("a")).toBe(1051);
     expect((await getBossBattleBundle(joined.battleId))?.battle.rewards.reduce((sum, r) => sum + r.amount, 0)).toBe(101);
     const rewardLedger = await db.select().from(transactionsTable).where(eq(transactionsTable.guildId, guild));
     expect(rewardLedger.filter(t => t.sessionKey?.startsWith("boss-reward:"))).toHaveLength(2);
@@ -162,7 +242,7 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     await host({ partyHp: 1, special: "double_reward" }); await prepare("a"); await prepare("b");
     await join("a", "party"); await join("b", "party"); await advanceBossGuild(guild, at(11));
     await attack("a", 12);
-    expect(await balance("a")).toBe(1091);
+    expect(await balance("a")).toBe(1101);
     expect(await balance("b")).toBe(1101);
   });
   it("rolls back debit, boss HP and reward if any reward recipient overflows", async () => {
@@ -176,7 +256,7 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     expect(bundle?.battle.currentHp).toBe(1);
     await wallet("b", 1000);
     await attack("a", 13);
-    expect(await balance("a")).toBe(1041);
+    expect(await balance("a")).toBe(1051);
   });
   it("rolls back combat and money if ledger insertion fails", async () => {
     await host(); await prepare("a"); const joined = await join("a");
@@ -190,7 +270,7 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     await host({ attack: 1000, counterEvery: 1 }); await prepare("a"); const joined = await join("a");
     expect((await attack("a")).state).toBe("failed");
     await expect(performBossAction(id(), guild, "a", "heal", { now: at(5) })).rejects.toThrow();
-    expect(await balance("a")).toBe(990);
+    expect(await balance("a")).toBe(1000);
     expect((await getBossBattleBundle(joined.battleId))?.battle.reason).toContain("戦闘不能");
   });
   it("restores deadline processing from DB and never charges after expiry", async () => {
@@ -209,17 +289,20 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     await endBossEvent(guild, at(2));
     expect((await getBossBattleBundle(solo.battleId))?.battle.status).toBe("failed");
     expect((await getBossBattleBundle(lobby.battleId))?.battle.status).toBe("cancelled");
-    expect(await balance("a")).toBe(990);
+    expect(await balance("a")).toBe(1000);
     expect(await balance("b")).toBe(1000);
   });
-  it("requires reconfirmation on fee changes, then keeps accepted fees fixed", async () => {
+  it("requires reconfirmation on heal fee changes, then keeps accepted fees fixed", async () => {
     await host(); await prepare("a");
     const quote = await createBossJoinRequest(id(), guild, "a", "solo", now);
-    await configureBossFees(guild, { attackCost: 100 });
+    await configureBossFees(guild, { healCost: 100 });
     await expect(confirmBossJoin(quote.request.id, guild, "a", "a", [], now)).rejects.toThrow("料金");
     await join("a");
-    await configureBossFees(guild, { attackCost: 999 });
-    expect((await attack("a")).paid).toBe(100);
+    await configureBossFees(guild, { healCost: 999 });
+    expect((await attack("a")).paid).toBe(0);
+    await attack("a", 2);
+    const healed = await performBossAction(id(), guild, "a", "heal", { now: at(3), roll: () => 0.5 });
+    expect(healed.paid).toBe(100);
   });
   it("cancels pending join confirmations without touching money", async () => {
     await host(); await prepare("a");
@@ -239,7 +322,7 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
       expect(bundle.battle.status).toBe("won"); sent++; return "notice";
     }, at(100))));
     expect(sent).toBe(1);
-    expect(await balance("a")).toBe(1091);
+    expect(await balance("a")).toBe(1101);
     expect((await getBossBattleBundle(joined.battleId))?.battle.noticeState).toBe("won");
   });
   it("keeps guild data isolated and rejects cross-guild replay", async () => {
@@ -247,8 +330,8 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     const operation = id(); await attack("a", 1, operation);
     const other = `boss-test-${id()}`; guilds.push(other);
     await expect(performBossAction(operation, other, "a", "attack", { now: at(2) })).rejects.toThrow("識別");
-    expect(await getBossFees(other)).toEqual({ attackCost: null, healCost: null });
-    expect(await balance("a")).toBe(990);
+    expect(await getBossFees(other)).toEqual({ attackCost: 0, healCost: null });
+    expect(await balance("a")).toBe(1000);
   });
   it("does not stop a newer event when the same admin end operation is replayed", async () => {
     await host();
@@ -264,7 +347,7 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     await join("a", "party"); await join("b", "party"); await advanceBossGuild(guild, at(11));
     const results = await Promise.allSettled([attack("a", 12), attack("b", 12)]);
     expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
-    expect((await balance("a"))! + (await balance("b"))!).toBe(2091);
+    expect((await balance("a"))! + (await balance("b"))!).toBe(2101);
     const ledger = await db.select().from(transactionsTable).where(eq(transactionsTable.guildId, guild));
     expect(ledger.filter(t => t.sessionKey?.startsWith("boss-reward:"))).toHaveLength(2);
     expect(ledger.filter(t => t.sessionKey?.startsWith("boss-action:"))).toHaveLength(1);

@@ -3,10 +3,10 @@ import { walletsTable, transactionsTable } from "./schema/economy";
 import { bossEventsTable as events, bossBattlesTable as battles, bossMembersTable as members,
   bossActiveUsersTable as active } from "./schema/boss";
 import { advanceBossGuild, withBossGuild, bossMembers, previousBossAction, recordBossAction, finishBossBattle } from "./bossStore";
-import { BossError, bossPlayerAttack, bossHealing, bossCounter, type BossActionResult } from "./bossRules";
+import { BossError, bossPlayerAttack, bossHealing, bossCounter, bossCooldownSeconds, type BossActionResult } from "./bossRules";
 import { forgeRoll } from "./forgeRules";
 
-/** 残高減算・戦闘更新・勝利報酬・操作記録は同じトランザクションで確定する。 */
+/** 攻撃無料・回復課金・個別クールタイム・勝利報酬を同時に確定する。 */
 export async function performBossAction(
   id: string, guildId: string, userId: string, action: "attack" | "heal",
   options: { now?: Date; roll?: () => number } = {},
@@ -25,8 +25,11 @@ export async function performBossAction(
     let players = await bossMembers(tx, battle.id);
     const player = players.find(p => p.userId === userId);
     if (!player || player.hp <= 0) throw new BossError("戦闘不能のため行動できません。パーティの終了を待ってください。");
-    if (player.actionReadyAt > now) throw new BossError(`次の行動まで${Math.ceil((player.actionReadyAt.getTime() - now.getTime()) / 1000)}秒お待ちください。`);
-    const paid = action === "attack" ? battle.attackCost : battle.healCost;
+    const readyKey = action === "attack" ? "attackReadyAt" : "healReadyAt";
+    const readyAt = player.effects[readyKey] ?? 0;
+    if (readyAt > now.getTime()) throw new BossError(`次の${action === "attack" ? "攻撃" : "回復"}まで${Math.ceil((readyAt - now.getTime()) / 1000)}秒お待ちください。`);
+    const paid = action === "attack" ? 0 : battle.healCost;
+    if (action === "heal" && paid <= 0) throw new BossError("この討伐の有料回復料金が未設定です。管理者にお問い合わせください。");
     const messages: string[] = [];
     let bossHp = battle.currentHp, damage = 0, healed = 0, critical = false, skill: string | undefined;
     if (action === "attack") {
@@ -50,10 +53,17 @@ export async function performBossAction(
       if (healed <= 0) throw new BossError("HPが満タンです。料金は消費していません。");
       player.hp += healed;
     }
-    await tx.insert(walletsTable).values({ guildId, userId, balance: 0 }).onConflictDoNothing();
-    const [wallet] = await tx.update(walletsTable).set({ balance: sql`${walletsTable.balance} - ${paid}`, updatedAt: now })
-      .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId), sql`${walletsTable.balance} >= ${paid}`)).returning();
-    if (!wallet) throw new BossError("残高が不足しています。戦闘と残高は変更していません。");
+    // Free attacks never create or mutate a wallet, even for legacy paid battles.
+    let [wallet] = await tx.select().from(walletsTable)
+      .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId)));
+    if (action === "heal") {
+      [wallet] = await tx.update(walletsTable)
+        .set({ balance: sql`${walletsTable.balance} - ${paid}`, updatedAt: now })
+        .where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId),
+          sql`${walletsTable.balance} >= ${paid}`)).returning();
+      if (!wallet) throw new BossError("残高が不足しています。HPとクールタイムは変更していません。");
+    }
+    player.effects = { ...player.effects, [readyKey]: now.getTime() + bossCooldownSeconds(event.config, action) * 1000 };
     const actionCount = battle.actionCount + 1;
     let counterTurn = battle.counterTurn;
     if (bossHp > 0 && actionCount % event.config.counterEvery === 0) {
@@ -64,8 +74,7 @@ export async function performBossAction(
       messages.push(...counter.messages);
     }
     for (const p of players) {
-      await tx.update(members).set({ hp: p.hp, damage: p.damage, attackCount: p.attackCount, effects: p.effects,
-        ...(p.userId === userId ? { actionReadyAt: new Date(now.getTime() + event.config.cooldownSeconds * 1000) } : {}) })
+      await tx.update(members).set({ hp: p.hp, damage: p.damage, attackCount: p.attackCount, effects: p.effects })
         .where(and(eq(members.battleId, battle.id), eq(members.userId, p.userId)));
     }
     const [updated] = await tx.update(battles).set({ currentHp: bossHp, actionCount, counterTurn }).where(eq(battles.id, battle.id)).returning();
@@ -76,12 +85,12 @@ export async function performBossAction(
     else if (players.every(p => p.hp <= 0)) finished = await finishBossBattle(tx, finished, "failed", "全員が戦闘不能", now);
     const result: BossActionResult = {
       battleId: battle.id, mode: battle.mode, state: finished.status, bossHp,
-      damage, healed, critical, skill, paid, balance: wallet.balance,
+      damage, healed, critical, skill, paid, balance: wallet?.balance ?? 0,
       userHp: players.find(p => p.userId === userId)?.hp, messages,
     };
     if (finished.status === "won") {
       const reward = finished.rewards.find(r => r.userId === userId)?.amount ?? 0;
-      result.balance = wallet.balance + reward;
+      result.balance = (wallet?.balance ?? 0) + reward;
       messages.push(`討伐成功！報酬合計はパーティ人数で均等分配し、残高へ加算済みです。`);
     }
     return recordBossAction(tx, id, guildId, userId, action, result);

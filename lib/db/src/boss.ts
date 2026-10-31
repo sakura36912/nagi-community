@@ -13,11 +13,17 @@ export { advanceBossGuild } from "./bossStore";
 export async function getBossFees(guildId: string) {
   await ensureBossSchema();
   const [row] = await db.select().from(fees).where(eq(fees.guildId, guildId));
-  return { attackCost: row?.attackCost ?? null, healCost: row?.healCost ?? null };
+  return { attackCost: 0, healCost: row?.healCost ?? null };
 }
 export async function configureBossFees(guildId: string, patch: { attackCost?: number; healCost?: number }) {
   if (patch.attackCost !== undefined) bossInteger(patch.attackCost);
   if (patch.healCost !== undefined) bossInteger(patch.healCost);
+  if ((patch.attackCost ?? 0) !== 0) {
+    throw new BossError("攻撃は無料です。攻撃料金は0以外に設定できません。");
+  }
+  if (patch.healCost === 0) {
+    throw new BossError("回復料金は1以上で設定してください。");
+  }
   if (patch.attackCost === undefined && patch.healCost === undefined) return getBossFees(guildId);
   return withBossGuild(guildId, async tx => {
     const [row] = await tx.insert(fees).values({ guildId, ...patch })
@@ -81,9 +87,8 @@ export async function createBossJoinRequest(id: string, guildId: string, userId:
     if (!weapon) throw new BossError("参加には武器が必要です。先に /武器選択 を使用してください。");
     const [lobby] = mode === "party" ? await tx.select().from(battles).where(and(eq(battles.eventId, event.id), eq(battles.status, "waiting"))) : [];
     const [currentFees] = await tx.select().from(fees).where(eq(fees.guildId, guildId));
-    const attackCost = lobby?.attackCost ?? currentFees?.attackCost;
-    const healCost = lobby?.healCost ?? currentFees?.healCost;
-    if (attackCost == null || healCost == null) throw new BossError("攻撃・回復の料金が未設定です。管理者に /ボス料金設定 を依頼してください。");
+    // Zero is a historical storage sentinel: attacks can start, healing stays disabled.
+    const attackCost = 0, healCost = lobby?.healCost ?? currentFees?.healCost ?? 0;
     const [request] = await tx.insert(requests).values({ id, guildId, userId, eventId: event.id, mode,
       battleId: lobby?.id ?? null, attackCost, healCost, expiresAt: new Date(Math.min(event.endsAt.getTime(), now.getTime() + 120000)) }).returning();
     return { request: request!, event, lobby };
@@ -109,14 +114,14 @@ export async function confirmBossJoin(
     if (request.battleId && battle?.id !== request.battleId) throw new BossError("確認中にパーティ受付が終了しました。/参加 から確認し直してください。");
     if (battle) {
       if (!battle.lobbyEndsAt || battle.lobbyEndsAt <= now || (await bossMembers(tx, battle.id)).length >= 4) throw new BossError("このパーティの受付は終了しています。");
-      if (battle.attackCost !== request.attackCost || battle.healCost !== request.healCost) throw new BossError("参加料金が変わりました。/参加 から確認し直してください。");
+      if (battle.healCost !== request.healCost) throw new BossError("回復料金が変わりました。/参加 から確認し直してください。");
     } else {
       const [currentFees] = await tx.select().from(fees).where(eq(fees.guildId, guildId));
-      if (currentFees?.attackCost !== request.attackCost || currentFees?.healCost !== request.healCost) throw new BossError("料金が変更されました。/参加 から確認し直してください。");
+      if ((currentFees?.healCost ?? 0) !== request.healCost) throw new BossError("回復料金が変更されました。/参加 から確認し直してください。");
       const hp = request.mode === "solo" ? event.config.soloHp : event.config.partyHp;
       const [created] = await tx.insert(battles).values({ id, eventId: event.id, guildId, mode: request.mode,
         status: request.mode === "solo" ? "active" : "waiting", maxHp: hp, currentHp: hp,
-        attackCost: request.attackCost, healCost: request.healCost,
+        attackCost: 0, healCost: request.healCost,
         startedAt: request.mode === "solo" ? now : null,
         lobbyEndsAt: request.mode === "party" ? new Date(Math.min(event.endsAt.getTime(), now.getTime() + event.config.lobbySeconds * 1000)) : null,
         endsAt: event.endsAt, noticeNextAt: now }).returning();

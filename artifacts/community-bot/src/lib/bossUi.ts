@@ -1,5 +1,5 @@
 import { EmbedBuilder, escapeMarkdown } from "discord.js";
-import { BOSS_NAMES, type BossConfig, type BossEvent, type BossNoticeBundle, type BossActionResult } from "@workspace/db";
+import { BOSS_NAMES, bossCooldownSeconds, type BossConfig, type BossEvent, type BossNoticeBundle, type BossActionResult } from "@workspace/db";
 
 export const bossMoney = (value: number | null) => value === null ? "未設定（新規参加不可）" : `$${value.toLocaleString("ja-JP")}`;
 export function bossDuration(seconds: number) {
@@ -28,14 +28,15 @@ export function bossSpecialName(special: BossConfig["special"]) {
 }
 export function bossEventEmbed(event: BossEvent) {
   return new EmbedBuilder().setTitle(`ボス討伐：${BOSS_NAMES[event.bossType]}`).setColor(0x447bb8)
-    .setDescription("**本船員・武器所持者向けの討伐イベント**\n`/参加` でソロ／パーティを選択 → 料金を確認して参加確定")
+    .setDescription("**本船員・武器所持者向けの討伐イベント**\n`/参加` でソロ／パーティを選択 → 条件を確認して参加確定\n攻撃は無料、回復は有料です。")
     .addFields(
       { name: "ボスHP", value: `ソロ **${event.config.soloHp.toLocaleString("ja-JP")}** ／ パーティ **${event.config.partyHp.toLocaleString("ja-JP")}**` },
       { name: "報酬総額 / 1討伐", value: `**${bossMoney(event.config.reward * (event.config.special === "double_reward" ? 2 : 1))}**\n参加者で均等分配`, inline: true },
       { name: "パーティ受付", value: `**2〜4人 / ${bossDuration(event.config.lobbySeconds)}**\n4人で即開始`, inline: true },
       { name: "開催終了予定", value: bossDeadline(event.endsAt) },
+      { name: "個別クールタイム", value: `攻撃 **${bossCooldownSeconds(event.config, "attack")}秒** ／ 回復 **${bossCooldownSeconds(event.config, "heal")}秒**` },
       ...(event.config.special !== "none" ? [{ name: "特殊イベント", value: `**${bossSpecialName(event.config.special)}**` }] : []),
-    ).setFooter({ text: "武器・ロール補正と料金は参加時に固定。イベント共通の終了時刻まで戦います。" });
+    ).setFooter({ text: "武器・ロール補正と回復料金は参加時に固定。イベント共通の終了時刻まで戦います。" });
 }
 /** 戦闘中の表示はHPと参加者だけ。ダメージ順位は終了通知だけに表示する。 */
 export function bossBattleNotice(bundle: BossNoticeBundle) {
@@ -60,8 +61,9 @@ export function bossBattleNotice(bundle: BossNoticeBundle) {
     { name: "参加方法", value: "`/参加 モード:パーティ`\n4人で即開始。受付終了時に2〜3人なら開始、1人ならキャンセル。" },
   );
   if (["waiting", "active"].includes(battle.status)) embed.addFields(
-    { name: "攻撃 / 1回", value: `**${bossMoney(battle.attackCost)}**`, inline: true },
-    { name: "回復 / 1回", value: `**${bossMoney(battle.healCost)}**`, inline: true },
+    { name: "攻撃 / 1回", value: "**無料（$0）**", inline: true },
+    { name: "回復 / 1回", value: battle.healCost > 0 ? `**${bossMoney(battle.healCost)}**` : "未設定（回復不可）", inline: true },
+    { name: "個別クールタイム", value: `攻撃 ${bossCooldownSeconds(event.config, "attack")}秒 ／ 回復 ${bossCooldownSeconds(event.config, "heal")}秒` },
     { name: "戦闘終了予定", value: bossDeadline(battle.endsAt) },
   );
   if (["won", "failed"].includes(battle.status)) {

@@ -44,7 +44,9 @@ describe("readable Discord boss embeds", () => {
   });
   it("shows prices separately and identifies start posts as snapshots, not live HP", () => {
     const embed = bossBattleNotice(bundle("active")).toJSON();
-    expect(embed.fields?.find(f => f.name === "攻撃 / 1回")?.value).toBe("**$10,000**");
+    expect(embed.fields?.find(f => f.name === "攻撃 / 1回")?.value).toBe("**無料（$0）**");
+    expect(embed.fields?.find(f => f.name === "回復 / 1回")?.value).toBe("**$50,000**");
+    expect(embed.fields?.find(f => f.name === "個別クールタイム")?.value).toContain("攻撃 5秒 ／ 回復 30秒");
     expect(embed.footer?.text).toContain("投稿時点の記録");
     expect(JSON.stringify(embed)).not.toContain("ダメージランキング");
   });
