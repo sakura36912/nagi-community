@@ -20,6 +20,7 @@ vi.mock("../lib/zombieRuntime.js", async original => ({
 import { zombieCommands, handleZombieButton } from "../commands/zombie.js";
 import { zombiePublicResult, zombieTextChannel } from "../lib/zombieRuntime.js";
 import { syncZombieCommands } from "../lib/zombieRegistration.js";
+import { isCommunityCommandBlocked } from "../lib/restrictedCommandAccess.js";
 import { ZombieError, type ZombieConfig, type ZombieGame } from "@workspace/db";
 const config: ZombieConfig = { vcIds: ["vc"], excludedUsers: ["excluded"], excludedRoles: ["exclude-role"],
   announceId: "public", rulesId: "rules", resultId: "results", adminId: "private", infectionLogId: "infection", roleLogId: "roles",
@@ -89,9 +90,22 @@ describe("zombie private commands and channel protection", () => {
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: "管理者のみ操作できます。" }));
   });
   it("limits role settings, rewards, beginning and ending to live administrators", async () => {
-    for (const sub of ["set_zombie", "set_healer", "rewards", "start", "begin", "end", "cancel"]) await run(fixture("zombie", sub));
+    expect(isCommunityCommandBlocked("zombie", ["島民"])).toBe(false);
+    for (const sub of ["config", "vc", "exclude", "set_zombie", "set_healer", "set_human", "rewards", "start", "begin", "status", "requests", "end", "cancel"]) {
+      const i = fixture("zombie", sub); await run(i);
+      expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: "管理者のみ操作できます。" }));
+    }
     expect(m.role).not.toHaveBeenCalled(); expect(m.begin).not.toHaveBeenCalled();
     expect(m.end).not.toHaveBeenCalled(); expect(m.start).not.toHaveBeenCalled(); expect(m.setReward).not.toHaveBeenCalled();
+    expect(m.get).not.toHaveBeenCalled(); expect(m.update).not.toHaveBeenCalled();
+  });
+  it("lets an island member with live Administrator permission reach the private status handler", async () => {
+    expect(isCommunityCommandBlocked("zombie", ["島民"])).toBe(false);
+    const i = fixture("zombie", "status"); i.flags.admin = true;
+    await run(i);
+    expect(m.get).toHaveBeenCalledWith("guild");
+    expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(i.editReply).not.toHaveBeenCalledWith(expect.objectContaining({ content: "管理者のみ操作できます。" }));
   });
   it("shows only the caller's own role without administrator privileges", async () => {
     m.get.mockResolvedValueOnce({ ...game, players: {

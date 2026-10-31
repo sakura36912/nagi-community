@@ -530,12 +530,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await command.execute(interaction);
         return;
       }
-      // 島民は /zombie me も許可。追放者・他コマンドの制限とスタッフ免除は維持する。
+      // 島民は /zombie を許可。管理操作は各ハンドラーの管理者チェックを維持する。
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
         const roles = interaction.guild?.roles.cache.filter(role => member.roles.cache.has(role.id)).map(role => role.name) ?? [];
-        if (isCommunityCommandBlocked(interaction.commandName,
-          interaction.commandName === "zombie" ? interaction.options.getSubcommand(false) : null, roles)) {
+        if (isCommunityCommandBlocked(interaction.commandName, roles)) {
           await interaction.reply({ content: "このロールではこのコマンドを使用できません。", ephemeral: true });
           return;
         }
