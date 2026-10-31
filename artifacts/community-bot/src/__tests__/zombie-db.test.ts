@@ -257,6 +257,82 @@ describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie even
     expect(result.game.players.doctor!.healedUsers).toEqual(["h"]);
     expect(result.game.players.z!.infectedUsers).toEqual(["h"]);
   });
+  it("starts persisted cooldown only on successful healing and blocks pending approvals as well as new requests", async () => {
+    await begin(); await infect();
+    const first = await requestZombieAction(id(), guild, "doctor", "h", "heal", t(361));
+    const wrong = await requestZombieAction(id(), guild, "doctor", "x", "heal", t(361));
+    const healed = await decideZombieRequest(guild, gameId, first.id, "admin", true, t(361));
+    expect(healed.game.players.doctor!.healCooldownUntil).toBe(t(421));
+    await expect(requestZombieAction(id(), guild, "doctor", "x", "heal", t(420))).rejects.toThrow("残り1秒");
+    await expect(decideZombieRequest(guild, gameId, wrong.id, "admin", true, t(420))).rejects.toThrow("クールタイム");
+    expect((await getZombieGame(guild))!.requests[wrong.id]!.status).toBe("pending");
+    const retry = await decideZombieRequest(guild, gameId, first.id, "admin", true, t(422));
+    expect(retry.game.players.doctor!.healCooldownUntil).toBe(t(421)); // Replay never extends it.
+    expect((await decideZombieRequest(guild, gameId, wrong.id, "admin", true, t(421))).request.status).toBe("accepted");
+  });
+  it("applies mishealing only after approval, once, without changing roles, bonuses or cooldown", async () => {
+    await begin();
+    const wrong = await requestZombieAction(id(), guild, "doctor", "h", "heal", t(181));
+    expect(wrong.misheal).toBe(true);
+    expect((await getZombieGame(guild))!.movePenalties).toBeUndefined();
+    const [a, b] = await Promise.all([1, 2].map(() => decideZombieRequest(guild, gameId, wrong.id, "admin", true, t(182))));
+    expect(a.game.movePenalties).toEqual(b.game.movePenalties);
+    expect(a.game.movePenalties!.h).toEqual({ channel: "tavern", until: t(242), requestId: wrong.id });
+    expect(a.game.players.h!.role).toBe("human");
+    expect(a.game.players.doctor!.healedUsers).toEqual([]);
+    expect(a.game.players.doctor!.healCooldownUntil).toBeUndefined();
+    await syncZombiePresence(guild, "epoch", {}, t(242), gameId);
+    const expired = await getZombieGame(guild);
+    expect(expired!.movePenalties).toEqual({});
+    const jobs = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    expect(jobs.filter(j => j.id.includes(`misheal:${wrong.id}`))).toHaveLength(1);
+    expect(jobs.filter(j => j.id.includes(`misheal-expired:${wrong.id}`))).toHaveLength(1);
+    expect(jobs.filter(j => j.payload.kind === "audit").every(j => j.payload.channelId !== config.announceId)).toBe(true);
+  });
+  it("rejects wrong treatment without penalties and makes role-changed applications stale", async () => {
+    await begin();
+    const rejected = await requestZombieAction(id(), guild, "doctor", "x", "heal", t(181));
+    await decideZombieRequest(guild, gameId, rejected.id, "admin", false, t(182));
+    expect((await getZombieGame(guild))!.movePenalties).toBeUndefined();
+    const stale = await requestZombieAction(id(), guild, "doctor", "h", "heal", t(181));
+    await infect("h", 182);
+    expect((await decideZombieRequest(guild, gameId, stale.id, "admin", true, t(183))).request.status).toBe("stale");
+    expect((await getZombieGame(guild))!.movePenalties).toBeUndefined();
+  });
+  it.each([true, false])("clears movement penalties on end/cancel (%s)", async cancel => {
+    await begin();
+    const wrong = await requestZombieAction(id(), guild, "doctor", "h", "heal", t(181));
+    await decideZombieRequest(guild, gameId, wrong.id, "admin", true, t(182));
+    expect((await endZombieGame(guild, gameId, cancel, t(183))).movePenalties).toEqual({});
+  });
+  it("atomically transfers abilities and queues versioned private DMs once under concurrent observations", async () => {
+    await prepare(["z", "h", "x", "doctor", "spare"]);
+    await setZombieRole(guild, "h", "zombie", now);
+    await beginZombieGame(guild, t(1));
+    const voices = { z: "tavern", h: "tavern", doctor: "tavern", x: "small", spare: "small" };
+    await syncZombiePresence(guild, "epoch", voices, t(1), gameId);
+    await Promise.all([1, 2].map(() => syncZombiePresence(guild, "epoch", voices, t(181), gameId)));
+    const game = (await getZombieGame(guild))!;
+    expect(game.players.doctor!.role).toBe("human");
+    const next = Object.values(game.players).find(p => p.role === "healer")!;
+    expect(["x", "spare"]).toContain(next.id);
+    const jobs = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    expect(jobs.filter(j => j.id.includes(":transfer:"))).toHaveLength(1);
+    expect(jobs.filter(j => j.payload.text?.includes("治療能力を失いました"))).toHaveLength(1);
+    expect(jobs.filter(j => j.payload.text?.includes("治療能力があなたへ"))).toHaveLength(1);
+    expect(jobs.find(j => j.payload.text?.includes("治療能力があなたへ"))!.payload.version).toBe(next.version);
+  });
+  it("does not use pre-disconnect observations toward an automatic transfer", async () => {
+    await prepare(["z", "h", "x", "doctor"]);
+    await setZombieRole(guild, "h", "zombie", now);
+    await beginZombieGame(guild, t(1));
+    const voices = { z: "tavern", h: "tavern", doctor: "tavern", x: "small" };
+    await syncZombiePresence(guild, "old-epoch", voices, t(1), gameId);
+    await syncZombiePresence(guild, "new-epoch", voices, t(181), gameId);
+    expect((await getZombieGame(guild))!.players.doctor!.role).toBe("healer");
+    await syncZombiePresence(guild, "new-epoch", voices, t(361), gameId);
+    expect((await getZombieGame(guild))!.players.x!.role).toBe("healer");
+  });
   it("automatically wins when every non-healer is infected, paying each person exactly once", async () => {
     await begin(["z", "h", "doctor"]);
     const result = await infect();
@@ -318,10 +394,14 @@ describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie even
   it("retries failed DM jobs, stores sanitized errors and never repeats a completed delivery", async () => {
     await prepare();
     const job = (await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild))).find(r => r.payload.kind === "dm")!;
-    await deliverZombieJob(job.id, async () => { throw new Error("secret request header should not be saved"); }, new Date(t(5)));
-    expect((await zombieDeliveryFailures(guild))[0]?.error).not.toContain("secret");
+    // Job nextAt uses DB wall time, not this suite's initial synthetic game timestamp.
+    const attemptedAt = Math.max(Date.now(), job.nextAt.getTime()) + 1000;
+    await deliverZombieJob(job.id, async () => { throw new Error("secret request header should not be saved"); }, new Date(attemptedAt));
+    const error = (await zombieDeliveryFailures(guild))[0]?.error;
+    expect(typeof error).toBe("string");
+    expect(error).not.toContain("secret");
     let sent = 0;
-    await Promise.all([1, 2].map(() => deliverZombieJob(job.id, async () => { sent++; }, new Date(t(70)))));
+    await Promise.all([1, 2].map(() => deliverZombieJob(job.id, async () => { sent++; }, new Date(attemptedAt + 60000))));
     expect(sent).toBe(1);
   });
   it("isolates events, participants and wallets across guilds", async () => {

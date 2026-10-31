@@ -6,6 +6,7 @@ import {
 import { ZombieError, deliverZombieJob, enrollZombieParticipants, getZombieGame, getZombieGameById, pendingZombieJobs, syncZombiePresence, type ZombieJob, type ZombieGame } from "@workspace/db";
 import { isVcTrackingOptedOut } from "./community.js";
 import { logger } from "./logger.js";
+import { enforceZombieMovePenalties } from "./zombieMovePenalty.js";
 let epoch = randomUUID();
 let connected = false;
 let delivering = false;
@@ -17,11 +18,12 @@ export async function observeZombieGuild(guild: Guild) {
   const observedEpoch = epoch;
   try {
     const now = Date.now(), snapshot: Record<string, string> = {};
+    const game = await getZombieGame(guild.id);
+    if (!game || !["preparing", "running"].includes(game.phase)) return;
+    await enforceZombieMovePenalties(guild, game);
     const voices = [...guild.voiceStates.cache.values()].map(v => ({
       id: v.id, channel: v.channelId, muted: v.mute || v.deaf, bot: v.member?.user.bot,
     }));
-    const game = await getZombieGame(guild.id);
-    if (!game || !["preparing", "running"].includes(game.phase)) return;
     const candidates: { id: string; name: string; channel: string }[] = [];
     for (const voice of voices) {
       if (!voice.channel || voice.bot || !game.config.vcIds.includes(voice.channel)) continue;
@@ -84,10 +86,12 @@ async function sendJob(client: Client, id: string, payload: ZombieJob) {
   if (!game) throw new Error("Event missing");
   const nonce = createHash("sha256").update(id).digest("hex").slice(0, 24);
   if (payload.kind === "dm") {
+    if (payload.expiresAt !== undefined && (Date.now() >= payload.expiresAt || game.phase !== "running")) return;
     if (payload.version !== undefined && (game.players[payload.userId!]?.version !== payload.version || game.phase === "cancelled")) return;
     const prefix = payload.version === undefined ? "" : game.phase === "ended" ? "【終了済みイベントの通知】\n" :
       game.phase === "preparing" ? "【役職設定中：開始告知をお待ちください】\n" : "";
-    await (await client.users.fetch(payload.userId!)).send({ content: `${prefix}${payload.text}`, allowedMentions: { parse: [] }, nonce, enforceNonce: true });
+    const remaining = payload.expiresAt === undefined ? "" : `\n制限の残り時間：約${Math.max(0, Math.ceil((payload.expiresAt - Date.now()) / 1000))}秒`;
+    await (await client.users.fetch(payload.userId!)).send({ content: `${prefix}${payload.text}${remaining}`, allowedMentions: { parse: [] }, nonce, enforceNonce: true });
     return;
   }
   const guild = client.guilds.cache.get(game.guildId) ?? await client.guilds.fetch(game.guildId);
@@ -100,7 +104,7 @@ async function sendJob(client: Client, id: string, payload: ZombieJob) {
     if (!r || r.status !== "pending" || game.phase !== "running" || Date.now() - r.createdAt >= 900000) return;
     const actor = game.players[r.actor]!, target = game.players[r.target]!;
     const embed = new EmbedBuilder().setTitle(`${r.type === "infect" ? "感染" : "治療"}申請 — 管理者確認`)
-      .setDescription(`申請者：${escapeMarkdown(actor.name)} (${actor.id})\n対象：${escapeMarkdown(target.name)} (${target.id})\n対象役職：${zombieRoleName(target.role)}\nVC：<#${r.channel}>\n連続同席：${r.seconds}秒\n\n**実際に3分以上会話したことを確認して承認してください。**\n無言・挨拶だけ・テキスト交流は承認しないでください。`)
+      .setDescription(`申請者：${escapeMarkdown(actor.name)} (${actor.id})\n対象：${escapeMarkdown(target.name)} (${target.id})\n対象役職：${zombieRoleName(target.role)}\nVC：<#${r.channel}>\n連続同席：${r.seconds}秒\n${r.misheal ? "\n**人間への誤治療申請です。承認すると対象者に60秒のVC引き戻し制限が発生します。**\n" : ""}\n**実際に3分以上会話したことを確認して承認してください。**\n無言・挨拶だけ・テキスト交流は承認しないでください。`)
       .setFooter({ text: `申請ID：${r.id} / 有効期限15分` });
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`zmb:accept:${game.id}:${r.id}`).setLabel("会話を確認して承認").setStyle(ButtonStyle.Success),
@@ -114,7 +118,8 @@ async function sendJob(client: Client, id: string, payload: ZombieJob) {
     const text = payload.kind === "announce" ? `Halloween ゾンビ感染ゲームを開始しました。現在${Object.keys(game.players).length}人が参加対象です。\n対象の酒場VCに途中入室した方も、除外対象でなければ人間として自動参加します。役職は秘密です。DMとルールを確認してください。` :
       payload.kind === "rules" ? "**ゾンビ感染ゲームのルール**\n・対象酒場VCへの途中入室も人間として自動参加します（Bot・除外対象・VC記録拒否者を除く）。\n・指定酒場VCで連続3分以上会話し、管理者の承認を受けます。\n・感染：`/infect request 対象:ユーザー`\n・治療：`/heal request 対象:ユーザー`\n・自分の役職：`/zombie me`（本人限定表示）\n・役職、治療班、感染者情報の公開は禁止です。\n・無言滞在、挨拶だけ、チャット、リアクションは感染・治療の対象外です。\n・ミュート・退出・移動・Bot再接続後は同席時間を数え直します。\n・治療班以外が全員ゾンビになるとゾンビ勝利。管理終了時に人間が残れば人間勝利。\n・録音や会話内容の保存はしません。迷惑行為・無理な感染は禁止です。" : payload.text!;
     // Audit text contains private nicknames: disable mentions; send only in verified private channels.
-    await channel.send({ content: text.slice(0, 1950), allowedMentions: { parse: [] }, nonce, enforceNonce: true });
+    const balanceRules = payload.kind === "rules" ? "\n・治療成功後は60秒間、次の治療申請・承認はできません。\n・人間への誤治療は会話確認・管理承認後に成立し、対象者は60秒間、別VCへ移動すると元のVCへ戻されます。切断は妨げません。\n・治療班とゾンビ2人以上の連続3分同席で、能力は生存中の人間へランダムで自動移譲されます。この移譲だけは管理承認不要です。移譲先がいない場合は保留します。" : "";
+    await channel.send({ content: (text + balanceRules).slice(0, 1950), allowedMentions: { parse: [] }, nonce, enforceNonce: true });
   }
 }
 export async function flushZombieJobs(client: Client) {

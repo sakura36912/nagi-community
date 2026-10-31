@@ -14,6 +14,7 @@ export const zombieOperationsTable = pgTable("zombie_operations", {
 export interface ZombieJob {
   gameId: string; kind: "dm" | "request" | "audit" | "announce" | "rules" | "result";
   userId?: string; version?: number; text?: string; requestId?: string; channelId?: string;
+  expiresAt?: number;
 }
 export const zombieJobsTable = pgTable("zombie_jobs", {
   id: text("id").primaryKey(), guildId: text("guild_id").notNull(), payload: jsonb("payload").$type<ZombieJob>().notNull(),

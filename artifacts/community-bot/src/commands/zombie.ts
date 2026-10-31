@@ -146,7 +146,7 @@ async function executeZombie(i: ChatInputCommandInteraction) {
       if (sub === "me") {
         const p = game.players[uid];
         if (!p) throw new ZombieError("今回のイベントの参加者ではありません。");
-        await i.editReply(`あなたの役職：**${zombieRoleName(p.role)}**\nイベント状態：${game.phase}\n役職・感染者情報は公開しないでください。`);
+        await i.editReply(`あなたの役職：**${zombieRoleName(p.role)}**\nイベント状態：${game.phase}${p.role === "healer" ? `\n治療クールタイム：残り${Math.max(0, Math.ceil(((p.healCooldownUntil ?? 0) - Date.now()) / 1000))}秒` : ""}\n役職・感染者情報は公開しないでください。`);
       } else if (sub === "end" || sub === "cancel") {
         if (!i.options.getBoolean("確認", true)) throw new ZombieError("終了／中止する場合は確認をTrueにしてください。");
         if (sub === "end" && game.phase === "running") await observeZombieGuild(guild);

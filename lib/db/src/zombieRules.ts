@@ -11,6 +11,7 @@ export interface ZombieConfig {
 export interface ZombiePlayer {
   id: string; name: string; role: ZombieRole; version: number; stateAt: number;
   joinedAt?: number;
+  healCooldownUntil?: number;
   everInfected: boolean; infectedAt: number | null; infectedUsers: string[]; healedUsers: string[];
 }
 export interface ZombiePresence { channel: string; since: number }
@@ -18,6 +19,7 @@ export interface ZombieRequest {
   id: string; actor: string; target: string; type: "infect" | "heal";
   actorVersion: number; targetVersion: number; channel: string; seconds: number;
   createdAt: number; status: "pending" | "accepted" | "rejected" | "stale"; decidedBy?: string;
+  misheal?: boolean;
 }
 export interface ZombieGame {
   id: string; guildId: string; phase: "preparing" | "running" | "ended" | "cancelled";
@@ -25,6 +27,12 @@ export interface ZombieGame {
   epoch: string; observedAt: number; presence: Record<string, ZombiePresence>;
   createdAt: number; startedAt: number | null; endedAt: number | null;
   winner: "human" | "zombie" | null; payouts: { userId: string; amount: number }[];
+  movePenalties?: Record<string, { channel: string; until: number; requestId: string }>;
+  transferBlocked?: Record<string, boolean>;
+}
+export function checkZombieHealCooldown(player: ZombiePlayer, now: number) {
+  if ((player.healCooldownUntil ?? 0) > now)
+    throw new ZombieError(`治療クールタイム中です。残り${Math.ceil((player.healCooldownUntil! - now) / 1000)}秒です。`);
 }
 export function zombieAmount(value: number) {
   if (!Number.isInteger(value) || value < 0 || value > 2147483647) throw new ZombieError("報酬額は0〜2,147,483,647の整数で指定してください。");
