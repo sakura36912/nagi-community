@@ -9,7 +9,7 @@ vi.mock("@workspace/db", async original => ({
   ...await original<typeof import("@workspace/db")>(),
   getZombieGame: m.get, getZombieConfig: m.config, updateZombieConfig: m.update,
   startZombieGame: m.start, setZombieRole: m.role, beginZombieGame: m.begin, endZombieGame: m.end,
-  requestZombieAction: m.request, decideZombieRequest: m.decide, zombieDeliveryFailures: m.failures,
+  performZombieAction: m.request, decideZombieRequest: m.decide, zombieDeliveryFailures: m.failures,
   setZombieReward: m.setReward, getZombieVoiceIds: m.voices,
 }));
 vi.mock("../lib/community.js", () => ({ isVcTrackingOptedOut: m.privacy }));
@@ -62,10 +62,28 @@ beforeEach(() => {
   m.failures.mockResolvedValue([]); m.flush.mockResolvedValue(undefined); m.observe.mockResolvedValue(undefined);
   m.privacy.mockResolvedValue(false); m.start.mockResolvedValue(game);
   m.decide.mockResolvedValue({ game, request: { id: "request", status: "accepted" } });
+  m.request.mockResolvedValue({ id: "operation", status: "accepted" });
   m.end.mockResolvedValue({ ...game, phase: "ended" });
   m.voices.mockImplementation(async (_guild, configured) => configured);
 });
 describe("zombie private commands and channel protection", () => {
+  it.each(["infect", "heal"])("executes %s immediately for a non-admin and never calls the admin approval path", async name => {
+    const i = fixture(name, "request");
+    await run(i);
+    expect(m.observe).toHaveBeenCalledWith(i.guild);
+    expect(m.request).toHaveBeenCalledWith("operation", "guild", "user", "target", name);
+    expect(m.decide).not.toHaveBeenCalled();
+    expect(i.guild.members.fetch).not.toHaveBeenCalled();
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("承認なし");
+    expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
+  it("does not report success when an immediate action is not accepted or observation fails", async () => {
+    m.request.mockResolvedValueOnce({ status: "stale" });
+    const i = fixture("infect", "request"); await run(i);
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("成立していません");
+    m.request.mockClear(); m.observe.mockRejectedValueOnce(new ZombieError("観測失敗"));
+    await run(i); expect(m.request).not.toHaveBeenCalled();
+  });
   it("builds only three new commands, with compatible request and accept subcommands", () => {
     expect(zombieCommands.map(c => c.data.name)).toEqual(["zombie", "infect", "heal"]);
     for (const c of zombieCommands) expect(c.data.toJSON().dm_permission).toBe(false);

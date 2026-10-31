@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import {
   enrollZombieParticipants,
   db, ensureZombieSchema, updateZombieConfig, startZombieGame, setZombieRole, beginZombieGame,
-  syncZombiePresence, requestZombieAction, decideZombieRequest, getZombieGame, endZombieGame, setZombieReward,
+  syncZombiePresence, requestZombieAction, performZombieAction, decideZombieRequest, getZombieGame, endZombieGame, setZombieReward,
   changeZombieSettingList, zombieConfigsTable, zombieGamesTable, zombieJobsTable, zombieOperationsTable,
   walletsTable, transactionsTable, deliverZombieJob, zombieDeliveryFailures, type ZombieConfig,
   addHubChannel, createHubSession, deleteHubSession, getZombieVoiceIds, vcHubChannelsTable, vcHubSessionsTable,
@@ -47,6 +47,96 @@ describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie even
     await updateZombieConfig(guild, { vcIds: [source, "small"] });
     return row;
   }
+  it("immediately infects without approval, queues no approval panel and handles retries exactly once", async () => {
+    await begin();
+    const operation = id();
+    const result = await performZombieAction(operation, guild, "z", "h", "infect", t(181));
+    expect(result).toMatchObject({ status: "accepted", decidedBy: "system" });
+    const first = (await getZombieGame(guild))!;
+    expect(first.players.h!.role).toBe("zombie");
+    expect(first.players.z!.infectedUsers).toEqual(["h"]);
+    expect(await performZombieAction(operation, guild, "z", "h", "infect", t(182))).toEqual(result);
+    expect((await getZombieGame(guild))!.players.h!.version).toBe(first.players.h!.version);
+    const notices = await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.guildId, guild));
+    expect(notices.filter(j => j.payload.kind === "request")).toHaveLength(0);
+    expect(notices.filter(j => j.id === `${gameId}:decision:${operation}`)).toHaveLength(1);
+    expect(notices.find(j => j.id === `${gameId}:receipt:${operation}`)!.payload.text).toContain("管理承認なし");
+  });
+  it("immediately heals and preserves the 60-second cooldown, including idempotent retries", async () => {
+    await begin(); await infect();
+    const operation = id();
+    expect(await performZombieAction(operation, guild, "doctor", "h", "heal", t(361))).toMatchObject({ status: "accepted" });
+    expect((await getZombieGame(guild))!.players.h!.role).toBe("human");
+    expect((await getZombieGame(guild))!.players.doctor!.healCooldownUntil).toBe(t(421));
+    expect(await performZombieAction(operation, guild, "doctor", "h", "heal", t(362))).toMatchObject({ status: "accepted" });
+    await expect(performZombieAction(id(), guild, "doctor", "z", "heal", t(362))).rejects.toThrow("クールタイム");
+    expect(await performZombieAction(id(), guild, "doctor", "z", "heal", t(421))).toMatchObject({ status: "accepted" });
+  });
+  it("automatically applies misheal penalties in the actual room without changing roles or leaking the target role", async () => {
+    await begin();
+    const result = await performZombieAction(id(), guild, "doctor", "h", "heal", t(181));
+    const game = (await getZombieGame(guild))!;
+    expect(result).toMatchObject({ status: "accepted", misheal: true });
+    expect(game.movePenalties?.h).toMatchObject({ channel: "tavern", until: t(241) });
+    expect(game.players.h!.role).toBe("human");
+    expect(game.players.doctor!.healedUsers).toEqual([]);
+    const receipt = (await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.id, `${gameId}:receipt:${result.id}`)))[0]!;
+    expect(receipt.payload.text).not.toMatch(/人間|誤治療/);
+  });
+  it("retains role, immunity, self-target, continuous-time and actual-room checks without approvals", async () => {
+    await begin();
+    await expect(performZombieAction(id(), guild, "z", "h", "infect", t(180))).rejects.toThrow("連続3分");
+    for (const [actor, target, type] of [["h", "x", "infect"], ["z", "doctor", "infect"], ["z", "z", "infect"], ["doctor", "doctor", "heal"]] as const)
+      await expect(performZombieAction(id(), guild, actor, target, type, t(181))).rejects.toThrow("この申請はできません");
+    await syncZombiePresence(guild, "epoch", { z: "tavern", h: "small" }, t(182));
+    await expect(performZombieAction(id(), guild, "z", "h", "infect", t(400))).rejects.toThrow("酒場VC");
+    await syncZombiePresence(guild, "epoch", { z: "tavern", h: "tavern" }, t(401));
+    await expect(performZombieAction(id(), guild, "z", "h", "infect", t(402))).rejects.toThrow("連続3分");
+    await syncZombiePresence(guild, "epoch", { z: "tavern" }, t(403));
+    await expect(performZombieAction(id(), guild, "z", "h", "infect", t(600))).rejects.toThrow("酒場VC");
+    expect((await getZombieGame(guild))!.players.h!.role).toBe("human");
+  });
+  it("serializes simultaneous infection and healing so targets and cooldowns cannot be applied twice", async () => {
+    await begin();
+    const infections = await Promise.allSettled([id(), id()].map(op => performZombieAction(op, guild, "z", "h", "infect", t(181))));
+    expect(infections.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect((await getZombieGame(guild))!.players.z!.infectedUsers).toEqual(["h"]);
+    const heals = await Promise.allSettled(["z", "h"].map(target => performZombieAction(id(), guild, "doctor", target, "heal", t(361))));
+    expect(heals.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect((await getZombieGame(guild))!.players.doctor!.healedUsers).toHaveLength(1);
+  });
+  it("settles the final automatic infection once and preserves its receipt after the event ends", async () => {
+    await begin(["z", "h"]); const operation = id();
+    const result = await performZombieAction(operation, guild, "z", "h", "infect", t(181));
+    expect((await getZombieGame(guild))!.phase).toBe("ended");
+    const balance = await money("z");
+    expect(balance).toBe(rewards.zombieVictory + rewards.mostInfections);
+    expect(await performZombieAction(operation, guild, "z", "h", "infect", t(182))).toEqual(result);
+    expect(await money("z")).toBe(balance);
+    expect((await db.select().from(transactionsTable).where(eq(transactionsTable.guildId, guild))).length).toBe(2);
+  });
+  it("rolls back the automatic infection, jobs and settlement if bank credit fails", async () => {
+    await begin(["z", "h"]); const operation = id();
+    await db.insert(walletsTable).values({ guildId: guild, userId: "z", balance: 2147483647 });
+    await expect(performZombieAction(operation, guild, "z", "h", "infect", t(181))).rejects.toThrow("残高上限");
+    const game = (await getZombieGame(guild))!;
+    expect(game.phase).toBe("running"); expect(game.players.h!.role).toBe("human");
+    expect(game.requests[operation]).toBeUndefined();
+    expect((await db.select().from(zombieJobsTable).where(eq(zombieJobsTable.id, `${gameId}:decision:${operation}`)))).toHaveLength(0);
+    expect(await money("z")).toBe(2147483647);
+  });
+  it("automatically resolves generated Hub rooms, without auto-approving historical pending requests", async () => {
+    const h = await hub(); const child = `child-${guild}`;
+    await createHubSession(guild, child, "owner", h.id);
+    await begin();
+    await syncZombiePresence(guild, "epoch", { z: child, h: child, x: child, doctor: child }, t(2));
+    const pending = await requestZombieAction(id(), guild, "z", "h", "infect", t(182));
+    await expect(performZombieAction(pending.id, guild, "z", "h", "infect", t(183))).rejects.toThrow("以前の承認待ち");
+    const result = await performZombieAction(id(), guild, "z", "h", "infect", t(183));
+    expect(result).toMatchObject({ channel: child, status: "accepted" });
+    const stale = await decideZombieRequest(guild, gameId, pending.id, "admin", true, t(184));
+    expect(stale.request.status).toBe("stale");
+  });
   it("resolves only verified same-guild rooms of configured Hubs, including panel-only rooms", async () => {
     const h = await hub(true);
     await createHubSession(guild, `room-${guild}`, "owner", h.id);

@@ -4,7 +4,7 @@ import {
 } from "discord.js";
 import {
   ZombieError, ZOMBIE_REWARDS, beginZombieGame, changeZombieSettingList, decideZombieRequest, endZombieGame,
-  getZombieConfig, getZombieGame, requestZombieAction, setZombieReward, setZombieRole, startZombieGame,
+  getZombieConfig, getZombieGame, performZombieAction, setZombieReward, setZombieRole, startZombieGame,
   updateZombieConfig, zombieDeliveryFailures, getZombieVoiceIds, type ZombieConfig,
 } from "@workspace/db";
 import { isVcTrackingOptedOut } from "../lib/community.js";
@@ -40,8 +40,9 @@ async function executeZombie(i: ChatInputCommandInteraction) {
     if (i.commandName === "infect" || i.commandName === "heal") {
       if (sub === "request") {
         await observeZombieGuild(guild);
-        await requestZombieAction(i.id, guild.id, uid, i.options.getUser("対象", true).id, i.commandName);
-        await i.editReply("申請を管理者へ送信しました。同席時間だけでは成立せず、会話の確認と管理承認が必要です。対象の役職は開示しません。");
+        const result = await performZombieAction(i.id, guild.id, uid, i.options.getUser("対象", true).id, i.commandName);
+        if (result.status !== "accepted") throw new ZombieError("この操作は成立していません。参加状態・同席時間などの条件を確認してください。");
+        await i.editReply("条件を満たしたため、管理者の承認なしで処理が成立しました。対象の役職は開示しません。");
       } else {
         if (sub === "accept") await observeZombieGuild(guild);
         const game = await getZombieGame(guild.id);
@@ -259,12 +260,12 @@ for (const name of ["end", "cancel"])
 export const zombieCommands = [
   { data: zombie, execute: executeZombie },
   ...(["infect", "heal"] as const).map(name => ({
-    data: new SlashCommandBuilder().setName(name).setDescription(name === "infect" ? "ゾンビ感染の申請・管理承認" : "治療班による治療の申請・管理承認").setDMPermission(false)
-      .addSubcommand(s => s.setName("request").setDescription("対象者と連続3分会話した後に申請")
+    data: new SlashCommandBuilder().setName(name).setDescription(name === "infect" ? "連続3分同席後の感染（管理承認不要）" : "連続3分同席後の治療（管理承認不要）").setDMPermission(false)
+      .addSubcommand(s => s.setName("request").setDescription("対象者と連続3分会話した後に実行（管理承認不要）")
         .addUserOption(o => o.setName("対象").setDescription("同じ酒場VCの参加者").setRequired(true)))
-      .addSubcommand(s => s.setName("accept").setDescription("管理者：会話を確認した感染・治療申請を承認")
+      .addSubcommand(s => s.setName("accept").setDescription("管理者：変更前の承認待ち申請を承認")
         .addStringOption(o => o.setName("申請").setDescription("申請ID").setRequired(true)))
-      .addSubcommand(s => s.setName("reject").setDescription("管理者：感染・治療申請を却下")
+      .addSubcommand(s => s.setName("reject").setDescription("管理者：変更前の承認待ち申請を却下")
         .addStringOption(o => o.setName("申請").setDescription("申請ID").setRequired(true))),
     execute: executeZombie,
   })),

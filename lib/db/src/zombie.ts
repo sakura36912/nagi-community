@@ -7,7 +7,7 @@ import { ensureZombieSchema } from "./zombieSchema";
 import { transferSurroundedHealers } from "./zombieBalance";
 import { getZombieVoiceIds } from "./zombieVoice";
 import { ZombieError, ZOMBIE_REWARDS, zombieAmount, zombiePayouts, zombieWinner, zombieProof, validateZombieRewardCapacity, checkZombieHealCooldown,
-  type ZombieConfig, type ZombieGame, type ZombieRole } from "./zombieRules";
+  type ZombieConfig, type ZombieGame, type ZombieRole, type ZombieRequest } from "./zombieRules";
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 async function locked<T>(guildId: string, run: (tx: Tx) => Promise<T>): Promise<T> {
   await ensureZombieSchema();
@@ -28,11 +28,11 @@ async function job(tx: Tx, game: ZombieGame, id: string, payload: Omit<ZombieJob
 }
 async function roleDm(tx: Tx, game: ZombieGame, userId: string, initial = false) {
   const p = game.players[userId]!;
-  const text = p.role === "healer" ? "🩺 治療班に選ばれました。あなた自身は感染しません。\n感染者と酒場VCで連続3分以上会話して `/heal request 対象:ユーザー` で申請してください。管理承認後に治療が成立します。\n治療班であること・感染者情報は公開禁止です。自分から名乗らないでください。" :
-    p.role === "zombie" ? `🧟 ${initial ? "感染源に選ばれました。あなたは最初のゾンビです。" : "あなたは感染しました。これよりゾンビ陣営です。"}\n人間と酒場VCで連続3分以上会話して \`/infect request 対象:ユーザー\` で感染申請してください。管理承認後に成立します。\nゾンビであることは公開禁止。テキスト・リアクション・無言滞在・挨拶だけの感染、迷惑行為や無理な感染は禁止です。` :
+  const text = p.role === "healer" ? "🩺 治療班に選ばれました。あなた自身は感染しません。\n感染者と酒場VCで連続3分以上会話して `/heal request 対象:ユーザー` を実行してください。条件を満たせば管理承認なしで治療が成立します。\n治療班であること・感染者情報は公開禁止です。自分から名乗らないでください。" :
+    p.role === "zombie" ? `🧟 ${initial ? "感染源に選ばれました。あなたは最初のゾンビです。" : "あなたは感染しました。これよりゾンビ陣営です。"}\n人間と酒場VCで連続3分以上会話して \`/infect request 対象:ユーザー\` を実行してください。条件を満たせば管理承認なしで成立します。\nゾンビであることは公開禁止。テキスト・リアクション・無言滞在・挨拶だけの感染、迷惑行為や無理な感染は禁止です。` :
     `${initial ? "👤 あなたは人間に選ばれました。" : "治療または管理者の設定により、あなたは人間状態です。"}イベント終了まで生存してください。役職や感染者の情報を公開しないでください。`;
   await job(tx, game, `role:${userId}:${p.version}`, { kind: "dm", userId, version: p.version,
-    text: text + (p.role === "healer" ? "\n治療成立後は60秒のクールタイムがあります。人間への誤治療は管理承認後に対象者へ60秒のVC移動制限が発生します。ゾンビ2人以上との連続3分同席で治療能力が自動移譲されます。" : "") });
+    text: text + (p.role === "healer" ? "\n治療成立後は60秒のクールタイムがあります。人間への誤治療も管理承認なしで対象者へ60秒のVC移動制限が発生します。ゾンビ2人以上との連続3分同席で治療能力が自動移譲されます。" : "") });
 }
 export async function getZombieConfig(guildId: string) {
   await ensureZombieSchema();
@@ -180,7 +180,7 @@ export async function enrollZombieParticipants(guildId: string, gameId: string, 
       }
       await job(tx, game, `late-join:${candidate.id}`, {
         kind: "dm", userId: candidate.id, version: 0,
-        text: "🎃 酒場VCへの入室により、ゾンビ感染ゲームへ人間として自動参加しました。\n自分の状態は `/zombie me` で確認できます。役職や感染者情報は公開しないでください。\n感染・治療は同じ対象VCで連続3分以上の会話と管理承認が必要です。参加前・Bot停止中の同席時間は加算しません。",
+        text: "🎃 酒場VCへの入室により、ゾンビ感染ゲームへ人間として自動参加しました。\n自分の状態は `/zombie me` で確認できます。役職や感染者情報は公開しないでください。\n感染・治療は同じ対象VCで連続3分以上会話した後、コマンドを実行すると管理承認なしで成立します。参加前・Bot停止中の同席時間は加算しません。",
       });
       await job(tx, game, `late-audit:${candidate.id}`, {
         kind: "audit", channelId: game.config.roleLogId,
@@ -216,7 +216,7 @@ export async function syncZombiePresence(guildId: string, epoch: string, voices:
       await job(tx, game, `role:${from.id}:${from.version}`, { kind: "dm", userId: from.id, version: from.version,
         text: "🧟 ゾンビに包囲されてしまいました。\nあなたは治療能力を失いました。\nこれより通常の人間としてゲームへ参加してください。" });
       await job(tx, game, `role:${to.id}:${to.version}`, { kind: "dm", userId: to.id, version: to.version,
-        text: "🩺 治療能力があなたへ引き継がれました。\nこれよりあなたが治療班です。\n感染者とVCで連続3分以上会話した後、`/heal request 対象:ユーザー` で申請してください。治療には管理承認が必要です。\n治療成立後は60秒間のクールタイムがあります。人間への誤治療は対象者へのVC移動制限になります。ゾンビ2人以上との連続3分同席で能力は自動移譲されます。\nこのことは他の参加者へ公開してはいけません。" });
+        text: "🩺 治療能力があなたへ引き継がれました。\nこれよりあなたが治療班です。\n感染者とVCで連続3分以上会話した後、`/heal request 対象:ユーザー` を実行してください。条件を満たせば管理承認なしで治療が成立します。\n治療成立後は60秒間のクールタイムがあります。人間への誤治療は対象者へのVC移動制限になります。ゾンビ2人以上との連続3分同席で能力は自動移譲されます。\nこのことは他の参加者へ公開してはいけません。" });
       await job(tx, game, `transfer:${from.id}:${from.version}`, { kind: "audit", channelId: game.config.roleLogId,
         text: `治療能力の自動移譲：${from.name} (${from.id}) → ${to.name} (${to.id})\nVC <#${transfer.channel}> / ゾンビ ${transfer.zombies.join(", ")} と連続180秒同席。会話の自動判定はしていません。` });
     }
@@ -234,30 +234,39 @@ export async function recordZombieMoveFailure(guildId: string, eventId: string, 
       text: `誤治療のVC引き戻しに失敗：${userId}。Botのメンバー移動・接続・閲覧権限、対象VC、メンバー状態を確認してください。期限内は再試行します。` });
   });
 }
-export async function requestZombieAction(id: string, guildId: string, actorId: string, targetId: string, type: "infect" | "heal", now = Date.now()) {
+/** Legacy pending requests remain reviewable; new player commands use performZombieAction. */
+export async function requestZombieAction(id: string, guildId: string, actorId: string, targetId: string, type: "infect" | "heal", now = Date.now(), automatic = false) {
   return locked(guildId, async tx => {
     const game = await current(tx, guildId);
-    if (!game || game.phase !== "running") throw new ZombieError("開催中のイベントがありません。");
+    if (!game) throw new ZombieError("開催中のイベントがありません。");
     if (game.requests[id]) {
       if (game.requests[id]!.actor !== actorId || game.requests[id]!.target !== targetId || game.requests[id]!.type !== type) throw new ZombieError("申請が一致しません。");
+      if (automatic && game.requests[id]!.status === "pending") throw new ZombieError("以前の承認待ち申請は管理者が確認してください。新たな操作として実行し直してください。");
       return game.requests[id]!;
     }
+    if (game.phase !== "running") throw new ZombieError("開催中のイベントがありません。");
     const actor = game.players[actorId], target = game.players[targetId];
-    if (!actor || !target || actorId === targetId || actor.role !== (type === "infect" ? "zombie" : "healer"))
+    if (!actor || !target || actorId === targetId || actor.role !== (type === "infect" ? "zombie" : "healer")
+      || automatic && (type === "infect" ? target.role !== "human" : target.role === "healer"))
       throw new ZombieError("この申請はできません。参加状態・自分の役職・対象者を確認してください。");
     if (type === "heal") checkZombieHealCooldown(actor, now);
     game.resolvedVcIds = await getZombieVoiceIds(guildId, game.config.vcIds, tx);
     const proof = zombieProof(game, actor, target, now);
     for (const request of Object.values(game.requests)) if (request.status === "pending" && now - request.createdAt >= 900000) request.status = "stale";
     const pending = Object.values(game.requests).filter(r => r.status === "pending");
-    if (pending.some(r => r.actor === actorId && r.target === targetId && r.type === type)) throw new ZombieError("同じ相手への申請が承認待ちです。");
-    if (pending.filter(r => r.actor === actorId).length >= 10) throw new ZombieError("承認待ちの申請が10件あります。管理者の確認をお待ちください。");
-    const request = { id, actor: actorId, target: targetId, type, actorVersion: actor.version, targetVersion: target.version,
+    if (!automatic && pending.some(r => r.actor === actorId && r.target === targetId && r.type === type)) throw new ZombieError("同じ相手への申請が承認待ちです。");
+    if (!automatic && pending.filter(r => r.actor === actorId).length >= 10) throw new ZombieError("承認待ちの申請が10件あります。管理者の確認をお待ちください。");
+    const request: ZombieRequest = { id, actor: actorId, target: targetId, type, actorVersion: actor.version, targetVersion: target.version,
       ...proof, createdAt: now, status: "pending" as const, ...(type === "heal" && target.role === "human" ? { misheal: true } : {}) };
     game.requests[id] = request;
+    // Validation, role changes, cooldown, notifications and any final payout share one transaction/lock.
+    if (automatic) return (await applyZombieDecision(tx, game, request, "system", true, now, true)).request;
     await job(tx, game, `request:${id}`, { kind: "request", requestId: id });
     await save(tx, game); return request;
   });
+}
+export function performZombieAction(id: string, guildId: string, actorId: string, targetId: string, type: "infect" | "heal", now = Date.now()) {
+  return requestZombieAction(id, guildId, actorId, targetId, type, now, true);
 }
 async function settle(tx: Tx, game: ZombieGame, now: number) {
   const payouts = zombiePayouts(game);
@@ -280,10 +289,14 @@ export async function decideZombieRequest(guildId: string, eventId: string, requ
   return locked(guildId, async tx => {
     const game = await current(tx, guildId), request = game && Object.hasOwn(game.requests, requestId) ? game.requests[requestId] : undefined;
     if (!game || game.id !== eventId || !request) throw new ZombieError("このイベント・申請は現在の対象ではありません。");
+    return applyZombieDecision(tx, game, request, adminId, accept, now);
+  });
+}
+async function applyZombieDecision(tx: Tx, game: ZombieGame, request: ZombieRequest, adminId: string, accept: boolean, now: number, automatic = false) {
     if (request.status !== "pending") return { game, request };
     if (game.phase !== "running") throw new ZombieError("イベントは開催中ではありません。");
     const actor = game.players[request.actor]!, target = game.players[request.target]!;
-    game.resolvedVcIds = await getZombieVoiceIds(guildId, game.config.vcIds, tx);
+    game.resolvedVcIds = await getZombieVoiceIds(game.guildId, game.config.vcIds, tx);
     const valid = game.resolvedVcIds.includes(request.channel) && now - request.createdAt < 900000 && request.actorVersion === actor.version && request.targetVersion === target.version
       && actor.role === (request.type === "infect" ? "zombie" : "healer") && target.role === (request.type === "infect" ? "human" : request.misheal ? "human" : "zombie");
     if (accept && valid && request.type === "heal") checkZombieHealCooldown(actor, now);
@@ -294,7 +307,7 @@ export async function decideZombieRequest(guildId: string, eventId: string, requ
       await job(tx, game, `misheal:${request.id}`, { kind: "audit", channelId: game.config.infectionLogId,
         text: `誤治療成立：${actor.id} → ${target.id}。対象者を60秒間、移動時に <#${request.channel}> へ引き戻します。申請 ${request.id}` });
       await job(tx, game, `misheal-dm:${request.id}`, { kind: "dm", userId: target.id, expiresAt: now + 60000,
-        text: "誤治療により、承認時から1分間は別のVCへ移動すると元のVCへ戻されます。切断は妨げません。期限終了後は自動的に制限がなくなります。" });
+        text: "誤治療により、成立時から1分間は別のVCへ移動すると元のVCへ戻されます。切断は妨げません。期限終了後は自動的に制限がなくなります。" });
     } else if (request.status === "accepted") {
       target.role = request.type === "infect" ? "zombie" : "human"; target.version++; target.stateAt = now;
       if (request.type === "infect") {
@@ -307,13 +320,12 @@ export async function decideZombieRequest(guildId: string, eventId: string, requ
       await roleDm(tx, game, target.id);
     }
     await job(tx, game, `decision:${request.id}`, { kind: "audit", channelId: game.config.infectionLogId,
-      text: `申請 ${request.id} / ${request.type} / ${actor.name} (${actor.id}) → ${target.name} (${target.id})\n結果 ${request.status} / 承認者 ${adminId}\n同席 <#${request.channel}> ${request.seconds}秒${request.status === "accepted" && request.type === "heal" && !request.misheal ? `\n治療クールタイム開始：${new Date(actor.healCooldownUntil!).toISOString()} まで` : ""}` });
+      text: `操作 ${request.id} / ${request.type} / ${actor.name} (${actor.id}) → ${target.name} (${target.id})\n結果 ${request.status} / ${automatic ? "同席条件を満たしたため自動成立（管理承認不要）" : `承認者 ${adminId}`}\n同席 <#${request.channel}> ${request.seconds}秒${request.status === "accepted" && request.type === "heal" && !request.misheal ? `\n治療クールタイム開始：${new Date(actor.healCooldownUntil!).toISOString()} まで` : ""}` });
     await job(tx, game, `receipt:${request.id}`, { kind: "dm", userId: actor.id,
-      text: `申請 ${request.id}：${request.status === "accepted" ? "管理承認により成立しました。" : "成立しませんでした。対象状態の変更・期限切れ・管理判断などによるものです。"}` });
+      text: `操作 ${request.id}：${request.status === "accepted" ? automatic ? "条件を満たしたため管理承認なしで成立しました。" : "管理承認により成立しました。" : "成立しませんでした。対象状態の変更・期限切れ・管理判断などによるものです。"}` });
     if (!Object.values(game.players).some(p => p.role === "human")) await settle(tx, game, now);
     await save(tx, game);
     return { game, request };
-  });
 }
 export async function endZombieGame(guildId: string, eventId: string, cancel = false, now = Date.now(), operation?: { id: string; actor: string }) {
   return locked(guildId, async tx => {
