@@ -2,6 +2,7 @@ import { ApplicationCommandType, REST, Routes, type APIApplicationCommand, type 
 import { commands } from "./commands/index.js";
 import { logger } from "./lib/logger.js";
 import { commandScopeKey, prefersGlobalCommands } from "./lib/guildCommandScope.js";
+import { removeRetiredBankCommands } from "./lib/retiredBankCommands.js";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 const clientId = process.env["DISCORD_CLIENT_ID"];
@@ -14,6 +15,8 @@ const guildId = process.env["DEPLOY_GUILD_ID"];
 const rest = new REST().setToken(token);
 
 async function main() {
+  const cleanup = await removeRetiredBankCommands(rest, clientId!, guildId ? [guildId] : []);
+  if (cleanup.failed.length) throw new Error("Retired bank command cleanup failed");
   const body = commands.map((c) => c.data.toJSON() as RESTPostAPIApplicationCommandsJSONBody);
   // PUT replaces the entire scope and can erase separately managed guild-only commands.
   // Update each command by name/type instead, leaving unrelated registrations untouched.

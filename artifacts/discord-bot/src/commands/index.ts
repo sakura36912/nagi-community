@@ -2507,14 +2507,11 @@ import { vclogCommand } from "./vclog";
 import { slotCommand } from "./slot";
 import { blackjackCommand } from "./blackjack";
 import { pokerCommand } from "./poker";
-import { rouletteCommand } from "./roulette";
 import { highlowCommand } from "./highlow";
 import { chinchiroCommand } from "./chinchiro";
 import { casinoCommand } from "./casino";
 import { bannotifyCommand } from "./bannotify";
 import { rolePanelCommand } from "./rolepanel";
-import { guideCommand } from "./guide";
-import { leavelogCommand } from "./leavelog";
 import { returnlogCommand } from "./returnlog";
 import { bountyCommand } from "./bounty";
 import { forumCopyCommand } from "./forumCopy";
@@ -4542,7 +4539,6 @@ export const commands: Command[] = [
   interviewCommand,
   balanceCommand,
   payCommand,
-  giveCommand,
   leaderboardCommand,
   shopCommand,
   rewardCommand,
@@ -4554,15 +4550,12 @@ export const commands: Command[] = [
   blackjackCommand,
   highlowCommand,
   pokerCommand,
-  rouletteCommand,
   chinchiroCommand,
   chinchiroDiceCommand,
   casinoCommand,
   bannotifyCommand,
   evalsheetCommand,
   rolePanelCommand,
-  guideCommand,
-  leavelogCommand,
   returnlogCommand,
   bountyCommand,
   forumCopyCommand,
