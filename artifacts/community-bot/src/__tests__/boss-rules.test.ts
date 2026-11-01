@@ -14,13 +14,22 @@ function fighter(userId = "user", weaponType = "greatsword"): BossFighter {
     effects: { bleedTicks: 0, vulnerableTicks: 0, shield: false } };
 }
 describe("boss combat rules", () => {
+  it.each([1, 9, 10, 19, 1234, 2147483647])("recovers 10 percent of snapshotted maximum HP %s, rounded down with a minimum of one", maxHp => {
+    const player = { ...fighter("user", "staff"), hp: 0, maxHp };
+    const percentage = { ...config, healingMode: "max_hp_10_percent" as const, special: "double_heal" as const };
+    expect(bossHealing(player, percentage)).toBe(Math.max(1, Math.floor(maxHp / 10)));
+    player.hp = maxHp - 1;
+    expect(bossHealing(player, percentage)).toBe(1);
+    player.hp = maxHp;
+    expect(bossHealing(player, percentage)).toBe(0);
+  });
   it.each([
     ["kraken", 300, 450, 25, 35], ["megalodon", 450, 650, 35, 45], ["leviathan", 650, 900, 45, 60],
   ] as const)("generates inclusive, valid %s combat settings", (type, minHp, maxHp, minAttack, maxAttack) => {
     const low = generateBossCombatStats(type, () => 0);
     const high = generateBossCombatStats(type, () => 0.999999);
-    expect(low).toMatchObject({ soloHp: minHp, partyHp: Math.round(minHp * 2.5), attack: minAttack, healAmount: 100 });
-    expect(high).toMatchObject({ soloHp: maxHp, partyHp: maxHp * 3, attack: maxAttack, healAmount: 150 });
+    expect(low).toMatchObject({ soloHp: minHp, partyHp: Math.round(minHp * 2.5), attack: minAttack, healingMode: "max_hp_10_percent", playerHpSource: "wallet" });
+    expect(high).toMatchObject({ soloHp: maxHp, partyHp: maxHp * 3, attack: maxAttack });
     for (const generated of [low, high]) expect(() => validateBossConfig(type, { ...config, ...generated })).not.toThrow();
   });
   it.each([NaN, Infinity, -0.1, 1])("rejects an invalid generation roll: %s", roll => {

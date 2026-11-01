@@ -17,7 +17,6 @@ const types = [{ name: "クラーケン", value: "kraken" }, { name: "メガロ�
 const specials = [
   { name: "なし", value: "none" }, { name: "ボス攻撃力2倍", value: "double_attack" },
   { name: "財宝報酬2倍", value: "double_reward" }, { name: "与ダメージ1.5倍", value: "damage_boost" },
-  { name: "回復量2倍", value: "double_heal" },
 ];
 type Interaction = ChatInputCommandInteraction | ButtonInteraction;
 async function bossError(interaction: Interaction, error: unknown) {
@@ -112,7 +111,10 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
     if (name === "参加") {
       const { request, event } = await createBossJoinRequest(interaction.id, guildId, userId, interaction.options.getString("モード", true) as BossMode);
       const embed = bossEventEmbed(event).setTitle("ボス参加 — 条件確認")
-        .setDescription(`モード：${request.mode === "solo" ? "ソロ" : "パーティ（2〜4人）"}\n攻撃：無料（$0）\n回復1回：${request.healCost > 0 ? bossMoney(request.healCost) : "未設定（この討伐では回復不可）"}\n参加・攻撃では課金しません。/回復 が成功した際だけ料金を消費します。\n回復料金は参加時に固定。確認は最長2分間、イベント終了まで有効です。`);
+        .setDescription(`モード：${request.mode === "solo" ? "ソロ" : "パーティ（2〜4人）"}\n攻撃：無料（$0）\n回復1回：${request.healCost > 0 ? bossMoney(request.healCost) : "未設定（この討伐では回復不可）"}\n`
+          + (event.config.playerHpSource === "wallet" ? "参加確定時の所持金を最大HPとして固定します（所持金1以上が必要）。被ダメージでは残高は減りません。\n" : "")
+          + (event.config.healingMode === "max_hp_10_percent" ? "/回復 は最大HPの10%回復（端数切り捨て、最低1、最大HPまで）。\n" : "")
+          + "参加・攻撃では課金しません。/回復 が成功した際だけ料金を消費します。\n回復料金は参加時に固定。確認は最長2分間、イベント終了まで有効です。");
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`boss:join:${request.id}`).setLabel("条件を確認して参加").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`boss:cancel:${request.id}`).setLabel("キャンセル").setStyle(ButtonStyle.Secondary));
@@ -154,7 +156,7 @@ function base(name: string, description: string) {
   if (ADMIN.has(name)) cmd.setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
   return cmd;
 }
-const host = base("ボス開催", "管理者専用：HP・攻撃力・回復力をBotが抽選してボスを開催")
+const host = base("ボス開催", "管理者専用：ボスHP・攻撃力をBotが抽選（参加者HPは所持金）")
   .addStringOption(o => o.setName("ボス").setDescription("開催するボス").setRequired(true).addChoices(...types));
 for (const [name, description, min, max] of [
   ["制限秒", "イベント全体の制限時間（秒）", 1, 604800],

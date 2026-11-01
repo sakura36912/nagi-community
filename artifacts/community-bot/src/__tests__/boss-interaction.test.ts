@@ -90,7 +90,8 @@ describe("boss commands and displays", () => {
     expect(m.host).toHaveBeenCalledWith(i.id, "guild", "channel", "kraken", expect.objectContaining({
       attackCooldownSeconds: overrides.攻撃間隔秒 ?? 5,
       healCooldownSeconds: overrides.回復間隔秒 ?? 30,
-      playerHp: 500, counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
+      playerHpSource: "wallet", healingMode: "max_hp_10_percent",
+      counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
     }));
     const config = m.host.mock.calls[0]![4];
     expect(config.soloHp).toBeGreaterThanOrEqual(300);
@@ -98,8 +99,15 @@ describe("boss commands and displays", () => {
     expect(config.partyHp).toBeGreaterThan(config.soloHp);
     expect(config.attack).toBeGreaterThanOrEqual(25);
     expect(config.attack).toBeLessThanOrEqual(35);
-    expect(config.healAmount).toBeGreaterThanOrEqual(100);
-    expect(config.healAmount).toBeLessThanOrEqual(150);
+  });
+  it("explains wallet HP and percentage healing in the join confirmation for new events", async () => {
+    m.quote.mockResolvedValueOnce({ event: { ...event, config: { ...event.config, playerHpSource: "wallet", healingMode: "max_hp_10_percent" } },
+      request: { id: "quote", mode: "solo", attackCost: 0, healCost: 20 } });
+    const i = fixture(); await run(i);
+    const output = JSON.stringify(i.editReply.mock.calls);
+    expect(output).toContain("参加確定時の所持金");
+    expect(output).toContain("最大HPの10%");
+    expect(output).toContain("残高は減りません");
   });
   it("rejects non-crew before preparing a participation or charge", async () => {
     const i = fixture(); i.flags.crew = false;

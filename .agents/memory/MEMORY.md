@@ -33,5 +33,5 @@
 - [GitHub repository scope](github-repository-scope.md) — 凪通貨BOTと多機能BOTは別々の新規非公開リポジトリへ保存する。
 - [KP shop policy](kp-shop-policy.md) — キミノヒトミニKPshopは独立商品とし、購入ログは操作したパネルの設置先へ表示する。
 - [鍛冶屋統合方針](forge-integration-policy.md) — 操作は多機能Bot、残高は銀行と共有。本船員限定・内部数値非公開・失敗時も費用消費。
-- [ボス討伐方針](boss-event-policy.md) — 攻撃無料・回復有料、報酬均等分配。HP・攻撃力・回復力は開催時抽選、削除対象は入力欄のみ。
+- [ボス討伐方針](boss-event-policy.md) — 参加時所持金を最大HPに固定、通常回復は最大HPの10%。武器補正維持、攻撃無料・回復有料。
 - [Halloween感染ゲーム](zombie-event-policy.md) — 多機能Botの秘密役職。感染・治療は連続3分後に承認不要。治療班は勝敗から除外、報酬は銀行残高へ。

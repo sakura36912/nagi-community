@@ -16,6 +16,14 @@ function bundle(status: string): BossNoticeBundle {
   } as BossNoticeBundle;
 }
 describe("readable Discord boss embeds", () => {
+  it("explains wallet HP and maximum-HP percentage healing without exposing weapon stats", () => {
+    const output = JSON.stringify(bossEventEmbed({ ...event, config: { ...event.config,
+      playerHpSource: "wallet", healingMode: "max_hp_10_percent" } }).toJSON());
+    expect(output).toContain("参加確定時の所持金");
+    expect(output).toContain("最大HPの10%");
+    expect(output).toContain("残高は減りません");
+    expect(output).not.toContain("内部攻撃力");
+  });
   it("formats durations as hours/minutes/seconds rather than long raw seconds", () => {
     expect(bossDuration(3531)).toBe("58分51秒");
     expect(bossDuration(3660)).toBe("1時間1分");

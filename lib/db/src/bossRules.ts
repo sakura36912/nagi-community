@@ -15,6 +15,8 @@ export interface BossConfig {
   criticalMultiplier: number; levelBonusPercent: number;
   special: BossSpecial; bonusRoleId: string | null; roleMultiplier: number;
   attackCooldownSeconds?: number; healCooldownSeconds?: number;
+  playerHpSource?: "wallet";
+  healingMode?: "max_hp_10_percent";
 }
 export interface BossWeaponSnapshot {
   weaponType: string; weaponLevel: number; attack: number; defense: number; roleMultiplier: number;
@@ -42,6 +44,8 @@ export function bossInteger(n: number, min = 0, max = FORGE_MAX_INT) {
 }
 export function validateBossConfig(type: string, config: BossConfig) {
   if (!Object.hasOwn(BOSS_NAMES, type)) throw new BossError("未対応のボスです。");
+  if (config.playerHpSource !== undefined && config.playerHpSource !== "wallet") throw new BossError("HPの設定が不正です。");
+  if (config.healingMode !== undefined && config.healingMode !== "max_hp_10_percent") throw new BossError("回復の設定が不正です。");
   for (const key of ["soloHp", "partyHp", "attack", "playerHp", "healAmount"] as const) bossInteger(config[key], 1);
   for (const key of ["defense", "reward"] as const) bossInteger(config[key]);
   bossInteger(config.durationSeconds, 1, 604800);
@@ -77,8 +81,10 @@ export function generateBossCombatStats(type: BossType, roll: () => number = for
   const soloHp = integer(profile.hp[0], profile.hp[1]);
   return {
     soloHp, partyHp: Math.round(soloHp * integer(250, 300) / 100),
-    attack: integer(profile.attack[0], profile.attack[1]), healAmount: integer(100, 150),
-    playerHp: 500, counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
+    attack: integer(profile.attack[0], profile.attack[1]),
+    // Required legacy fields remain valid; new events use wallet HP and percentage healing instead.
+    healAmount: 1, playerHp: 1, playerHpSource: "wallet" as const, healingMode: "max_hp_10_percent" as const,
+    counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
   };
 }
 const clampDamage = (value: number) => Math.min(FORGE_MAX_INT, Math.max(1, Math.floor(value)));
@@ -106,6 +112,9 @@ export function bossPlayerAttack(
     shield: trigger && type === "spear", supportHeal: trigger && type === "staff" };
 }
 export function bossHealing(player: BossFighter, config: BossConfig) {
+  if (config.healingMode === "max_hp_10_percent") {
+    return Math.max(0, Math.min(player.maxHp - player.hp, Math.max(1, Math.floor(player.maxHp / 10))));
+  }
   const amount = config.healAmount * (config.special === "double_heal" ? 2 : 1)
     * (player.weapon.weaponType === "staff" ? 1.5 : 1);
   return Math.min(player.maxHp - player.hp, Math.floor(amount));

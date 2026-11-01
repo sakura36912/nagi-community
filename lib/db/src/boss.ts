@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "./index";
 import { forgeWeaponsTable } from "./schema/forge";
+import { walletsTable } from "./schema/economy";
 import { bossFeesTable as fees, bossEventsTable as events, bossBattlesTable as battles,
   bossActiveUsersTable as active, bossMembersTable as members, bossJoinRequestsTable as requests,
   bossActionsTable as actions } from "./schema/boss";
@@ -110,6 +111,16 @@ export async function confirmBossJoin(
     if (busy) throw new BossError("既に討伐へ参加中です。");
     const [weapon] = await tx.select().from(forgeWeaponsTable).where(and(eq(forgeWeaponsTable.guildId, guildId), eq(forgeWeaponsTable.userId, userId))).for("share");
     if (!weapon || !isForgeWeaponType(weapon.weaponType)) throw new BossError("使用可能な武器がありません。");
+    let playerHp = event.config.playerHp;
+    if (event.config.playerHpSource === "wallet") {
+      // A shared row lock keeps this snapshot consistent with concurrent wallet updates.
+      // Taking damage and healing never mutate this saved maximum or debit its value.
+      const [wallet] = await tx.select().from(walletsTable).where(and(
+        eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId),
+      )).for("share");
+      if (!wallet || wallet.balance < 1) throw new BossError("所持金が1以上必要です。参加確定時の所持金が最大HPになります。");
+      playerHp = bossInteger(wallet.balance, 1);
+    }
     let [battle] = request.mode === "party" ? await tx.select().from(battles).where(and(eq(battles.eventId, event.id), eq(battles.status, "waiting"))) : [];
     if (request.battleId && battle?.id !== request.battleId) throw new BossError("確認中にパーティ受付が終了しました。/参加 から確認し直してください。");
     if (battle) {
@@ -128,7 +139,7 @@ export async function confirmBossJoin(
       battle = created!;
     }
     await tx.insert(members).values({ battleId: battle.id, guildId, userId, displayName: displayName.slice(0, 80),
-      hp: event.config.playerHp, maxHp: event.config.playerHp,
+      hp: playerHp, maxHp: playerHp,
       weapon: { weaponType: weapon.weaponType, weaponLevel: weapon.weaponLevel, attack: weapon.attack,
         defense: weapon.defense, roleMultiplier: event.config.bonusRoleId && roleIds.includes(event.config.bonusRoleId) ? event.config.roleMultiplier : 1 } });
     await tx.insert(active).values({ guildId, userId, battleId: battle.id });
@@ -138,7 +149,7 @@ export async function confirmBossJoin(
       battle = started!;
     }
     return recordBossAction(tx, `join:${id}`, guildId, userId, "join", {
-      battleId: battle.id, mode: battle.mode, state: battle.status, bossHp: battle.currentHp,
+      battleId: battle.id, mode: battle.mode, state: battle.status, bossHp: battle.currentHp, userHp: playerHp,
       messages: [battle.status === "waiting" ? "パーティ受付中です。4人で即開始、期限時に2〜3人なら開始します。1人ならキャンセルされます。" : "討伐開始！ /攻撃・/回復 が使用できます。"],
     });
   });

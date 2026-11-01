@@ -62,6 +62,55 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
   const heal = (user: string, seconds: number, operation = id()) =>
     performBossAction(operation, guild, user, "heal", { now: at(seconds), roll: () => 0.5 });
 
+  it("snapshots the wallet at confirmation, preserves it on retry, and never debits money for damage", async () => {
+    await host({ soloHp: 10000, playerHpSource: "wallet", healingMode: "max_hp_10_percent", counterEvery: 1 });
+    await prepare("a");
+    const quote = await createBossJoinRequest(id(), guild, "a", "solo", now);
+    await wallet("a", 1234);
+    const joined = await confirmBossJoin(quote.request.id, guild, "a", "a", [], now);
+    expect(joined.userHp).toBe(1234);
+    expect((await getBossBattleBundle(joined.battleId))!.members[0]).toMatchObject({ hp: 1234, maxHp: 1234 });
+    await wallet("a", 2000);
+    await confirmBossJoin(quote.request.id, guild, "a", "a", [], now);
+    const hit = await attack("a");
+    expect(hit.userHp).toBeLessThan(1234);
+    expect(await balance("a")).toBe(2000);
+    expect((await getBossBattleBundle(joined.battleId))!.members[0]!.maxHp).toBe(1234);
+    await db.update(bossMembersTable).set({ hp: 500 }).where(eq(bossMembersTable.battleId, joined.battleId));
+    const operation = id();
+    const result = await heal("a", 2, operation);
+    expect(result.healed).toBe(123);
+    expect(await balance("a")).toBe(1980);
+    await heal("a", 2, operation);
+    expect(await balance("a")).toBe(1980);
+    expect((await getBossBattleBundle(joined.battleId))!.members[0]!.maxHp).toBe(1234);
+  });
+  it("snapshots each party member's own wallet independently", async () => {
+    await host({ playerHpSource: "wallet", healingMode: "max_hp_10_percent" });
+    await prepare("a"); await prepare("b"); await wallet("b", 2300);
+    const a = await join("a", "party"), b = await join("b", "party");
+    expect(a.battleId).toBe(b.battleId);
+    const players = (await getBossBattleBundle(a.battleId))!.members;
+    expect(players.find(p => p.userId === "a")!.maxHp).toBe(1000);
+    expect(players.find(p => p.userId === "b")!.maxHp).toBe(2300);
+    expect(await balance("a")).toBe(1000);
+    expect(await balance("b")).toBe(2300);
+  });
+  it("blocks missing or zero wallet HP before creating a battle and allows one-dollar HP", async () => {
+    await host({ playerHpSource: "wallet", healingMode: "max_hp_10_percent", counterEvery: 100 });
+    await prepare("a");
+    await wallet("a", 0);
+    await expect(join("a")).rejects.toThrow("所持金が1以上");
+    await db.delete(walletsTable).where(eq(walletsTable.guildId, guild));
+    await expect(join("a")).rejects.toThrow("所持金が1以上");
+    expect(await db.select().from(bossBattlesTable).where(eq(bossBattlesTable.guildId, guild))).toHaveLength(0);
+    await wallet("a", 1);
+    const joined = await join("a");
+    expect((await getBossBattleBundle(joined.battleId))!.members[0]).toMatchObject({ hp: 1, maxHp: 1 });
+    await expect(heal("a", 1)).rejects.toThrow("HPが満タン");
+    expect(await balance("a")).toBe(1);
+  });
+
   it("persists independent attack/heal deadlines and accepts exactly at each boundary", async () => {
     await host({ soloHp: 10000, attackCooldownSeconds: 5, healCooldownSeconds: 30, counterEvery: 100 });
     await prepare("a"); const joined = await join("a");

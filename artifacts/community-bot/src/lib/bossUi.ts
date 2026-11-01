@@ -35,6 +35,8 @@ export function bossEventEmbed(event: BossEvent) {
       { name: "パーティ受付", value: `**2〜4人 / ${bossDuration(event.config.lobbySeconds)}**\n4人で即開始`, inline: true },
       { name: "開催終了予定", value: bossDeadline(event.endsAt) },
       { name: "個別クールタイム", value: `攻撃 **${bossCooldownSeconds(event.config, "attack")}秒** ／ 回復 **${bossCooldownSeconds(event.config, "heal")}秒**` },
+      ...(event.config.playerHpSource === "wallet" ? [{ name: "プレイヤーHP", value: "参加確定時の所持金で固定（所持金1以上）。被ダメージで残高は減りません。" }] : []),
+      ...(event.config.healingMode === "max_hp_10_percent" ? [{ name: "有料回復", value: "最大HPの10%（端数切り捨て、最低1、最大HPまで）。回復料金を支払っても最大HPは変わりません。" }] : []),
       ...(event.config.special !== "none" ? [{ name: "特殊イベント", value: `**${bossSpecialName(event.config.special)}**` }] : []),
     ).setFooter({ text: "武器・ロール補正と回復料金は参加時に固定。イベント共通の終了時刻まで戦います。" });
 }
