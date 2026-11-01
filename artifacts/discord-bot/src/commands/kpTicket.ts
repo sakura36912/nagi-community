@@ -82,13 +82,11 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
     const channel = interaction.channel;
     const message = await channel.send({
       embeds: [new EmbedBuilder().setTitle(KP_SHOP_NAME).setColor(0xf5a623).setDescription(
-        "チケット内でキャスト指名・VIP希望・延長希望・ドリンク購入ができます。\n"
-        + "指名候補は黒真珠・白真珠の対象ロール所持者のみです。\n"
-        + "指名キャスト → VIP希望 → 延長希望 → ドリンク → 数量 → 支払い確定\n"
-        + "購入ログはこのチケット内に表示します。VIP・延長料金が未設定の場合、該当する希望付きの支払いはできません。",
+        "キミノヒトミニKP予約受付",
       )],
       components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}start`).setLabel("注文する").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}additional`).setLabel("追加注文").setStyle(ButtonStyle.Secondary),
       )],
       allowedMentions: { parse: [] },
     });
@@ -199,7 +197,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
     return;
   }
   const encoded = interaction.customId.slice(KP_TICKET_PREFIX.length);
-  const starting = encoded === "start";
+  const starting = encoded === "start" || encoded === "additional";
   if (starting) await interaction.deferReply({ ephemeral: true });
   else await interaction.deferUpdate();
   try {
@@ -207,7 +205,11 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
         throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
       }
-      const session = await createKpTicketSession(interaction.id, interaction.guildId, interaction.channelId, interaction.user.id);
+      let session = await createKpTicketSession(interaction.id, interaction.guildId, interaction.channelId, interaction.user.id);
+      if (encoded === "additional") {
+        // Additional drinks are a separate order, without charging reservation extras again.
+        session = await advanceKpTicketSession(session, "cast", { vip: false, extension: false });
+      }
       await renderKpTicket(interaction, session);
       return;
     }
@@ -255,7 +257,8 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       case "cast":
         if (!value) throw new KpTicketError("キャストを選択してください。");
         await checkCast(interaction.guild, settings, value);
-        selection.castId = value; next = "vip";
+        selection.castId = value;
+        next = selection.vip === false && selection.extension === false ? "drink" : "vip";
         break;
       case "vip":
       case "extension": {

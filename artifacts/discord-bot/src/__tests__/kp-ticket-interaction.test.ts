@@ -76,6 +76,36 @@ beforeEach(() => {
 });
 
 describe("KP ticket component flow", () => {
+  it("takes an additional drink order without VIP or extension fees and logs it in the ticket", async () => {
+    settings.vipPrice = null; settings.extensionPrice = null;
+    const i = fixture();
+    i.customId = `${KP_TICKET_PREFIX}additional`;
+    await run(i);
+    expect(i.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(m.panel).toHaveBeenCalledWith("panel", "guild", "ticket");
+    expect(m.create).toHaveBeenCalledWith(i.id, "guild", "ticket", "buyer");
+    await choose(i, "black-cast");
+    expect(session.phase).toBe("drink");
+    await choose(i, "1");
+    await choose(i, "3");
+    expect(session.selection.quote).toMatchObject({ total: 300, vipPrice: 0, extensionPrice: 0 });
+    expect(m.settle).not.toHaveBeenCalled();
+    i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
+    await run(i);
+    expect(m.settle).toHaveBeenCalledOnce();
+    expect(i.channel.send).toHaveBeenCalledOnce();
+    expect(i.channel.send.mock.calls[0]![0].embeds[0].toJSON().fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "合計金額", value: "300円" }),
+    ]));
+  });
+  it("rejects additional orders from an unregistered panel before creating or charging an order", async () => {
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`;
+    m.panel.mockResolvedValue(false);
+    await run(i);
+    expect(m.create).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("未登録") }));
+  });
   it("shows only members with either cast role and never duplicates a dual-role member", async () => {
     const i = fixture(); await run(i);
     const menu = i.editReply.mock.calls[0]![0].components[0].toJSON().components[0];
@@ -180,6 +210,12 @@ describe("KP ticket price administration", () => {
     expect(m.configure).toHaveBeenCalledWith("guild", { castRoleIds: ["black", "white"] });
     expect(m.register).toHaveBeenCalledWith("panel", "guild", "ticket");
     expect(channel.send).toHaveBeenCalledOnce();
+    const panel = channel.send.mock.calls[0]![0];
+    expect(panel.embeds[0].toJSON().description).toBe("キミノヒトミニKP予約受付");
+    expect(panel.components[0].toJSON().components).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "注文する", custom_id: `${KP_TICKET_PREFIX}start` }),
+      expect.objectContaining({ label: "追加注文", custom_id: `${KP_TICKET_PREFIX}additional` }),
+    ]));
   });
 
   it("lets an administrator set a price later without resetting the other price", async () => {
