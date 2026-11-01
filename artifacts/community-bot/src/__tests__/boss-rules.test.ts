@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bossCounter, bossHealing, bossPlayerAttack, bossCooldownSeconds, splitBossReward, validateBossConfig,
+import { bossCounter, bossHealing, bossPlayerAttack, bossCooldownSeconds, splitBossReward, validateBossConfig, generateBossCombatStats,
   type BossConfig, type BossFighter } from "../../../../lib/db/src/bossRules";
 
 const config: BossConfig = {
@@ -14,6 +14,18 @@ function fighter(userId = "user", weaponType = "greatsword"): BossFighter {
     effects: { bleedTicks: 0, vulnerableTicks: 0, shield: false } };
 }
 describe("boss combat rules", () => {
+  it.each([
+    ["kraken", 300, 450, 25, 35], ["megalodon", 450, 650, 35, 45], ["leviathan", 650, 900, 45, 60],
+  ] as const)("generates inclusive, valid %s combat settings", (type, minHp, maxHp, minAttack, maxAttack) => {
+    const low = generateBossCombatStats(type, () => 0);
+    const high = generateBossCombatStats(type, () => 0.999999);
+    expect(low).toMatchObject({ soloHp: minHp, partyHp: Math.round(minHp * 2.5), attack: minAttack, healAmount: 100 });
+    expect(high).toMatchObject({ soloHp: maxHp, partyHp: maxHp * 3, attack: maxAttack, healAmount: 150 });
+    for (const generated of [low, high]) expect(() => validateBossConfig(type, { ...config, ...generated })).not.toThrow();
+  });
+  it.each([NaN, Infinity, -0.1, 1])("rejects an invalid generation roll: %s", roll => {
+    expect(() => generateBossCombatStats("kraken", () => roll)).toThrow("乱数");
+  });
   it("uses separate cooldown defaults and validates configurable bounds", () => {
     expect(bossCooldownSeconds(config, "attack")).toBe(5);
     expect(bossCooldownSeconds(config, "heal")).toBe(30);

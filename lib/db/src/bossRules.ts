@@ -63,6 +63,24 @@ function random(roll: () => number) {
   if (!Number.isFinite(value) || value < 0 || value >= 1) throw new BossError("乱数の値が不正です。");
   return value;
 }
+/** Generated once at hosting, then persisted in the event's existing config snapshot. */
+export function generateBossCombatStats(type: BossType, roll: () => number = forgeRoll) {
+  if (!Object.hasOwn(BOSS_NAMES, type)) throw new BossError("未対応のボスです。");
+  // Balanced around level-one weapon attacks (8–16), with stronger bosses for upgraded weapons.
+  const profiles = {
+    kraken: { hp: [300, 450], attack: [25, 35] },
+    megalodon: { hp: [450, 650], attack: [35, 45] },
+    leviathan: { hp: [650, 900], attack: [45, 60] },
+  } as const;
+  const integer = (min: number, max: number) => min + Math.floor(random(roll) * (max - min + 1));
+  const profile = profiles[type];
+  const soloHp = integer(profile.hp[0], profile.hp[1]);
+  return {
+    soloHp, partyHp: Math.round(soloHp * integer(250, 300) / 100),
+    attack: integer(profile.attack[0], profile.attack[1]), healAmount: integer(100, 150),
+    playerHp: 500, counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
+  };
+}
 const clampDamage = (value: number) => Math.min(FORGE_MAX_INT, Math.max(1, Math.floor(value)));
 export function splitBossReward(reward: number, userIds: string[]) {
   bossInteger(reward);

@@ -6,7 +6,7 @@ import {
   cancelBossJoinRequest, advanceBossGuild, performBossAction, endBossEvent, getBossInfo,
   getBossBattleBundle, dueBossGuilds, deliverBossNotice, getBossFees, selectForgeWeapon,
   bossFeesTable, bossEventsTable, bossBattlesTable, bossMembersTable, bossActiveUsersTable,
-  bossJoinRequestsTable, bossActionsTable, forgeWeaponsTable, forgeActionsTable, walletsTable, transactionsTable,
+  bossJoinRequestsTable, bossActionsTable, forgeWeaponsTable, forgeActionsTable, walletsTable, transactionsTable, generateBossCombatStats,
   type BossConfig, type BossMode,
 } from "@workspace/db";
 
@@ -33,6 +33,15 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     if (costs) await configureBossFees(guild, { healCost: 20 });
     return createBossEvent(id(), guild, "channel", "kraken", { ...base, ...patch }, now);
   }
+  it("persists generated stats once and preserves them on hosting retry and later reads", async () => {
+    const operation = id();
+    const generated = { ...base, ...generateBossCombatStats("kraken", () => 0) };
+    const event = await createBossEvent(operation, guild, "channel", "kraken", generated, now);
+    const retried = await createBossEvent(operation, guild, "channel", "kraken",
+      { ...base, ...generateBossCombatStats("kraken", () => 0.999999) }, now);
+    expect(retried.config).toEqual(event.config);
+    expect((await getBossInfo(guild, now))?.event.config).toEqual(generated);
+  });
   async function wallet(user: string, balance: number) {
     await db.insert(walletsTable).values({ guildId: guild, userId: user, balance })
       .onConflictDoUpdate({ target: [walletsTable.guildId, walletsTable.userId], set: { balance } });

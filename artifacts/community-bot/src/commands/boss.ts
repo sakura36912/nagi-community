@@ -4,7 +4,7 @@ import {
   type ChatInputCommandInteraction, type ButtonInteraction,
 } from "discord.js";
 import {
-  BossError, ForgeError, getBossFees, configureBossFees, createBossEvent, endBossEvent, getBossInfo,
+  BossError, ForgeError, getBossFees, configureBossFees, createBossEvent, endBossEvent, getBossInfo, generateBossCombatStats,
   createBossJoinRequest, confirmBossJoin, cancelBossJoinRequest, performBossAction, type BossConfig, type BossType, type BossMode,
 } from "@workspace/db";
 import { requireForgeAccess } from "./forge";
@@ -66,13 +66,12 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
       if (role?.id === guildId) throw new BossError("@everyoneを補正ロールに指定することはできません。");
       if (role && !await interaction.guild!.roles.fetch(role.id)) throw new BossError("指定した補正ロールが見つかりません。");
       const config: BossConfig = {
-        soloHp: integer("ソロhp"), partyHp: integer("パーティhp"), durationSeconds: integer("制限秒"),
-        lobbySeconds: integer("受付秒"), reward: integer("報酬"), attack: integer("攻撃力"), defense: integer("防御力"),
-        playerHp: integer("プレイヤーhp"), healAmount: integer("回復量"), counterEvery: integer("反撃間隔"),
-        cooldownSeconds: 1, criticalPercent: integer("会心率"),
+        ...generateBossCombatStats(interaction.options.getString("ボス", true) as BossType),
+        durationSeconds: integer("制限秒"),
+        lobbySeconds: integer("受付秒"), reward: integer("報酬"), defense: integer("防御力"),
+        cooldownSeconds: 1,
         attackCooldownSeconds: interaction.options.getInteger("攻撃間隔秒") ?? 5,
         healCooldownSeconds: interaction.options.getInteger("回復間隔秒") ?? 30,
-        criticalMultiplier: interaction.options.getNumber("会心倍率", true), levelBonusPercent: integer("レベル補正率"),
         special: (interaction.options.getString("特殊イベント") ?? "none") as BossConfig["special"],
         bonusRoleId: role?.id ?? null, roleMultiplier: multiplier ?? 1,
       };
@@ -155,24 +154,15 @@ function base(name: string, description: string) {
   if (ADMIN.has(name)) cmd.setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
   return cmd;
 }
-const host = base("ボス開催", "管理者専用：ボスイベントをこのチャンネルで開催（数値は開催時に指定）")
+const host = base("ボス開催", "管理者専用：HP・攻撃力・回復力をBotが抽選してボスを開催")
   .addStringOption(o => o.setName("ボス").setDescription("開催するボス").setRequired(true).addChoices(...types));
 for (const [name, description, min, max] of [
-  ["ソロhp", "ソロ1戦ごとのボスHP", 1, 2147483647],
-  ["パーティhp", "パーティ1組ごとのボスHP", 1, 2147483647],
   ["制限秒", "イベント全体の制限時間（秒）", 1, 604800],
   ["受付秒", "パーティ1組の受付時間（秒、制限秒以下）", 1, 604800],
   ["報酬", "1討伐の報酬総額（パーティは均等分配）", 0, 2147483647],
-  ["攻撃力", "ボスの内部攻撃力", 1, 2147483647],
   ["防御力", "ボスの内部防御力", 0, 2147483647],
-  ["プレイヤーhp", "参加者1人の最大HP", 1, 2147483647],
-  ["回復量", "回復1回の基本回復量", 1, 2147483647],
-  ["反撃間隔", "参加者合計何回の行動ごとにボスが反撃するか", 1, 100],
-  ["会心率", "プレイヤーのクリティカル率（%）", 0, 100],
-  ["レベル補正率", "武器Lvが1上がるごとの追加ダメージ補正（%）", 0, 100],
 ] as const) host.addIntegerOption(o => o.setName(name).setDescription(description).setRequired(true).setMinValue(min).setMaxValue(max));
-host.addNumberOption(o => o.setName("会心倍率").setDescription("クリティカル倍率（1〜10）").setRequired(true).setMinValue(1).setMaxValue(10))
-  .addIntegerOption(o => o.setName("攻撃間隔秒").setDescription("攻撃専用クールタイム。省略時5秒、0で無制限").setMinValue(0).setMaxValue(3600))
+host.addIntegerOption(o => o.setName("攻撃間隔秒").setDescription("攻撃専用クールタイム。省略時5秒、0で無制限").setMinValue(0).setMaxValue(3600))
   .addIntegerOption(o => o.setName("回復間隔秒").setDescription("回復専用クールタイム。省略時30秒").setMinValue(1).setMaxValue(3600))
   .addStringOption(o => o.setName("特殊イベント").setDescription("全ての討伐へ適用する特殊イベント").addChoices(...specials))
   .addRoleOption(o => o.setName("補正ロール").setDescription("追加ダメージ補正を受けるロール"))

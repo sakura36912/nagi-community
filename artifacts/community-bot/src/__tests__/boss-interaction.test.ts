@@ -62,13 +62,16 @@ beforeEach(() => {
   m.recover.mockResolvedValue(undefined);
 });
 describe("boss commands and displays", () => {
-  it("builds eight valid commands with all host parameters and no bulk command replacement", () => {
+  it("builds eight commands with automatic combat settings and no bulk command replacement", () => {
     expect(bossCommands).toHaveLength(8);
     const host = bossCommands.find(c => c.data.name === "ボス開催")!.data.toJSON();
     expect(host.options!.length).toBeLessThanOrEqual(25);
     expect(host.default_member_permissions).toBe(PermissionFlagsBits.Administrator.toString());
-    for (const name of ["ソロhp", "パーティhp", "攻撃力", "防御力", "プレイヤーhp", "回復量", "反撃間隔", "会心倍率"]) {
+    for (const name of ["制限秒", "受付秒", "報酬", "防御力"]) {
       expect(host.options!.find(o => o.name === name)?.required).toBe(true);
+    }
+    for (const name of ["ソロhp", "パーティhp", "攻撃力", "回復力", "プレイヤーhp", "回復量", "反撃間隔", "会心率", "会心倍率", "レベル補正率"]) {
+      expect(host.options!.some(o => o.name === name)).toBe(false);
     }
     expect(bossCommands.map(c => c.data.name)).toEqual(expect.arrayContaining(["参加", "攻撃", "回復", "ボス情報"]));
     for (const name of ["攻撃間隔秒", "回復間隔秒"]) {
@@ -81,15 +84,22 @@ describe("boss commands and displays", () => {
   it.each([{}, { 攻撃間隔秒: 10, 回復間隔秒: 60 }])("passes individual cooldown settings to the hosted event: %j", async overrides => {
     const i = fixture("ボス開催"); i.flags.admin = true;
     Object.assign(i.values, {
-      ボス: "kraken", ソロhp: 100, パーティhp: 400, 制限秒: 600, 受付秒: 10, 報酬: 100,
-      攻撃力: 10, 防御力: 0, プレイヤーhp: 100, 回復量: 25, 反撃間隔: 2,
-      会心率: 10, 会心倍率: 2, レベル補正率: 5, ...overrides,
+      ボス: "kraken", 制限秒: 600, 受付秒: 10, 報酬: 100, 防御力: 0, ...overrides,
     });
     await run(i);
     expect(m.host).toHaveBeenCalledWith(i.id, "guild", "channel", "kraken", expect.objectContaining({
       attackCooldownSeconds: overrides.攻撃間隔秒 ?? 5,
       healCooldownSeconds: overrides.回復間隔秒 ?? 30,
+      playerHp: 500, counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
     }));
+    const config = m.host.mock.calls[0]![4];
+    expect(config.soloHp).toBeGreaterThanOrEqual(300);
+    expect(config.soloHp).toBeLessThanOrEqual(450);
+    expect(config.partyHp).toBeGreaterThan(config.soloHp);
+    expect(config.attack).toBeGreaterThanOrEqual(25);
+    expect(config.attack).toBeLessThanOrEqual(35);
+    expect(config.healAmount).toBeGreaterThanOrEqual(100);
+    expect(config.healAmount).toBeLessThanOrEqual(150);
   });
   it("rejects non-crew before preparing a participation or charge", async () => {
     const i = fixture(); i.flags.crew = false;
