@@ -68,7 +68,7 @@ interface BJGame {
    * ヒットのたびに Storage を叩かず、ここから読む。
    */
   cardBuffers: Map<string, Buffer>;
-  /** true の間はボタン操作を受け付けない（ヒット処理中の二重押し防止） */
+  /** true の間はボタン操作を受け付けない（二重押し防止） */
   processing: boolean;
   /** パブリックゲーム状態メッセージの参照 */
   publicMessage?: Message;
@@ -97,7 +97,9 @@ function gameKey(guildId: string, userId: string) { return `${guildId}:${userId}
 
 setInterval(() => {
   const now = Date.now();
-  for (const [key, game] of activeGames) { if (game.expiresAt < now) activeGames.delete(key); }
+  for (const [key, game] of activeGames) {
+    if (!game.processing && game.expiresAt < now) activeGames.delete(key);
+  }
 }, 60_000);
 
 // ─── Suit emoji helpers ───────────────────────────────────────────────────────
@@ -482,17 +484,19 @@ async function finishGame(
   await recordTransaction(guildId, userId, netDelta, logReason[outcome]).catch(() => {});
 
   const key = gameKey(guildId, userId);
-  activeGames.delete(key);
-
   const totals = addCasinoSessionRound("blackjack", guildId, userId, bet, payout, netDelta);
 
-  // dealerPlay で引いた新しいカードをキャッシュに追加（結果画面で画像表示するため）
-  await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
-  const { embeds, files } = await buildResultEmbed(game, outcome, totals);
-  if (interaction instanceof ButtonInteraction) {
-    await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
-  } else {
-    await interaction.editReply({ content: "", embeds, files, components: [] });
+  try {
+    // 結果メッセージの更新が終わるまでゲームを保持して二重押しを防ぐ。
+    await cacheHandBuffers(game.dealerHand, game.cardPaths, game.cardBuffers);
+    const { embeds, files } = await buildResultEmbed(game, outcome, totals);
+    if (interaction instanceof ButtonInteraction) {
+      await game.publicMessage?.edit({ content: "", embeds, files, components: [] });
+    } else {
+      await interaction.editReply({ content: "", embeds, files, components: [] });
+    }
+  } finally {
+    activeGames.delete(key);
   }
 }
 
@@ -517,7 +521,7 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
   // ─── hit / stand は activeGames にゲームが必要 ──────────────────────────────
   const game = activeGames.get(key);
 
-  if (!game || game.expiresAt < Date.now()) {
+  if (!game || (!game.processing && game.expiresAt < Date.now())) {
     activeGames.delete(key);
     try {
       await interaction.update({
@@ -536,47 +540,48 @@ export async function handleBlackjackButton(interaction: ButtonInteraction): Pro
     return;
   }
 
-  // ヒット処理中の二重押しを無視
+  // 更新中の二重押しを無視
   if (game.processing) {
     await interaction.deferUpdate();
     return;
   }
 
-  await interaction.deferUpdate();
-
-  if (verb === "hit") {
-    // 処理中フラグを立てて即 Map に反映（二重押し防止）
+  // Discord への応答も非同期なので、先にロックして同時押下を防ぐ。
+  if (verb === "hit" || verb === "stand") {
     game.processing = true;
-    activeGames.set(key, game);
+  }
+  try {
+    await interaction.deferUpdate();
 
-    // 現在の手札画像を維持したまま「更新中」を表示
-    const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
-    await game.publicMessage?.edit({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
+    if (verb === "hit") {
+      // 現在の手札画像を維持したまま「更新中」を表示
+      const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
+      await game.publicMessage?.edit({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
 
-    const [card, newDeck] = draw(game.deck);
-    game.playerHand = [...game.playerHand, card];
-    game.deck = newDeck;
-    // 新しく引いたカード1枚のみ追加取得（既存カードはキャッシュ済み）
-    await cacheCardBuffer(card, game.cardPaths, game.cardBuffers);
+      const [card, newDeck] = draw(game.deck);
+      game.playerHand = [...game.playerHand, card];
+      game.deck = newDeck;
+      // 新しく引いたカード1枚のみ追加取得（既存カードはキャッシュ済み）
+      await cacheCardBuffer(card, game.cardPaths, game.cardBuffers);
 
-    if (isBust(game.playerHand) || total(game.playerHand) === 21) {
+      if (isBust(game.playerHand) || total(game.playerHand) === 21) {
+        await finishGame(interaction, dealerPlay(game));
+        return;
+      }
+
+      const { embeds, files } = await buildGameEmbed(game, true);
+      await game.publicMessage?.edit({ content: "", embeds, files, components: [buildButtons(user.id)] });
+      game.processing = false;
+
+    } else if (verb === "stand") {
+      const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
+      await game.publicMessage?.edit({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
       await finishGame(interaction, dealerPlay(game));
-      return;
     }
-
-    game.processing = false;
-    activeGames.set(key, game);
-
-    const { embeds, files } = await buildGameEmbed(game, true);
-    await game.publicMessage?.edit({ content: "", embeds, files, components: [buildButtons(user.id)] });
-
-  } else if (verb === "stand") {
-    game.processing = true;
-    activeGames.set(key, game);
-    const { embeds: curEmbeds, files: curFiles } = await buildGameEmbed(game, true);
-    await game.publicMessage?.edit({ content: "🔄 更新中...", embeds: curEmbeds, files: curFiles, components: [] });
-    await finishGame(interaction, dealerPlay(game));
-
+  } catch (error) {
+    // 精算や表示の失敗後に同じボタンから再精算できないようにし、次のゲームは開始可能にする。
+    if (activeGames.get(key) === game) activeGames.delete(key);
+    throw error;
   }
 }
 
