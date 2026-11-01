@@ -2,6 +2,7 @@ import {
   pgTable,
   text,
   integer,
+  doublePrecision,
   serial,
   timestamp,
   boolean,
@@ -85,6 +86,9 @@ export const guildSettingsTable = pgTable("guild_settings", {
   bjSuitHeart:   text("bj_suit_heart"),
   bjSuitDiamond: text("bj_suit_diamond"),
   bjSuitClub:    text("bj_suit_club"),
+  // Net winnings multipliers; the original stake is returned separately.
+  bjPayoutBlackjack: doublePrecision("bj_payout_blackjack").notNull().default(2),
+  bjPayoutWin: doublePrecision("bj_payout_win").notNull().default(1),
 
   // Per-guild casino max bet. NULL means use the hardcoded default (100,000).
   casinoMaxBet: integer("casino_max_bet"),

@@ -280,6 +280,18 @@ export async function setBjSuitEmoji(
   return upsertGuildSetting(guildId, { [key]: emoji });
 }
 
+/** Update only supplied multipliers, preserving the other setting. */
+export async function setBjPayouts(
+  guildId: string,
+  payouts: { bjPayoutBlackjack?: number; bjPayoutWin?: number },
+): Promise<GuildSettings> {
+  const values = Object.values(payouts);
+  if (!values.length || values.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) {
+    throw new Error("BJ payout multipliers must be finite numbers between 0 and 100");
+  }
+  return upsertGuildSetting(guildId, payouts);
+}
+
 export async function setLeaveLogChannelId(
   guildId: string,
   leaveLogChannelId: string | null,

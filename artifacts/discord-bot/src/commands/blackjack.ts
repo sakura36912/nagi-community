@@ -6,6 +6,7 @@
  *   play          : ゲームを開始する
  *   config suit   : スート絵文字を設定する（管理者専用）
  *   config card   : カード画像を登録する（管理者専用）
+ *   config payout : 勝利時の純利益倍率を設定する（管理者専用）
  */
 
 import Jimp from "jimp";
@@ -24,7 +25,7 @@ import {
 } from "discord.js";
 import { and, eq, sql } from "drizzle-orm";
 import { db, walletsTable } from "@workspace/db";
-import { getGuildSettings, recordTransaction, getOrCreateWallet, setBjSuitEmoji } from "../lib/economy";
+import { getGuildSettings, recordTransaction, getOrCreateWallet, setBjSuitEmoji, setBjPayouts } from "../lib/economy";
 import {
   addCasinoSessionRound,
   buildCasinoResultFields,
@@ -53,6 +54,8 @@ interface BJGame {
   guildId: string;
   userId: string;
   bet: number;
+  bjPayoutBlackjack: number;
+  bjPayoutWin: number;
   playerHand: Card[];
   dealerHand: Card[];
   deck: Card[];
@@ -351,7 +354,7 @@ async function buildGameEmbed(game: BJGame, hideDealer = true): Promise<EmbedWit
       },
       { name: "操作方法", value: "🃏 **ヒット** — 1枚追加　🛑 **スタンド** — このままで勝負" },
     )
-    .setFooter({ text: "BJ=1.5倍 / 通常勝利=1倍 / 引き分け=返金 | 5分でタイムアウト" });
+    .setFooter({ text: `純利益: BJ=${game.bjPayoutBlackjack}倍 / 通常勝利=${game.bjPayoutWin}倍（掛け金は別途返却） / 引き分け=返金 | 5分でタイムアウト` });
 
   // カード画像（横一列合成）をメイン embed の前（上部）に配置
   // setTitle でラベルを画像上部に表示する
@@ -388,7 +391,6 @@ async function buildResultEmbed(
   const COLOR: Record<Outcome, number> = {
     blackjack: COLOR_WIN, win: COLOR_WIN, push: COLOR_PUSH, lose: COLOR_LOSE,
   };
-  const { netDelta } = resolveOutcome(game);
   const e    = game.suitEmojis;
 
   const [playerStrip, dealerStrip] = await Promise.all([
@@ -450,17 +452,19 @@ function dealerPlay(game: BJGame): BJGame {
   return { ...game, dealerHand, deck };
 }
 
-function resolveOutcome(game: BJGame): { outcome: Outcome; netDelta: number } {
+export function resolveOutcome(
+  game: Pick<BJGame, "playerHand" | "dealerHand" | "bet" | "bjPayoutBlackjack" | "bjPayoutWin">,
+): { outcome: Outcome; netDelta: number } {
   const pTotal = total(game.playerHand);
   const dTotal = total(game.dealerHand);
   const pBJ = isBlackjack(game.playerHand);
   const dBJ = isBlackjack(game.dealerHand);
 
   if (pBJ && dBJ)                                return { outcome: "push",      netDelta: 0 };
-  if (pBJ)                                       return { outcome: "blackjack",  netDelta: Math.floor(game.bet * 1.5) };
+  if (pBJ)                                       return { outcome: "blackjack",  netDelta: Math.floor(game.bet * game.bjPayoutBlackjack) };
   if (dBJ)                                       return { outcome: "lose",       netDelta: -game.bet };
   if (isBust(game.playerHand))                   return { outcome: "lose",       netDelta: -game.bet };
-  if (isBust(game.dealerHand) || pTotal > dTotal) return { outcome: "win",       netDelta: game.bet };
+  if (isBust(game.dealerHand) || pTotal > dTotal) return { outcome: "win",       netDelta: Math.floor(game.bet * game.bjPayoutWin) };
   if (pTotal === dTotal)                          return { outcome: "push",       netDelta: 0 };
   return { outcome: "lose", netDelta: -game.bet };
 }
@@ -652,6 +656,8 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
 
   const game: BJGame = {
     guildId, userId, bet, playerHand, dealerHand, deck,
+    bjPayoutBlackjack: settings.bjPayoutBlackjack,
+    bjPayoutWin: settings.bjPayoutWin,
     currencyName: settings.currencyName,
     balance: afterDeduct.balance, expiresAt: Date.now() + GAME_TTL_MS,
     suitEmojis, cardPaths, cardBuffers, processing: false,
@@ -666,6 +672,38 @@ async function handlePlay(interaction: ChatInputCommandInteraction): Promise<voi
   const { embeds, files } = await buildGameEmbed(game, true);
   const msg = await interaction.editReply({ embeds, files, components: [buildButtons(userId)] });
   game.publicMessage = msg as Message;
+}
+
+// ─── /blackjack config payout ─────────────────────────────────────────────────
+
+async function handleConfigPayout(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { guildId } = interaction;
+  if (!guildId) return;
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ 管理者専用です。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const blackjack = interaction.options.getNumber("blackjack");
+  const win = interaction.options.getNumber("win");
+  if ([blackjack, win].some((value) => value !== null && (!Number.isFinite(value) || value < 0 || value > 100))) {
+    await interaction.reply({ content: "❌ 倍率は0〜100の数値で指定してください。", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const payouts = {
+    ...(blackjack !== null ? { bjPayoutBlackjack: blackjack } : {}),
+    ...(win !== null ? { bjPayoutWin: win } : {}),
+  };
+  const settings = Object.keys(payouts).length
+    ? await setBjPayouts(guildId, payouts)
+    : await getGuildSettings(guildId);
+  await interaction.editReply({
+    embeds: [new EmbedBuilder()
+      .setTitle("🃏 ブラックジャック — 勝利倍率")
+      .setColor(COLOR_NEUTRAL)
+      .setDescription(`BJ: **${settings.bjPayoutBlackjack}倍** / 通常勝利: **${settings.bjPayoutWin}倍**\n倍率は純利益に適用し、小数点以下は切り捨てます。掛け金は別途返却します。引き分けは掛け金のみ返却します。`)
+      .setFooter({ text: "変更は次回ゲームから反映されます。数値を省略すると現在の設定を表示します。" })],
+  });
 }
 
 // ─── /blackjack config suit ───────────────────────────────────────────────────
@@ -845,14 +883,23 @@ export const blackjackCommand = {
     .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub.setName("play")
-        .setDescription("ブラックジャック — 21を目指せ！BJ=1.5倍・通常勝利=1倍")
+        .setDescription("ブラックジャック — 21を目指せ！勝利倍率はサーバー設定に従います")
         .addIntegerOption((opt) =>
           opt.setName("bet").setDescription(`賭け金（${MIN_BET.toLocaleString()}〜${MAX_BET.toLocaleString()}）`)
             .setMinValue(MIN_BET).setMaxValue(MAX_BET).setRequired(true),
         ),
     )
     .addSubcommandGroup((group) =>
-      group.setName("config").setDescription("【管理者】ブラックジャックの見た目を設定する")
+      group.setName("config").setDescription("【管理者】ブラックジャックの倍率・見た目を設定する")
+        .addSubcommand((sub) =>
+          sub.setName("payout").setDescription("勝利時の純利益倍率を設定・確認する（掛け金は別途返却）")
+            .addNumberOption((opt) =>
+              opt.setName("blackjack").setDescription("BJの純利益倍率（初期値2・0〜100）").setMinValue(0).setMaxValue(100),
+            )
+            .addNumberOption((opt) =>
+              opt.setName("win").setDescription("通常勝利の純利益倍率（初期値1・0〜100）").setMinValue(0).setMaxValue(100),
+            ),
+        )
         .addSubcommand((sub) =>
           sub.setName("suit").setDescription("スートの絵文字を設定する")
             .addStringOption((opt) =>
@@ -897,6 +944,7 @@ export const blackjackCommand = {
       else if (sub === "card") await handleConfigCard(interaction);
       else if (sub === "list") await handleConfigList(interaction);
       else if (sub === "delete") await handleConfigDelete(interaction);
+      else if (sub === "payout") await handleConfigPayout(interaction);
     }
   },
 };

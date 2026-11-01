@@ -3,7 +3,7 @@ import type { ButtonInteraction, ChatInputCommandInteraction } from "discord.js"
 import { blackjackCommand, handleBlackjackButton } from "../commands/blackjack";
 import { getOrCreateWallet, getGuildSettings } from "../lib/economy";
 import { getBjCardImages } from "../lib/bjCardImages";
-import { tryStartCasinoPlay } from "../lib/casinoPlayLimits";
+import { tryStartCasinoMemberPlay } from "../lib/casinoPlayLimits";
 
 vi.mock("@workspace/db", () => ({ db: {}, walletsTable: {} }));
 vi.mock("../commands/casino", () => ({ CASINO_DEFAULT_MAX_BET: 10_000 }));
@@ -12,6 +12,7 @@ vi.mock("../lib/economy", () => ({
   getGuildSettings: vi.fn(),
   recordTransaction: vi.fn(),
   setBjSuitEmoji: vi.fn(),
+  setBjPayouts: vi.fn(),
 }));
 vi.mock("../lib/bjCardImages", () => ({
   getBjCardImages: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock("../lib/gcsStorage", () => ({
   deleteGcsObject: vi.fn(),
 }));
 vi.mock("../lib/casinoPlayLimits", () => ({
-  tryStartCasinoPlay: vi.fn(),
+  tryStartCasinoMemberPlay: vi.fn(),
   dailyLimitReachedMessage: vi.fn(),
 }));
 
@@ -34,9 +35,9 @@ describe("blackjack button lock", () => {
     // A predictable shoe with no opening blackjack.
     vi.spyOn(Math, "random").mockReturnValue(0);
     vi.mocked(getOrCreateWallet).mockResolvedValue({} as never);
-    vi.mocked(getGuildSettings).mockResolvedValue({ currencyName: "coins", casinoMaxBet: 10_000 } as never);
+    vi.mocked(getGuildSettings).mockResolvedValue({ currencyName: "coins", casinoMaxBet: 10_000, bjPayoutBlackjack: 2, bjPayoutWin: 1 } as never);
     vi.mocked(getBjCardImages).mockResolvedValue(new Map());
-    vi.mocked(tryStartCasinoPlay).mockResolvedValue({ ok: true, balance: 9_000 } as never);
+    vi.mocked(tryStartCasinoMemberPlay).mockResolvedValue({ ok: true, balance: 9_000 } as never);
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -73,7 +74,7 @@ describe("blackjack button lock", () => {
 
       await expect(handleBlackjackButton(button as unknown as ButtonInteraction)).rejects.toThrow();
       await blackjackCommand.execute(play());
-      expect(tryStartCasinoPlay).toHaveBeenCalledTimes(2);
+      expect(tryStartCasinoMemberPlay).toHaveBeenCalledTimes(2);
     },
   );
 });
