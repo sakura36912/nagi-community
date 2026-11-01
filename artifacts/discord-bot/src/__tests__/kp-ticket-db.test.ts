@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   advanceKpTicketSession, configureKpTicket, createKpTicketSession, db, deliverKpTicketLog,
   ensureKpTicketSchema, getKpTicketSession, kpTicketPanelsTable, kpTicketSessionsTable, kpTicketSettingsTable,
-  inventoryItemsTable, quoteKpTicket, settleKpTicket, shopItemsTable, transactionsTable, walletsTable,
+  inventoryItemsTable, quoteKpTicket, settleKpTicket, shopItemsTable, transactionsTable, walletsTable, listPaidKpTicketOrders,
   type KpTicketSelection, type KpTicketSession,
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
@@ -44,6 +44,30 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     return advanceKpTicketSession(session, "confirm", selection);
   }
   const settle = (session: KpTicketSession) => settleKpTicket(session.id, session.version, user, guild, channel, ["black", "white"]);
+
+  it("summarizes only paid orders in the exact guild and ticket without changing balances", async () => {
+    const ticket = `statement-${randomUUID()}`;
+    const quote = quoteKpTicket(product, { vipPrice: 500, extensionPrice: 200 }, baseSelection());
+    const rows = [
+      { guildId: guild, channelId: ticket, phase: "paid" as const },
+      { guildId: guild, channelId: ticket, phase: "paid" as const },
+      { guildId: guild, channelId: ticket, phase: "confirm" as const },
+      { guildId: guild, channelId: ticket, phase: "cancelled" as const },
+      { guildId: guild, channelId: `${ticket}-other`, phase: "paid" as const },
+      { guildId: `${guild}-other`, channelId: ticket, phase: "paid" as const },
+    ].map(row => ({ ...row, id: randomUUID(), userId: user, expiresAt: new Date(0),
+      selection: { ...baseSelection(), quote }, paidAt: row.phase === "paid" ? new Date() : null }));
+    try {
+      await db.insert(kpTicketSessionsTable).values(rows);
+      await wallet(4321);
+      const orders = await listPaidKpTicketOrders(guild, ticket);
+      expect(orders.map(o => o.id).sort()).toEqual(rows.slice(0, 2).map(o => o.id).sort());
+      expect(await listPaidKpTicketOrders(guild, ticket)).toHaveLength(2);
+      expect(await balance()).toBe(4321);
+    } finally {
+      await db.delete(kpTicketSessionsTable).where(eq(kpTicketSessionsTable.guildId, `${guild}-other`));
+    }
+  });
 
   it("serializes duplicate confirmation: one debit, one ledger row, one inventory grant", async () => {
     await wallet(5000);

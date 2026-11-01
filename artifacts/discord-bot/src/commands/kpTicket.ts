@@ -6,7 +6,7 @@ import {
 import {
   advanceKpTicketSession, configureKpTicket, createKpTicketSession, deliverKpTicketLog,
   getKpTicketSession, getKpTicketSettings, isKpDrink, isKpTicketPanel, KpTicketError,
-  quoteKpTicket, registerKpTicketPanel, settleKpTicket,
+  quoteKpTicket, registerKpTicketPanel, settleKpTicket, listPaidKpTicketOrders,
   type KpTicketSession, type KpTicketSettings,
 } from "@workspace/db";
 import { getGuildSettings, getShopItem, listShopItems } from "../lib/economy";
@@ -15,6 +15,7 @@ import { KP_SHOP_CATEGORY, KP_SHOP_NAME } from "../lib/kpShop";
 import { confirmTicketRows, KP_TICKET_PREFIX, pagedTicketMenu, ticketControls,
   ticketId, ticketMenu, ticketSummary } from "../lib/kpTicketUi";
 import { logger } from "../lib/logger";
+import { kpTicketStatement } from "../lib/kpTicketStatement";
 
 export const kpTicketPanelSubcommand = new SlashCommandSubcommandBuilder()
   .setName("ticket-panel").setDescription("このチケット内にKPshopの注文・支払いパネルを設置します（管理者）")
@@ -87,6 +88,7 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
       components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}start`).setLabel("注文する").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}additional`).setLabel("追加注文").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}statement`).setLabel("明細を集計").setStyle(ButtonStyle.Secondary),
       )],
       allowedMentions: { parse: [] },
     });
@@ -198,9 +200,20 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
   }
   const encoded = interaction.customId.slice(KP_TICKET_PREFIX.length);
   const starting = encoded === "start" || encoded === "additional";
-  if (starting) await interaction.deferReply({ ephemeral: true });
+  const statement = encoded === "statement";
+  if (statement) await interaction.deferReply();
+  else if (starting) await interaction.deferReply({ ephemeral: true });
   else await interaction.deferUpdate();
   try {
+    if (statement) {
+      if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
+        throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
+      }
+      const orders = await listPaidKpTicketOrders(interaction.guildId, interaction.channelId);
+      const { currencyName } = await getGuildSettings(interaction.guildId);
+      await interaction.editReply(kpTicketStatement(orders, currencyName));
+      return;
+    }
     if (starting) {
       if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
         throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
@@ -290,7 +303,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
   } catch (error) {
     if (!(error instanceof KpTicketError)) logger.error("[kp-ticket] Interaction failed", error);
     const content = error instanceof KpTicketError ? error.message : "注文の処理に失敗しました。支払い操作の場合は同じ確定ボタンから結果を確認できます。";
-    if (starting) await interaction.editReply({ content, components: [] });
+    if (starting || statement) await interaction.editReply({ content, components: [] });
     else await interaction.followUp({ content, ephemeral: true });
   }
 }

@@ -78,6 +78,16 @@ export async function getKpTicketSession(id: string) {
   return session;
 }
 
+/** Read-only snapshot of all settled orders in this ticket, including expired sessions. */
+export async function listPaidKpTicketOrders(guildId: string, channelId: string) {
+  await ensureKpTicketSchema();
+  return db.select().from(kpTicketSessionsTable).where(and(
+    eq(kpTicketSessionsTable.guildId, guildId),
+    eq(kpTicketSessionsTable.channelId, channelId),
+    eq(kpTicketSessionsTable.phase, "paid"),
+  )).orderBy(kpTicketSessionsTable.createdAt, kpTicketSessionsTable.id);
+}
+
 export async function advanceKpTicketSession(session: KpTicketSession, phase: KpTicketPhase, selection: KpTicketSelection) {
   const [next] = await db.update(kpTicketSessionsTable).set({ phase, selection, version: session.version + 1 })
     .where(and(eq(kpTicketSessionsTable.id, session.id), eq(kpTicketSessionsTable.userId, session.userId),

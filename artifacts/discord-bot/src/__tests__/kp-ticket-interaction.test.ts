@@ -4,7 +4,7 @@ import type { KpTicketSession } from "@workspace/db";
 
 const m = vi.hoisted(() => ({
   settings: vi.fn(), configure: vi.fn(), getSession: vi.fn(), create: vi.fn(), advance: vi.fn(),
-  panel: vi.fn(), register: vi.fn(), settle: vi.fn(), deliver: vi.fn(),
+  panel: vi.fn(), register: vi.fn(), settle: vi.fn(), deliver: vi.fn(), paidOrders: vi.fn(),
   guildSettings: vi.fn(), getItem: vi.fn(), listItems: vi.fn(), error: vi.fn(),
 }));
 vi.mock("@workspace/db", async importOriginal => ({
@@ -12,6 +12,7 @@ vi.mock("@workspace/db", async importOriginal => ({
   getKpTicketSettings: m.settings, configureKpTicket: m.configure,
   getKpTicketSession: m.getSession, createKpTicketSession: m.create, advanceKpTicketSession: m.advance,
   isKpTicketPanel: m.panel, registerKpTicketPanel: m.register, settleKpTicket: m.settle, deliverKpTicketLog: m.deliver,
+  listPaidKpTicketOrders: m.paidOrders,
 }));
 vi.mock("../lib/economy", () => ({
   getGuildSettings: m.guildSettings, getShopItem: m.getItem, listShopItems: m.listItems,
@@ -65,6 +66,7 @@ beforeEach(() => {
     return session;
   });
   m.panel.mockResolvedValue(true);
+  m.paidOrders.mockResolvedValue([]);
   m.guildSettings.mockResolvedValue({ currencyName: "円" });
   m.getItem.mockResolvedValue(drink);
   m.listItems.mockResolvedValue([drink]);
@@ -76,6 +78,30 @@ beforeEach(() => {
 });
 
 describe("KP ticket component flow", () => {
+  it("publishes the ticket statement without creating, advancing or charging an order, including on repeat clicks", async () => {
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}statement`;
+    for (let n = 0; n < 2; n++) await run(i);
+    expect(m.paidOrders).toHaveBeenCalledWith("guild", "ticket");
+    expect(i.deferReply).toHaveBeenCalledWith();
+    expect(i.editReply.mock.calls[0]![0].embeds[0].toJSON().description).toContain("支払い済みの注文がありません");
+    expect(m.create).not.toHaveBeenCalled();
+    expect(m.advance).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("does not disclose statements from unregistered panels", async () => {
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}statement`;
+    m.panel.mockResolvedValue(false);
+    await run(i);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("未登録") }));
+  });
+  it("reports a statement query failure without claiming an empty or successful total", async () => {
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}statement`;
+    m.paidOrders.mockRejectedValueOnce(new Error("Database unavailable"));
+    await run(i);
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("処理に失敗") }));
+    expect(m.settle).not.toHaveBeenCalled();
+  });
   it("takes an additional drink order without VIP or extension fees and logs it in the ticket", async () => {
     settings.vipPrice = null; settings.extensionPrice = null;
     const i = fixture();
@@ -215,6 +241,7 @@ describe("KP ticket price administration", () => {
     expect(panel.components[0].toJSON().components).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: "注文する", custom_id: `${KP_TICKET_PREFIX}start` }),
       expect.objectContaining({ label: "追加注文", custom_id: `${KP_TICKET_PREFIX}additional` }),
+      expect.objectContaining({ label: "明細を集計", custom_id: `${KP_TICKET_PREFIX}statement` }),
     ]));
   });
 
