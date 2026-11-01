@@ -40,6 +40,8 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
     const retried = await createBossEvent(operation, guild, "channel", "kraken",
       { ...base, ...generateBossCombatStats("kraken", () => 0.999999) }, now);
     expect(retried.config).toEqual(event.config);
+    expect(event.config.defense).toBe(0);
+    expect(retried.config.defense).toBe(0); // A retry must not replace it with the new roll of 2.
     expect((await getBossInfo(guild, now))?.event.config).toEqual(generated);
   });
   async function wallet(user: string, balance: number) {

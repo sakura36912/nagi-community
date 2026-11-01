@@ -72,9 +72,9 @@ export function generateBossCombatStats(type: BossType, roll: () => number = for
   if (!Object.hasOwn(BOSS_NAMES, type)) throw new BossError("未対応のボスです。");
   // Balanced around level-one weapon attacks (8–16), with stronger bosses for upgraded weapons.
   const profiles = {
-    kraken: { hp: [300, 450], attack: [25, 35] },
-    megalodon: { hp: [450, 650], attack: [35, 45] },
-    leviathan: { hp: [650, 900], attack: [45, 60] },
+    kraken: { hp: [300, 450], attack: [25, 35], defense: [0, 2] },
+    megalodon: { hp: [450, 650], attack: [35, 45], defense: [1, 3] },
+    leviathan: { hp: [650, 900], attack: [45, 60], defense: [2, 4] },
   } as const;
   const integer = (min: number, max: number) => min + Math.floor(random(roll) * (max - min + 1));
   const profile = profiles[type];
@@ -82,6 +82,7 @@ export function generateBossCombatStats(type: BossType, roll: () => number = for
   return {
     soloHp, partyHp: Math.round(soloHp * integer(250, 300) / 100),
     attack: integer(profile.attack[0], profile.attack[1]),
+    defense: integer(profile.defense[0], profile.defense[1]),
     // Required legacy fields remain valid; new events use wallet HP and percentage healing instead.
     healAmount: 1, playerHp: 1, playerHpSource: "wallet" as const, healingMode: "max_hp_10_percent" as const,
     counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,

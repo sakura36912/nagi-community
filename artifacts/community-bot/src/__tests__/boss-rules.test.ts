@@ -24,12 +24,12 @@ describe("boss combat rules", () => {
     expect(bossHealing(player, percentage)).toBe(0);
   });
   it.each([
-    ["kraken", 300, 450, 25, 35], ["megalodon", 450, 650, 35, 45], ["leviathan", 650, 900, 45, 60],
-  ] as const)("generates inclusive, valid %s combat settings", (type, minHp, maxHp, minAttack, maxAttack) => {
+    ["kraken", 300, 450, 25, 35, 0, 2], ["megalodon", 450, 650, 35, 45, 1, 3], ["leviathan", 650, 900, 45, 60, 2, 4],
+  ] as const)("generates inclusive, valid %s combat settings", (type, minHp, maxHp, minAttack, maxAttack, minDefense, maxDefense) => {
     const low = generateBossCombatStats(type, () => 0);
     const high = generateBossCombatStats(type, () => 0.999999);
-    expect(low).toMatchObject({ soloHp: minHp, partyHp: Math.round(minHp * 2.5), attack: minAttack, healingMode: "max_hp_10_percent", playerHpSource: "wallet" });
-    expect(high).toMatchObject({ soloHp: maxHp, partyHp: maxHp * 3, attack: maxAttack });
+    expect(low).toMatchObject({ soloHp: minHp, partyHp: Math.round(minHp * 2.5), attack: minAttack, defense: minDefense, healingMode: "max_hp_10_percent", playerHpSource: "wallet" });
+    expect(high).toMatchObject({ soloHp: maxHp, partyHp: maxHp * 3, attack: maxAttack, defense: maxDefense });
     for (const generated of [low, high]) expect(() => validateBossConfig(type, { ...config, ...generated })).not.toThrow();
   });
   it.each([NaN, Infinity, -0.1, 1])("rejects an invalid generation roll: %s", roll => {

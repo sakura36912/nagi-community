@@ -59,6 +59,13 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
     if (name === "ボス開催") {
       const channel = await assertAnnouncementChannel(interaction);
       const integer = (name: string) => interaction.options.getInteger(name, true);
+      const minutes = (name: string) => {
+        const value = integer(name);
+        if (!Number.isInteger(value) || value < 1 || value > 10080) throw new BossError(`${name}は1〜10080分の整数で指定してください。`);
+        return value;
+      };
+      const durationMinutes = minutes("制限分"), lobbyMinutes = minutes("受付分");
+      if (lobbyMinutes > durationMinutes) throw new BossError("受付分は制限分以下で指定してください。");
       const role = interaction.options.getRole("補正ロール");
       const multiplier = interaction.options.getNumber("ロール倍率");
       if (Boolean(role) !== (multiplier !== null)) throw new BossError("補正ロールとロール倍率は両方指定してください。");
@@ -66,8 +73,8 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
       if (role && !await interaction.guild!.roles.fetch(role.id)) throw new BossError("指定した補正ロールが見つかりません。");
       const config: BossConfig = {
         ...generateBossCombatStats(interaction.options.getString("ボス", true) as BossType),
-        durationSeconds: integer("制限秒"),
-        lobbySeconds: integer("受付秒"), reward: integer("報酬"), defense: integer("防御力"),
+        durationSeconds: durationMinutes * 60,
+        lobbySeconds: lobbyMinutes * 60, reward: integer("報酬"),
         cooldownSeconds: 1,
         attackCooldownSeconds: interaction.options.getInteger("攻撃間隔秒") ?? 5,
         healCooldownSeconds: interaction.options.getInteger("回復間隔秒") ?? 30,
@@ -156,13 +163,12 @@ function base(name: string, description: string) {
   if (ADMIN.has(name)) cmd.setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
   return cmd;
 }
-const host = base("ボス開催", "管理者専用：ボスHP・攻撃力をBotが抽選（参加者HPは所持金）")
+const host = base("ボス開催", "管理者専用：時間は分指定、ボスHP・攻撃力・防御力はBotが抽選")
   .addStringOption(o => o.setName("ボス").setDescription("開催するボス").setRequired(true).addChoices(...types));
 for (const [name, description, min, max] of [
-  ["制限秒", "イベント全体の制限時間（秒）", 1, 604800],
-  ["受付秒", "パーティ1組の受付時間（秒、制限秒以下）", 1, 604800],
+  ["制限分", "イベント全体の制限時間（分、最大7日＝10080分）", 1, 10080],
+  ["受付分", "パーティ1組の受付時間（分、制限分以下）", 1, 10080],
   ["報酬", "1討伐の報酬総額（パーティは均等分配）", 0, 2147483647],
-  ["防御力", "ボスの内部防御力", 0, 2147483647],
 ] as const) host.addIntegerOption(o => o.setName(name).setDescription(description).setRequired(true).setMinValue(min).setMaxValue(max));
 host.addIntegerOption(o => o.setName("攻撃間隔秒").setDescription("攻撃専用クールタイム。省略時5秒、0で無制限").setMinValue(0).setMaxValue(3600))
   .addIntegerOption(o => o.setName("回復間隔秒").setDescription("回復専用クールタイム。省略時30秒").setMinValue(1).setMaxValue(3600))

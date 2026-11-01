@@ -67,11 +67,14 @@ describe("boss commands and displays", () => {
     const host = bossCommands.find(c => c.data.name === "ボス開催")!.data.toJSON();
     expect(host.options!.length).toBeLessThanOrEqual(25);
     expect(host.default_member_permissions).toBe(PermissionFlagsBits.Administrator.toString());
-    for (const name of ["制限秒", "受付秒", "報酬", "防御力"]) {
+    for (const name of ["制限分", "受付分", "報酬"]) {
       expect(host.options!.find(o => o.name === name)?.required).toBe(true);
     }
-    for (const name of ["ソロhp", "パーティhp", "攻撃力", "回復力", "プレイヤーhp", "回復量", "反撃間隔", "会心率", "会心倍率", "レベル補正率"]) {
+    for (const name of ["制限秒", "受付秒", "防御力", "ソロhp", "パーティhp", "攻撃力", "回復力", "プレイヤーhp", "回復量", "反撃間隔", "会心率", "会心倍率", "レベル補正率"]) {
       expect(host.options!.some(o => o.name === name)).toBe(false);
+    }
+    for (const name of ["制限分", "受付分"]) {
+      expect(host.options!.find(o => o.name === name)).toMatchObject({ min_value: 1, max_value: 10080 });
     }
     expect(bossCommands.map(c => c.data.name)).toEqual(expect.arrayContaining(["参加", "攻撃", "回復", "ボス情報"]));
     for (const name of ["攻撃間隔秒", "回復間隔秒"]) {
@@ -84,12 +87,13 @@ describe("boss commands and displays", () => {
   it.each([{}, { 攻撃間隔秒: 10, 回復間隔秒: 60 }])("passes individual cooldown settings to the hosted event: %j", async overrides => {
     const i = fixture("ボス開催"); i.flags.admin = true;
     Object.assign(i.values, {
-      ボス: "kraken", 制限秒: 600, 受付秒: 10, 報酬: 100, 防御力: 0, ...overrides,
+      ボス: "kraken", 制限分: 10, 受付分: 1, 報酬: 100, ...overrides,
     });
     await run(i);
     expect(m.host).toHaveBeenCalledWith(i.id, "guild", "channel", "kraken", expect.objectContaining({
       attackCooldownSeconds: overrides.攻撃間隔秒 ?? 5,
       healCooldownSeconds: overrides.回復間隔秒 ?? 30,
+      durationSeconds: 600, lobbySeconds: 60,
       playerHpSource: "wallet", healingMode: "max_hp_10_percent",
       counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
     }));
@@ -99,6 +103,27 @@ describe("boss commands and displays", () => {
     expect(config.partyHp).toBeGreaterThan(config.soloHp);
     expect(config.attack).toBeGreaterThanOrEqual(25);
     expect(config.attack).toBeLessThanOrEqual(35);
+    expect(config.defense).toBeGreaterThanOrEqual(0);
+    expect(config.defense).toBeLessThanOrEqual(2);
+  });
+  it.each([1, 10080])("converts equal valid duration and lobby minutes %s into seconds exactly once", async value => {
+    const i = fixture("ボス開催"); i.flags.admin = true;
+    Object.assign(i.values, { ボス: "kraken", 制限分: value, 受付分: value, 報酬: 100 });
+    await run(i);
+    expect(m.host).toHaveBeenCalledWith(i.id, "guild", "channel", "kraken",
+      expect.objectContaining({ durationSeconds: value * 60, lobbySeconds: value * 60 }));
+  });
+  it.each([
+    { 制限分: 0 }, { 制限分: 10081 }, { 制限分: 1.5 }, { 制限分: NaN },
+    { 受付分: 0 }, { 受付分: 10081 }, { 受付分: 1.5 }, { 受付分: Infinity },
+    { 制限分: 1, 受付分: 2 },
+  ])("rejects invalid minute inputs without saving or announcing: %j", async overrides => {
+    const i = fixture("ボス開催"); i.flags.admin = true;
+    Object.assign(i.values, { ボス: "kraken", 制限分: 10, 受付分: 1, 報酬: 100, ...overrides });
+    await run(i);
+    expect(m.host).not.toHaveBeenCalled();
+    expect(i.channel.send).not.toHaveBeenCalled();
+    expect(JSON.stringify(i.editReply.mock.calls)).toMatch(/整数で指定|受付分は制限分以下/);
   });
   it("explains wallet HP and percentage healing in the join confirmation for new events", async () => {
     m.quote.mockResolvedValueOnce({ event: { ...event, config: { ...event.config, playerHpSource: "wallet", healingMode: "max_hp_10_percent" } },
