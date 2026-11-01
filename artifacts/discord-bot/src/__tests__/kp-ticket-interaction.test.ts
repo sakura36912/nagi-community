@@ -4,7 +4,7 @@ import type { KpTicketSession } from "@workspace/db";
 
 const m = vi.hoisted(() => ({
   settings: vi.fn(), configure: vi.fn(), getSession: vi.fn(), create: vi.fn(), advance: vi.fn(),
-  panel: vi.fn(), register: vi.fn(), settle: vi.fn(), deliver: vi.fn(), paidOrders: vi.fn(),
+  panel: vi.fn(), register: vi.fn(), settle: vi.fn(), deliver: vi.fn(), paidOrders: vi.fn(), createAdditional: vi.fn(),
   guildSettings: vi.fn(), getItem: vi.fn(), listItems: vi.fn(), error: vi.fn(),
 }));
 vi.mock("@workspace/db", async importOriginal => ({
@@ -13,6 +13,7 @@ vi.mock("@workspace/db", async importOriginal => ({
   getKpTicketSession: m.getSession, createKpTicketSession: m.create, advanceKpTicketSession: m.advance,
   isKpTicketPanel: m.panel, registerKpTicketPanel: m.register, settleKpTicket: m.settle, deliverKpTicketLog: m.deliver,
   listPaidKpTicketOrders: m.paidOrders,
+  createAdditionalKpTicketSession: m.createAdditional,
 }));
 vi.mock("../lib/economy", () => ({
   getGuildSettings: m.guildSettings, getShopItem: m.getItem, listShopItems: m.listItems,
@@ -60,6 +61,10 @@ beforeEach(() => {
     createdAt: new Date(), paidAt: null, logMessageId: null };
   m.settings.mockImplementation(async () => settings);
   m.create.mockImplementation(async () => session);
+  m.createAdditional.mockImplementation(async () => {
+    session = { ...session, phase: "vip", selection: { castId: "black-cast", fixedCastId: "black-cast" } };
+    return session;
+  });
   m.getSession.mockImplementation(async () => session);
   m.advance.mockImplementation(async (_previous, phase, selection) => {
     session = { ...session, phase, selection, version: session.version + 1 };
@@ -102,15 +107,19 @@ describe("KP ticket component flow", () => {
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("処理に失敗") }));
     expect(m.settle).not.toHaveBeenCalled();
   });
-  it("takes an additional drink order without VIP or extension fees and logs it in the ticket", async () => {
+  it("keeps the cast fixed and allows additional drinks without selecting VIP or extension", async () => {
     settings.vipPrice = null; settings.extensionPrice = null;
     const i = fixture();
     i.customId = `${KP_TICKET_PREFIX}additional`;
     await run(i);
     expect(i.deferReply).toHaveBeenCalledWith({ ephemeral: true });
     expect(m.panel).toHaveBeenCalledWith("panel", "guild", "ticket");
-    expect(m.create).toHaveBeenCalledWith(i.id, "guild", "ticket", "buyer");
-    await choose(i, "black-cast");
+    expect(m.createAdditional).toHaveBeenCalledWith(i.id, "guild", "ticket", "buyer");
+    expect(m.create).not.toHaveBeenCalled();
+    expect(i.editReply.mock.calls[0]![0].content).toContain("<@black-cast>（変更不可）");
+    expect(session.phase).toBe("vip");
+    await choose(i, "no");
+    await choose(i, "no");
     expect(session.phase).toBe("drink");
     await choose(i, "1");
     await choose(i, "3");
@@ -129,8 +138,62 @@ describe("KP ticket component flow", () => {
     m.panel.mockResolvedValue(false);
     await run(i);
     expect(m.create).not.toHaveBeenCalled();
+    expect(m.createAdditional).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("未登録") }));
+  });
+  it("includes explicitly selected VIP and extension in an additional drink payment", async () => {
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
+    await choose(i, "yes"); await choose(i, "yes");
+    await choose(i, "1"); await choose(i, "2");
+    expect(session.selection).toMatchObject({ castId: "black-cast", fixedCastId: "black-cast",
+      vip: true, extension: true, quote: { total: 900 } });
+    expect(m.settle).not.toHaveBeenCalled();
+    i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
+    await run(i);
+    expect(m.settle).toHaveBeenCalledOnce();
+  });
+  it("adds VIP and extension without drinks, including when no drink catalogue exists", async () => {
+    m.listItems.mockResolvedValue([]);
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
+    await choose(i, "yes"); await choose(i, "yes");
+    const reply = i.editReply.mock.calls.at(-1)![0];
+    expect(reply.components.at(-1).toJSON().components[0].label).toContain("ドリンクなし");
+    i.customId = ticketId("extras-only", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
+    await run(i);
+    expect(session.phase).toBe("confirm");
+    expect(session.selection.quote).toMatchObject({ itemId: null, quantity: 0, total: 700 });
+    expect(m.settle).not.toHaveBeenCalled();
+    i.customId = ticketId("confirm", session); await run(i);
+    expect(m.settle).toHaveBeenCalledOnce();
+  });
+  it("keeps the inherited cast on reset and rejects forged cast selection", async () => {
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
+    await choose(i, "no"); await choose(i, "no");
+    i.customId = ticketId("reset", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
+    await run(i);
+    expect(session.phase).toBe("vip");
+    expect(session.selection).toEqual({ castId: "black-cast", fixedCastId: "black-cast" });
+    i.customId = ticketId("cast", session); i.values = ["white-cast"];
+    i.isButton = () => false; i.isStringSelectMenu = () => true;
+    await run(i);
+    expect(session.selection.castId).toBe("black-cast");
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("blocks additional VIP with an unset fee without advancing or charging", async () => {
+    settings.vipPrice = null;
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
+    await choose(i, "yes");
+    expect(session.phase).toBe("vip");
+    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("VIP料金が未設定") }));
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("cannot start an additional order without a previous paid order", async () => {
+    const { KpTicketError } = await import("@workspace/db");
+    m.createAdditional.mockRejectedValueOnce(new KpTicketError("先に「注文する」から注文してください。"));
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("先に") }));
+    expect(m.settle).not.toHaveBeenCalled();
   });
   it("shows only members with either cast role and never duplicates a dual-role member", async () => {
     const i = fixture(); await run(i);

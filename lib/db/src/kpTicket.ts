@@ -1,4 +1,4 @@
-import { and, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
 import { db } from "./index";
 import { inventoryItemsTable, shopItemsTable, transactionsTable, walletsTable } from "./schema/economy";
@@ -72,6 +72,24 @@ export async function createKpTicketSession(id: string, guildId: string, channel
   return session!;
 }
 
+export async function createAdditionalKpTicketSession(id: string, guildId: string, channelId: string, userId: string) {
+  await ensureKpTicketSchema();
+  const [previous] = await db.select().from(kpTicketSessionsTable).where(and(
+    eq(kpTicketSessionsTable.guildId, guildId), eq(kpTicketSessionsTable.channelId, channelId),
+    eq(kpTicketSessionsTable.userId, userId), eq(kpTicketSessionsTable.phase, "paid"),
+  )).orderBy(desc(kpTicketSessionsTable.paidAt), desc(kpTicketSessionsTable.id)).limit(1);
+  if (!previous?.selection.castId) {
+    throw new KpTicketError("このチケットでご自身が支払い済みの注文がありません。先に「注文する」から注文してください。");
+  }
+  const castId = previous.selection.castId;
+  const [session] = await db.insert(kpTicketSessionsTable).values({
+    id, guildId, channelId, userId, phase: "vip",
+    selection: { castId, fixedCastId: castId },
+    expiresAt: new Date(Date.now() + 20 * 60_000),
+  }).returning();
+  return session!;
+}
+
 export async function getKpTicketSession(id: string) {
   await ensureKpTicketSchema();
   const [session] = await db.select().from(kpTicketSessionsTable).where(eq(kpTicketSessionsTable.id, id));
@@ -89,6 +107,10 @@ export async function listPaidKpTicketOrders(guildId: string, channelId: string)
 }
 
 export async function advanceKpTicketSession(session: KpTicketSession, phase: KpTicketPhase, selection: KpTicketSelection) {
+  if (session.selection.fixedCastId && (phase === "cast" || selection.castId !== session.selection.fixedCastId
+    || selection.fixedCastId !== session.selection.fixedCastId)) {
+    throw new KpTicketError("追加注文の指名キャストは変更できません。");
+  }
   const [next] = await db.update(kpTicketSessionsTable).set({ phase, selection, version: session.version + 1 })
     .where(and(eq(kpTicketSessionsTable.id, session.id), eq(kpTicketSessionsTable.userId, session.userId),
       eq(kpTicketSessionsTable.phase, session.phase), eq(kpTicketSessionsTable.version, session.version),
@@ -112,13 +134,15 @@ export async function settleKpTicket(
     }
     const [settings] = await tx.select().from(kpTicketSettingsTable)
       .where(eq(kpTicketSettingsTable.guildId, guildId)).for("share");
-    const [item] = await tx.select().from(shopItemsTable)
-      .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.id, session.selection.itemId ?? -1))).for("share");
-    if (!settings || !item) throw new KpTicketError("商品または設定が削除されています。最初から選び直してください。");
+    const [item] = session.selection.itemId === undefined ? [] : await tx.select().from(shopItemsTable)
+      .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.id, session.selection.itemId))).for("share");
+    if (!settings || (session.selection.itemId !== undefined && !item)) {
+      throw new KpTicketError("商品または設定が削除されています。最初から選び直してください。");
+    }
     if (JSON.stringify([...settings.castRoleIds].sort()) !== JSON.stringify([...validatedRoleIds].sort())) {
       throw new KpTicketError("キャスト対象ロールが変更されました。最初から選び直してください。");
     }
-    const quote = quoteKpTicket(item, settings, session.selection);
+    const quote = quoteKpTicket(item ?? null, settings, session.selection);
     if (!isDeepStrictEqual(quote, session.selection.quote)) {
       const [changed] = await tx.update(kpTicketSessionsTable).set({
         selection: { ...session.selection, quote }, version: session.version + 1,
@@ -131,13 +155,15 @@ export async function settleKpTicket(
     }).where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId),
       sql`${walletsTable.balance} >= ${quote.total}`)).returning();
     if (!wallet) throw new KpTicketError("残高が不足しています。引き落としは行っていません。");
-    await tx.insert(inventoryItemsTable).values({ guildId, userId, shopItemId: item.id, quantity: quote.quantity })
-      .onConflictDoUpdate({ target: [inventoryItemsTable.guildId, inventoryItemsTable.userId, inventoryItemsTable.shopItemId],
-        set: { quantity: sql`${inventoryItemsTable.quantity} + ${quote.quantity}` } });
+    if (item) {
+      await tx.insert(inventoryItemsTable).values({ guildId, userId, shopItemId: item.id, quantity: quote.quantity })
+        .onConflictDoUpdate({ target: [inventoryItemsTable.guildId, inventoryItemsTable.userId, inventoryItemsTable.shopItemId],
+          set: { quantity: sql`${inventoryItemsTable.quantity} + ${quote.quantity}` } });
+    }
     await tx.insert(transactionsTable).values({
       guildId, userId, amount: -quote.total, relatedUserId: session.selection.castId,
       sessionKey: `kp-ticket:${id}`,
-      reason: `kp-ticket:${item.name} x${quote.quantity}; VIP=${session.selection.vip}; 延長=${session.selection.extension}; ticket=${channelId}`,
+      reason: `kp-ticket:${quote.itemName} x${quote.quantity}; VIP=${session.selection.vip}; 延長=${session.selection.extension}; ticket=${channelId}`,
     });
     const [paid] = await tx.update(kpTicketSessionsTable).set({ phase: "paid", paidAt: new Date() })
       .where(eq(kpTicketSessionsTable.id, id)).returning();

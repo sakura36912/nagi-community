@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 
 export type KpTicketPhase = "cast" | "vip" | "extension" | "drink" | "quantity" | "confirm" | "paid" | "cancelled";
 export interface KpTicketQuote {
-  itemId: number;
+  itemId: number | null;
   itemName: string;
   unitPrice: number;
   quantity: number;
@@ -13,6 +13,8 @@ export interface KpTicketQuote {
 }
 export interface KpTicketSelection {
   castId?: string;
+  /** Additional orders keep the cast of the buyer's paid order in this ticket. */
+  fixedCastId?: string;
   vip?: boolean;
   extension?: boolean;
   itemId?: number;

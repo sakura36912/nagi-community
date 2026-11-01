@@ -7,6 +7,16 @@ const item = { id: 1, name: "ドリンク", price: 100, category: "kp", effectTy
 const selection: KpTicketSelection = { castId: "cast", itemId: 1, quantity: 3, vip: true, extension: true };
 
 describe("KP ticket pricing and paging", () => {
+  it("quotes additional VIP or extension without forcing a drink purchase", () => {
+    const extra = { castId: "cast", fixedCastId: "cast", vip: true, extension: true };
+    expect(quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, extra))
+      .toMatchObject({ itemId: null, quantity: 0, total: 700 });
+    expect(quoteKpTicket(null, { vipPrice: 0, extensionPrice: null }, { ...extra, extension: false }).total).toBe(0);
+    expect(() => quoteKpTicket(null, { vipPrice: null, extensionPrice: 200 }, extra)).toThrow("VIP料金が未設定");
+    expect(() => quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, { ...extra, vip: false, extension: false })).toThrow("不完全");
+    expect(() => quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, { ...extra, fixedCastId: undefined })).toThrow("不完全");
+    expect(() => quoteKpTicket(item, { vipPrice: 500, extensionPrice: 200 }, { ...selection, fixedCastId: "other" })).toThrow("変更できません");
+  });
   it("adds VIP and extension once, not once per drink", () => {
     expect(quoteKpTicket(item, { vipPrice: 500, extensionPrice: 200 }, selection))
       .toMatchObject({ total: 1000, quantity: 3, vipPrice: 500, extensionPrice: 200 });

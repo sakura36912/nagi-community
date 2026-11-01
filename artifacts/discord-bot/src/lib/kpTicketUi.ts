@@ -47,7 +47,7 @@ export function ticketSummary(session: KpTicketSession, currency: string, paid =
       { name: "VIP希望", value: `${s.vip ? "希望する" : "希望しない"}（${q?.vipPrice.toLocaleString()}${currency}）` },
       { name: "延長希望", value: `${s.extension ? "希望する" : "希望しない"}（${q?.extensionPrice.toLocaleString()}${currency}）` },
       { name: "ドリンク", value: q?.itemName.slice(0, 1024) ?? "未選択" },
-      { name: "単価・数量", value: `${q?.unitPrice.toLocaleString()}${currency} × ${q?.quantity}個` },
+      { name: "単価・数量", value: q?.itemId === null ? "ドリンクなし" : `${q?.unitPrice.toLocaleString()}${currency} × ${q?.quantity}個` },
       { name: "合計金額", value: `${q?.total.toLocaleString()}${currency}` },
     ).setFooter({ text: `注文ID: ${session.id}` });
   if (paid) embed.setTimestamp(session.paidAt ?? new Date());

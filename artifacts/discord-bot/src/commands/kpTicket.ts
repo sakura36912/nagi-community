@@ -4,7 +4,7 @@ import {
   type Guild, type StringSelectMenuInteraction,
 } from "discord.js";
 import {
-  advanceKpTicketSession, configureKpTicket, createKpTicketSession, deliverKpTicketLog,
+  advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, deliverKpTicketLog,
   getKpTicketSession, getKpTicketSettings, isKpDrink, isKpTicketPanel, KpTicketError,
   quoteKpTicket, registerKpTicketPanel, settleKpTicket, listPaidKpTicketOrders,
   type KpTicketSession, type KpTicketSettings,
@@ -122,7 +122,9 @@ async function checkCast(guild: Guild, settings: KpTicketSettings, castId: strin
 export async function renderKpTicket(interaction: TicketInteraction, session: KpTicketSession, page = 0, notice = "") {
   const { currencyName } = await getGuildSettings(session.guildId);
   const settings = await currentSettings(session.guildId);
-  const content = `${notice ? `${notice}\n` : ""}注文の操作は本人のみ可能です。有効期限: <t:${Math.floor(session.expiresAt.getTime() / 1000)}:R>`;
+  const content = `${notice ? `${notice}\n` : ""}`
+    + (session.selection.fixedCastId ? `指名キャスト: <@${session.selection.fixedCastId}>（変更不可）\n` : "")
+    + `注文の操作は本人のみ可能です。有効期限: <t:${Math.floor(session.expiresAt.getTime() / 1000)}:R>`;
   switch (session.phase) {
     case "cast": {
       const members = await fetchForumCastMembers(interaction.guild!, settings.castRoleIds);
@@ -146,10 +148,15 @@ export async function renderKpTicket(interaction: TicketInteraction, session: Kp
     }
     case "drink": {
       const items = (await listShopItems(session.guildId, KP_SHOP_CATEGORY)).filter(isKpDrink);
-      if (!items.length) throw new KpTicketError("KPshopの通常ドリンク商品が未登録です。管理者が /shop add で登録してください。");
-      await interaction.editReply({ content, embeds: [], components: pagedTicketMenu(session, "drink", "ドリンクを選択", items.map(item => ({
+      const extrasOnly = !!session.selection.fixedCastId && (session.selection.vip || session.selection.extension);
+      if (!items.length && !extrasOnly) throw new KpTicketError("KPshopの通常ドリンク商品が未登録です。管理者が /shop add で登録してください。");
+      const components = items.length ? pagedTicketMenu(session, "drink", "ドリンクを選択", items.map(item => ({
         label: item.name, value: String(item.id), description: `${item.price.toLocaleString()}${currencyName}`,
-      })), page) });
+      })), page) : [ticketControls(session)];
+      if (extrasOnly) components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(ticketId("extras-only", session)).setLabel("ドリンクなしでVIP・延長のみ追加").setStyle(ButtonStyle.Primary),
+      ));
+      await interaction.editReply({ content, embeds: [], components });
       break;
     }
     case "quantity":
@@ -218,10 +225,11 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
         throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
       }
-      let session = await createKpTicketSession(interaction.id, interaction.guildId, interaction.channelId, interaction.user.id);
-      if (encoded === "additional") {
-        // Additional drinks are a separate order, without charging reservation extras again.
-        session = await advanceKpTicketSession(session, "cast", { vip: false, extension: false });
+      const session = await (encoded === "additional" ? createAdditionalKpTicketSession : createKpTicketSession)(
+        interaction.id, interaction.guildId, interaction.channelId, interaction.user.id,
+      );
+      if (session.selection.fixedCastId) {
+        await checkCast(interaction.guild, await currentSettings(interaction.guildId), session.selection.fixedCastId);
       }
       await renderKpTicket(interaction, session);
       return;
@@ -245,7 +253,9 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       return;
     }
     if (action === "reset") {
-      await renderKpTicket(interaction, await advanceKpTicketSession(session, "cast", {}));
+      const fixedCastId = session.selection.fixedCastId;
+      await renderKpTicket(interaction, await advanceKpTicketSession(session, fixedCastId ? "vip" : "cast",
+        fixedCastId ? { castId: fixedCastId, fixedCastId } : {}));
       return;
     }
     if ((action === "cast-page" && session.phase === "cast") || (action === "drink-page" && session.phase === "drink")) {
@@ -253,6 +263,12 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       return;
     }
     const settings = await currentSettings(session.guildId);
+    if (action === "extras-only" && session.phase === "drink" && interaction.isButton()) {
+      const selection = { ...session.selection, itemId: undefined, quantity: undefined };
+      selection.quote = quoteKpTicket(null, settings, selection);
+      await renderKpTicket(interaction, await advanceKpTicketSession(session, "confirm", selection));
+      return;
+    }
     if (action === "confirm" && session.phase === "confirm" && interaction.isButton()) {
       if (!canPost(interaction)) throw new KpTicketError("チケット内に購入ログを送信できません。権限を確認してください。引き落としは行っていません。");
       await checkCast(interaction.guild, settings, session.selection.castId!);
@@ -270,8 +286,9 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       case "cast":
         if (!value) throw new KpTicketError("キャストを選択してください。");
         await checkCast(interaction.guild, settings, value);
+        if (selection.fixedCastId) throw new KpTicketError("追加注文の指名キャストは変更できません。");
         selection.castId = value;
-        next = selection.vip === false && selection.extension === false ? "drink" : "vip";
+        next = "vip";
         break;
       case "vip":
       case "extension": {

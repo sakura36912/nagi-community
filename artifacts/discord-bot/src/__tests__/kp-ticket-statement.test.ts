@@ -13,6 +13,15 @@ function paid(id: string, extras = false): KpTicketSession {
   };
 }
 describe("KP ticket paid statement", () => {
+  it("includes extra-only purchases in VIP/extension totals without adding a drink", () => {
+    const additional = paid("extra");
+    additional.selection.quote = { itemId: null, itemName: "VIP・延長のみ（ドリンクなし）",
+      unitPrice: 0, quantity: 0, vipPrice: 500, extensionPrice: 200, total: 700 };
+    const result = kpTicketStatement([paid("1"), additional], "円");
+    expect(result.embeds[0]!.toJSON().fields![0]!.value).toBe(
+      "ドリンク代: 200円\nVIP料金: 500円\n延長料金: 200円\n支払い済み合計: 900円");
+    expect(result.embeds[0]!.toJSON().description).not.toContain("× 0個");
+  });
   it("combines original and additional paid orders using historical prices, even expired or unlogged orders", () => {
     const result = kpTicketStatement([paid("1", true), paid("2")], "円");
     expect(result.embeds[0]!.toJSON().fields![0]!.value).toBe(

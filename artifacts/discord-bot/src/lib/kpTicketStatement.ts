@@ -14,8 +14,9 @@ export function kpTicketStatement(orders: KpTicketSession[], currency: string) {
     vip += BigInt(q.vipPrice);
     extension += BigInt(q.extensionPrice);
     const price = `${q.total.toLocaleString()}${currency}`;
+    const itemLabel = q.itemId === null ? q.itemName : `${q.itemName} × ${q.quantity}個`;
     lines.push(
-      `${index + 1}. ${q.itemName} × ${q.quantity}個`,
+      `${index + 1}. ${itemLabel}`,
       `購入者ID: ${order.userId} / 指名キャストID: ${order.selection.castId ?? "未記録"}`,
       `単価: ${q.unitPrice.toLocaleString()}${currency}`,
       `VIP: ${q.vipPrice.toLocaleString()}${currency} / 延長: ${q.extensionPrice.toLocaleString()}${currency}`,
@@ -23,7 +24,7 @@ export function kpTicketStatement(orders: KpTicketSession[], currency: string) {
       `支払日時: ${order.paidAt?.toISOString() ?? "未記録"} / 注文ID: ${order.id}`, "",
     );
     if (index < 10) preview.push(
-      `${index + 1}. ${escapeMarkdown(q.itemName.slice(0, 80))} × ${q.quantity}個 — ${price}\n購入者: <@${order.userId}> / キャスト: <@${order.selection.castId}>`,
+      `${index + 1}. ${escapeMarkdown(itemLabel.slice(0, 100))} — ${price}\n購入者: <@${order.userId}> / キャスト: <@${order.selection.castId}>`,
     );
   }
   const amount = (value: bigint) => `${value.toLocaleString()}${currency}`;

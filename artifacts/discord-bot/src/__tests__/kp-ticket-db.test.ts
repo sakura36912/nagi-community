@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  advanceKpTicketSession, configureKpTicket, createKpTicketSession, db, deliverKpTicketLog,
+  advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, db, deliverKpTicketLog,
   ensureKpTicketSchema, getKpTicketSession, kpTicketPanelsTable, kpTicketSessionsTable, kpTicketSettingsTable,
   inventoryItemsTable, quoteKpTicket, settleKpTicket, shopItemsTable, transactionsTable, walletsTable, listPaidKpTicketOrders,
   type KpTicketSelection, type KpTicketSession,
@@ -45,6 +45,31 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
   }
   const settle = (session: KpTicketSession) => settleKpTicket(session.id, session.version, user, guild, channel, ["black", "white"]);
 
+  it("inherits only this buyer's paid cast in this ticket and keeps it locked through payment", async () => {
+    await wallet(5000);
+    await settle(await ready());
+    const order = await createAdditionalKpTicketSession(randomUUID(), guild, channel, user);
+    expect(order.phase).toBe("vip");
+    expect(order.selection).toEqual({ castId: "test-cast", fixedCastId: "test-cast" });
+    await expect(createAdditionalKpTicketSession(randomUUID(), guild, channel, "other")).rejects.toThrow("支払い済み");
+    await expect(createAdditionalKpTicketSession(randomUUID(), guild, "other", user)).rejects.toThrow("支払い済み");
+    await expect(createAdditionalKpTicketSession(randomUUID(), `${guild}-other`, channel, user)).rejects.toThrow("支払い済み");
+    await expect(advanceKpTicketSession(order, "cast", order.selection)).rejects.toThrow("変更できません");
+    await expect(advanceKpTicketSession(order, "vip", {})).rejects.toThrow("変更できません");
+    const selection = { ...order.selection, vip: true, extension: true };
+    const quote = quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, selection);
+    const confirm = await advanceKpTicketSession(order, "confirm", { ...selection, quote });
+    const beforeInventory = await db.select().from(inventoryItemsTable).where(eq(inventoryItemsTable.guildId, guild));
+    const results = await Promise.all([settle(confirm), settle(confirm)]);
+    expect(results.map(result => result.status).sort()).toEqual(["already", "paid"]);
+    expect(await balance()).toBe(3400);
+    expect(await db.select().from(inventoryItemsTable).where(eq(inventoryItemsTable.guildId, guild))).toEqual(beforeInventory);
+    expect((await listPaidKpTicketOrders(guild, channel)).some(paid => paid.id === order.id && paid.selection.quote?.total === 700)).toBe(true);
+    const ledger = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${order.id}`));
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.amount).toBe(-700);
+  });
+
   it("summarizes only paid orders in the exact guild and ticket without changing balances", async () => {
     const ticket = `statement-${randomUUID()}`;
     const quote = quoteKpTicket(product, { vipPrice: 500, extensionPrice: 200 }, baseSelection());
@@ -71,6 +96,9 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
 
   it("serializes duplicate confirmation: one debit, one ledger row, one inventory grant", async () => {
     await wallet(5000);
+    const [before] = await db.select().from(inventoryItemsTable).where(and(
+      eq(inventoryItemsTable.guildId, guild), eq(inventoryItemsTable.shopItemId, product.id),
+    ));
     const session = await ready();
     const outcomes = await Promise.all([settle(session), settle(session)]);
     expect(outcomes.map(r => r.status).sort()).toEqual(["already", "paid"]);
@@ -79,7 +107,7 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     expect(ledger).toHaveLength(1);
     expect(ledger[0]!.amount).toBe(-900);
     const [inventory] = await db.select().from(inventoryItemsTable).where(and(eq(inventoryItemsTable.guildId, guild), eq(inventoryItemsTable.shopItemId, product.id)));
-    expect(inventory!.quantity).toBe(2);
+    expect(inventory!.quantity).toBe((before?.quantity ?? 0) + 2);
   });
   it("does not overspend across two different orders sharing a wallet", async () => {
     await wallet(1000);
