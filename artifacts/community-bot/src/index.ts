@@ -530,7 +530,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await command.execute(interaction);
         return;
       }
-      // 島民はゾンビイベントの3コマンドを許可。役職・参加状態・管理操作は各ハンドラーで確認。
+      // 島民の共通制限はなし。追放者の制限と各ハンドラーの管理・参加条件は維持する。
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
         const roles = interaction.guild?.roles.cache.filter(role => member.roles.cache.has(role.id)).map(role => role.name) ?? [];

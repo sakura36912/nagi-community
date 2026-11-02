@@ -12,6 +12,7 @@ import {
 
 import { handleHighlowButton, HL_PREFIX } from "./commands/highlow";
 import { handlePokerButton, POKER_PREFIX } from "./commands/poker";
+import { isBankCommandBlocked } from "./lib/restrictedCommandAccess";
 import {
   DEALER_CASINO_PREFIX,
   handleDealerCasinoInteraction,
@@ -2455,42 +2456,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
         return;
       }
-        // 島民・追放者ロール制限（スタッフロールは免除）
+      // 島民には共通制限を設けない。追放者の制限・既存のスタッフ免除は維持する。
       if (interaction.inGuild()) {
         const member = interaction.member as GuildMember;
-        const EXEMPT_ROLES    = [
-          "守門卿",
-          "門番",
-          "門番見習い",
-          "見習い門番",
-          "航海士",
-          "提督",
-          "大提督",
-          "賭博頭領",
-          "賭博師",
-        ];
-        const isExempt = EXEMPT_ROLES.some((name) =>
-          interaction.guild?.roles.cache.some((r) => r.name === name && member.roles.cache.has(r.id)),
-        );
-          const hasIslandRole = !isExempt && interaction.guild?.roles.cache.some((r) =>
-            r.name === "島民" && member.roles.cache.has(r.id),
-          );
-          const hasExpelledRole = !isExempt && interaction.guild?.roles.cache.some((r) =>
-            r.name === "追放者" && member.roles.cache.has(r.id),
-          );
-          const hasRestrictedRole = !isExempt && (hasIslandRole || hasExpelledRole);
-          const allowedForIsland = new Set(["送金", "残高確認", "slot", "blackjack", "baccarat", "highlow", "chinchiro", "裏航海", "bounty"]);
-          const allowedForExpelled = new Set(["送金", "残高確認", "slot", "blackjack", "highlow", "chinchiro", "裏航海", "bounty"]);
-          const allowedCommands = hasIslandRole && !hasExpelledRole
-            ? allowedForIsland
-            : allowedForExpelled;
-          if (hasRestrictedRole && !allowedCommands.has(interaction.commandName)) {
-            const allowedText = hasIslandRole && !hasExpelledRole
-              ? "`/送金`、`/残高確認`、`/slot play`、`/blackjack`、`/baccarat`、`/highlow`、`/chinchiro`、`/bounty`"
-              : "`/送金`、`/残高確認`、`/slot`、`/blackjack`、`/highlow`、`/chinchiro`、`/bounty`";
-            await interaction.reply({ content: `このロールでは ${allowedText} のみ使用できます。`, ephemeral: true });
-            return;
-          }
+        const roles = interaction.guild?.roles.cache.filter(role => member.roles.cache.has(role.id)).map(role => role.name) ?? [];
+        if (isBankCommandBlocked(interaction.commandName, roles)) {
+          await interaction.reply({ content: "このロールでは `/送金`、`/残高確認`、`/slot`、`/blackjack`、`/highlow`、`/chinchiro`、`/裏航海`、`/bounty` のみ使用できます。", ephemeral: true });
+          return;
+        }
       }
       // /vc refresh-panels は commands/index.ts にあるハンドラで処理
       // (vc.ts から commands/index.ts を import すると循環参照になるため)
