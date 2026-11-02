@@ -88,6 +88,10 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
       const orders = await listPaidKpTicketOrders(guild, ticket);
       expect(orders.map(o => o.id).sort()).toEqual(rows.slice(0, 2).map(o => o.id).sort());
       expect(await listPaidKpTicketOrders(guild, ticket)).toHaveLength(2);
+      const allOrders = await listPaidKpTicketOrders(guild);
+      expect(allOrders.every(order => order.guildId === guild && order.phase === "paid")).toBe(true);
+      expect(allOrders.filter(order => rows.some(row => row.id === order.id)).map(order => order.id).sort())
+        .toEqual([rows[0]!.id, rows[1]!.id, rows[4]!.id].sort());
       expect(await balance()).toBe(4321);
     } finally {
       await db.delete(kpTicketSessionsTable).where(eq(kpTicketSessionsTable.guildId, `${guild}-other`));

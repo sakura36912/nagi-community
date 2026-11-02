@@ -13,6 +13,23 @@ function paid(id: string, extras = false): KpTicketSession {
   };
 }
 describe("KP ticket paid statement", () => {
+  it("totals multiple tickets and identifies each ticket in the complete attachment", () => {
+    const first = paid("1", true), second = { ...paid("2"), channelId: "other-ticket" };
+    const result = kpTicketStatement([first, second], "円", true);
+    const embed = result.embeds[0]!.toJSON();
+    expect(embed.title).toContain("全チケット");
+    expect(embed.footer!.text).toContain("全期間・2チケット");
+    expect(embed.fields![0]!.value).toContain("支払い済み合計: 1,100円");
+    const text = (result.files[0]!.attachment as Buffer).toString("utf8");
+    expect(text).toContain("チケットID: ticket");
+    expect(text).toContain("チケットID: other-ticket");
+    expect(result.files[0]!.name).toBe("kp-all-tickets-statement.txt");
+  });
+  it("clearly labels an empty all-ticket statement as server-wide", () => {
+    const result = kpTicketStatement([], "円", true);
+    expect(result.embeds[0]!.toJSON().description).toContain("このサーバー");
+    expect(result.embeds[0]!.toJSON().fields![0]!.value).toContain("支払い済み合計: 0円");
+  });
   it("includes extra-only purchases in VIP/extension totals without adding a drink", () => {
     const additional = paid("extra");
     additional.selection.quote = { itemId: null, itemName: "VIP・延長のみ（ドリンクなし）",

@@ -96,12 +96,12 @@ export async function getKpTicketSession(id: string) {
   return session;
 }
 
-/** Read-only snapshot of all settled orders in this ticket, including expired sessions. */
-export async function listPaidKpTicketOrders(guildId: string, channelId: string) {
+/** Read-only settled orders, including expired sessions. Omit channelId for this guild's full statement. */
+export async function listPaidKpTicketOrders(guildId: string, channelId?: string) {
   await ensureKpTicketSchema();
   return db.select().from(kpTicketSessionsTable).where(and(
     eq(kpTicketSessionsTable.guildId, guildId),
-    eq(kpTicketSessionsTable.channelId, channelId),
+    channelId === undefined ? undefined : eq(kpTicketSessionsTable.channelId, channelId),
     eq(kpTicketSessionsTable.phase, "paid"),
   )).orderBy(kpTicketSessionsTable.createdAt, kpTicketSessionsTable.id);
 }

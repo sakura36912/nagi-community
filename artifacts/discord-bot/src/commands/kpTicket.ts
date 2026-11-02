@@ -54,6 +54,16 @@ async function resolveCastRoles(interaction: ChatInputCommandInteraction) {
   });
 }
 
+async function requireKpStaff(interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction) {
+  const member = await interaction.guild!.members.fetch({ user: interaction.user.id, force: true })
+    .catch(() => { throw new KpTicketError("操作権限を確認できませんでした。時間をおいて再実行してください。"); });
+  if (member.permissions.has(PermissionFlagsBits.Administrator)) return;
+  const roles = await interaction.guild!.roles.fetch();
+  const allowed = [...roles.values()].some(role =>
+    (role.name === "夜鴉" || role.name === "黒兵") && member.roles.cache.has(role.id));
+  if (!allowed) throw new KpTicketError("この操作は夜鴉・黒兵ロールの所持者、または管理者のみ使用できます。");
+}
+
 export async function executeKpTicketCommand(interaction: ChatInputCommandInteraction) {
   if (!interaction.guildId || !interaction.guild) {
     await interaction.reply({ content: "サーバー内で実行してください。", ephemeral: true });
@@ -64,14 +74,7 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
     const subcommand = interaction.options.getSubcommand();
     if (subcommand === "ticket-panel") {
       // Re-fetch the caller: a removed role must not remain authorized through cached membership.
-      const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true })
-        .catch(() => { throw new KpTicketError("操作権限を確認できませんでした。時間をおいて再実行してください。"); });
-      if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
-        const roles = await interaction.guild.roles.fetch();
-        const allowed = [...roles.values()].some(role =>
-          (role.name === "夜鴉" || role.name === "黒兵") && member.roles.cache.has(role.id));
-        if (!allowed) throw new KpTicketError("このコマンドは夜鴉・黒兵ロールの所持者、または管理者のみ使用できます。");
-      }
+      await requireKpStaff(interaction);
     } else if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
       throw new KpTicketError("サーバー管理権限が必要です。");
     }
@@ -104,6 +107,7 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}start`).setLabel("注文する").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}additional`).setLabel("追加注文").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}statement`).setLabel("明細を集計").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}all-statement`).setLabel("全チケットを集計").setStyle(ButtonStyle.Secondary),
       )],
       allowedMentions: { parse: [] },
     });
@@ -223,8 +227,10 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
   }
   const encoded = interaction.customId.slice(KP_TICKET_PREFIX.length);
   const starting = encoded === "start" || encoded === "additional";
-  const statement = encoded === "statement";
-  if (statement) await interaction.deferReply();
+  const allTickets = encoded === "all-statement";
+  const statement = encoded === "statement" || allTickets;
+  if (allTickets) await interaction.deferReply({ ephemeral: true });
+  else if (statement) await interaction.deferReply();
   else if (starting) await interaction.deferReply({ ephemeral: true });
   else await interaction.deferUpdate();
   try {
@@ -232,9 +238,12 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
         throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
       }
-      const orders = await listPaidKpTicketOrders(interaction.guildId, interaction.channelId);
+      if (allTickets) await requireKpStaff(interaction);
+      const orders = allTickets
+        ? await listPaidKpTicketOrders(interaction.guildId)
+        : await listPaidKpTicketOrders(interaction.guildId, interaction.channelId);
       const { currencyName } = await getGuildSettings(interaction.guildId);
-      await interaction.editReply(kpTicketStatement(orders, currencyName));
+      await interaction.editReply(kpTicketStatement(orders, currencyName, allTickets));
       return;
     }
     if (starting) {
