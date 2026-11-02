@@ -16,6 +16,7 @@ import { confirmTicketRows, KP_TICKET_PREFIX, pagedTicketMenu, ticketControls,
   ticketId, ticketMenu, ticketSummary } from "../lib/kpTicketUi";
 import { logger } from "../lib/logger";
 import { kpTicketStatement } from "../lib/kpTicketStatement";
+import { grantKpTicketCastAccess } from "../lib/kpTicketAccess";
 
 export const kpTicketPanelSubcommand = new SlashCommandSubcommandBuilder()
   .setName("ticket-panel").setDescription("チケット内にKPshopパネルを設置します（夜鴉・黒兵・管理者）")
@@ -129,8 +130,9 @@ async function currentSettings(guildId: string) {
 async function checkCast(guild: Guild, settings: KpTicketSettings, castId: string) {
   const roles = await Promise.all(settings.castRoleIds.map(id => guild.roles.fetch(id)));
   if (roles.some(role => !role || role.id === guild.id)) throw new KpTicketError("キャスト対象ロールが削除されています。管理者に再設定を依頼してください。");
-  const member = await guild.members.fetch(castId).catch(() => null);
-  if (!isEligibleForumCast(member, settings.castRoleIds)) throw new KpTicketError("指名キャストが退出したか対象ロールを失っています。最初から選び直してください。");
+  const member = await guild.members.fetch({ user: castId, force: true }).catch(() => null);
+  if (!member || !isEligibleForumCast(member, settings.castRoleIds)) throw new KpTicketError("指名キャストが退出したか対象ロールを失っています。最初から選び直してください。");
+  return member;
 }
 
 export async function renderKpTicket(interaction: TicketInteraction, session: KpTicketSession, page = 0, notice = "") {
@@ -243,7 +245,8 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         interaction.id, interaction.guildId, interaction.channelId, interaction.user.id,
       );
       if (session.selection.fixedCastId) {
-        await checkCast(interaction.guild, await currentSettings(interaction.guildId), session.selection.fixedCastId);
+        const cast = await checkCast(interaction.guild, await currentSettings(interaction.guildId), session.selection.fixedCastId);
+        await grantKpTicketCastAccess(interaction, cast);
       }
       await renderKpTicket(interaction, session);
       return;
@@ -285,7 +288,8 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
     }
     if (action === "confirm" && session.phase === "confirm" && interaction.isButton()) {
       if (!canPost(interaction)) throw new KpTicketError("チケット内に購入ログを送信できません。権限を確認してください。引き落としは行っていません。");
-      await checkCast(interaction.guild, settings, session.selection.castId!);
+      const cast = await checkCast(interaction.guild, settings, session.selection.castId!);
+      await grantKpTicketCastAccess(interaction, cast);
       const result = await settleKpTicket(session.id, version, interaction.user.id, interaction.guildId, interaction.channelId, settings.castRoleIds);
       if (result.status === "changed") {
         await renderKpTicket(interaction, result.session, 0, "商品または追加料金が変更されたため、引き落としていません。新しい金額を確認し、もう一度確定してください。");
@@ -296,12 +300,15 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
     const value = interaction.values[0];
     const selection = { ...session.selection };
     let next = session.phase;
+    let notice = "";
     switch (session.phase) {
       case "cast":
         if (!value) throw new KpTicketError("キャストを選択してください。");
-        await checkCast(interaction.guild, settings, value);
         if (selection.fixedCastId) throw new KpTicketError("追加注文の指名キャストは変更できません。");
+        const cast = await checkCast(interaction.guild, settings, value);
+        await grantKpTicketCastAccess(interaction, cast);
         selection.castId = value;
+        notice = "指名キャストをこのチケットに追加しました。";
         next = "vip";
         break;
       case "vip":
@@ -330,7 +337,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       }
       default: throw new KpTicketError("この操作は処理できません。");
     }
-    await renderKpTicket(interaction, await advanceKpTicketSession(session, next, selection));
+    await renderKpTicket(interaction, await advanceKpTicketSession(session, next, selection), 0, notice);
   } catch (error) {
     if (!(error instanceof KpTicketError)) logger.error("[kp-ticket] Interaction failed", error);
     const content = error instanceof KpTicketError ? error.message : "注文の処理に失敗しました。支払い操作の場合は同じ確定ボタンから結果を確認できます。";

@@ -26,7 +26,7 @@ const drink = { id: 1, name: "ドリンク", price: 100, category: "kp", effectT
 let session: KpTicketSession;
 let settings: { guildId: string; castRoleIds: string[]; vipPrice: number | null; extensionPrice: number | null };
 function member(id: string, roleIds: string[], bot = false) {
-  return { id, displayName: id, user: { bot }, roles: { cache: new Map(roleIds.map(id => [id, {}])) } };
+  return { id, guild: { id: "guild" }, displayName: id, user: { bot }, roles: { cache: new Map(roleIds.map(id => [id, {}])) } };
 }
 function fixture() {
   const eligible = [member("black-cast", ["black"]), member("white-cast", ["white"]),
@@ -37,9 +37,11 @@ function fixture() {
     guildId: "guild", channelId: "ticket", user: { id: "buyer" }, message: { id: "panel" }, values: [] as string[],
     guild: {
       id: "guild", roles: { fetch: vi.fn(async id => ({ id })) },
-      members: { me: { id: "bot" }, fetch: vi.fn(async arg => typeof arg === "string" ? members.get(arg) : members) },
+      members: { me: { id: "bot" }, fetch: vi.fn(async arg =>
+        typeof arg === "string" ? members.get(arg) : arg && "user" in arg ? members.get(arg.user) : members) },
     },
-    channel: { id: "ticket", isThread: () => false, permissionsFor: () => ({ has: () => true }),
+    channel: { id: "ticket", guildId: "guild", type: 0, isThread: () => false, permissionsFor: () => ({ has: () => true }),
+      permissionOverwrites: { edit: vi.fn().mockResolvedValue(undefined) },
       send: vi.fn().mockResolvedValue({ id: "receipt" }) },
     isButton: () => true, isStringSelectMenu: () => false,
     deferReply: vi.fn().mockResolvedValue(undefined), deferUpdate: vi.fn().mockResolvedValue(undefined),
@@ -279,6 +281,50 @@ describe("KP ticket component flow", () => {
     i.customId = ticketId("confirm", session); await run(i);
     expect(m.settle).not.toHaveBeenCalled();
     expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("引き落としは行っていません") }));
+  });
+});
+
+describe("KP ticket cast access integration", () => {
+  it("adds the cast immediately on selection, before VIP choices or payment", async () => {
+    const i = fixture(); await choose(i, "black-cast");
+    expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "black-cast", force: true });
+    expect(i.channel.permissionOverwrites.edit).toHaveBeenCalledWith("black-cast",
+      { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }, expect.any(Object));
+    expect(session.phase).toBe("vip");
+    expect(i.editReply.mock.calls.at(-1)![0].content).toContain("チケットに追加しました");
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("does not advance or charge when granting cast access fails and allows retry", async () => {
+    const i = fixture();
+    i.channel.permissionOverwrites.edit.mockRejectedValueOnce(new Error("Missing Permissions"));
+    await choose(i, "black-cast");
+    expect(session.phase).toBe("cast"); expect(m.advance).not.toHaveBeenCalled(); expect(m.settle).not.toHaveBeenCalled();
+    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("引き落としは行っていません") }));
+    await choose(i, "black-cast");
+    expect(session.phase).toBe("vip");
+  });
+  it("never grants access to an ineligible cast", async () => {
+    const i = fixture(); await choose(i, "outsider");
+    expect(i.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(m.advance).not.toHaveBeenCalled(); expect(m.settle).not.toHaveBeenCalled();
+  });
+  it.each(["userId", "channelId", "guildId"] as const)("never grants from a mismatched order %s", async field => {
+    const i = fixture(); session[field] = "another";
+    await choose(i, "black-cast");
+    expect(i.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(m.advance).not.toHaveBeenCalled();
+  });
+  it("rechecks access before payment and does not charge if access cannot be restored", async () => {
+    const i = fixture(); session.phase = "confirm"; session.selection = { castId: "black-cast" };
+    i.channel.permissionOverwrites.edit.mockRejectedValue(new Error("Missing Permissions"));
+    i.customId = ticketId("confirm", session); await run(i);
+    expect(m.settle).not.toHaveBeenCalled(); expect(m.deliver).not.toHaveBeenCalled();
+  });
+  it("ensures the inherited cast has access on additional orders without changing it", async () => {
+    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
+    expect(i.channel.permissionOverwrites.edit).toHaveBeenCalledWith("black-cast", expect.any(Object), expect.any(Object));
+    expect(session.selection.fixedCastId).toBe("black-cast");
+    expect(m.settle).not.toHaveBeenCalled();
   });
 });
 
