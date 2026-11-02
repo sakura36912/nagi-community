@@ -20,6 +20,9 @@ export async function syncShopCommandRegistration(
       command.name === "shop" && command.type === ApplicationCommandType.ChatInput);
     const saved = existing ? await manager.edit(existing.id, definition) : await manager.create(definition);
     const verified = await manager.fetch(saved.id, { force: true });
+    if (definition.default_member_permissions === null && verified.defaultMemberPermissions !== null) {
+      throw new Error(`/shop permission registration verification failed (${label})`);
+    }
     const forumPanel = verified.options.find((option) => option.name === "forum-panel");
     if (!forumPanel || !("options" in forumPanel) || !forumPanel.options?.some((option) => option.name === "cast_role")
       || !verified.options.some((option) => option.name === "cast-roles")) {

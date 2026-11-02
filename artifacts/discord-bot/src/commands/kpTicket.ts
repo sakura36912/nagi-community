@@ -18,7 +18,7 @@ import { logger } from "../lib/logger";
 import { kpTicketStatement } from "../lib/kpTicketStatement";
 
 export const kpTicketPanelSubcommand = new SlashCommandSubcommandBuilder()
-  .setName("ticket-panel").setDescription("このチケット内にKPshopの注文・支払いパネルを設置します（管理者）")
+  .setName("ticket-panel").setDescription("チケット内にKPshopパネルを設置します（夜鴉・黒兵・管理者）")
   .addRoleOption(o => o.setName("black_role").setDescription("黒真珠ロール（省略時は名前で検索）"))
   .addRoleOption(o => o.setName("white_role").setDescription("白真珠ロール（省略時は名前で検索）"));
 export const kpTicketPricesSubcommand = new SlashCommandSubcommandBuilder()
@@ -54,14 +54,28 @@ async function resolveCastRoles(interaction: ChatInputCommandInteraction) {
 }
 
 export async function executeKpTicketCommand(interaction: ChatInputCommandInteraction) {
-  if (!interaction.guildId || !interaction.guild || !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-    await interaction.reply({ content: "サーバー管理権限が必要です。", ephemeral: true });
+  if (!interaction.guildId || !interaction.guild) {
+    await interaction.reply({ content: "サーバー内で実行してください。", ephemeral: true });
     return;
   }
   await interaction.deferReply({ ephemeral: true });
   try {
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === "ticket-panel") {
+      // Re-fetch the caller: a removed role must not remain authorized through cached membership.
+      const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true })
+        .catch(() => { throw new KpTicketError("操作権限を確認できませんでした。時間をおいて再実行してください。"); });
+      if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+        const roles = await interaction.guild.roles.fetch();
+        const allowed = [...roles.values()].some(role =>
+          (role.name === "夜鴉" || role.name === "黒兵") && member.roles.cache.has(role.id));
+        if (!allowed) throw new KpTicketError("このコマンドは夜鴉・黒兵ロールの所持者、または管理者のみ使用できます。");
+      }
+    } else if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      throw new KpTicketError("サーバー管理権限が必要です。");
+    }
     const { currencyName } = await getGuildSettings(interaction.guildId);
-    if (interaction.options.getSubcommand() === "ticket-prices") {
+    if (subcommand === "ticket-prices") {
       const vip = interaction.options.getInteger("vip"), extension = interaction.options.getInteger("extension");
       const unset = interaction.options.getString("unset");
       if (unset && (vip !== null || extension !== null)) throw new KpTicketError("未設定に戻す操作と料金指定は分けて実行してください。");

@@ -1,14 +1,15 @@
-import { ApplicationCommandType, Collection, SlashCommandBuilder, type Client } from "discord.js";
+import { ApplicationCommandType, Collection, PermissionsBitField, PermissionFlagsBits, SlashCommandBuilder, type Client } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
 import { syncShopCommandRegistration } from "../lib/shopCommandRegistration";
 import { GLOBAL_PREFERRED_GUILD_ID } from "../lib/guildCommandScope";
 
-const definition = new SlashCommandBuilder().setName("shop").setDescription("ショップ")
+const definition = new SlashCommandBuilder().setName("shop").setDescription("ショップ").setDefaultMemberPermissions(null)
   .addSubcommand((sub) => sub.setName("forum-panel").setDescription("パネル")
     .addRoleOption((option) => option.setName("cast_role").setDescription("対象ロール")))
   .addSubcommand((sub) => sub.setName("cast-roles").setDescription("複数ロールを設定")).toJSON();
-function manager(existing = true, valid = true) {
+function manager(existing = true, valid = true, restricted = false) {
   const command = { id: "shop-id", name: "shop", type: ApplicationCommandType.ChatInput,
+    defaultMemberPermissions: restricted ? new PermissionsBitField(PermissionFlagsBits.Administrator) : null,
     options: valid ? definition.options : [] };
   return {
     fetch: vi.fn(async (id?: unknown) => typeof id === "string" ? command
@@ -17,6 +18,10 @@ function manager(existing = true, valid = true) {
   };
 }
 describe("/shop cast role command registration", () => {
+  it("reports an unchanged Discord administrator-only permission restriction", async () => {
+    const client = { application: { commands: manager(true, true, true) }, guilds: { cache: new Collection() } } as unknown as Client;
+    await expect(syncShopCommandRegistration(client, definition)).rejects.toThrow("registration failed");
+  });
   it("updates global and non-global-preferred guild definitions without deleting any other commands", async () => {
     const global = manager(), guild = manager(false), protectedGuild = manager();
     const client = { application: { commands: global }, guilds: { cache: new Collection([

@@ -1873,7 +1873,8 @@ const shopCommand: Command = {
   data: new SlashCommandBuilder()
     .setName("shop")
     .setDescription("ショップを操作します")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    // Discord cannot set permissions per subcommand; enforce the narrower rules below.
+    .setDefaultMemberPermissions(null)
     .addSubcommand((sub) =>
       sub.setName("list").setDescription("購入可能アイテムを表示します")
         .addStringOption((opt) =>
@@ -1967,6 +1968,10 @@ const shopCommand: Command = {
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub     = interaction.options.getSubcommand();
+    if (sub !== "ticket-panel" && !requireManageGuild(interaction)) {
+      await interaction.reply({ content: "このショップ操作には管理者権限が必要です。", ephemeral: true });
+      return;
+    }
     if (sub === "ticket-panel" || sub === "ticket-prices") {
       await executeKpTicketCommand(interaction);
       return;

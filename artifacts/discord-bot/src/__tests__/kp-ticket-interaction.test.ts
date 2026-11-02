@@ -283,6 +283,57 @@ describe("KP ticket component flow", () => {
 });
 
 describe("KP ticket price administration", () => {
+  function panelAccessFixture(roleNames: string[], admin = false) {
+    const roles = new Map(["黒真珠", "白真珠", "夜鴉", "黒兵", "夜鴉見習い"].map(name => [name, { id: name, name }]));
+    const member = { permissions: { has: () => admin }, roles: { cache: new Map(roleNames.map(name => [name, roles.get(name)])) } };
+    return {
+      guildId: "guild", user: { id: "caller" },
+      guild: { id: "guild", roles: { fetch: vi.fn().mockResolvedValue(roles) },
+        members: { me: { id: "bot" }, fetch: vi.fn().mockResolvedValue(member) } },
+      // Stale interaction permissions must not bypass the fresh member check.
+      memberPermissions: { has: () => true },
+      channel: { id: "ticket", type: 0, isThread: () => false,
+        permissionsFor: () => ({ has: () => true }), send: vi.fn().mockResolvedValue({ id: "panel" }) },
+      options: { getSubcommand: () => "ticket-panel", getRole: () => null },
+      reply: vi.fn(), deferReply: vi.fn(), editReply: vi.fn(),
+    };
+  }
+  it.each([
+    { roles: ["夜鴉"], admin: false }, { roles: ["黒兵"], admin: false },
+    { roles: ["夜鴉", "黒兵"], admin: false }, { roles: [], admin: true },
+  ])("allows only approved panel installers: %j", async ({ roles, admin }) => {
+    const interaction = panelAccessFixture(roles, admin);
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(interaction.guild.members.fetch).toHaveBeenCalledWith({ user: "caller", force: true });
+    expect(interaction.deferReply.mock.invocationCallOrder[0]).toBeLessThan(interaction.guild.members.fetch.mock.invocationCallOrder[0]!);
+    expect(interaction.channel.send).toHaveBeenCalledOnce();
+    expect(m.register).toHaveBeenCalledWith("panel", "guild", "ticket");
+    expect(m.configure).toHaveBeenCalledWith("guild", { castRoleIds: ["黒真珠", "白真珠"] });
+  });
+  it.each([{ roles: [] }, { roles: ["黒真珠"] }, { roles: ["白真珠"] }, { roles: ["夜鴉見習い"] }])("blocks unapproved or removed roles despite stale permissions: %j", async ({ roles }) => {
+    const interaction = panelAccessFixture(roles);
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(interaction.channel.send).not.toHaveBeenCalled();
+    expect(m.configure).not.toHaveBeenCalled();
+    expect(m.register).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("夜鴉・黒兵"));
+  });
+  it("fails closed when fresh membership cannot be verified", async () => {
+    const interaction = panelAccessFixture(["夜鴉"]);
+    interaction.guild.members.fetch.mockRejectedValue(new Error("Discord unavailable"));
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(interaction.channel.send).not.toHaveBeenCalled();
+    expect(m.configure).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("操作権限を確認できません"));
+  });
+  it("does not grant price administration to a ticket installer", async () => {
+    const interaction = panelAccessFixture(["黒兵"]);
+    interaction.memberPermissions.has = () => false;
+    interaction.options.getSubcommand = () => "ticket-prices";
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(m.configure).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("サーバー管理権限"));
+  });
   it("installs a ticket panel without deciding prices and preserves unset fees", async () => {
     const roleMap = new Map([
       ["black", { id: "black", name: "黒真珠" }], ["white", { id: "white", name: "白真珠" }],
@@ -290,7 +341,9 @@ describe("KP ticket price administration", () => {
     const channel = { id: "ticket", type: 0, isThread: () => false,
       permissionsFor: () => ({ has: () => true }), send: vi.fn().mockResolvedValue({ id: "panel" }) };
     const interaction = {
-      guildId: "guild", guild: { id: "guild", roles: { fetch: vi.fn().mockResolvedValue(roleMap) }, members: { me: { id: "bot" } } },
+      guildId: "guild", user: { id: "admin" },
+      guild: { id: "guild", roles: { fetch: vi.fn().mockResolvedValue(roleMap) },
+        members: { me: { id: "bot" }, fetch: vi.fn().mockResolvedValue({ permissions: { has: () => true } }) } },
       channel, memberPermissions: { has: () => true },
       options: { getSubcommand: () => "ticket-panel", getRole: () => null },
       deferReply: vi.fn(), editReply: vi.fn(),

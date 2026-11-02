@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Collection, type ButtonInteraction, type StringSelectMenuInteraction, type UserSelectMenuInteraction } from "discord.js";
+import { Collection, type ButtonInteraction, type ChatInputCommandInteraction, type StringSelectMenuInteraction, type UserSelectMenuInteraction } from "discord.js";
 
 const mocks = vi.hoisted(() => ({
   getPanel: vi.fn(), getItem: vi.fn(), buy: vi.fn(), settings: vi.fn(),
@@ -15,6 +15,23 @@ vi.mock("../lib/economy", async (importOriginal) => ({
   getShopItem: mocks.getItem, buyItemQuantity: mocks.buy, getGuildSettings: mocks.settings,
 }));
 import { commands, handleForumCastPage, handleForumPurchaseCast, handleForumPurchaseQuantity } from "../commands/index";
+
+describe("shop command access boundary", () => {
+  const shop = commands.find(command => command.data.name === "shop")!;
+  const definition = shop.data.toJSON() as import("discord.js").RESTPostAPIChatInputApplicationCommandsJSONBody;
+  it("removes the parent administrator restriction so ticket installers can invoke it", () => {
+    expect(definition.default_member_permissions).toBeNull();
+  });
+  it.each(definition.options!.map(option => option.name).filter(name => name !== "ticket-panel"))(
+    "keeps %s administrator-only even though the parent command is visible", async subcommand => {
+      const interaction = { guildId: "guild", options: { getSubcommand: () => subcommand },
+        memberPermissions: { has: () => false }, reply: vi.fn() };
+      await shop.execute(interaction as unknown as ChatInputCommandInteraction);
+      expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("管理者権限") }));
+      expect(mocks.savePanel).not.toHaveBeenCalled();
+      expect(mocks.buy).not.toHaveBeenCalled();
+    });
+});
 
 function fixture(role = true, bot = false) {
   const cast = { id: "cast", displayName: "担当キャスト", user: { bot, username: "cast" },
