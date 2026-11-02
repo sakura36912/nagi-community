@@ -2,7 +2,7 @@ import { ChannelType, PermissionFlagsBits, type ButtonInteraction, type GuildMem
 import { KpTicketError } from "@workspace/db";
 import { logger } from "./logger";
 
-/** Grant only the selected member access to this ticket, never to its category or thread parent. */
+/** Grant the selected member ticket access, including required thread-parent permissions. */
 export async function grantKpTicketCastAccess(
   interaction: ButtonInteraction | StringSelectMenuInteraction, cast: GuildMember,
 ) {
@@ -15,10 +15,18 @@ export async function grantKpTicketCastAccess(
     if (channel.isThread()) {
       if (channel.archived || channel.locked) throw new KpTicketError("終了・ロック済みのスレッドにはキャストを追加できません。");
       const parent = channel.parent ?? (channel.parentId ? await channel.guild.channels.fetch(channel.parentId) : null);
-      if (!parent?.permissionsFor(cast)?.has([
+      if (!parent || parent.guildId !== interaction.guildId || !("permissionOverwrites" in parent)) {
+        throw new KpTicketError("チケットの親チャンネルを確認できません。引き落としは行っていません。");
+      }
+      if (!parent.permissionsFor(cast)?.has([
         PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessagesInThreads, PermissionFlagsBits.ReadMessageHistory,
       ])) {
-        throw new KpTicketError("キャストにスレッドの親チャンネルを閲覧・送信する権限がありません。親の公開範囲は自動変更しないため、管理者に設定を依頼してください。");
+        if (!parent.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageRoles])) {
+          throw new KpTicketError("キャストを追加するにはBotに親チャンネルの閲覧・権限管理（ロールの管理）権限が必要です。引き落としは行っていません。");
+        }
+        await parent.permissionOverwrites.edit(cast.id, {
+          ViewChannel: true, SendMessagesInThreads: true, ReadMessageHistory: true,
+        }, { reason: "KPチケットで指名されたキャストのスレッド利用権限追加" });
       }
       await channel.members.add(cast.id);
       return;
