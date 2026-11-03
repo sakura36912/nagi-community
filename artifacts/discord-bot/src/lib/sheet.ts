@@ -5,6 +5,7 @@ import {
   getSheetVcSeconds,
 } from "./economy";
 import { logger } from "./logger";
+import { findConfiguredRoleSelfIntro } from "./sheetIntroSources";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,8 @@ export async function findSelfIntro(
   userId: string,
   rosterCategoryId: string | null | undefined,
 ): Promise<{ content: string; url: string } | null> {
+  const configured = await findConfiguredRoleSelfIntro(guild, userId);
+  if (configured.configured) return configured.intro;
   if (!rosterCategoryId) return null;
   // キャッシュが不完全な場合に備えて API から取得する
   await guild.channels.fetch().catch(() => null);

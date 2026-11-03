@@ -35,3 +35,8 @@ channel = "stable-25_05"
 
 [objectStorage]
 defaultBucketID = "replit-objstore-4be7b4fc-42f4-4359-bb92-df3804dde369"
+
+[userenv]
+
+[userenv.shared]
+EVAL_SHEET_INTRO_CHANNELS_BY_ROLE = "{\"1526418867335725247\":{\"追放者\":[\"1535330543636320407\",\"1535330581020414093\"]}}"

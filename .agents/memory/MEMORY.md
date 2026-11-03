@@ -12,6 +12,7 @@
 - [Monthly payroll timezone](monthly-payroll-timezone.md) — 給与日、重複防止、シフト集計はすべて日本時間の暦日で判定する。
 - [Sub-account salary exclusion](sub-account-salary-exclusion.md) — 「sub垢」ロール保有者は定期給与と手動給与の両方から除外する。
 - [Eval sheet extension limit](eval-sheet-extension-limit.md) — 評価シート延長は1週間のみ、サーバー内で1人1回までにする。
+- [評価名簿の自己紹介](eval-sheet-introductions.md) — 追放者の自己紹介は指定された2つの投稿先のみから取得し、同カテゴリの雑談へ検索を広げない。
 - [Monthly role debit](monthly-role-debit.md) — ロール別の月額を合算して毎月25日JSTに1人1回請求し、不足時は対象ロールを外す。
 - [Daily role debit](daily-role-debit.md) — 日額はJSTの翌日から開始し、残高不足時は請求せずロールを外す。
 - [Private VC panel categories](private-vc-panel-category.md) — 旧`ura`と現行`island`はフリールームとして扱い、高級船室`vc`と混同しない。
