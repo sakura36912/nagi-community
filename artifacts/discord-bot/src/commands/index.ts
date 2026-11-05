@@ -324,10 +324,15 @@ async function findOwnedLuxuryVc(guild: Guild, member: GuildMember, categoryIds:
       return session.channelId;
     }
   }
+  let hasUnknownOwner = false;
   for (const channel of channels.values()) {
     if (!channel || channel.type !== ChannelType.GuildVoice) continue;
     const session = sessionByChannel.get(channel.id);
     if (session && isFreeRoomCategory(session.category)) continue;
+    // The first pass already found any room owned by this buyer. A known
+    // different owner is authoritative even if the guest can view this room
+    // and its panel was deleted, reposted, or is outside the fetched history.
+    if (session?.category === "vc") continue;
     if (!channel.permissionOverwrites.cache.get(member.id)?.allow.has(PermissionFlagsBits.ViewChannel)) continue;
     if (!categoryIds.includes(channel.parentId ?? "") && !channel.name.startsWith("🔒 ")) continue;
 
@@ -338,10 +343,17 @@ async function findOwnedLuxuryVc(guild: Guild, member: GuildMember, categoryIds:
     const oldest = await channel.messages.fetch({ limit: 10, after: "0" });
     const panel = oldest.find(isLuxuryPanel)
       ?? (await channel.messages.fetch({ limit: 50 })).find(isLuxuryPanel);
-    if (!panel) return "unknown"; // Do not charge if this could be an untracked, ownerless-looking room.
-    if (panel.embeds[0]?.description?.match(/<@!?(\d+)>/)?.[1] === member.id) return channel.id;
+    const ownerId = panel?.embeds[0]?.description?.match(/<@!?(\d+)>/)?.[1];
+    if (!ownerId) {
+      // Keep the no-charge guard, but inspect the remaining rooms so an
+      // ambiguous guest room cannot hide a confirmed room owned by this buyer.
+      hasUnknownOwner = true;
+      logger.warn(`[privateVC] Unverified luxury room owner guild=${guild.id} channel=${channel.id} buyer=${member.id}`);
+      continue;
+    }
+    if (ownerId === member.id) return channel.id;
   }
-  return null;
+  return hasUnknownOwner ? "unknown" : null;
 }
 
 async function purchaseAndCreatePrivateVc(

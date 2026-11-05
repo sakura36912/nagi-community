@@ -241,6 +241,7 @@ describe("island shop category", () => {
 
     const interaction = {
       guildId: GUILD_ID,
+      memberPermissions: { has: () => true },
       options: {
         getSubcommand: () => "list",
         getString: () => "island",
@@ -917,6 +918,90 @@ describe("高級船室は1人1室", () => {
 
     expect(mocks.buyItem).toHaveBeenCalledOnce();
     expect(interaction.editReply).toHaveBeenCalledWith("残高不足");
+  });
+
+  it.each(["button", "select"] as const)("DBで他人の所有と確認できればパネルがなくても購入を妨げない（%s）", async entry => {
+    const interaction = entry === "button" ? makeShopBuyBtnInteraction() : makeShopSelectMenuInteraction();
+    const guild = preparePurchase(interaction);
+    const vc = {
+      id: "known-guest-room", type: ChannelType.GuildVoice, parentId: "luxury-category", name: "🔒 招待先",
+      permissionOverwrites: { cache: new Map([[USER_ID, { allow: { has: () => true } }]]) },
+      messages: { fetch: vi.fn().mockRejectedValue(new Error("Missing Access")) },
+    };
+    guild.channels.fetch.mockResolvedValue(new Collection([[vc.id, vc]]));
+    mocks.getActivePrivateVcSessionsByGuild.mockResolvedValue([{
+      guildId: GUILD_ID, userId: "other-owner", channelId: vc.id, category: "vc",
+    }]);
+    mocks.buyItem.mockResolvedValue({ ok: false, reason: "残高不足" });
+
+    if (entry === "button") await handleShopBuyButton(interaction as never);
+    else await handleShopSelectMenu(interaction as never);
+
+    expect(vc.messages.fetch).not.toHaveBeenCalled();
+    expect(mocks.buyItem).toHaveBeenCalledOnce();
+    expect(interaction.editReply).toHaveBeenCalledWith("残高不足");
+  });
+
+  it("招待先より後のチャンネルに本人所有の記録があればパネルなしでも二重購入を止める", async () => {
+    const interaction = makeShopBuyBtnInteraction();
+    const guild = preparePurchase(interaction);
+    guild.channels.fetch.mockResolvedValue(new Collection([
+      ["guest-room", { id: "guest-room", type: ChannelType.GuildVoice }],
+      ["owned-room", { id: "owned-room", type: ChannelType.GuildVoice }],
+    ]));
+    mocks.getActivePrivateVcSessionsByGuild.mockResolvedValue([
+      { guildId: GUILD_ID, userId: "other-owner", channelId: "guest-room", category: "vc" },
+      { guildId: GUILD_ID, userId: USER_ID, channelId: "owned-room", category: "vc" },
+    ]);
+
+    await handleShopBuyButton(interaction as never);
+
+    expect(mocks.buyItem).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("<#owned-room>"));
+  });
+
+  it.each(["missing", "malformed"] as const)("記録も所有者表示も確認できない船室では請求しない（%s）", async panelState => {
+    const interaction = makeShopBuyBtnInteraction();
+    const guild = preparePurchase(interaction);
+    const messages = new Collection(panelState === "missing" ? [] : [["panel", {
+      author: { id: BOT_ID }, embeds: [{ title: "🔒 高級船室 コントロールパネル", description: "所有者情報なし" }],
+    }]]);
+    const vc = {
+      id: "unknown-room", type: ChannelType.GuildVoice, parentId: "luxury-category", name: "🔒 未確認",
+      permissionOverwrites: { cache: new Map([[USER_ID, { allow: { has: () => true } }]]) },
+      messages: { fetch: vi.fn().mockResolvedValue(messages) },
+    };
+    guild.channels.fetch.mockResolvedValue(new Collection([[vc.id, vc]]));
+
+    await handleShopBuyButton(interaction as never);
+
+    expect(mocks.buyItem).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("所有者を確認できませんでした"));
+  });
+
+  it("所有者不明の招待先の後にある無期限の本人船室も確認する", async () => {
+    const interaction = makeShopBuyBtnInteraction();
+    const guild = preparePurchase(interaction);
+    const ownerId = "111111111111111111";
+    interaction.user.id = ownerId;
+    guild.members.fetch.mockResolvedValue({ id: ownerId, displayName: "購入者" });
+    const room = (id: string, messages: Collection<string, unknown>) => ({
+      id, type: ChannelType.GuildVoice, parentId: "luxury-category", name: `🔒 ${id}`,
+      permissionOverwrites: { cache: new Map([[ownerId, { allow: { has: () => true } }]]) },
+      messages: { fetch: vi.fn().mockResolvedValue(messages) },
+    });
+    const unknown = room("unknown", new Collection());
+    const owned = room("permanent-owned", new Collection([["panel", {
+      author: { id: BOT_ID },
+      embeds: [{ title: "🔒 高級船室 コントロールパネル", description: `<@${ownerId}> の高級船室です。` }],
+    }]]));
+    guild.channels.fetch.mockResolvedValue(new Collection([[unknown.id, unknown], [owned.id, owned]]));
+
+    await handleShopBuyButton(interaction as never);
+
+    expect(owned.messages.fetch).toHaveBeenCalled();
+    expect(mocks.buyItem).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("<#permanent-owned>"));
   });
 
   it("フリールームの購入には高級船室の1室制限を適用しない", async () => {
