@@ -345,6 +345,13 @@ async function findOwnedLuxuryVc(guild: Guild, member: GuildMember, categoryIds:
       ?? (await channel.messages.fetch({ limit: 50 })).find(isLuxuryPanel);
     const ownerId = panel?.embeds[0]?.description?.match(/<@!?(\d+)>/)?.[1];
     if (!ownerId) {
+      // A category can also contain manually managed VCs. Guest access and
+      // category placement alone do not establish that this is a shop room.
+      // Shop-created rooms have an explicit Bot overwrite even when renamed.
+      const hasShopRoomEvidence = Boolean(panel)
+        || channel.name.startsWith("🔒 ")
+        || Boolean(guild.client.user?.id && channel.permissionOverwrites.cache.has(guild.client.user.id));
+      if (!hasShopRoomEvidence) continue;
       // Keep the no-charge guard, but inspect the remaining rooms so an
       // ambiguous guest room cannot hide a confirmed room owned by this buyer.
       hasUnknownOwner = true;
