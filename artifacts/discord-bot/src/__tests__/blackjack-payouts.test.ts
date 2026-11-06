@@ -36,6 +36,26 @@ function game(player: string[], dealer: string[], blackjack = 2, win = 1): Game 
   };
 }
 
+describe("resolveOutcome blackjack precedence", () => {
+  it("loses when the player is below 21 and the dealer has blackjack", () => {
+    expect(resolveOutcome(game(["10", "9"], ["A", "K"]))).toEqual({
+      outcome: "lose", netDelta: -1001,
+    });
+  });
+
+  it("pushes when both the player and dealer have blackjack", () => {
+    expect(resolveOutcome(game(["A", "K"], ["A", "Q"]))).toEqual({
+      outcome: "push", netDelta: 0,
+    });
+  });
+
+  it("awards blackjack when only the player has blackjack", () => {
+    expect(resolveOutcome(game(["A", "K"], ["10", "9"]))).toEqual({
+      outcome: "blackjack", netDelta: 2002,
+    });
+  });
+});
+
 describe("blackjack payout math", () => {
   it("uses default and custom BJ net multipliers, rounding down", () => {
     expect(resolveOutcome(game(["A", "K"], ["10", "9"]))).toEqual({ outcome: "blackjack", netDelta: 2002 });
