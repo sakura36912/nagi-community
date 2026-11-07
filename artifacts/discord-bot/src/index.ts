@@ -148,6 +148,7 @@ import { handleCalendarButton, runCalendarReminderScheduler } from "./commands/c
 import { FORUM_CAST_PAGE_PREFIX } from "./lib/forumCastPicker";
 import { FORUM_CAST_ROLES_PREFIX, handleForumCastRoleConfig } from "./commands/forumCastRoles";
 import { syncShopCommandRegistration } from "./lib/shopCommandRegistration";
+import { syncGiveCommandRegistration } from "./lib/giveCommandRegistration";
 import { handleForumCopyButton, syncForumCopyCommandRegistration } from "./commands/forumCopy";
 import {
   handleUraInteraction,
@@ -1269,6 +1270,9 @@ client.on(Events.GuildUnavailable, (guild) => {
 
 client.once(Events.ClientReady, async (readyClient) => {
   const commandRegistrations = Promise.allSettled([
+    syncGiveCommandRegistration(readyClient).catch((err) =>
+      logger.error("[give] Startup command registration failed", err),
+    ),
     syncShopCommandRegistration(readyClient, commandsByName.get("shop")!.data.toJSON() as import("discord.js").RESTPostAPIChatInputApplicationCommandsJSONBody).catch((err) =>
       logger.error("[shop] Startup command registration failed", err),
     ),

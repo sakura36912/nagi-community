@@ -70,9 +70,6 @@ import {
   createPrivateVcSession,
   getActivePrivateVcSession,
   extendPrivateVcSession,
-  depositToTreasury,
-  getTreasuriesByRoles,
-  giveToCrunchTreasury,
   updateShopItemPrice,
   updateShopItemRole,
   getGuildSettings,
@@ -129,6 +126,7 @@ import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
 import { KP_SHOP_CATEGORY, KP_SHOP_NAME, purchaseKpItem, supportsKpEffect } from "../lib/kpShop";
 import { executeKpTicketCommand, kpTicketPanelSubcommand, kpTicketPricesSubcommand } from "./kpTicket";
+import { giveCommand } from "./give";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -1645,146 +1643,6 @@ const payCommand: Command = {
       await interaction.reply({ embeds: [embed] });
     } else {
       await interaction.reply({ content: result.reason, ephemeral: true });
-    }
-  },
-};
-
-const giveCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("give")
-    .setDescription("通貨の付与・金庫への入金")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addSubcommand((sub) =>
-      sub
-        .setName("wallet")
-        .setDescription("ユーザーのウォレットに通貨を付与します（管理者）")
-        .addUserOption((opt) =>
-          opt.setName("user").setDescription("付与先のユーザー").setRequired(true),
-        )
-        .addIntegerOption((opt) =>
-          opt.setName("amount").setDescription("付与額（マイナスで没収）").setRequired(true),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("treasury")
-        .setDescription("金庫に直接通貨を付与します（管理者）")
-        .addIntegerOption((opt) =>
-          opt.setName("treasury_id").setDescription("金庫ID").setRequired(true),
-        )
-        .addIntegerOption((opt) =>
-          opt.setName("amount").setDescription("付与額").setRequired(true).setMinValue(1),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("deposit")
-        .setDescription("自分のウォレットから金庫に入金します")
-        .addIntegerOption((opt) =>
-          opt.setName("amount").setDescription("入金額").setRequired(true).setMinValue(1),
-        )
-        .addIntegerOption((opt) =>
-          opt.setName("treasury_id").setDescription("複数の隊に所属している場合は金庫IDを指定").setRequired(false),
-        ),
-    ),
-  async execute(interaction) {
-    const guildId = requireGuild(interaction);
-    const sub = interaction.options.getSubcommand(false);
-    if (!sub) {
-      await interaction.reply({ content: "サブコマンドを選択してください: `wallet` / `treasury` / `deposit`", ephemeral: true });
-      return;
-    }
-    const settings = await getGuildSettings(guildId);
-    const member = interaction.member as GuildMember | null;
-
-    // ── wallet ──
-    if (sub === "wallet") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-        return;
-      }
-      const target = interaction.options.getUser("user", true);
-      const amount = interaction.options.getInteger("amount", true);
-      if (target.bot) {
-        await interaction.reply({ content: "Botには付与できません。", ephemeral: true });
-        return;
-      }
-      const result = await giveCurrency(guildId, target.id, amount, settings.currencyName);
-      if (result.ok) {
-        const verb = amount >= 0 ? "付与" : "没収";
-        const embed = new EmbedBuilder()
-          .setColor(amount >= 0 ? 0x2ecc71 : 0xe74c3c)
-          .setAuthor({ name: target.displayName ?? target.username, iconURL: interaction.guild?.members.cache.get(target.id)?.displayAvatarURL() ?? target.displayAvatarURL() })
-          .setDescription(`${verb}: **${Math.abs(amount).toLocaleString()}${settings.currencyName}**\n残高: **${result.balance.toLocaleString()}${settings.currencyName}**`);
-        await interaction.reply({ embeds: [embed] });
-      } else {
-        await interaction.reply({ content: result.reason, ephemeral: true });
-      }
-      return;
-    }
-
-    // ── treasury ──
-    if (sub === "treasury") {
-      if (!requireManageGuild(interaction)) {
-        await interaction.reply({ content: "このコマンドはサーバー管理権限が必要です。", ephemeral: true });
-        return;
-      }
-      const treasuryId = interaction.options.getInteger("treasury_id", true);
-      const amount     = interaction.options.getInteger("amount", true);
-      const treasury   = await getSquadTreasury(treasuryId);
-      if (!treasury || treasury.guildId !== guildId) {
-        await interaction.reply({ content: "金庫が見つかりません。", ephemeral: true });
-        return;
-      }
-      const newBalance = await giveToCrunchTreasury(guildId, treasuryId, interaction.user.id, amount);
-      await interaction.reply(
-        `✅ **${treasury.name}** に **${amount.toLocaleString()}${settings.currencyName}** を付与しました。\n金庫残高: ${newBalance.toLocaleString()}${settings.currencyName}`,
-      );
-      return;
-    }
-
-    // ── deposit ──
-    if (sub === "deposit") {
-      const amount = interaction.options.getInteger("amount", true);
-      const idOpt  = interaction.options.getInteger("treasury_id");
-      let treasury: Awaited<ReturnType<typeof getSquadTreasury>> | null = null;
-      let resolveError: string | null = null;
-      if (idOpt !== null) {
-        const t = await getSquadTreasury(idOpt);
-        if (!t || t.guildId !== guildId) { resolveError = "指定された金庫が見つかりません。"; }
-        else { treasury = t; }
-      } else {
-        const memberRoleIds = member ? [...member.roles.cache.keys()] : [];
-        const matches = await getTreasuriesByRoles(guildId, memberRoleIds);
-        if (matches.length === 0) { resolveError = "所属している隊の金庫が見つかりません。"; }
-        else if (matches.length > 1) {
-          const ids = matches.map((t) => `[ID:${t.id}] ${t.name}`).join("\n");
-          resolveError = `複数の隊に所属しています。\`treasury_id\` を指定してください:\n${ids}`;
-        } else { treasury = matches[0]!; }
-      }
-      if (!treasury) { await interaction.reply({ content: resolveError!, ephemeral: true }); return; }
-      const memberRoleIds = member ? [...member.roles.cache.keys()] : [];
-      if (!memberRoleIds.includes(treasury.roleId)) {
-        await interaction.reply({ content: `この金庫（${treasury.name}）の隊員ロールを持っていません。`, ephemeral: true });
-        return;
-      }
-      await interaction.deferReply();
-      try {
-        const result = await depositToTreasury(guildId, treasury.id, interaction.user.id, amount);
-        const embed = new EmbedBuilder()
-          .setTitle(`🏦 ${treasury.name} — 入金完了`)
-          .setColor(0x57f287)
-          .addFields(
-            { name: "入金額", value: `**+${amount.toLocaleString()}${settings.currencyName}**`, inline: true },
-            { name: "金庫残高", value: `${result.treasuryBalance.toLocaleString()}${settings.currencyName}`, inline: true },
-            { name: "あなたの残高", value: `${result.walletBalance.toLocaleString()}${settings.currencyName}`, inline: true },
-          );
-        await interaction.editReply({ embeds: [embed] });
-      } catch (err) {
-        logger.error("[treasury] depositToTreasury failed", err);
-        await interaction.editReply("入金に失敗しました。");
-      }
-      return;
     }
   },
 };
@@ -4540,6 +4398,7 @@ export const commands: Command[] = [
   interviewCommand,
   balanceCommand,
   payCommand,
+  giveCommand,
   leaderboardCommand,
   shopCommand,
   rewardCommand,

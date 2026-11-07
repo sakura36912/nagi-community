@@ -7,6 +7,7 @@ function fixture() {
   const routes = [Routes.applicationCommands("bank"), Routes.applicationGuildCommands("bank", "guild")];
   const definitions = new Map<string, { id: string; name: string; type: number }[]>(routes.map(route => [route, [
     ...RETIRED_BANK_COMMAND_NAMES.map(name => ({ id: name, name, type: 1 })),
+    { id: "give-slash", name: "give", type: 1 },
     { id: "shop", name: "shop", type: 1 }, { id: "casino", name: "casino", type: 1 },
     { id: "context", name: "give", type: 2 }, { id: "similar", name: "giveaway", type: 1 },
   ]]));
@@ -25,15 +26,15 @@ function fixture() {
   return { routes, definitions, rest };
 }
 describe("explicitly retired bank slash commands", () => {
-  it("removes exactly the four slash names in both scopes and force-verifies", async () => {
+  it("removes the three retired names but preserves the restored give in both scopes", async () => {
     const s = fixture();
     const result = await removeRetiredBankCommands(s.rest, "bank", ["guild", "guild"]);
-    expect(result.removed).toHaveLength(8);
+    expect(result.removed).toHaveLength(6);
     expect(result.failed).toEqual([]);
-    expect(s.rest.delete).toHaveBeenCalledTimes(8);
+    expect(s.rest.delete).toHaveBeenCalledTimes(6);
     for (const route of s.routes) {
       expect(s.rest.get.mock.calls.filter(([path]) => path === route)).toHaveLength(2);
-      expect(s.definitions.get(route)!.map(c => c.id)).toEqual(["shop", "casino", "context", "similar"]);
+      expect(s.definitions.get(route)!.map(c => c.id)).toEqual(["give-slash", "shop", "casino", "context", "similar"]);
     }
   });
   it("is idempotent and does not delete other scopes or applications", async () => {
@@ -58,21 +59,21 @@ describe("explicitly retired bank slash commands", () => {
     });
     const result = await removeRetiredBankCommands(s.rest, "bank", ["guild"]);
     expect(result.failed).toEqual(["global"]);
-    expect(result.removed).toHaveLength(4);
-    expect(s.definitions.get(s.routes[1]!)!.map(c => c.id)).toEqual(["shop", "casino", "context", "similar"]);
+    expect(result.removed).toHaveLength(3);
+    expect(s.definitions.get(s.routes[1]!)!.map(c => c.id)).toEqual(["give-slash", "shop", "casino", "context", "similar"]);
   });
   it("does not report success when verification still finds a retired name", async () => {
     const s = fixture();
     s.rest.delete.mockImplementation(async () => undefined);
     expect((await removeRetiredBankCommands(s.rest, "bank", [])).failed).toEqual(["global"]);
   });
-  it("excludes the four commands from the shared registration and dispatch list", () => {
+  it("excludes retired commands but includes give in the shared registration and dispatch list", () => {
     const source = readFileSync(new URL("../commands/index.ts", import.meta.url), "utf8");
     const list = source.split("export const commands: Command[] = [")[1]!.split("];")[0]!;
     for (const name of RETIRED_BANK_COMMAND_NAMES) {
       expect(list).not.toMatch(new RegExp(`\\b${name}Command\\b`));
     }
-    for (const name of ["shop", "casino", "returnlog"]) expect(list).toContain(`${name}Command`);
+    for (const name of ["give", "shop", "casino", "returnlog"]) expect(list).toContain(`${name}Command`);
   });
   it("wires cleanup into startup and manual deployment without full-scope replacement", () => {
     const startup = readFileSync(new URL("../index.ts", import.meta.url), "utf8");

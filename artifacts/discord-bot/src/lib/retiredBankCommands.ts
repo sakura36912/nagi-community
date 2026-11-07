@@ -2,7 +2,7 @@ import { ApplicationCommandType, Events, Routes, type Client } from "discord.js"
 import { logger } from "./logger";
 
 /** Remove slash definitions only; keep balances, logs and in-progress interactions. */
-export const RETIRED_BANK_COMMAND_NAMES = ["give", "guide", "leavelog", "roulette"] as const;
+export const RETIRED_BANK_COMMAND_NAMES = ["guide", "leavelog", "roulette"] as const;
 const retired = new Set<string>(RETIRED_BANK_COMMAND_NAMES);
 interface CommandDefinition { id: string; name: string; type: number }
 interface CommandRest {
