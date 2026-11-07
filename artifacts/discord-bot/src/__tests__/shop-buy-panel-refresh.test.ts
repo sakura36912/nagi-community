@@ -26,6 +26,12 @@ const mocks = vi.hoisted(() => ({
   loggerInfo:                 vi.fn(),
   loggerWarn:                 vi.fn(),
   loggerError:                vi.fn(),
+  toggleVcStreaming:          vi.fn(),
+}));
+
+vi.mock("../lib/vcStreaming", async importOriginal => ({
+  ...await importOriginal<typeof import("../lib/vcStreaming")>(),
+  toggleVcStreaming: mocks.toggleVcStreaming,
 }));
 
 vi.mock("../lib/economy.js", () => ({
@@ -152,6 +158,7 @@ import {
   getChestOpenProgress,
   getPrivateVcRoomCategory,
   handleShopBuyButton,
+  handleVcPanelStreamBtn,
   handleVcPanelAddBtn,
   hasLuxuryVcBlockedRole,
   handleShopSelectMenu,
@@ -163,6 +170,46 @@ import {
   SHOP_BUY_PREFIX,
   SHOP_SELECT_ID,
 } from "../commands/index.js";
+import { handleHubStreamBtn } from "../commands/vc.js";
+
+describe.each([
+  ["shop", "vc:panel:stream:", handleVcPanelStreamBtn],
+  ["hub", "vc:hub:stream:", handleHubStreamBtn],
+] as const)("%s の画面共有ボタン", (_kind, prefix, handler) => {
+  function interaction(userId = "owner") {
+    return {
+      guild: { id: "guild" }, user: { id: userId }, customId: `${prefix}channel:owner`,
+      reply: vi.fn().mockResolvedValue(undefined),
+      deferReply: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      client: { user: { id: "bot" } },
+    };
+  }
+
+  it("全権限反映の確認後だけONの成功を返す", async () => {
+    const i = interaction();
+    mocks.toggleVcStreaming.mockResolvedValue({ channel: { id: "channel" }, enabled: true });
+    await handler(i as never);
+    expect(mocks.toggleVcStreaming).toHaveBeenLastCalledWith(i.guild, "channel");
+    expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("有効"));
+  });
+
+  it("メンバーへの反映失敗を成功として表示しない", async () => {
+    const i = interaction();
+    mocks.toggleVcStreaming.mockRejectedValue(new Error("member permission failure"));
+    await handler(i as never);
+    expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("完了できませんでした"));
+    expect(i.editReply).not.toHaveBeenCalledWith(expect.stringContaining("✅"));
+  });
+
+  it("所有者以外は権限変更を実行できない", async () => {
+    const i = interaction("guest");
+    mocks.toggleVcStreaming.mockClear();
+    await handler(i as never);
+    expect(mocks.toggleVcStreaming).not.toHaveBeenCalled();
+    expect(i.reply).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }));
+  });
+});
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const GUILD_ID    = "guild-001";

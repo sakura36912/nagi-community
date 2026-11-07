@@ -43,6 +43,7 @@ import { getGuildSettings, setVcWarnBeforeMinutes } from "../lib/economy";
 import { getTavernChannelNames } from "../lib/chestTracker";
 import { logger } from "../lib/logger";
 import { isBeachVoiceChannel } from "../lib/vcRewardEligibility";
+import { isVcStreamingEnabled, toggleVcStreaming } from "../lib/vcStreaming";
 
 // ─── Hub VC panel constants ──────────────────────────────────────────────────
 
@@ -60,14 +61,8 @@ function parseHubPanelId(prefix: string, customId: string): { channelId: string;
   return { channelId: payload.slice(0, sep), ownerId: payload.slice(sep + 1) };
 }
 
-/**
- * @everyone に Stream: false の上書きがあれば OFF、なければ ON とみなす。
- * 初回作成時は上書きがないので ON が返る。
- */
 function isHubStreamEnabled(ch: GuildChannel, everyoneId: string): boolean {
-  if (!("permissionOverwrites" in ch)) return true;
-  const ow = ch.permissionOverwrites.cache.get(everyoneId);
-  return !(ow?.deny.has(PermissionFlagsBits.Stream) ?? false);
+  return isVcStreamingEnabled(ch, everyoneId);
 }
 
 export function buildHubVcPanelMessage(
@@ -190,21 +185,15 @@ export async function handleHubStreamBtn(interaction: ButtonInteraction): Promis
   if (!checkHubOwner(interaction, ownerId)) return;
   await interaction.deferReply({ ephemeral: true });
 
-  const ch = interaction.guild.channels.cache.get(channelId)
-    ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
-  if (!ch || !("permissionOverwrites" in ch)) {
-    await interaction.editReply("❌ チャンネルが見つかりません。");
+  let result: Awaited<ReturnType<typeof toggleVcStreaming>>;
+  try {
+    result = await toggleVcStreaming(interaction.guild, channelId);
+  } catch (error) {
+    logger.error(`[vcHub] Stream toggle failed channel=${channelId}`, error);
+    await interaction.editReply("❌ 画面共有設定を完了できませんでした。一部反映の可能性があります。Botの権限を確認して再操作してください。");
     return;
   }
-  const everyoneId = interaction.guild.roles.everyone.id;
-  const nowEnabled = isHubStreamEnabled(ch as GuildChannel, everyoneId);
-  const newState   = !nowEnabled;
-
-  // @everyone の Stream を ON:true / OFF:false で上書き
-  await (ch as GuildChannel).permissionOverwrites.edit(
-    everyoneId,
-    newState ? { Stream: true } : { Stream: false },
-  );
+  const { channel: ch, enabled: newState } = result;
 
   // パネルメッセージを更新（best-effort）
   try {
@@ -482,7 +471,7 @@ export const vcCommand = {
           if (existing) {
             await existing.edit(buildHubVcPanelMessage(session.channelId, session.ownerId, nowStream));
           } else {
-            await tc.send(buildHubVcPanelMessage(session.channelId, session.ownerId, true));
+            await tc.send(buildHubVcPanelMessage(session.channelId, session.ownerId, nowStream));
           }
           updated++;
         } catch (err) {
@@ -691,7 +680,7 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
     logger.info(`[vcHub] panel check: channel=${newVc.id} template="${hub.nameTemplate}" isTavern=${isTavern} botId=${botId ?? "none"}`);
     if (!isTavern) {
       await newVc
-        .send(buildHubVcPanelMessage(newVc.id, member.id, true))
+        .send(buildHubVcPanelMessage(newVc.id, member.id, isHubStreamEnabled(newVc, guild.roles.everyone.id)))
         .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
       logger.info(`[vcHub] panel sent to channel=${newVc.id}`);
     }
@@ -774,7 +763,7 @@ export async function handlePanelOnlyHubTransfer(
     || isBeachVoiceChannel(sourceChannel?.name ?? "", sourceParentName);
 
   // カテゴリの ViewChannel 権限を継承させるため @everyone への上書きは行わない。
-  const panel = buildHubVcPanelMessage(vc.id, member.id, true, !isBeachTransfer);
+    const panel = buildHubVcPanelMessage(vc.id, member.id, isHubStreamEnabled(vc, guild.roles.everyone.id), !isBeachTransfer);
   try {
     const botId = newState.client.user?.id;
     const messages = await vc.messages.fetch({ limit: 50 });

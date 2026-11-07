@@ -25,6 +25,7 @@ import {
 import type { ShopItem } from "@workspace/db";
 import type { Client, Guild, VoiceChannel } from "discord.js";
 import { logger } from "../lib/logger";
+import { isVcStreamingEnabled, toggleVcStreaming } from "../lib/vcStreaming";
 import { buildForumCastPicker, fetchForumCastMembers, getForumCastRoleIds, isEligibleForumCast, FORUM_CAST_PAGE_PREFIX } from "../lib/forumCastPicker";
 import { buildForumCastRoleConfig, showForumCastRoleConfig } from "./forumCastRoles";
 import { WAITING_ROLE_NAME } from "../lib/rejoinLog";
@@ -2819,14 +2820,8 @@ function getVcAccessMemberIds(
     .map((ow) => ow.id);
 }
 
-/**
- * オーナーのチャンネル上書きで Stream が明示的に allow されていれば ON とみなす。
- * ない場合は OFF（初期作成時はオーナー上書きに Stream が含まれないので OFF）。
- */
-function isPrivateVcStreamEnabled(ch: import("discord.js").GuildChannel, ownerId: string): boolean {
-  if (!("permissionOverwrites" in ch)) return false;
-  const ow = ch.permissionOverwrites.cache.get(ownerId);
-  return ow?.allow.has(PermissionFlagsBits.Stream) ?? false;
+function isPrivateVcStreamEnabled(ch: import("discord.js").GuildChannel, _ownerId: string): boolean {
+  return isVcStreamingEnabled(ch, ch.guild?.id ?? "");
 }
 
 interface RefreshPrivateVcPanelOptions {
@@ -3941,33 +3936,15 @@ export async function handleVcPanelStreamBtn(interaction: ButtonInteraction): Pr
   if (!checkOwner(interaction, ownerId)) return;
   await interaction.deferReply({ ephemeral: true });
 
-  const ch = interaction.guild.channels.cache.get(channelId)
-    ?? await interaction.guild.channels.fetch(channelId).catch(() => null);
-  if (!ch || !("permissionOverwrites" in ch)) {
-    await interaction.editReply("❌ チャンネルが見つかりません。");
+  let result: Awaited<ReturnType<typeof toggleVcStreaming>>;
+  try {
+    result = await toggleVcStreaming(interaction.guild, channelId);
+  } catch (error) {
+    logger.error(`[vc-panel] Stream toggle failed channel=${channelId}`, error);
+    await interaction.editReply("❌ 画面共有設定を完了できませんでした。一部反映の可能性があります。Botの権限を確認して再操作してください。");
     return;
   }
-  const nowEnabled = isPrivateVcStreamEnabled(ch as import("discord.js").GuildChannel, ownerId);
-  const newState   = !nowEnabled;
-
-  // オーナーの上書きに Stream を追加 / 削除
-  await (ch as import("discord.js").GuildChannel).permissionOverwrites.edit(
-    ownerId,
-    newState ? { Stream: true } : { Stream: false },
-  );
-
-  // 招待済みメンバーにも同じ設定を反映
-  const memberIds = getVcAccessMemberIds(
-    ch as import("discord.js").GuildChannel,
-    ownerId,
-    interaction.client.user?.id,
-  );
-  for (const mid of memberIds) {
-    await (ch as import("discord.js").GuildChannel).permissionOverwrites.edit(
-      mid,
-      newState ? { Stream: true } : { Stream: false },
-    ).catch(() => {});
-  }
+  const { channel: ch, enabled: newState } = result;
 
   // パネル更新（best-effort）
   try {

@@ -27,6 +27,7 @@
 - [Discord command registration](discord-command-registration.md) — Botの公開とスラッシュコマンドのDiscord登録は別。個別更新で専用コマンドを守る。
 - [Dealer casino Hub rooms](dealer-casino-hub-rooms.md) — 賭博場の設定VCがHubでも、個々のゲームは実際の転送先VC内に限定する。
 - [Hub room permission source](hub-room-permissions.md) — Hub生成VCの権限はカテゴリ同期ではなく転送元のチャンネル固有設定を基準にする。
+- [VC streaming scope](vc-streaming-policy.md) — 画面共有はロール経由の参加者にも適用するが、VCの閲覧・接続範囲や砂浜パネル仕様は変えない。
 - [Bounty accrual during bot outages](bounty-outage-policy.md) — Bot停止中のVC時間は推定加算しない。月初未観測の月次付与は保留し、管理者の確認・承認後に精算する。
 - [Bounty Hub transfer accrual](bounty-hub-transfer-accrual.md) — 転送先は元Hubのポイント率と時間残を共有し、転送先への明示設定があれば0を含めて優先する。
 - [Bounty panel access scope](bounty-panel-access-scope.md) — 広報部・本船員へのパネル操作の委譲を、初期設定や月次保留精算の承認権限へ自動的に広げない。
