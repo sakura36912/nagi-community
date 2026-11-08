@@ -280,8 +280,8 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
         throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
       }
+      await requireKpStaff(interaction);
       if (allTickets) {
-        await requireKpStaff(interaction);
         await showKpSales(interaction, kpBusinessDay());
         return;
       }

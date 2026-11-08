@@ -136,15 +136,43 @@ describe("KP ticket component flow", () => {
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("処理に失敗") }));
     expect(m.settle).not.toHaveBeenCalled();
   });
-  it("publishes the ticket statement without creating, advancing or charging an order, including on repeat clicks", async () => {
-    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}statement`;
+  it.each(["夜鴉", "黒兵", "admin"])("allows the ticket statement only for fresh staff membership (%s), without charging", async role => {
+    const i = allStatementFixture(role === "admin" ? null : role, role === "admin");
+    i.customId = `${KP_TICKET_PREFIX}statement`;
     for (let n = 0; n < 2; n++) await run(i);
+    expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "buyer", force: true });
     expect(m.paidOrders).toHaveBeenCalledWith("guild", "ticket");
     expect(i.deferReply).toHaveBeenCalledWith();
     expect(i.editReply.mock.calls[0]![0].embeds[0].toJSON().description).toContain("支払い済みの注文がありません");
     expect(m.create).not.toHaveBeenCalled();
     expect(m.advance).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
+  });
+  it.each([null, "黒真珠", "白真珠", "夜鴉見習い", "本船員", "島民"])("blocks ticket statement access for non-staff (%s)", async role => {
+    const i = allStatementFixture(role); i.customId = `${KP_TICKET_PREFIX}statement`;
+    await run(i);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(m.guildSettings).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("夜鴉・黒兵") }));
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("blocks the ticket statement when membership lookup fails", async () => {
+    const i = allStatementFixture("夜鴉"); i.customId = `${KP_TICKET_PREFIX}statement`;
+    i.guild.members.fetch.mockRejectedValueOnce(new Error("Discord unavailable"));
+    await run(i);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("操作権限を確認できません") }));
+  });
+  it.each(["statement", "all-statement"])("rechecks revoked staff membership on every %s click", async action => {
+    const i = allStatementFixture("夜鴉"); i.customId = `${KP_TICKET_PREFIX}${action}`;
+    await run(i);
+    m.paidOrders.mockClear();
+    Object.assign(i.guild.members, { fetch: vi.fn().mockResolvedValue({
+      permissions: { has: () => false }, roles: { cache: new Map() },
+    }) });
+    await run(i);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenLastCalledWith(expect.objectContaining({ content: expect.stringContaining("夜鴉・黒兵") }));
   });
   it("does not disclose statements from unregistered panels", async () => {
     const i = fixture(); i.customId = `${KP_TICKET_PREFIX}statement`;
@@ -154,7 +182,7 @@ describe("KP ticket component flow", () => {
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("未登録") }));
   });
   it("reports a statement query failure without claiming an empty or successful total", async () => {
-    const i = fixture(); i.customId = `${KP_TICKET_PREFIX}statement`;
+    const i = allStatementFixture(null, true); i.customId = `${KP_TICKET_PREFIX}statement`;
     m.paidOrders.mockRejectedValueOnce(new Error("Database unavailable"));
     await run(i);
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("処理に失敗") }));
