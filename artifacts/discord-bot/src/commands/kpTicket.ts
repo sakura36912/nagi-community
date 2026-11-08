@@ -132,8 +132,20 @@ type TicketInteraction = ButtonInteraction | StringSelectMenuInteraction;
 async function showKpSales(interaction: TicketInteraction | ModalSubmitInteraction, period: KpBusinessDay) {
   const orders = await listPaidKpTicketOrders(interaction.guildId!, undefined, { start: period.start, end: period.end });
   const { currencyName } = await getGuildSettings(interaction.guildId!);
+  const statement = kpTicketStatement(orders, currencyName, true, period);
+  const castSales = kpCastSales(orders, currencyName, period);
+  const embeds = [...statement.embeds, ...castSales.embeds];
+  // Discord's 6,000-character limit applies to all embeds in the message together.
+  for (const embed of embeds) {
+    const description = embed.data.description;
+    if (description && description.length > 1500) {
+      embed.setDescription(description.slice(0, 1500) + "\n\n続きは添付ファイルをご確認ください。");
+    }
+  }
   await interaction.editReply({
-    ...kpCastSales(orders, currencyName, period),
+    embeds,
+    files: [...statement.files, ...castSales.files],
+    allowedMentions: statement.allowedMentions,
     components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}sales-date:${interaction.user.id}`)
         .setLabel("営業日を指定").setStyle(ButtonStyle.Secondary),

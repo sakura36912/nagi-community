@@ -352,9 +352,38 @@ describe("KP ticket business-day date selection", () => {
     });
     const reply = i.editReply.mock.calls[0]![0];
     expect(reply.embeds[0].toJSON().fields[1].value).toContain("2026-11-08 18:00");
+    expect(reply.embeds).toHaveLength(2);
+    expect(reply.embeds[0].toJSON().title).toContain("全チケット明細");
+    expect(reply.embeds[1].toJSON().title).toContain("キャスト別売上");
+    expect(reply.embeds[1].toJSON().fields[1].value).toContain("2026-11-08 18:00");
+    expect(reply.files.map((file: { name: string }) => file.name)).toEqual([
+      "kp-all-tickets-statement.txt", "kp-cast-sales.txt",
+    ]);
     expect(reply.components[0].toJSON().components[0].label).toBe("営業日を指定");
     expect(m.settle).not.toHaveBeenCalled();
     expect(i.channel.send).not.toHaveBeenCalled();
+  });
+  it("uses the same paid records for both reports and keeps a large combined response within Discord limits", async () => {
+    const i = salesFixture();
+    const orders = Array.from({ length: 80 }, (_, index) => ({
+      ...session, id: `order-${index}`, phase: "paid", channelId: `deleted-ticket-${index}`,
+      selection: { castId: String(100000000000000000n + BigInt(index)), quote: {
+        itemId: 1, itemName: "長い商品名".repeat(30), quantity: 1,
+        unitPrice: 100, vipPrice: 0, extensionPrice: 0, total: 100,
+      } },
+    }));
+    m.paidOrders.mockResolvedValueOnce(orders);
+    await submit(i);
+    const reply = i.editReply.mock.calls[0]![0];
+    expect(m.paidOrders).toHaveBeenCalledOnce();
+    expect(reply.embeds[0].toJSON().fields[0].value).toContain("8,000円");
+    expect(reply.embeds.reduce((sum: number, embed: { length: number }) => sum + embed.length, 0)).toBeLessThan(6000);
+    const fullText = (reply.files[0].attachment as Buffer).toString("utf8");
+    const castText = (reply.files[1].attachment as Buffer).toString("utf8");
+    expect(fullText.match(/注文ID:/g)).toHaveLength(80);
+    expect(castText.match(/キャストID:/g)).toHaveLength(80);
+    expect(reply.allowedMentions).toEqual({ parse: [] });
+    expect(m.settle).not.toHaveBeenCalled();
   });
   it("opens a date modal without loading any sales data", async () => {
     const i = salesFixture(); i.customId = `${KP_TICKET_PREFIX}sales-date:buyer`;
