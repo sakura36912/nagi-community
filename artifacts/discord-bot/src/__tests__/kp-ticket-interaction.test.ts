@@ -40,7 +40,10 @@ function fixture() {
       members: { me: { id: "bot" }, fetch: vi.fn(async arg =>
         typeof arg === "string" ? members.get(arg) : arg && "user" in arg ? members.get(arg.user) : members) },
     },
-    channel: { id: "ticket", guildId: "guild", type: 0, isThread: () => false, permissionsFor: () => ({ has: () => true }),
+    channel: { id: "ticket", guildId: "guild", type: 12, isThread: () => true, permissionsFor: () => ({ has: () => true }),
+      parent: { guildId: "guild", permissionsFor: vi.fn(() => ({ has: (): boolean => true })),
+        permissionOverwrites: { edit: vi.fn() } },
+      members: { add: vi.fn().mockResolvedValue(undefined) },
       permissionOverwrites: { edit: vi.fn().mockResolvedValue(undefined) },
       send: vi.fn().mockResolvedValue({ id: "receipt" }) },
     isButton: () => true, isStringSelectMenu: () => false,
@@ -64,7 +67,7 @@ beforeEach(() => {
   m.settings.mockImplementation(async () => settings);
   m.create.mockImplementation(async () => session);
   m.createAdditional.mockImplementation(async () => {
-    session = { ...session, phase: "vip", selection: { castId: "black-cast", fixedCastId: "black-cast" } };
+    session = { ...session, phase: "drink", selection: { castId: "black-cast", fixedCastId: "black-cast", vip: false, extension: false } };
     return session;
   });
   m.getSession.mockImplementation(async () => session);
@@ -166,9 +169,6 @@ describe("KP ticket component flow", () => {
     expect(m.createAdditional).toHaveBeenCalledWith(i.id, "guild", "ticket", "buyer");
     expect(m.create).not.toHaveBeenCalled();
     expect(i.editReply.mock.calls[0]![0].content).toContain("<@black-cast>（変更不可）");
-    expect(session.phase).toBe("vip");
-    await choose(i, "no");
-    await choose(i, "no");
     expect(session.phase).toBe("drink");
     await choose(i, "1");
     await choose(i, "3");
@@ -191,50 +191,44 @@ describe("KP ticket component flow", () => {
     expect(m.settle).not.toHaveBeenCalled();
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("未登録") }));
   });
-  it("includes explicitly selected VIP and extension in an additional drink payment", async () => {
+  it("ignores legacy configured fees in an additional drink payment", async () => {
     const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
-    await choose(i, "yes"); await choose(i, "yes");
     await choose(i, "1"); await choose(i, "2");
     expect(session.selection).toMatchObject({ castId: "black-cast", fixedCastId: "black-cast",
-      vip: true, extension: true, quote: { total: 900 } });
+      vip: false, extension: false, quote: { total: 200 } });
     expect(m.settle).not.toHaveBeenCalled();
     i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
     await run(i);
     expect(m.settle).toHaveBeenCalledOnce();
   });
-  it("adds VIP and extension without drinks, including when no drink catalogue exists", async () => {
+  it("does not offer extras-only payment when no drink catalogue exists", async () => {
     m.listItems.mockResolvedValue([]);
     const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
-    await choose(i, "yes"); await choose(i, "yes");
-    const reply = i.editReply.mock.calls.at(-1)![0];
-    expect(reply.components.at(-1).toJSON().components[0].label).toContain("ドリンクなし");
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("未登録") }));
     i.customId = ticketId("extras-only", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
     await run(i);
-    expect(session.phase).toBe("confirm");
-    expect(session.selection.quote).toMatchObject({ itemId: null, quantity: 0, total: 700 });
+    expect(session.phase).toBe("drink");
     expect(m.settle).not.toHaveBeenCalled();
-    i.customId = ticketId("confirm", session); await run(i);
-    expect(m.settle).toHaveBeenCalledOnce();
   });
   it("keeps the inherited cast on reset and rejects forged cast selection", async () => {
     const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
-    await choose(i, "no"); await choose(i, "no");
     i.customId = ticketId("reset", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
     await run(i);
-    expect(session.phase).toBe("vip");
-    expect(session.selection).toEqual({ castId: "black-cast", fixedCastId: "black-cast" });
+    expect(session.phase).toBe("drink");
+    expect(session.selection).toEqual({ castId: "black-cast", fixedCastId: "black-cast", vip: false, extension: false });
     i.customId = ticketId("cast", session); i.values = ["white-cast"];
     i.isButton = () => false; i.isStringSelectMenu = () => true;
     await run(i);
     expect(session.selection.castId).toBe("black-cast");
     expect(m.settle).not.toHaveBeenCalled();
   });
-  it("blocks additional VIP with an unset fee without advancing or charging", async () => {
+  it("rejects old VIP component IDs without advancing or charging", async () => {
     settings.vipPrice = null;
     const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
-    await choose(i, "yes");
-    expect(session.phase).toBe("vip");
-    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("VIP料金が未設定") }));
+    i.customId = ticketId("vip", session); i.values = ["yes"];
+    await run(i);
+    expect(session.phase).toBe("drink");
+    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("受付は終了") }));
     expect(m.settle).not.toHaveBeenCalled();
   });
   it("cannot start an additional order without a previous paid order", async () => {
@@ -253,32 +247,33 @@ describe("KP ticket component flow", () => {
   it("completes all choices, quotes the full total, and charges only after explicit confirmation", async () => {
     const i = fixture(); await run(i);
     await choose(i, "black-cast");
-    await choose(i, "yes");
-    await choose(i, "yes");
     await choose(i, "1");
     await choose(i, "3");
     expect(session.phase).toBe("confirm");
-    expect(session.selection.quote!.total).toBe(1000);
+    expect(session.selection.quote!.total).toBe(300);
     expect(m.settle).not.toHaveBeenCalled();
     i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
     await run(i);
-    expect(m.settle).toHaveBeenCalledWith(session.id, 5, "buyer", "guild", "ticket", ["black", "white"]);
+    expect(m.settle).toHaveBeenCalledWith(session.id, 3, "buyer", "guild", "ticket", ["black", "white"]);
     expect(i.channel.send).toHaveBeenCalledOnce();
     const log = i.channel.send.mock.calls[0]![0];
+    expect(log.embeds[0].toJSON().fields.map((field: { name: string }) => field.name).join(" ")).not.toMatch(/VIP|延長/);
     expect(log.embeds[0].toJSON().fields).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "指名キャスト", value: "<@black-cast>" }),
-      expect.objectContaining({ name: "合計金額", value: "1,000円" }),
+      expect.objectContaining({ name: "合計金額", value: "300円" }),
     ]));
     expect(log.allowedMentions).toEqual({ parse: [] });
   });
-  it("keeps VIP unset separate from a free VIP and does not advance for an unset requested extra", async () => {
-    settings.vipPrice = null;
-    const i = fixture(); await choose(i, "black-cast");
-    await choose(i, "yes");
-    expect(session.phase).toBe("vip");
-    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("VIP料金が未設定") }));
-    settings.vipPrice = 0; await choose(i, "yes");
-    expect(session.phase).toBe("extension");
+  it("rejects old unpaid extras and clears them on reset", async () => {
+    const i = fixture();
+    session.phase = "confirm";
+    session.selection = { castId: "black-cast", vip: true, extension: true };
+    i.customId = ticketId("confirm", session); await run(i);
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("受付は終了") }));
+    i.customId = ticketId("reset", session); await run(i);
+    expect(session.phase).toBe("cast");
+    expect(session.selection).toEqual({});
   });
   it("rejects an outsider, another owner, a stale component and an expired order without settling", async () => {
     const i = fixture(); await choose(i, "outsider");
@@ -332,23 +327,41 @@ describe("KP ticket component flow", () => {
 });
 
 describe("KP ticket cast access integration", () => {
-  it("adds the cast immediately on selection, before VIP choices or payment", async () => {
+  it("blocks payment with missing parent access without editing the parent", async () => {
+    const i = fixture();
+    i.channel.parent.permissionsFor.mockReturnValue({ has: () => false });
+    session.phase = "confirm"; session.selection = { castId: "black-cast" };
+    i.customId = ticketId("confirm", session); await run(i);
+    expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(i.channel.members.add).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("親チャンネルの権限を変更しません") }));
+  });
+  it("rejects starting on an old non-thread panel", async () => {
+    const i = fixture(); i.channel.isThread = () => false;
+    await run(i);
+    expect(m.create).not.toHaveBeenCalled();
+    expect(i.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("adds the cast immediately to the thread only and goes directly to drinks", async () => {
     const i = fixture(); await choose(i, "black-cast");
     expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "black-cast", force: true });
-    expect(i.channel.permissionOverwrites.edit).toHaveBeenCalledWith("black-cast",
-      { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }, expect.any(Object));
-    expect(session.phase).toBe("vip");
+    expect(i.channel.members.add).toHaveBeenCalledWith("black-cast");
+    expect(i.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(session.phase).toBe("drink");
     expect(i.editReply.mock.calls.at(-1)![0].content).toContain("チケットに追加しました");
     expect(m.settle).not.toHaveBeenCalled();
   });
   it("does not advance or charge when granting cast access fails and allows retry", async () => {
     const i = fixture();
-    i.channel.permissionOverwrites.edit.mockRejectedValueOnce(new Error("Missing Permissions"));
+    i.channel.members.add.mockRejectedValueOnce(new Error("Missing Permissions"));
     await choose(i, "black-cast");
     expect(session.phase).toBe("cast"); expect(m.advance).not.toHaveBeenCalled(); expect(m.settle).not.toHaveBeenCalled();
     expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("引き落としは行っていません") }));
     await choose(i, "black-cast");
-    expect(session.phase).toBe("vip");
+    expect(session.phase).toBe("drink");
   });
   it("never grants access to an ineligible cast", async () => {
     const i = fixture(); await choose(i, "outsider");
@@ -363,13 +376,14 @@ describe("KP ticket cast access integration", () => {
   });
   it("rechecks access before payment and does not charge if access cannot be restored", async () => {
     const i = fixture(); session.phase = "confirm"; session.selection = { castId: "black-cast" };
-    i.channel.permissionOverwrites.edit.mockRejectedValue(new Error("Missing Permissions"));
+    i.channel.members.add.mockRejectedValue(new Error("Missing Permissions"));
     i.customId = ticketId("confirm", session); await run(i);
     expect(m.settle).not.toHaveBeenCalled(); expect(m.deliver).not.toHaveBeenCalled();
   });
   it("ensures the inherited cast has access on additional orders without changing it", async () => {
     const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);
-    expect(i.channel.permissionOverwrites.edit).toHaveBeenCalledWith("black-cast", expect.any(Object), expect.any(Object));
+    expect(i.channel.members.add).toHaveBeenCalledWith("black-cast");
+    expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(session.selection.fixedCastId).toBe("black-cast");
     expect(m.settle).not.toHaveBeenCalled();
   });
@@ -385,7 +399,7 @@ describe("KP ticket price administration", () => {
         members: { me: { id: "bot" }, fetch: vi.fn().mockResolvedValue(member) } },
       // Stale interaction permissions must not bypass the fresh member check.
       memberPermissions: { has: () => true },
-      channel: { id: "ticket", type: 0, isThread: () => false,
+      channel: { id: "ticket", type: 12, isThread: () => true,
         permissionsFor: () => ({ has: () => true }), send: vi.fn().mockResolvedValue({ id: "panel" }) },
       options: { getSubcommand: () => "ticket-panel", getRole: () => null },
       reply: vi.fn(), deferReply: vi.fn(), editReply: vi.fn(),
@@ -402,6 +416,14 @@ describe("KP ticket price administration", () => {
     expect(interaction.channel.send).toHaveBeenCalledOnce();
     expect(m.register).toHaveBeenCalledWith("panel", "guild", "ticket");
     expect(m.configure).toHaveBeenCalledWith("guild", { castRoleIds: ["黒真珠", "白真珠"] });
+  });
+  it("does not install a panel in the parent text channel", async () => {
+    const interaction = panelAccessFixture(["夜鴉"]);
+    interaction.channel.isThread = () => false;
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(interaction.channel.send).not.toHaveBeenCalled();
+    expect(m.configure).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("スレッド内で実行"));
   });
   it.each([{ roles: [] }, { roles: ["黒真珠"] }, { roles: ["白真珠"] }, { roles: ["夜鴉見習い"] }])("blocks unapproved or removed roles despite stale permissions: %j", async ({ roles }) => {
     const interaction = panelAccessFixture(roles);
@@ -431,7 +453,7 @@ describe("KP ticket price administration", () => {
     const roleMap = new Map([
       ["black", { id: "black", name: "黒真珠" }], ["white", { id: "white", name: "白真珠" }],
     ]);
-    const channel = { id: "ticket", type: 0, isThread: () => false,
+    const channel = { id: "ticket", type: 12, isThread: () => true,
       permissionsFor: () => ({ has: () => true }), send: vi.fn().mockResolvedValue({ id: "panel" }) };
     const interaction = {
       guildId: "guild", user: { id: "admin" },

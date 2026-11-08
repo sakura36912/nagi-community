@@ -19,15 +19,11 @@ function fixture(type = ChannelType.GuildText) {
 }
 beforeEach(() => vi.clearAllMocks());
 describe("KP ticket selected-cast access", () => {
-  it("merges only the selected member's read/write/history permissions into this ticket", async () => {
-    const i = fixture(); await i.grant(); await i.grant();
-    expect(i.edit).toHaveBeenCalledWith("cast", {
-      ViewChannel: true, SendMessages: true, ReadMessageHistory: true,
-    }, expect.objectContaining({ reason: expect.any(String) }));
-    expect(i.edit).toHaveBeenCalledTimes(2); // Same edit is safe to repeat.
+  it("rejects ordinary channels without editing any overwrites", async () => {
+    const i = fixture(); await expect(i.grant()).rejects.toThrow("スレッド内でのみ");
+    expect(i.edit).not.toHaveBeenCalled();
     expect(i.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(i.add).not.toHaveBeenCalled();
-    expect(i.channel.permissionsFor).toHaveBeenCalledWith({ id: "bot" });
   });
   it.each([ChannelType.PrivateThread, ChannelType.PublicThread])("adds the cast to thread type %s without widening its parent", async type => {
     const i = fixture(type); await i.grant();
@@ -36,15 +32,12 @@ describe("KP ticket selected-cast access", () => {
     expect(i.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(i.parent.permissionsFor).toHaveBeenCalledWith(i.cast);
   });
-  it.each([ChannelType.PrivateThread, ChannelType.PublicThread])("grants only required parent permissions to the selected cast for thread type %s", async type => {
+  it.each([ChannelType.PrivateThread, ChannelType.PublicThread])("rejects missing parent permissions without widening access for thread type %s", async type => {
     const i = fixture(type);
     i.parent.permissionsFor.mockImplementation(member => ({ has: () => member !== i.cast }));
-    await i.grant();
-    expect(i.parent.permissionOverwrites.edit).toHaveBeenCalledWith("cast", {
-      ViewChannel: true, SendMessagesInThreads: true, ReadMessageHistory: true,
-    }, expect.objectContaining({ reason: expect.any(String) }));
-    expect(i.add).toHaveBeenCalledWith("cast");
-    expect(i.parent.permissionOverwrites.edit.mock.invocationCallOrder[0]).toBeLessThan(i.add.mock.invocationCallOrder[0]);
+    await expect(i.grant()).rejects.toThrow("親チャンネルの権限を変更しません");
+    expect(i.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(i.add).not.toHaveBeenCalled();
     expect(i.edit).not.toHaveBeenCalled();
   });
   it("blocks thread membership when the bot cannot manage missing parent permissions", async () => {
@@ -72,10 +65,11 @@ describe("KP ticket selected-cast access", () => {
     await expect(i.grant()).rejects.toThrow("終了・ロック済み");
     expect(i.add).not.toHaveBeenCalled();
   });
-  it("requires the bot's overwrite-management permission, not administrator access for the cast", async () => {
-    const i = fixture();
-    i.channel.permissionsFor.mockReturnValue({ has: () => false });
-    await expect(i.grant()).rejects.toThrow("ロールの管理");
+  it("does not require overwrite-management permissions when adding thread members", async () => {
+    const i = fixture(ChannelType.PrivateThread);
+    i.parent.permissionsFor.mockImplementation(member => ({ has: () => member === i.cast }));
+    await i.grant();
+    expect(i.add).toHaveBeenCalledWith("cast");
     expect(i.edit).not.toHaveBeenCalled();
   });
   it.each(["channel", "guild", "cast"] as const)("rejects a mismatched %s before granting access", async mismatch => {
@@ -86,7 +80,7 @@ describe("KP ticket selected-cast access", () => {
     await expect(i.grant()).rejects.toThrow("チケットを確認できない");
     expect(i.edit).not.toHaveBeenCalled(); expect(i.add).not.toHaveBeenCalled();
   });
-  it.each([ChannelType.GuildText, ChannelType.PrivateThread])("reports Discord permission failures for type %s", async type => {
+  it.each([ChannelType.PrivateThread, ChannelType.PublicThread])("reports Discord permission failures for type %s", async type => {
     const i = fixture(type);
     (type === ChannelType.GuildText ? i.edit : i.add).mockRejectedValue(new Error("Missing Permissions"));
     await expect(i.grant()).rejects.toThrow("引き落としは行っていません");

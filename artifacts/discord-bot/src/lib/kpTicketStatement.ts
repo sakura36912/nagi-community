@@ -20,7 +20,7 @@ export function kpTicketStatement(orders: KpTicketSession[], currency: string, a
       ...(allTickets ? [`チケットID: ${order.channelId}`] : []),
       `購入者ID: ${order.userId} / 指名キャストID: ${order.selection.castId ?? "未記録"}`,
       `単価: ${q.unitPrice.toLocaleString()}${currency}`,
-      `VIP: ${q.vipPrice.toLocaleString()}${currency} / 延長: ${q.extensionPrice.toLocaleString()}${currency}`,
+      ...(q.vipPrice || q.extensionPrice ? [`VIP: ${q.vipPrice.toLocaleString()}${currency} / 延長: ${q.extensionPrice.toLocaleString()}${currency}`] : []),
       `支払額: ${price}`,
       `支払日時: ${order.paidAt?.toISOString() ?? "未記録"} / 注文ID: ${order.id}`, "",
     );
@@ -29,7 +29,9 @@ export function kpTicketStatement(orders: KpTicketSession[], currency: string, a
     );
   }
   const amount = (value: bigint) => `${value.toLocaleString()}${currency}`;
-  const totals = `ドリンク代: ${amount(drinks)}\nVIP料金: ${amount(vip)}\n延長料金: ${amount(extension)}\n支払い済み合計: ${amount(total)}`;
+  const totals = `ドリンク代: ${amount(drinks)}`
+    + (vip || extension ? `\nVIP料金: ${amount(vip)}\n延長料金: ${amount(extension)}` : "")
+    + `\n支払い済み合計: ${amount(total)}`;
   const title = allTickets ? "キミノヒトミニKP 全チケット明細" : "キミノヒトミニKP 注文明細";
   const scope = allTickets ? `同じサーバーの全期間・${new Set(orders.map(order => order.channelId)).size}チケット` : "";
   const embed = new EmbedBuilder().setTitle(title).setColor(0x2ecc71)

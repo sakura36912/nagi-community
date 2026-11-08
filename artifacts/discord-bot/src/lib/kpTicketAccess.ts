@@ -1,8 +1,8 @@
-import { ChannelType, PermissionFlagsBits, type ButtonInteraction, type GuildMember, type StringSelectMenuInteraction } from "discord.js";
+import { PermissionFlagsBits, type ButtonInteraction, type GuildMember, type StringSelectMenuInteraction } from "discord.js";
 import { KpTicketError } from "@workspace/db";
 import { logger } from "./logger";
 
-/** Grant the selected member ticket access, including required thread-parent permissions. */
+/** Add only thread membership. Never widen channel permissions. */
 export async function grantKpTicketCastAccess(
   interaction: ButtonInteraction | StringSelectMenuInteraction, cast: GuildMember,
 ) {
@@ -21,24 +21,12 @@ export async function grantKpTicketCastAccess(
       if (!parent.permissionsFor(cast)?.has([
         PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessagesInThreads, PermissionFlagsBits.ReadMessageHistory,
       ])) {
-        if (!parent.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageRoles])) {
-          throw new KpTicketError("キャストを追加するにはBotに親チャンネルの閲覧・権限管理（ロールの管理）権限が必要です。引き落としは行っていません。");
-        }
-        await parent.permissionOverwrites.edit(cast.id, {
-          ViewChannel: true, SendMessagesInThreads: true, ReadMessageHistory: true,
-        }, { reason: "KPチケットで指名されたキャストのスレッド利用権限追加" });
+        throw new KpTicketError("キャストに親チャンネルの閲覧・スレッド送信・履歴閲覧権限がありません。Botは親チャンネルの権限を変更しません。管理者に設定を依頼してください。引き落としは行っていません。");
       }
       await channel.members.add(cast.id);
       return;
     }
-    if (channel.type !== ChannelType.GuildText) throw new KpTicketError("チケットのテキストチャンネル・スレッドで操作してください。");
-    if (!channel.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageRoles])) {
-      throw new KpTicketError("キャストを追加するにはBotにこのチケットの閲覧・権限管理（ロールの管理）権限が必要です。引き落としは行っていません。");
-    }
-    // edit merges this member's overwrite instead of replacing the ticket's permission list.
-    await channel.permissionOverwrites.edit(cast.id, {
-      ViewChannel: true, SendMessages: true, ReadMessageHistory: true,
-    }, { reason: "KPチケットで指名されたキャストの追加" });
+    throw new KpTicketError("キャストの追加はチケットのスレッド内でのみ行えます。スレッド内のパネルから注文してください。引き落としは行っていません。");
   } catch (error) {
     if (error instanceof KpTicketError) throw error;
     logger.error("[kp-ticket] Could not add the selected cast to the ticket", error);

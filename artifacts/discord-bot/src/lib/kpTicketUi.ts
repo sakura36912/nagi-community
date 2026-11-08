@@ -44,8 +44,9 @@ export function ticketSummary(session: KpTicketSession, currency: string, paid =
     .addFields(
       { name: "購入者", value: `<@${session.userId}>`, inline: true },
       { name: "指名キャスト", value: `<@${s.castId}>`, inline: true },
-      { name: "VIP希望", value: `${s.vip ? "希望する" : "希望しない"}（${q?.vipPrice.toLocaleString()}${currency}）` },
-      { name: "延長希望", value: `${s.extension ? "希望する" : "希望しない"}（${q?.extensionPrice.toLocaleString()}${currency}）` },
+      // Retain paid historical extras in receipts; new orders no longer offer them.
+      ...(paid && s.vip ? [{ name: "VIP希望", value: `希望する（${q?.vipPrice.toLocaleString()}${currency}）` }] : []),
+      ...(paid && s.extension ? [{ name: "延長希望", value: `希望する（${q?.extensionPrice.toLocaleString()}${currency}）` }] : []),
       { name: "ドリンク", value: q?.itemName.slice(0, 1024) ?? "未選択" },
       { name: "単価・数量", value: q?.itemId === null ? "ドリンクなし" : `${q?.unitPrice.toLocaleString()}${currency} × ${q?.quantity}個` },
       { name: "合計金額", value: `${q?.total.toLocaleString()}${currency}` },

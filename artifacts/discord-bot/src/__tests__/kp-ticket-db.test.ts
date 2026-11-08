@@ -13,7 +13,7 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
   const guild = `kp-test-${randomUUID()}`, user = "test-buyer", channel = "test-ticket";
   let product: typeof shopItemsTable.$inferSelect;
   const baseSelection = (): KpTicketSelection => ({
-    castId: "test-cast", vip: true, extension: true, quantity: 2, itemId: product.id,
+    castId: "test-cast", vip: false, extension: false, quantity: 2, itemId: product.id,
   });
   beforeAll(async () => {
     await ensureKpTicketSchema();
@@ -49,25 +49,26 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     await wallet(5000);
     await settle(await ready());
     const order = await createAdditionalKpTicketSession(randomUUID(), guild, channel, user);
-    expect(order.phase).toBe("vip");
-    expect(order.selection).toEqual({ castId: "test-cast", fixedCastId: "test-cast" });
+    expect(order.phase).toBe("drink");
+    expect(order.selection).toEqual({ castId: "test-cast", fixedCastId: "test-cast", vip: false, extension: false });
     await expect(createAdditionalKpTicketSession(randomUUID(), guild, channel, "other")).rejects.toThrow("支払い済み");
     await expect(createAdditionalKpTicketSession(randomUUID(), guild, "other", user)).rejects.toThrow("支払い済み");
     await expect(createAdditionalKpTicketSession(randomUUID(), `${guild}-other`, channel, user)).rejects.toThrow("支払い済み");
     await expect(advanceKpTicketSession(order, "cast", order.selection)).rejects.toThrow("変更できません");
     await expect(advanceKpTicketSession(order, "vip", {})).rejects.toThrow("変更できません");
-    const selection = { ...order.selection, vip: true, extension: true };
-    const quote = quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, selection);
+    const selection = { ...order.selection, itemId: product.id, quantity: 2 };
+    const quote = quoteKpTicket(product, { vipPrice: 500, extensionPrice: 200 }, selection);
     const confirm = await advanceKpTicketSession(order, "confirm", { ...selection, quote });
-    const beforeInventory = await db.select().from(inventoryItemsTable).where(eq(inventoryItemsTable.guildId, guild));
+    const [beforeInventory] = await db.select().from(inventoryItemsTable).where(eq(inventoryItemsTable.guildId, guild));
     const results = await Promise.all([settle(confirm), settle(confirm)]);
     expect(results.map(result => result.status).sort()).toEqual(["already", "paid"]);
-    expect(await balance()).toBe(3400);
-    expect(await db.select().from(inventoryItemsTable).where(eq(inventoryItemsTable.guildId, guild))).toEqual(beforeInventory);
-    expect((await listPaidKpTicketOrders(guild, channel)).some(paid => paid.id === order.id && paid.selection.quote?.total === 700)).toBe(true);
+    expect(await balance()).toBe(4600);
+    const [afterInventory] = await db.select().from(inventoryItemsTable).where(eq(inventoryItemsTable.guildId, guild));
+    expect(afterInventory!.quantity).toBe(beforeInventory!.quantity + 2);
+    expect((await listPaidKpTicketOrders(guild, channel)).some(paid => paid.id === order.id && paid.selection.quote?.total === 200)).toBe(true);
     const ledger = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${order.id}`));
     expect(ledger).toHaveLength(1);
-    expect(ledger[0]!.amount).toBe(-700);
+    expect(ledger[0]!.amount).toBe(-200);
   });
 
   it("summarizes only paid orders in the exact guild and ticket without changing balances", async () => {
@@ -106,15 +107,15 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     const session = await ready();
     const outcomes = await Promise.all([settle(session), settle(session)]);
     expect(outcomes.map(r => r.status).sort()).toEqual(["already", "paid"]);
-    expect(await balance()).toBe(4100);
+    expect(await balance()).toBe(4800);
     const ledger = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${session.id}`));
     expect(ledger).toHaveLength(1);
-    expect(ledger[0]!.amount).toBe(-900);
+    expect(ledger[0]!.amount).toBe(-200);
     const [inventory] = await db.select().from(inventoryItemsTable).where(and(eq(inventoryItemsTable.guildId, guild), eq(inventoryItemsTable.shopItemId, product.id)));
     expect(inventory!.quantity).toBe((before?.quantity ?? 0) + 2);
   });
   it("does not overspend across two different orders sharing a wallet", async () => {
-    await wallet(1000);
+    await wallet(300);
     const a = await ready(), b = await ready();
     const results = await Promise.allSettled([settle(a), settle(b)]);
     expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
@@ -129,30 +130,30 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     expect((await getKpTicketSession(session.id))!.phase).toBe("confirm");
     const ledger = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${session.id}`));
     expect(ledger).toHaveLength(0);
-    await wallet(1000);
+    await wallet(300);
     expect((await settle(session)).status).toBe("paid");
     expect(await balance()).toBe(100);
   });
-  it("requires reconfirmation when an extra charge changes", async () => {
+  it("requires reconfirmation when a drink price changes", async () => {
     await wallet(5000);
     const session = await ready();
-    await configureKpTicket(guild, { vipPrice: 700 });
+    await db.update(shopItemsTable).set({ price: 150 }).where(eq(shopItemsTable.id, product.id));
     const changed = await settle(session);
     expect(changed.status).toBe("changed");
-    expect(changed.session.selection.quote!.total).toBe(1100);
+    expect(changed.session.selection.quote!.total).toBe(300);
     expect(await balance()).toBe(5000);
     await expect(settle(session)).rejects.toThrow("変更");
     expect((await settle(changed.session)).status).toBe("paid");
-    expect(await balance()).toBe(3900);
-    await configureKpTicket(guild, { vipPrice: 500 });
+    expect(await balance()).toBe(4700);
+    await db.update(shopItemsTable).set({ price: 100 }).where(eq(shopItemsTable.id, product.id));
   });
-  it("blocks an extra reset to unset after the confirmation screen", async () => {
+  it("rejects old unpaid VIP orders without debiting money", async () => {
     await wallet(5000);
     const session = await ready();
-    await configureKpTicket(guild, { extensionPrice: null });
-    await expect(settle(session)).rejects.toThrow("延長料金が未設定");
+    await db.update(kpTicketSessionsTable).set({ selection: { ...session.selection, vip: true } })
+      .where(eq(kpTicketSessionsTable.id, session.id));
+    await expect(settle(session)).rejects.toThrow("受付は終了");
     expect(await balance()).toBe(5000);
-    await configureKpTicket(guild, { extensionPrice: 200 });
   });
   it("rejects another owner, guild, channel, changed roles, cancelled and expired sessions", async () => {
     await wallet(5000);
@@ -179,6 +180,6 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
       .toEqual(["test-log", "test-log"]);
     expect(sends).toBe(1);
     expect((await settle(session)).status).toBe("already");
-    expect(await balance()).toBe(4100);
+    expect(await balance()).toBe(4800);
   });
 });

@@ -4,26 +4,25 @@ import type { KpTicketSelection } from "@workspace/db";
 import { pagedTicketMenu } from "../lib/kpTicketUi";
 
 const item = { id: 1, name: "ドリンク", price: 100, category: "kp", effectType: null, targetRoleId: null };
-const selection: KpTicketSelection = { castId: "cast", itemId: 1, quantity: 3, vip: true, extension: true };
+const selection: KpTicketSelection = { castId: "cast", itemId: 1, quantity: 3, vip: false, extension: false };
 
 describe("KP ticket pricing and paging", () => {
   it("quotes additional VIP or extension without forcing a drink purchase", () => {
     const extra = { castId: "cast", fixedCastId: "cast", vip: true, extension: true };
-    expect(quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, extra))
-      .toMatchObject({ itemId: null, quantity: 0, total: 700 });
-    expect(quoteKpTicket(null, { vipPrice: 0, extensionPrice: null }, { ...extra, extension: false }).total).toBe(0);
-    expect(() => quoteKpTicket(null, { vipPrice: null, extensionPrice: 200 }, extra)).toThrow("VIP料金が未設定");
+    expect(() => quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, extra)).toThrow("受付は終了");
+    expect(() => quoteKpTicket(null, { vipPrice: 0, extensionPrice: null }, { ...extra, extension: false })).toThrow("受付は終了");
+    expect(() => quoteKpTicket(null, { vipPrice: null, extensionPrice: 200 }, extra)).toThrow("受付は終了");
     expect(() => quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, { ...extra, vip: false, extension: false })).toThrow("不完全");
-    expect(() => quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, { ...extra, fixedCastId: undefined })).toThrow("不完全");
+    expect(() => quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, { ...selection, itemId: undefined, quantity: undefined })).toThrow("不完全");
     expect(() => quoteKpTicket(item, { vipPrice: 500, extensionPrice: 200 }, { ...selection, fixedCastId: "other" })).toThrow("変更できません");
   });
-  it("adds VIP and extension once, not once per drink", () => {
+  it("charges only drinks even with legacy configured extra fees", () => {
     expect(quoteKpTicket(item, { vipPrice: 500, extensionPrice: 200 }, selection))
-      .toMatchObject({ total: 1000, quantity: 3, vipPrice: 500, extensionPrice: 200 });
+      .toMatchObject({ total: 300, quantity: 3, vipPrice: 0, extensionPrice: 0 });
   });
   it("blocks an unset requested charge instead of treating it as free", () => {
-    expect(() => quoteKpTicket(item, { vipPrice: null, extensionPrice: 200 }, selection)).toThrow("VIP料金が未設定");
-    expect(() => quoteKpTicket(item, { vipPrice: 500, extensionPrice: null }, selection)).toThrow("延長料金が未設定");
+    expect(() => quoteKpTicket(item, { vipPrice: null, extensionPrice: 200 }, { ...selection, vip: true })).toThrow("受付は終了");
+    expect(() => quoteKpTicket(item, { vipPrice: 500, extensionPrice: null }, { ...selection, extension: true })).toThrow("受付は終了");
   });
   it("supports an explicitly free price and unrequested unset extras", () => {
     expect(quoteKpTicket(item, { vipPrice: 0, extensionPrice: 0 }, selection).total).toBe(300);

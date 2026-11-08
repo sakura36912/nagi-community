@@ -83,8 +83,8 @@ export async function createAdditionalKpTicketSession(id: string, guildId: strin
   }
   const castId = previous.selection.castId;
   const [session] = await db.insert(kpTicketSessionsTable).values({
-    id, guildId, channelId, userId, phase: "vip",
-    selection: { castId, fixedCastId: castId },
+    id, guildId, channelId, userId, phase: "drink",
+    selection: { castId, fixedCastId: castId, vip: false, extension: false },
     expiresAt: new Date(Date.now() + 20 * 60_000),
   }).returning();
   return session!;

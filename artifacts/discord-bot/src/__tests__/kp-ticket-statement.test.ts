@@ -13,6 +13,11 @@ function paid(id: string, extras = false): KpTicketSession {
   };
 }
 describe("KP ticket paid statement", () => {
+  it("omits removed extras from new drink-only statements", () => {
+    const result = kpTicketStatement([paid("new")], "円");
+    expect(result.embeds[0]!.toJSON().fields![0]!.value).toBe("ドリンク代: 200円\n支払い済み合計: 200円");
+    expect((result.files[0]!.attachment as Buffer).toString("utf8")).not.toMatch(/VIP|延長/);
+  });
   it("totals multiple tickets and identifies each ticket in the complete attachment", () => {
     const first = paid("1", true), second = { ...paid("2"), channelId: "other-ticket" };
     const result = kpTicketStatement([first, second], "円", true);
