@@ -4,8 +4,9 @@ import { bossEventsTable as events, bossBattlesTable as battles, bossMembersTabl
   bossActiveUsersTable as active } from "./schema/boss";
 import { advanceBossGuild, withBossGuild, bossMembers, previousBossAction, recordBossAction, finishBossBattle } from "./bossStore";
 import { BossError, bossPlayerAttack, bossHealing, bossCounter, bossCooldownSeconds, type BossActionResult } from "./bossRules";
-import { forgeRoll } from "./forgeRules";
+import { forgeRoll, isForgeWeaponType } from "./forgeRules";
 import { forgeWeaponsTable } from "./schema/forge";
+import { bossCombo, bossAttackPresentation, type BossAttackPresentation } from "./bossAttackEffects";
 
 /** 攻撃無料・回復課金・個別クールタイム・勝利報酬を同時に確定する。 */
 export async function performBossAction(
@@ -33,6 +34,7 @@ export async function performBossAction(
     if (action === "heal" && paid <= 0) throw new BossError("この討伐の有料回復料金が未設定です。管理者にお問い合わせください。");
     const messages: string[] = [];
     let bossHp = battle.currentHp, damage = 0, healed = 0, critical = false, skill: string | undefined;
+    let presentation: BossAttackPresentation | undefined;
     if (action === "attack") {
       // Refresh only the selected weapon's offensive growth. HP, role bonus,
       // weapon type and defensive snapshot stay fixed at participation.
@@ -44,8 +46,14 @@ export async function performBossAction(
         player.weapon = { ...player.weapon, weaponLevel: weapon.weaponLevel, attack: weapon.attack };
       }
       const attack = bossPlayerAttack(player, event.config, roll);
-      damage = Math.min(bossHp, attack.damage);
+      if (!isForgeWeaponType(player.weapon.weaponType)) throw new BossError("未対応の武器です。");
+      const combo = bossCombo(player.weapon.weaponType, attack.damage, bossHp, roll);
+      damage = combo.damage;
       bossHp -= damage; critical = attack.critical; skill = attack.skill;
+      const narration = bossAttackPresentation(player.weapon.weaponType, event.bossType, combo,
+        { critical, finished: bossHp === 0, maxHp: battle.maxHp, effects: player.effects }, roll);
+      presentation = narration.presentation;
+      player.effects = narration.effects;
       player.attackCount++;
       player.damage += damage;
       if (!Number.isSafeInteger(player.damage)) throw new BossError("累計ダメージが上限に達しました。管理者にお問い合わせください。");
@@ -97,6 +105,7 @@ export async function performBossAction(
       battleId: battle.id, mode: battle.mode, state: finished.status, bossHp,
       damage, healed, critical, skill, paid, balance: wallet?.balance ?? 0,
       userHp: players.find(p => p.userId === userId)?.hp, messages,
+      ...(presentation ? { presentation } : {}),
     };
     if (finished.status === "won") {
       const reward = finished.rewards.find(r => r.userId === userId)?.amount ?? 0;

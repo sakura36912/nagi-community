@@ -67,6 +67,47 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
   const heal = (user: string, seconds: number, operation = id()) =>
     performBossAction(operation, guild, user, "heal", { now: at(seconds), roll: () => 0.5 });
 
+  it("commits a combo and its narration once, with one cooldown, counter and ledger action", async () => {
+    await host({ soloHp: 10000, counterEvery: 1 });
+    await prepare("a"); const joined = await join("a");
+    const operation = id();
+    const strike = () => performBossAction(operation, guild, "a", "attack", { now: at(1), roll: () => 0 });
+    const results = await Promise.all([strike(), strike()]);
+    const result = results.find(r => !r.repeated)!;
+    expect(result.presentation!.hits).toEqual([14, 6]);
+    expect(result.damage).toBe(20);
+    expect(result.presentation!.hits.reduce((a, b) => a + b, 0)).toBe(result.damage);
+    expect(results[0]!.presentation).toEqual(results[1]!.presentation);
+    const bundle = (await getBossBattleBundle(joined.battleId))!;
+    expect(bundle.battle).toMatchObject({ currentHp: 9980, actionCount: 1, counterTurn: 1 });
+    expect(bundle.members[0]).toMatchObject({ damage: 20, attackCount: 1 });
+    expect(bundle.members[0]!.effects.attackReadyAt).toBe(at(2).getTime());
+    expect(await balance("a")).toBe(1000);
+    const ledger = await db.select().from(transactionsTable)
+      .where(eq(transactionsTable.sessionKey, `boss-action:${operation}`));
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.amount).toBe(0);
+    await expect(performBossAction(operation, guild, "a", "attack",
+      { now: at(2), roll: () => { throw new Error("must not reroll"); } })).resolves.toMatchObject({
+        repeated: true, presentation: result.presentation,
+      });
+  });
+  it("saves overkill and finish narration but credits only the remaining HP and one reward", async () => {
+    await host({ soloHp: 1, counterEvery: 1 });
+    await prepare("a"); const joined = await join("a");
+    const operation = id();
+    const result = await attack("a", 1, operation);
+    expect(result.damage).toBe(1);
+    expect(result.presentation).toMatchObject({ hits: [1], overkill: true, finish: true });
+    expect(result.presentation!.lines.join("\n")).toContain("クラーケンを討伐");
+    expect(result.state).toBe("won");
+    expect(await balance("a")).toBe(1101);
+    expect((await getBossBattleBundle(joined.battleId))!.members[0]!.damage).toBe(1);
+    const repeated = await attack("a", 2, operation);
+    expect(repeated.presentation).toEqual(result.presentation);
+    expect(await balance("a")).toBe(1101);
+  });
+
   it("uses an upgrade on the next attack in an existing battle without changing HP, defense or role snapshot", async () => {
     await host({ soloHp: 10000, playerHpSource: "wallet", counterEvery: 100,
       bonusRoleId: "bonus", roleMultiplier: 2, levelBonusPercent: 10 });

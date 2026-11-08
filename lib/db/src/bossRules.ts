@@ -24,6 +24,7 @@ export interface BossWeaponSnapshot {
 export interface BossEffects {
   bleedTicks: number; vulnerableTicks: number; shield: boolean;
   attackReadyAt?: number; healReadyAt?: number;
+  lastAttackWeapon?: string; lastAttackOpening?: number; lastAttackReaction?: number;
 }
 /** Legacy events have no separate settings; never reuse their shared action timer. */
 export function bossCooldownSeconds(config: BossConfig, action: "attack" | "heal") {
@@ -37,6 +38,7 @@ export interface BossActionResult {
   battleId: string; mode: BossMode; state: BattleStatus; bossHp: number;
   damage?: number; healed?: number; critical?: boolean; skill?: string;
   paid?: number; balance?: number; userHp?: number; messages: string[]; repeated?: boolean;
+  presentation?: import("./bossAttackEffects").BossAttackPresentation;
 }
 export function bossInteger(n: number, min = 0, max = FORGE_MAX_INT) {
   if (!Number.isInteger(n) || n < min || n > max) throw new BossError(`${min}〜${max}の整数で指定してください。`);

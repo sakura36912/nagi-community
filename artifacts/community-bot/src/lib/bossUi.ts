@@ -38,7 +38,7 @@ export function bossEventEmbed(event: BossEvent) {
       ...(event.config.playerHpSource === "wallet" ? [{ name: "プレイヤーHP", value: "参加確定時の所持金で固定（所持金1以上）。被ダメージで残高は減りません。" }] : []),
       ...(event.config.healingMode === "max_hp_10_percent" ? [{ name: "有料回復", value: "最大HPの10%（端数切り捨て、最低1、最大HPまで）。回復料金を支払っても最大HPは変わりません。" }] : []),
       ...(event.config.special !== "none" ? [{ name: "特殊イベント", value: `**${bossSpecialName(event.config.special)}**` }] : []),
-    ).setFooter({ text: "武器・ロール補正と回復料金は参加時に固定。イベント共通の終了時刻まで戦います。" });
+    ).setFooter({ text: "武器強化は次の攻撃から反映。最大HP・ロール補正・回復料金は参加時に固定。" });
 }
 /** 戦闘中の表示はHPと参加者だけ。ダメージ順位は終了通知だけに表示する。 */
 export function bossBattleNotice(bundle: BossNoticeBundle) {
@@ -88,7 +88,7 @@ export function bossBattleNotice(bundle: BossNoticeBundle) {
 export function bossActionText(result: BossActionResult) {
   return [
     result.repeated ? "処理済みの操作結果です。再課金・再抽選はしていません。" : "",
-    result.damage ? `${result.critical ? "クリティカル！ " : ""}${result.damage.toLocaleString()}ダメージ` : "",
+    ...(result.presentation?.lines ?? (result.damage ? [`${result.critical ? "クリティカル！ " : ""}${result.damage.toLocaleString()}ダメージ`] : [])),
     result.healed ? `HPが${result.healed.toLocaleString()}回復` : "",
     result.skill ? `固有スキル：${result.skill}` : "",
     ...result.messages,

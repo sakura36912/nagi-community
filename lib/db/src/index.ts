@@ -16,6 +16,7 @@ export * from "./forgeRules";
 export * from "./forgeSchema";
 export * from "./forge";
 export * from "./bossRules";
+export * from "./bossAttackEffects";
 export * from "./rpgCommandNames";
 export * from "./zombieRules";
 export * from "./zombieVoice";
