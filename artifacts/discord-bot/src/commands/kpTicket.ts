@@ -17,6 +17,7 @@ import { confirmTicketRows, KP_TICKET_PREFIX, pagedTicketMenu, ticketControls,
   ticketId, ticketMenu, ticketSummary } from "../lib/kpTicketUi";
 import { logger } from "../lib/logger";
 import { kpTicketStatement } from "../lib/kpTicketStatement";
+import { kpCastSales } from "../lib/kpCastSales";
 import { grantKpTicketCastAccess } from "../lib/kpTicketAccess";
 import { kpBusinessDay, latestKpBusinessDate, type KpBusinessDay } from "../lib/kpBusinessDay";
 
@@ -132,7 +133,7 @@ async function showKpSales(interaction: TicketInteraction | ModalSubmitInteracti
   const orders = await listPaidKpTicketOrders(interaction.guildId!, undefined, { start: period.start, end: period.end });
   const { currencyName } = await getGuildSettings(interaction.guildId!);
   await interaction.editReply({
-    ...kpTicketStatement(orders, currencyName, true, period),
+    ...kpCastSales(orders, currencyName, period),
     components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}sales-date:${interaction.user.id}`)
         .setLabel("営業日を指定").setStyle(ButtonStyle.Secondary),
