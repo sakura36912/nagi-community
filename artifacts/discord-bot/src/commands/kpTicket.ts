@@ -1,5 +1,5 @@
 import {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, PermissionFlagsBits,
   SlashCommandSubcommandBuilder, type ButtonInteraction, type ChatInputCommandInteraction,
   type Guild, type StringSelectMenuInteraction,
 } from "discord.js";
@@ -93,8 +93,8 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
       await interaction.editReply(`VIP料金: ${priceLabel(settings?.vipPrice ?? null, currencyName)}\n延長1回分: ${priceLabel(settings?.extensionPrice ?? null, currencyName)}\n未設定と0（無料）は区別されます。`);
       return;
     }
-    if (!interaction.channel?.isThread() || !canPost(interaction)) {
-      throw new KpTicketError("チケットのスレッド内で実行し、Botに閲覧・送信・埋め込み権限を付与してください。");
+    if (!interaction.channel || !(interaction.channel.type === ChannelType.GuildText || interaction.channel.isThread()) || !canPost(interaction)) {
+      throw new KpTicketError("チケットのテキストチャンネル内で実行し、Botに閲覧・送信・埋め込み権限を付与してください。");
     }
     const roleIds = [...new Set(await resolveCastRoles(interaction))];
     await configureKpTicket(interaction.guildId, { castRoleIds: roleIds });
@@ -117,7 +117,7 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
       await message.edit({ components: [] }).catch(() => {});
       throw error;
     }
-    await interaction.editReply("チケット用パネルを設置しました。ドリンクにはKPshopの通常商品（特殊効果・付与ロールなし）を使用します。指名キャストはこのスレッドにのみ追加します。");
+    await interaction.editReply("チケット用パネルを設置しました。ドリンクにはKPshopの通常商品（特殊効果・付与ロールなし）を使用します。指名キャストはこのチケットにのみ追加します。");
   } catch (error) {
     if (!(error instanceof KpTicketError)) logger.error("[kp-ticket] Admin command failed", error);
     await interaction.editReply(error instanceof KpTicketError ? error.message : "設定・設置に失敗しました。管理者はBotログを確認してください。");
@@ -234,7 +234,9 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       return;
     }
     if (starting) {
-      if (!interaction.channel?.isThread()) throw new KpTicketError("チケットのスレッド内のパネルから注文してください。");
+      if (!interaction.channel || !(interaction.channel.type === ChannelType.GuildText || interaction.channel.isThread())) {
+        throw new KpTicketError("チケットのテキストチャンネル内のパネルから注文してください。");
+      }
       if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
         throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
       }

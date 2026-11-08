@@ -337,12 +337,57 @@ describe("KP ticket cast access integration", () => {
     expect(m.settle).not.toHaveBeenCalled();
     expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("親チャンネルの権限を変更しません") }));
   });
-  it("rejects starting on an old non-thread panel", async () => {
-    const i = fixture(); i.channel.isThread = () => false;
+  it("allows starting an order directly in a text ticket", async () => {
+    const i = fixture(); i.channel.type = 0; i.channel.isThread = () => false;
     await run(i);
-    expect(m.create).not.toHaveBeenCalled();
+    expect(m.create).toHaveBeenCalledWith(i.id, "guild", "ticket", "buyer");
+    expect(session.phase).toBe("cast");
     expect(i.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
+  });
+  function textTicketFixture() {
+    const i = fixture();
+    Object.assign(i.channel, {
+      type: 0, isThread: () => false,
+      permissionsFor: (member: { id: string }) => ({ has: () => member.id === "bot" }),
+    });
+    return i;
+  }
+  it("adds only the nominated cast to the text ticket and pays/logs drinks in that ticket", async () => {
+    const i = textTicketFixture(); await run(i);
+    await choose(i, "black-cast");
+    expect(i.channel.permissionOverwrites.edit).toHaveBeenCalledWith("black-cast",
+      { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }, expect.objectContaining({ type: 1 }));
+    expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(i.channel.members.add).not.toHaveBeenCalled();
+    expect(session.phase).toBe("drink");
+    await choose(i, "1"); await choose(i, "2");
+    expect(session.selection.quote).toMatchObject({ total: 200, vipPrice: 0, extensionPrice: 0 });
+    i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
+    await run(i);
+    expect(m.settle).toHaveBeenCalledOnce();
+    expect(i.channel.send).toHaveBeenCalledOnce();
+    expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
+  });
+  it("uses the fixed cast for additional orders in a text ticket", async () => {
+    const i = textTicketFixture(); i.customId = `${KP_TICKET_PREFIX}additional`;
+    await run(i);
+    expect(i.channel.permissionOverwrites.edit).toHaveBeenCalledWith("black-cast", expect.any(Object), expect.objectContaining({ type: 1 }));
+    expect(session.selection.fixedCastId).toBe("black-cast");
+    expect(session.phase).toBe("drink");
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("does not charge when text-ticket member access cannot be granted", async () => {
+    const i = textTicketFixture();
+    i.channel.permissionOverwrites.edit.mockRejectedValue(new Error("Missing Permissions"));
+    await choose(i, "black-cast");
+    expect(session.phase).toBe("cast");
+    expect(m.advance).not.toHaveBeenCalled();
+    session.phase = "confirm"; session.selection = { castId: "black-cast" };
+    i.customId = ticketId("confirm", session); i.isButton = () => true;
+    await run(i);
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.deliver).not.toHaveBeenCalled();
   });
   it("adds the cast immediately to the thread only and goes directly to drinks", async () => {
     const i = fixture(); await choose(i, "black-cast");
@@ -417,13 +462,14 @@ describe("KP ticket price administration", () => {
     expect(m.register).toHaveBeenCalledWith("panel", "guild", "ticket");
     expect(m.configure).toHaveBeenCalledWith("guild", { castRoleIds: ["黒真珠", "白真珠"] });
   });
-  it("does not install a panel in the parent text channel", async () => {
+  it("installs a panel directly in the Ticket Tool text channel", async () => {
     const interaction = panelAccessFixture(["夜鴉"]);
     interaction.channel.isThread = () => false;
+    interaction.channel.type = 0;
     await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
-    expect(interaction.channel.send).not.toHaveBeenCalled();
-    expect(m.configure).not.toHaveBeenCalled();
-    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("スレッド内で実行"));
+    expect(interaction.channel.send).toHaveBeenCalledOnce();
+    expect(m.register).toHaveBeenCalledWith("panel", "guild", "ticket");
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("このチケットにのみ追加"));
   });
   it.each([{ roles: [] }, { roles: ["黒真珠"] }, { roles: ["白真珠"] }, { roles: ["夜鴉見習い"] }])("blocks unapproved or removed roles despite stale permissions: %j", async ({ roles }) => {
     const interaction = panelAccessFixture(roles);

@@ -1,4 +1,4 @@
-import { ChannelType, type ButtonInteraction, type GuildMember } from "discord.js";
+import { ChannelType, OverwriteType, type ButtonInteraction, type GuildMember } from "discord.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { grantKpTicketCastAccess } from "../lib/kpTicketAccess";
 
@@ -9,7 +9,7 @@ function fixture(type = ChannelType.GuildText) {
   const channel = {
     id: "ticket", guildId: "guild", type, isThread: () => type !== ChannelType.GuildText,
     archived: false, locked: false, parent, parentId: "parent",
-    permissionsFor: vi.fn(() => ({ has: (): boolean => true })),
+    permissionsFor: vi.fn((member: unknown) => ({ has: (): boolean => member !== cast })),
     permissionOverwrites: { edit }, members: { add },
   };
   const cast = { id: "cast", guild: { id: "guild" } };
@@ -19,11 +19,29 @@ function fixture(type = ChannelType.GuildText) {
 }
 beforeEach(() => vi.clearAllMocks());
 describe("KP ticket selected-cast access", () => {
-  it("rejects ordinary channels without editing any overwrites", async () => {
-    const i = fixture(); await expect(i.grant()).rejects.toThrow("スレッド内でのみ");
-    expect(i.edit).not.toHaveBeenCalled();
+  it("merges only the selected member's access into this text ticket", async () => {
+    const i = fixture(); await i.grant();
+    expect(i.edit).toHaveBeenCalledWith("cast", {
+      ViewChannel: true, SendMessages: true, ReadMessageHistory: true,
+    }, expect.objectContaining({ type: OverwriteType.Member }));
     expect(i.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(i.add).not.toHaveBeenCalled();
+  });
+  it("does not edit permissions when the cast already has ticket access", async () => {
+    const i = fixture();
+    i.channel.permissionsFor.mockReturnValue({ has: () => true });
+    await i.grant();
+    expect(i.edit).not.toHaveBeenCalled();
+  });
+  it("does not grant or charge when the bot cannot manage ticket permissions", async () => {
+    const i = fixture();
+    i.channel.permissionsFor.mockReturnValue({ has: () => false });
+    await expect(i.grant()).rejects.toThrow("ロールの管理");
+    expect(i.edit).not.toHaveBeenCalled();
+  });
+  it("reports a failed text-ticket permission edit", async () => {
+    const i = fixture(); i.edit.mockRejectedValue(new Error("Missing Permissions"));
+    await expect(i.grant()).rejects.toThrow("引き落としは行っていません");
   });
   it.each([ChannelType.PrivateThread, ChannelType.PublicThread])("adds the cast to thread type %s without widening its parent", async type => {
     const i = fixture(type); await i.grant();

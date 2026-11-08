@@ -1,8 +1,8 @@
-import { PermissionFlagsBits, type ButtonInteraction, type GuildMember, type StringSelectMenuInteraction } from "discord.js";
+import { ChannelType, OverwriteType, PermissionFlagsBits, type ButtonInteraction, type GuildMember, type StringSelectMenuInteraction } from "discord.js";
 import { KpTicketError } from "@workspace/db";
 import { logger } from "./logger";
 
-/** Add only thread membership. Never widen channel permissions. */
+/** Grant only the selected member access to this ticket; never change its category or other tickets. */
 export async function grantKpTicketCastAccess(
   interaction: ButtonInteraction | StringSelectMenuInteraction, cast: GuildMember,
 ) {
@@ -26,7 +26,18 @@ export async function grantKpTicketCastAccess(
       await channel.members.add(cast.id);
       return;
     }
-    throw new KpTicketError("キャストの追加はチケットのスレッド内でのみ行えます。スレッド内のパネルから注文してください。引き落としは行っていません。");
+    if (channel.type !== ChannelType.GuildText) {
+      throw new KpTicketError("チケットのテキストチャンネル内で操作してください。引き落としは行っていません。");
+    }
+    const required = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory];
+    if (channel.permissionsFor(cast)?.has(required)) return;
+    if (!channel.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageRoles])) {
+      throw new KpTicketError("キャストを追加するにはBotにこのチケットの閲覧・権限管理（ロールの管理）権限が必要です。引き落としは行っていません。");
+    }
+    // Merge only this member's overwrite. Do not synchronize the category or grant access to a whole role.
+    await channel.permissionOverwrites.edit(cast.id, {
+      ViewChannel: true, SendMessages: true, ReadMessageHistory: true,
+    }, { type: OverwriteType.Member, reason: "KPチケットで指名されたキャストの追加" });
   } catch (error) {
     if (error instanceof KpTicketError) throw error;
     logger.error("[kp-ticket] Could not add the selected cast to the ticket", error);
