@@ -5,6 +5,7 @@ import { bossEventsTable as events, bossBattlesTable as battles, bossMembersTabl
 import { advanceBossGuild, withBossGuild, bossMembers, previousBossAction, recordBossAction, finishBossBattle } from "./bossStore";
 import { BossError, bossPlayerAttack, bossHealing, bossCounter, bossCooldownSeconds, type BossActionResult } from "./bossRules";
 import { forgeRoll } from "./forgeRules";
+import { forgeWeaponsTable } from "./schema/forge";
 
 /** 攻撃無料・回復課金・個別クールタイム・勝利報酬を同時に確定する。 */
 export async function performBossAction(
@@ -33,6 +34,15 @@ export async function performBossAction(
     const messages: string[] = [];
     let bossHp = battle.currentHp, damage = 0, healed = 0, critical = false, skill: string | undefined;
     if (action === "attack") {
+      // Refresh only the selected weapon's offensive growth. HP, role bonus,
+      // weapon type and defensive snapshot stay fixed at participation.
+      // A shared lock gives this action one consistent committed upgrade.
+      const [weapon] = await tx.select().from(forgeWeaponsTable).where(and(
+        eq(forgeWeaponsTable.guildId, guildId), eq(forgeWeaponsTable.userId, userId),
+      )).for("share");
+      if (weapon?.weaponType === player.weapon.weaponType) {
+        player.weapon = { ...player.weapon, weaponLevel: weapon.weaponLevel, attack: weapon.attack };
+      }
       const attack = bossPlayerAttack(player, event.config, roll);
       damage = Math.min(bossHp, attack.damage);
       bossHp -= damage; critical = attack.critical; skill = attack.skill;
@@ -74,7 +84,7 @@ export async function performBossAction(
       messages.push(...counter.messages);
     }
     for (const p of players) {
-      await tx.update(members).set({ hp: p.hp, damage: p.damage, attackCount: p.attackCount, effects: p.effects })
+      await tx.update(members).set({ hp: p.hp, damage: p.damage, attackCount: p.attackCount, effects: p.effects, weapon: p.weapon })
         .where(and(eq(members.battleId, battle.id), eq(members.userId, p.userId)));
     }
     const [updated] = await tx.update(battles).set({ currentHp: bossHp, actionCount, counterTurn }).where(eq(battles.id, battle.id)).returning();

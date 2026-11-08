@@ -8,6 +8,8 @@ import {
   bossFeesTable, bossEventsTable, bossBattlesTable, bossMembersTable, bossActiveUsersTable,
   bossJoinRequestsTable, bossActionsTable, forgeWeaponsTable, forgeActionsTable, walletsTable, transactionsTable, generateBossCombatStats,
   type BossConfig, type BossMode,
+  createForgeUpgradeRequest, settleForgeUpgrade, configureForgeSetting,
+  forgeUpgradeRequestsTable, forgeUpgradeSettingsTable,
 } from "@workspace/db";
 
 describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic flow", () => {
@@ -27,7 +29,8 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
   afterAll(async () => {
     for (const guildId of guilds) for (const table of [bossActionsTable, bossJoinRequestsTable, bossActiveUsersTable,
       bossMembersTable, bossBattlesTable, bossEventsTable, bossFeesTable, forgeWeaponsTable,
-      forgeActionsTable, walletsTable, transactionsTable]) await db.delete(table).where(eq(table.guildId, guildId));
+      forgeActionsTable, forgeUpgradeRequestsTable, forgeUpgradeSettingsTable,
+      walletsTable, transactionsTable]) await db.delete(table).where(eq(table.guildId, guildId));
   });
   async function host(patch: Partial<BossConfig> = {}, costs = true) {
     if (costs) await configureBossFees(guild, { healCost: 20 });
@@ -63,6 +66,66 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
   const attack = (user: string, seconds = 1, operation = id()) => performBossAction(operation, guild, user, "attack", { now: at(seconds), roll: () => 0.5 });
   const heal = (user: string, seconds: number, operation = id()) =>
     performBossAction(operation, guild, user, "heal", { now: at(seconds), roll: () => 0.5 });
+
+  it("uses an upgrade on the next attack in an existing battle without changing HP, defense or role snapshot", async () => {
+    await host({ soloHp: 10000, playerHpSource: "wallet", counterEvery: 100,
+      bonusRoleId: "bonus", roleMultiplier: 2, levelBonusPercent: 10 });
+    await prepare("a");
+    const joined = await join("a", "solo", ["bonus"]);
+    const before = (await getBossBattleBundle(joined.battleId))!.members[0]!;
+    const operation = id();
+    const first = await attack("a", 1, operation);
+    const quote = await createForgeUpgradeRequest(id(), guild, "a");
+    await settleForgeUpgrade(quote.id, guild, "a", () => 0);
+    const second = await attack("a", 2);
+    expect(first.damage).toBe(32);
+    expect(second.damage).toBe(44); // Lv2 attack 20 * 1.1 level bonus * frozen role 2.
+    const after = (await getBossBattleBundle(joined.battleId))!.members[0]!;
+    expect(after.weapon).toEqual({ ...before.weapon, weaponLevel: 2, attack: 20 });
+    expect(after.maxHp).toBe(before.maxHp);
+    expect(after.hp).toBe(before.hp);
+    expect(await balance("a")).toBe(0); // Only the upgrade cost was charged.
+    // Replaying an attack from before the upgrade must not recalculate damage.
+    expect(await attack("a", 3, operation)).toMatchObject({
+      repeated: true, damage: first.damage, bossHp: first.bossHp, paid: 0,
+    });
+    expect((await getBossBattleBundle(joined.battleId))!.battle.currentHp)
+      .toBe(10000 - first.damage! - second.damage!);
+  });
+  it("keeps attack unchanged when a paid upgrade fails", async () => {
+    await host({ soloHp: 10000, counterEvery: 100 });
+    await prepare("a");
+    await configureForgeSetting(id(), guild, "admin", 1, { successRate: 30 });
+    await join("a");
+    const first = await attack("a", 1);
+    const quote = await createForgeUpgradeRequest(id(), guild, "a");
+    expect((await settleForgeUpgrade(quote.id, guild, "a", () => 0.99)).success).toBe(false);
+    expect((await attack("a", 2)).damage).toBe(first.damage);
+    expect(await balance("a")).toBe(0);
+  });
+  it("refreshes only the attacker's same-guild weapon and leaves party allies untouched", async () => {
+    await host({ partyHp: 10000, counterEvery: 100 });
+    await prepare("a"); await prepare("b");
+    const joined = await join("a", "party");
+    await join("b", "party");
+    await advanceBossGuild(guild, at(11));
+    const quote = await createForgeUpgradeRequest(id(), guild, "a");
+    await settleForgeUpgrade(quote.id, guild, "a", () => 0);
+    expect((await attack("a", 12)).damage).toBe(20);
+    expect((await attack("b", 12)).damage).toBe(16);
+    const bundle = (await getBossBattleBundle(joined.battleId))!;
+    expect(bundle.members.find(p => p.userId === "a")!.weapon.weaponLevel).toBe(2);
+    expect(bundle.members.find(p => p.userId === "b")!.weapon.weaponLevel).toBe(1);
+  });
+  it("does not replace the battle's weapon type or skill after an administrator changes the weapon", async () => {
+    await host({ soloHp: 10000, counterEvery: 100 });
+    await prepare("a"); const joined = await join("a");
+    await db.update(forgeWeaponsTable).set({ weaponType: "staff", weaponLevel: 10, attack: 500 })
+      .where(and(eq(forgeWeaponsTable.guildId, guild), eq(forgeWeaponsTable.userId, "a")));
+    expect((await attack("a")).damage).toBe(16);
+    expect((await getBossBattleBundle(joined.battleId))!.members[0]!.weapon)
+      .toMatchObject({ weaponType: "greatsword", weaponLevel: 1, attack: 16 });
+  });
 
   it("snapshots the wallet at confirmation, preserves it on retry, and never debits money for damage", async () => {
     await host({ soloHp: 10000, playerHpSource: "wallet", healingMode: "max_hp_10_percent", counterEvery: 1 });
