@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, lt, sql } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
 import { db } from "./index";
 import { inventoryItemsTable, shopItemsTable, transactionsTable, walletsTable } from "./schema/economy";
@@ -97,12 +97,18 @@ export async function getKpTicketSession(id: string) {
 }
 
 /** Read-only settled orders, including expired sessions. Omit channelId for this guild's full statement. */
-export async function listPaidKpTicketOrders(guildId: string, channelId?: string) {
+export async function listPaidKpTicketOrders(guildId: string, channelId?: string, period?: { start: Date; end: Date }) {
+  if (period && (!Number.isFinite(period.start.getTime()) || !Number.isFinite(period.end.getTime())
+    || period.start.getTime() >= period.end.getTime())) {
+    throw new KpTicketError("集計期間が不正です。");
+  }
   await ensureKpTicketSchema();
   return db.select().from(kpTicketSessionsTable).where(and(
     eq(kpTicketSessionsTable.guildId, guildId),
     channelId === undefined ? undefined : eq(kpTicketSessionsTable.channelId, channelId),
     eq(kpTicketSessionsTable.phase, "paid"),
+    period ? gte(kpTicketSessionsTable.paidAt, period.start) : undefined,
+    period ? lt(kpTicketSessionsTable.paidAt, period.end) : undefined,
   )).orderBy(kpTicketSessionsTable.createdAt, kpTicketSessionsTable.id);
 }
 

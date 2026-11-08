@@ -1,7 +1,8 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, PermissionFlagsBits,
+  ModalBuilder, TextInputBuilder, TextInputStyle,
   SlashCommandSubcommandBuilder, type ButtonInteraction, type ChatInputCommandInteraction,
-  type Guild, type StringSelectMenuInteraction,
+  type Guild, type StringSelectMenuInteraction, type ModalSubmitInteraction,
 } from "discord.js";
 import {
   advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, deliverKpTicketLog,
@@ -17,6 +18,7 @@ import { confirmTicketRows, KP_TICKET_PREFIX, pagedTicketMenu, ticketControls,
 import { logger } from "../lib/logger";
 import { kpTicketStatement } from "../lib/kpTicketStatement";
 import { grantKpTicketCastAccess } from "../lib/kpTicketAccess";
+import { kpBusinessDay, latestKpBusinessDate, type KpBusinessDay } from "../lib/kpBusinessDay";
 
 export const kpTicketPanelSubcommand = new SlashCommandSubcommandBuilder()
   .setName("ticket-panel").setDescription("チケット内にKPshopパネルを設置します（夜鴉・黒兵・管理者）")
@@ -54,7 +56,7 @@ async function resolveCastRoles(interaction: ChatInputCommandInteraction) {
   });
 }
 
-async function requireKpStaff(interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction) {
+async function requireKpStaff(interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction | ModalSubmitInteraction) {
   const member = await interaction.guild!.members.fetch({ user: interaction.user.id, force: true })
     .catch(() => { throw new KpTicketError("操作権限を確認できませんでした。時間をおいて再実行してください。"); });
   if (member.permissions.has(PermissionFlagsBits.Administrator)) return;
@@ -125,6 +127,46 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
 }
 
 type TicketInteraction = ButtonInteraction | StringSelectMenuInteraction;
+
+async function showKpSales(interaction: TicketInteraction | ModalSubmitInteraction, period: KpBusinessDay) {
+  const orders = await listPaidKpTicketOrders(interaction.guildId!, undefined, { start: period.start, end: period.end });
+  const { currencyName } = await getGuildSettings(interaction.guildId!);
+  await interaction.editReply({
+    ...kpTicketStatement(orders, currencyName, true, period),
+    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}sales-date:${interaction.user.id}`)
+        .setLabel("営業日を指定").setStyle(ButtonStyle.Secondary),
+    )],
+  });
+}
+
+/** Date entry contains no sales data; every submitted query rechecks current staff permissions. */
+export async function handleKpTicketSalesDate(interaction: ButtonInteraction | ModalSubmitInteraction) {
+  const [action, owner] = interaction.customId.slice(KP_TICKET_PREFIX.length).split(":");
+  if (!interaction.guildId || !interaction.guild || owner !== interaction.user.id) {
+    await interaction.reply({ content: "この集計操作は使用できません。自分で全チケット集計を開いてください。", ephemeral: true });
+    return;
+  }
+  if (action === "sales-date" && interaction.isButton()) {
+    await interaction.showModal(new ModalBuilder()
+      .setCustomId(`${KP_TICKET_PREFIX}sales-modal:${interaction.user.id}`).setTitle("営業日別の全チケット売上")
+      .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId("business-date").setLabel("営業開始日（日本時間・YYYY-MM-DD）")
+          .setStyle(TextInputStyle.Short).setRequired(true).setMinLength(10).setMaxLength(10)
+          .setValue(latestKpBusinessDate()),
+      )));
+    return;
+  }
+  if (action !== "sales-modal" || !interaction.isModalSubmit()) return;
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    await requireKpStaff(interaction);
+    await showKpSales(interaction, kpBusinessDay(interaction.fields.getTextInputValue("business-date").trim()));
+  } catch (error) {
+    if (!(error instanceof KpTicketError)) logger.error("[kp-ticket] Sales date query failed", error);
+    await interaction.editReply({ content: error instanceof KpTicketError ? error.message : "売上集計に失敗しました。時間をおいて再実行してください。", components: [] });
+  }
+}
 
 async function currentSettings(guildId: string) {
   const settings = await getKpTicketSettings(guildId);
@@ -225,10 +267,12 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
         throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
       }
-      if (allTickets) await requireKpStaff(interaction);
-      const orders = allTickets
-        ? await listPaidKpTicketOrders(interaction.guildId)
-        : await listPaidKpTicketOrders(interaction.guildId, interaction.channelId);
+      if (allTickets) {
+        await requireKpStaff(interaction);
+        await showKpSales(interaction, kpBusinessDay());
+        return;
+      }
+      const orders = await listPaidKpTicketOrders(interaction.guildId, interaction.channelId);
       const { currencyName } = await getGuildSettings(interaction.guildId);
       await interaction.editReply(kpTicketStatement(orders, currencyName, allTickets));
       return;

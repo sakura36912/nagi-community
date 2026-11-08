@@ -1,8 +1,9 @@
 import { AttachmentBuilder, EmbedBuilder, escapeMarkdown } from "discord.js";
 import type { KpTicketSession } from "@workspace/db";
+import type { KpBusinessDay } from "./kpBusinessDay";
 
 /** Uses paid price snapshots, never the current catalogue or a wallet mutation. */
-export function kpTicketStatement(orders: KpTicketSession[], currency: string, allTickets = false) {
+export function kpTicketStatement(orders: KpTicketSession[], currency: string, allTickets = false, period?: KpBusinessDay) {
   let total = 0n, drinks = 0n, vip = 0n, extension = 0n;
   const lines: string[] = [];
   const preview: string[] = [];
@@ -33,14 +34,15 @@ export function kpTicketStatement(orders: KpTicketSession[], currency: string, a
     + (vip || extension ? `\nVIP料金: ${amount(vip)}\n延長料金: ${amount(extension)}` : "")
     + `\n支払い済み合計: ${amount(total)}`;
   const title = allTickets ? "キミノヒトミニKP 全チケット明細" : "キミノヒトミニKP 注文明細";
-  const scope = allTickets ? `同じサーバーの全期間・${new Set(orders.map(order => order.channelId)).size}チケット` : "";
+  const scope = allTickets ? `同じサーバーの${period ? "指定営業日" : "全期間"}・${new Set(orders.map(order => order.channelId)).size}チケット（削除済みを含む）` : "";
   const embed = new EmbedBuilder().setTitle(title).setColor(0x2ecc71)
     .setDescription(orders.length
       ? preview.join("\n\n") + (orders.length > 10 ? "\n\n11件目以降を含む全明細は添付ファイルをご確認ください。" : "")
-      : allTickets ? "このサーバーには支払い済みの注文がありません。" : "このチケットには支払い済みの注文がありません。")
+      : allTickets ? `このサーバー${period ? "の指定営業日" : ""}には支払い済みの注文がありません。` : "このチケットには支払い済みの注文がありません。")
     .addFields({ name: `支払い済み ${orders.length}件`, value: totals })
     .setFooter({ text: `${scope ? scope + "・" : ""}集計時点の支払い済み注文のみ・追加の引き落としなし` }).setTimestamp();
-  const text = `${title}\n${scope ? scope + "\n" : ""}支払い済み ${orders.length}件\n${totals}\n`
+  if (period) embed.addFields({ name: "売上集計期間（支払い完了日時基準）", value: period.label });
+  const text = `${title}\n${scope ? scope + "\n" : ""}${period ? period.label + "\n" : ""}支払い済み ${orders.length}件\n${totals}\n`
     + "集計時点の支払い済み注文のみ。追加の引き落としはありません。\n\n" + lines.join("\n");
   return { embeds: [embed], files: [new AttachmentBuilder(Buffer.from(text, "utf8"), { name: allTickets ? "kp-all-tickets-statement.txt" : "kp-ticket-statement.txt" })],
     allowedMentions: { parse: [] as ("users" | "roles" | "everyone")[] } };

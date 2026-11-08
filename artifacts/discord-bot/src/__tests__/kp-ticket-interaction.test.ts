@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ButtonInteraction, ChatInputCommandInteraction, StringSelectMenuInteraction } from "discord.js";
+import type { ButtonInteraction, ChatInputCommandInteraction, StringSelectMenuInteraction, ModalSubmitInteraction } from "discord.js";
 import type { KpTicketSession } from "@workspace/db";
 
 const m = vi.hoisted(() => ({
@@ -19,7 +19,7 @@ vi.mock("../lib/economy", () => ({
   getGuildSettings: m.guildSettings, getShopItem: m.getItem, listShopItems: m.listItems,
 }));
 vi.mock("../lib/logger", () => ({ logger: { error: m.error } }));
-import { handleKpTicketInteraction, executeKpTicketCommand } from "../commands/kpTicket";
+import { handleKpTicketInteraction, executeKpTicketCommand, handleKpTicketSalesDate } from "../commands/kpTicket";
 import { KP_TICKET_PREFIX, ticketId } from "../lib/kpTicketUi";
 
 const drink = { id: 1, name: "ドリンク", price: 100, category: "kp", effectType: null, targetRoleId: null };
@@ -47,6 +47,7 @@ function fixture() {
       permissionOverwrites: { edit: vi.fn().mockResolvedValue(undefined) },
       send: vi.fn().mockResolvedValue({ id: "receipt" }) },
     isButton: () => true, isStringSelectMenu: () => false,
+    reply: vi.fn().mockResolvedValue(undefined),
     deferReply: vi.fn().mockResolvedValue(undefined), deferUpdate: vi.fn().mockResolvedValue(undefined),
     editReply: vi.fn().mockResolvedValue(undefined), followUp: vi.fn().mockResolvedValue(undefined),
   };
@@ -104,7 +105,7 @@ describe("KP ticket component flow", () => {
     await run(i); await run(i);
     expect(i.deferReply).toHaveBeenCalledWith({ ephemeral: true });
     expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "buyer", force: true });
-    expect(m.paidOrders).toHaveBeenCalledWith("guild");
+    expect(m.paidOrders).toHaveBeenCalledWith("guild", undefined, { start: expect.any(Date), end: expect.any(Date) });
     expect(i.editReply.mock.calls[0]![0].embeds[0].toJSON().title).toContain("全チケット");
     expect(i.channel.send).not.toHaveBeenCalled();
     expect(m.create).not.toHaveBeenCalled(); expect(m.advance).not.toHaveBeenCalled();
@@ -323,6 +324,67 @@ describe("KP ticket component flow", () => {
     i.customId = ticketId("confirm", session); await run(i);
     expect(m.settle).not.toHaveBeenCalled();
     expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("引き落としは行っていません") }));
+  });
+});
+
+describe("KP ticket business-day date selection", () => {
+  function salesFixture(date = "2026-11-08", allowed = true) {
+    const i = fixture();
+    Object.assign(i.guild.members, { fetch: vi.fn().mockResolvedValue({
+      permissions: { has: () => allowed }, roles: { cache: new Map() },
+    }) });
+    Object.assign(i.guild.roles, { fetch: vi.fn().mockResolvedValue(new Map()) });
+    return Object.assign(i, {
+      customId: `${KP_TICKET_PREFIX}sales-modal:buyer`,
+      isModalSubmit: (): boolean => true, isButton: (): boolean => false,
+      fields: { getTextInputValue: () => date }, showModal: vi.fn(),
+    });
+  }
+  const submit = (i: ReturnType<typeof salesFixture>) =>
+    handleKpTicketSalesDate(i as unknown as ModalSubmitInteraction);
+  it("queries exactly the requested JST overnight period privately without fetching deleted channels", async () => {
+    const i = salesFixture();
+    await submit(i);
+    expect(i.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "buyer", force: true });
+    expect(m.paidOrders).toHaveBeenCalledWith("guild", undefined, {
+      start: new Date("2026-11-08T09:00:00Z"), end: new Date("2026-11-09T01:00:00Z"),
+    });
+    const reply = i.editReply.mock.calls[0]![0];
+    expect(reply.embeds[0].toJSON().fields[1].value).toContain("2026-11-08 18:00");
+    expect(reply.components[0].toJSON().components[0].label).toBe("営業日を指定");
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(i.channel.send).not.toHaveBeenCalled();
+  });
+  it("opens a date modal without loading any sales data", async () => {
+    const i = salesFixture(); i.customId = `${KP_TICKET_PREFIX}sales-date:buyer`;
+    i.isButton = () => true;
+    await handleKpTicketSalesDate(i as unknown as ButtonInteraction);
+    expect(i.showModal).toHaveBeenCalledOnce();
+    expect(i.showModal.mock.calls[0]![0].toJSON().custom_id).toBe(`${KP_TICKET_PREFIX}sales-modal:buyer`);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+  });
+  it("rejects invalid dates without querying or changing money", async () => {
+    const i = salesFixture("2026-02-30"); await submit(i);
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("存在する日付") }));
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("rechecks revoked staff permissions on submission", async () => {
+    const i = salesFixture("2026-11-08", false); await submit(i);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("夜鴉・黒兵") }));
+  });
+  it("rejects another user's date dialog", async () => {
+    const i = salesFixture(); i.user.id = "other"; await submit(i);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(i.reply).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }));
+  });
+  it("reports query failures without disclosing sales or retrying payments", async () => {
+    const i = salesFixture(); m.paidOrders.mockRejectedValueOnce(new Error("database unavailable"));
+    await submit(i);
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("売上集計に失敗") }));
+    expect(m.settle).not.toHaveBeenCalled();
   });
 });
 

@@ -99,6 +99,48 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     }
   });
 
+  it("includes deleted-ticket records by paid time in [18:00, next 10:00), never by creation time", async () => {
+    const queryGuild = `${guild}-period`;
+    const period = { start: new Date("2026-11-08T09:00:00Z"), end: new Date("2026-11-09T01:00:00Z") };
+    const times = [
+      "2026-11-08T08:59:59.999Z", // Before opening.
+      "2026-11-08T09:00:00Z", // Opening included.
+      "2026-11-08T15:00:00Z", // Midnight JST.
+      "2026-11-09T00:59:59.999Z", // Immediately before closing.
+      "2026-11-09T01:00:00Z", // Closing excluded.
+      "2026-11-09T08:59:59Z", // Closed hours.
+    ];
+    const selection = baseSelection();
+    selection.quote = quoteKpTicket(product, { vipPrice: null, extensionPrice: null }, selection);
+    const rows = times.map(time => ({
+      id: randomUUID(), guildId: queryGuild, userId: user, channelId: `deleted-${randomUUID()}`,
+      phase: "paid" as const, paidAt: new Date(time), selection,
+      createdAt: new Date("2026-10-01T00:00:00Z"), expiresAt: new Date(0),
+    }));
+    const extra = [
+      { ...rows[1]!, id: randomUUID(), phase: "cancelled" as const },
+      { ...rows[1]!, id: randomUUID(), phase: "confirm" as const },
+      { ...rows[1]!, id: randomUUID(), paidAt: null },
+      { ...rows[1]!, id: randomUUID(), guildId: `${guild}-other` },
+    ];
+    try {
+      await db.insert(kpTicketSessionsTable).values([...rows, ...extra]);
+      await wallet(4321);
+      const result = await listPaidKpTicketOrders(queryGuild, undefined, period);
+      expect(result.map(row => row.id).sort()).toEqual(rows.slice(1, 4).map(row => row.id).sort());
+      expect(result.reduce((sum, row) => sum + row.selection.quote!.total, 0)).toBe(600);
+      expect(await balance()).toBe(4321);
+      expect(await listPaidKpTicketOrders(queryGuild, rows[2]!.channelId, period)).toHaveLength(1);
+      expect(await listPaidKpTicketOrders(queryGuild, undefined, {
+        start: new Date("2025-01-01T09:00:00Z"), end: new Date("2025-01-02T01:00:00Z"),
+      })).toHaveLength(0);
+      await expect(listPaidKpTicketOrders(queryGuild, undefined, { start: period.end, end: period.start })).rejects.toThrow("集計期間");
+    } finally {
+      await db.delete(kpTicketSessionsTable).where(eq(kpTicketSessionsTable.guildId, queryGuild));
+      await db.delete(kpTicketSessionsTable).where(eq(kpTicketSessionsTable.guildId, `${guild}-other`));
+    }
+  });
+
   it("serializes duplicate confirmation: one debit, one ledger row, one inventory grant", async () => {
     await wallet(5000);
     const [before] = await db.select().from(inventoryItemsTable).where(and(

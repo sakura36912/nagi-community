@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { KpTicketSession } from "@workspace/db";
 import { kpTicketStatement } from "../lib/kpTicketStatement";
+import { kpBusinessDay } from "../lib/kpBusinessDay";
 
 function paid(id: string, extras = false): KpTicketSession {
   return {
@@ -13,6 +14,16 @@ function paid(id: string, extras = false): KpTicketSession {
   };
 }
 describe("KP ticket paid statement", () => {
+  it("labels the overnight sales date and includes deleted-ticket IDs in the export", () => {
+    const order = { ...paid("deleted"), channelId: "deleted-ticket" };
+    const result = kpTicketStatement([order], "円", true, kpBusinessDay("2026-11-08"));
+    const embed = result.embeds[0]!.toJSON();
+    expect(embed.footer!.text).toContain("指定営業日・1チケット（削除済みを含む）");
+    expect(embed.fields![1]!.value).toContain("2026-11-08 18:00 ～ 2026-11-09 10:00");
+    const text = (result.files[0]!.attachment as Buffer).toString("utf8");
+    expect(text).toContain("チケットID: deleted-ticket");
+    expect(text).toContain("2026-11-08 18:00");
+  });
   it("omits removed extras from new drink-only statements", () => {
     const result = kpTicketStatement([paid("new")], "円");
     expect(result.embeds[0]!.toJSON().fields![0]!.value).toBe("ドリンク代: 200円\n支払い済み合計: 200円");

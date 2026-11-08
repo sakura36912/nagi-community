@@ -115,7 +115,7 @@ import {
   handleHubRenameModal,
 } from "./commands/vc";
 import { getHubSession, getHubChannelById, getHubByChannelId } from "@workspace/db";
-import { handleKpTicketInteraction } from "./commands/kpTicket";
+import { handleKpTicketInteraction, handleKpTicketSalesDate } from "./commands/kpTicket";
 import { handleRetiredBankRpgInteraction, startBankRpgCleanup } from "./lib/rpgCommandMigration";
 import { startRetiredBankCommandCleanup } from "./lib/retiredBankCommands";
 import { KP_TICKET_PREFIX } from "./lib/kpTicketUi";
@@ -2557,6 +2557,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if ((interaction.isButton() || interaction.isModalSubmit())
+      && (interaction.customId.startsWith(`${KP_TICKET_PREFIX}sales-date:`)
+        || interaction.customId.startsWith(`${KP_TICKET_PREFIX}sales-modal:`))) {
+      await handleKpTicketSalesDate(interaction);
+      return;
+    }
     if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith(KP_TICKET_PREFIX)) {
       await handleKpTicketInteraction(interaction);
       return;
