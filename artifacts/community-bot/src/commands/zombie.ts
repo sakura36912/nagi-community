@@ -141,8 +141,13 @@ async function executeZombie(i: ChatInputCommandInteraction) {
       if (!game) throw new ZombieError("準備中のイベントがありません。");
       await validateChannels(guild, game.config);
       await observeZombieGuild(guild);
-      await beginZombieGame(guild.id); await observeZombieGuild(guild);
-      await i.editReply("ゲームを開始しました。公開の告知・ルールを送信します。対象VCへの途中入室者も人間として自動参加します。報酬・対象VC・除外条件は固定です。");
+      const started = await beginZombieGame(guild.id, Date.now(), i.options.getInteger("開催時間", true));
+      await observeZombieGuild(guild);
+      if (started.scheduledEndAt === undefined) {
+        await i.editReply("既に開催中のイベントです。このイベントは終了予定未設定のため、従来どおり手動終了です。再実行では予定を変更しません。");
+        return;
+      }
+      await i.editReply(`ゲームを開始しました。公開の告知・ルールを送信します。\n新規参加受付は終了予定の10分前までです。登録済み参加者は終了までプレイできます。\n受付終了：<t:${Math.floor((started.scheduledEndAt! - 600_000) / 1000)}:F>\n自動終了：<t:${Math.floor(started.scheduledEndAt! / 1000)}:F>\n報酬・対象VC・除外条件は固定です。`);
     } else {
       const game = await getZombieGame(guild.id);
       if (!game) throw new ZombieError("イベントがありません。");
@@ -168,6 +173,8 @@ async function executeZombie(i: ChatInputCommandInteraction) {
           .addFields({ name: `参加者 ${page}/${Math.max(1, Math.ceil(players.length / 5))}ページ`, value: list.map(p =>
             `${escapeMarkdown(p.name)} (${p.id}) — **${zombieRoleName(p.role)}**\n感染${p.infectedUsers.length}人 / 治療${p.healedUsers.length}人`).join("\n").slice(0, 1024) || "該当なし" });
         const failures = await zombieDeliveryFailures(guild.id);
+        if (game.scheduledEndAt !== undefined) embed.addFields({ name: "予定時刻", value:
+          `新規参加受付終了：<t:${Math.floor((game.scheduledEndAt - 600_000) / 1000)}:F>\nイベント終了：<t:${Math.floor(game.scheduledEndAt / 1000)}:F>` });
         if (failures.length) embed.addFields({ name: "未送信通知（自動再試行中）", value: failures.map(f => f.id).join("\n").slice(0, 1024) });
         await i.editReply({ embeds: [embed] });
       }
@@ -246,8 +253,10 @@ zombie.addSubcommand(s => s.setName("rewards").setDescription("管理者：報�
 zombie.addSubcommand(s => s.setName("start").setDescription("管理者：酒場VC参加者を登録し秘密役職をランダム抽選")
   .addIntegerOption(o => o.setName("ゾンビ数").setDescription("初期ゾンビの人数（省略時1人）").setMinValue(1))
   .addIntegerOption(o => o.setName("治療班数").setDescription("治療班の人数（省略時2人）").setMinValue(1)));
-for (const [name, description] of [["begin", "管理者：抽選・報酬を確認してゲーム開始"], ["me", "自分の秘密役職を本人限定で確認"]] as const)
-  zombie.addSubcommand(s => s.setName(name).setDescription(description));
+zombie.addSubcommand(s => s.setName("begin").setDescription("管理者：開催分数を指定して開始（終了10分前に受付終了）")
+  .addIntegerOption(o => o.setName("開催時間").setDescription("開始から自動終了までの分数（11〜10080分）")
+    .setRequired(true).setMinValue(11).setMaxValue(10080)));
+zombie.addSubcommand(s => s.setName("me").setDescription("自分の秘密役職を本人限定で確認"));
 for (const name of ["set_zombie", "set_healer", "set_human"])
   zombie.addSubcommand(s => s.setName(name).setDescription("管理者：準備中の参加者の秘密役職を設定")
     .addUserOption(o => o.setName("対象").setDescription("登録済みの参加者（準備中の修正用）").setRequired(true)));

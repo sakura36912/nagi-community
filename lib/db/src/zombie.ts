@@ -6,7 +6,7 @@ import { zombieConfigsTable as configs, zombieGamesTable as games, zombieJobsTab
 import { ensureZombieSchema } from "./zombieSchema";
 import { transferSurroundedHealers } from "./zombieBalance";
 import { getZombieVoiceIds } from "./zombieVoice";
-import { ZombieError, ZOMBIE_REWARDS, zombieAmount, zombiePayouts, zombieWinner, zombieProof, validateZombieRewardCapacity, checkZombieHealCooldown,
+import { ZombieError, ZOMBIE_REWARDS, zombieAmount, zombiePayouts, zombieWinner, zombieProof, validateZombieRewardCapacity, checkZombieHealCooldown, zombieRegistrationOpen, zombieTimeExpired,
   type ZombieConfig, type ZombieGame, type ZombieRole, type ZombieRequest } from "./zombieRules";
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 async function locked<T>(guildId: string, run: (tx: Tx) => Promise<T>): Promise<T> {
@@ -137,11 +137,16 @@ export async function setZombieRole(guildId: string, userId: string, role: Zombi
     await save(tx, game); return game;
   });
 }
-export async function beginZombieGame(guildId: string, now = Date.now()) {
+export async function beginZombieGame(guildId: string, now = Date.now(), durationMinutes?: number) {
   return locked(guildId, async tx => {
     const game = await current(tx, guildId);
     if (game?.phase === "running") return game;
     if (!game || game.phase !== "preparing") throw new ZombieError("先に /zombie start で参加者を登録してください。");
+    if (durationMinutes !== undefined) {
+      if (!Number.isSafeInteger(durationMinutes) || durationMinutes < 11 || durationMinutes > 10080)
+        throw new ZombieError("開催時間は11〜10080分の整数で指定してください。");
+      game.scheduledEndAt = now + durationMinutes * 60_000;
+    }
     const updated = (await tx.select().from(configs).where(eq(configs.guildId, guildId)))[0]?.config;
     if (updated) game.config.rewards = updated.rewards;
     validateZombieRewardCapacity(game);
@@ -157,7 +162,7 @@ export async function beginZombieGame(guildId: string, now = Date.now()) {
 export async function enrollZombieParticipants(guildId: string, gameId: string, candidates: { id: string; name: string; channel: string }[], now = Date.now()) {
   return locked(guildId, async tx => {
     const game = await current(tx, guildId), added: string[] = [];
-    if (!game || game.id !== gameId || !["preparing", "running"].includes(game.phase) || now < game.createdAt) return added;
+    if (!game || game.id !== gameId || !zombieRegistrationOpen(game, now) || now < game.createdAt) return added;
     game.resolvedVcIds = await getZombieVoiceIds(guildId, game.config.vcIds, tx);
     for (const candidate of candidates) {
       if (Object.hasOwn(game.players, candidate.id) || game.config.excludedUsers.includes(candidate.id) ||
@@ -195,7 +200,7 @@ export async function enrollZombieParticipants(guildId: string, gameId: string, 
 export async function syncZombiePresence(guildId: string, epoch: string, voices: Record<string, string>, now = Date.now(), gameId?: string) {
   return locked(guildId, async tx => {
     const game = await current(tx, guildId);
-    if (!game || (gameId && game.id !== gameId) || game.phase !== "running" || now < game.observedAt) return;
+    if (!game || (gameId && game.id !== gameId) || game.phase !== "running" || zombieTimeExpired(game, now) || now < game.observedAt) return;
     game.resolvedVcIds = await getZombieVoiceIds(guildId, game.config.vcIds, tx);
     if (game.epoch !== epoch) game.presence = {};
     for (const userId of Object.keys(game.players)) {
@@ -244,7 +249,7 @@ export async function requestZombieAction(id: string, guildId: string, actorId: 
       if (automatic && game.requests[id]!.status === "pending") throw new ZombieError("以前の承認待ち申請は管理者が確認してください。新たな操作として実行し直してください。");
       return game.requests[id]!;
     }
-    if (game.phase !== "running") throw new ZombieError("開催中のイベントがありません。");
+    if (game.phase !== "running" || zombieTimeExpired(game, now)) throw new ZombieError("開催中のイベントがありません（終了予定時刻を過ぎている場合を含みます）。");
     const actor = game.players[actorId], target = game.players[targetId];
     if (!actor || !target || actorId === targetId || actor.role !== (type === "infect" ? "zombie" : "healer")
       || automatic && (type === "infect" ? target.role !== "human" : target.role === "healer"))
@@ -294,7 +299,7 @@ export async function decideZombieRequest(guildId: string, eventId: string, requ
 }
 async function applyZombieDecision(tx: Tx, game: ZombieGame, request: ZombieRequest, adminId: string, accept: boolean, now: number, automatic = false) {
     if (request.status !== "pending") return { game, request };
-    if (game.phase !== "running") throw new ZombieError("イベントは開催中ではありません。");
+    if (game.phase !== "running" || zombieTimeExpired(game, now)) throw new ZombieError("イベントは開催中ではありません。");
     const actor = game.players[request.actor]!, target = game.players[request.target]!;
     game.resolvedVcIds = await getZombieVoiceIds(game.guildId, game.config.vcIds, tx);
     const valid = game.resolvedVcIds.includes(request.channel) && now - request.createdAt < 900000 && request.actorVersion === actor.version && request.targetVersion === target.version

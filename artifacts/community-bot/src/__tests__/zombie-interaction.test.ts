@@ -67,6 +67,21 @@ beforeEach(() => {
   m.voices.mockImplementation(async (_guild, configured) => configured);
 });
 describe("zombie private commands and channel protection", () => {
+  it("passes the requested event duration and shows both scheduled deadlines privately", async () => {
+    const i = fixture("zombie", "begin"); i.flags.admin = true;
+    i.values.開催時間 = 60;
+    m.begin.mockResolvedValueOnce({ ...game, scheduledEndAt: Date.now() + 3600000 });
+    await run(i);
+    expect(m.begin).toHaveBeenCalledWith("guild", expect.any(Number), 60);
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("受付終了");
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("自動終了");
+    expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
+  it("registers a required duration in minutes with more than ten minutes to play", () => {
+    const command = zombieCommands.find(c => c.data.name === "zombie")!.data.toJSON();
+    const begin = command.options!.find(o => o.name === "begin") as { options: { name: string; required?: boolean; min_value?: number }[] };
+    expect(begin.options).toEqual(expect.arrayContaining([expect.objectContaining({ name: "開催時間", required: true, min_value: 11 })]));
+  });
   it.each(["infect", "heal"])("executes %s immediately for a non-admin and never calls the admin approval path", async name => {
     const i = fixture(name, "request");
     await run(i);

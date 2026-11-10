@@ -270,6 +270,38 @@ describe.skipIf(process.env.RUN_ZOMBIE_DB_TESTS !== "1")("persistent zombie even
     expect(p).toMatchObject({ role: "human", version: 0, joinedAt: t(3), stateAt: t(3), everInfected: false });
     expect(await money("late-run")).toBe(0);
   });
+  it("persists the duration and closes late admission exactly ten minutes before the end", async () => {
+    await prepare();
+    const started = await beginZombieGame(guild, t(1), 20);
+    expect(started.scheduledEndAt).toBe(t(1201));
+    expect((await beginZombieGame(guild, t(100), 60)).scheduledEndAt).toBe(t(1201));
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "before", name: "前", channel: "tavern" }], t(600.999))).toEqual(["before"]);
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "at", name: "境界", channel: "tavern" }], t(601))).toEqual([]);
+    expect(await enrollZombieParticipants(guild, gameId, [{ id: "after", name: "後", channel: "tavern" }], t(602))).toEqual([]);
+    const reloaded = (await getZombieGame(guild))!;
+    expect(reloaded.scheduledEndAt).toBe(t(1201));
+    expect(reloaded.players.before).toBeDefined();
+    expect(reloaded.players.at).toBeUndefined();
+    expect(reloaded.players.after).toBeUndefined();
+  });
+  it("keeps existing players active after registration closes but blocks actions at the event deadline", async () => {
+    await prepare(); await beginZombieGame(guild, t(1), 20);
+    await syncZombiePresence(guild, "epoch", { z: "tavern", h: "tavern", doctor: "tavern" }, t(400));
+    await syncZombiePresence(guild, "epoch", { z: "tavern", h: "tavern", doctor: "tavern" }, t(601));
+    expect((await performZombieAction(id(), guild, "z", "h", "infect", t(601))).status).toBe("accepted");
+    await expect(performZombieAction(id(), guild, "doctor", "h", "heal", t(1201))).rejects.toThrow("開催中");
+    const ended = await endZombieGame(guild, gameId, false, t(1201));
+    expect(ended.phase).toBe("ended");
+    const rows = await db.select().from(transactionsTable).where(eq(transactionsTable.guildId, guild));
+    await endZombieGame(guild, gameId, false, t(1300));
+    expect(await db.select().from(transactionsTable).where(eq(transactionsTable.guildId, guild))).toHaveLength(rows.length);
+  });
+  it.each([0, 10, 10.5, 10081, NaN])("rejects invalid event duration %s without starting", async duration => {
+    await prepare();
+    await expect(beginZombieGame(guild, t(1), duration)).rejects.toThrow("開催時間");
+    expect((await getZombieGame(guild))!.phase).toBe("preparing");
+    expect((await getZombieGame(guild))!.scheduledEndAt).toBeUndefined();
+  });
   it("does not reset existing zombie or healer state or create duplicate notices on readmission", async () => {
     await begin(); await infect();
     const before = (await getZombieGame(guild))!;

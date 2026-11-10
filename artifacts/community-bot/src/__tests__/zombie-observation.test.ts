@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Collection } from "discord.js";
-const m = vi.hoisted(() => ({ get: vi.fn(), sync: vi.fn(), privacy: vi.fn(), enroll: vi.fn(), pending: vi.fn(), voices: vi.fn() }));
+const m = vi.hoisted(() => ({ get: vi.fn(), sync: vi.fn(), privacy: vi.fn(), enroll: vi.fn(), pending: vi.fn(), voices: vi.fn(), end: vi.fn() }));
 vi.mock("@workspace/db", async original => ({
   ...await original<typeof import("@workspace/db")>(), getZombieGame: m.get, syncZombiePresence: m.sync,
   enrollZombieParticipants: m.enroll, pendingZombieJobs: m.pending, getZombieVoiceIds: m.voices,
+  endZombieGame: m.end,
 }));
 vi.mock("../lib/community.js", () => ({ isVcTrackingOptedOut: m.privacy }));
 import { observeZombieGuild, resetZombieConnection, startZombieRuntime } from "../lib/zombieRuntime.js";
@@ -32,6 +33,22 @@ beforeEach(() => {
   m.voices.mockImplementation(async (_guild, configured) => configured);
 });
 describe("zombie VC observation continuity", () => {
+  it("settles an expired persisted event before admitting or changing any participants", async () => {
+    const deadline = Date.now() - 1000;
+    m.get.mockResolvedValue({ ...game(), scheduledEndAt: deadline });
+    await observeZombieGuild(guild as never);
+    expect(m.end).toHaveBeenCalledWith("test-guild", "event", false, expect.any(Number));
+    expect(m.enroll).not.toHaveBeenCalled();
+    expect(m.sync).not.toHaveBeenCalled();
+  });
+  it("retries automatic settlement on a later observation after a failure", async () => {
+    m.get.mockResolvedValue({ ...game(), scheduledEndAt: Date.now() - 1 });
+    m.end.mockRejectedValueOnce(new Error("DB unavailable")).mockResolvedValueOnce(undefined);
+    await expect(observeZombieGuild(guild as never)).rejects.toThrow("VC観測");
+    await observeZombieGuild(guild as never);
+    expect(m.end).toHaveBeenCalledTimes(2);
+    expect(m.enroll).not.toHaveBeenCalled();
+  });
   it("excludes muted, deafened, bot and opted-out users from continuous observation", async () => {
     await observeZombieGuild(guild as never);
     expect(m.sync).toHaveBeenCalledWith("test-guild", expect.any(String), { normal: "vc" }, expect.any(Number), "event");

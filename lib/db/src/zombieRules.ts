@@ -26,6 +26,8 @@ export interface ZombieGame {
   config: ZombieConfig; players: Record<string, ZombiePlayer>; requests: Record<string, ZombieRequest>;
   epoch: string; observedAt: number; presence: Record<string, ZombiePresence>;
   createdAt: number; startedAt: number | null; endedAt: number | null;
+  /** Persisted absolute deadline; absent on older, manually-ended events. */
+  scheduledEndAt?: number;
   winner: "human" | "zombie" | null; payouts: { userId: string; amount: number }[];
   movePenalties?: Record<string, { channel: string; until: number; requestId: string }>;
   transferBlocked?: Record<string, boolean>;
@@ -34,6 +36,13 @@ export interface ZombieGame {
 }
 export function isZombieVoice(game: ZombieGame, channel: string) {
   return game.config.vcIds.includes(channel) || !!game.resolvedVcIds?.includes(channel);
+}
+export function zombieRegistrationOpen(game: ZombieGame, now: number) {
+  return ["preparing", "running"].includes(game.phase)
+    && (game.scheduledEndAt === undefined || now < game.scheduledEndAt - 10 * 60_000);
+}
+export function zombieTimeExpired(game: ZombieGame, now: number) {
+  return game.phase === "running" && game.scheduledEndAt !== undefined && now >= game.scheduledEndAt;
 }
 export function checkZombieHealCooldown(player: ZombiePlayer, now: number) {
   if ((player.healCooldownUntil ?? 0) > now)
