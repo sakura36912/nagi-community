@@ -7,6 +7,7 @@ import { ZombieError, deliverZombieJob, enrollZombieParticipants, getZombieGame,
 import { isVcTrackingOptedOut } from "./community.js";
 import { logger } from "./logger.js";
 import { enforceZombieMovePenalties } from "./zombieMovePenalty.js";
+import { zombieAuditEmbed } from "./zombieAudit.js";
 let epoch = randomUUID();
 let connected = false;
 let delivering = false;
@@ -118,6 +119,11 @@ async function sendJob(client: Client, id: string, payload: ZombieJob) {
     await channel.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] }, nonce, enforceNonce: true });
   } else if (payload.kind === "result") {
     await channel.send({ embeds: [zombiePublicResult(game)], allowedMentions: { parse: [] }, nonce, enforceNonce: true });
+  } else if (payload.kind === "audit") {
+    await channel.send({
+      embeds: [zombieAuditEmbed(game, id, payload, vcId => guild.channels.cache.get(vcId)?.name)],
+      allowedMentions: { parse: [] }, nonce, enforceNonce: true,
+    });
   } else {
     if (["announce", "rules"].includes(payload.kind) && game.phase !== "running") return;
     const schedule = game.scheduledEndAt === undefined ? "" :
