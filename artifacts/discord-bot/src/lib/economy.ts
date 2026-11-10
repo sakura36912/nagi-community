@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gt, lte, sql } from "drizzle-orm";
+import { voyageJournalPurchaseError } from "./voyageJournal";
 import {
   db,
   walletsTable,
@@ -1372,6 +1373,9 @@ export async function buyItemQuantity(
   if (!item) {
     return { ok: false, reason: "そのアイテムは見つかりませんでした。" };
   }
+
+  const eligibilityError = await voyageJournalPurchaseError(guildId, userId, item.name);
+  if (eligibilityError) return { ok: false, reason: eligibilityError };
 
   const totalPrice = item.price * quantity;
   if (!Number.isSafeInteger(totalPrice)) {
