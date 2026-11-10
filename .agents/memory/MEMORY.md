@@ -39,3 +39,4 @@
 - [ボス討伐方針](boss-event-policy.md) — 参加時所持金を最大HPに固定、通常回復は最大HPの10%。武器補正維持、攻撃無料・回復有料。
 - [Halloween感染ゲーム](zombie-event-policy.md) — 多機能Botの秘密役職。感染・治療は連続3分後に承認不要。治療班は勝敗から除外、報酬は銀行残高へ。
 - [航海日誌の購入条件](voyage-journal-policy.md) — 航海日誌の購入は酒場VC累計100時間以上に限定する。
+- [全VC入退室記録](all-vc-history-policy.md) — 今後の履歴は全VCを対象にし、酒場報酬条件・記録拒否・保持期間は維持する。

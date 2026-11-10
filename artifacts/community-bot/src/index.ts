@@ -30,15 +30,11 @@ import {
   getActiveSessionCount,
   getLeaveLogChannel,
   markReminderSent,
-  openSession,
-  openVcSessionIfTracked,
   getVcSessionRetentionDays,
   pruneGuildVcSessions,
   pruneOrphanedVcSessions,
-  getTrackedVcCategoryId,
 } from "./lib/community.js";
-import { resolveIsExile } from "./lib/vc-exile.js";
-import { handleVoiceStateUpdate } from "./lib/vc-session-handler.js";
+import { handleVoiceStateUpdate, restoreVcHistorySessions } from "./lib/vc-session-handler.js";
 import { runPerGuildVcPrune, runOrphanVcPrune } from "./lib/vc-prune-scheduler.js";
 import { runPeriodicMessages } from "./lib/periodic-message-scheduler.js";
 import { getPreban, pool, checkSchemaDrift } from "@workspace/db";
@@ -294,28 +290,8 @@ client.once(Events.ClientReady, async (readyClient) => {
     logger.error("[vc] Failed to close stale sessions", err),
   );
 
-  // Re-open sessions for users currently in VCs.
-  // Mirrors the VoiceStateUpdate join handler: only open sessions for channels
-  // inside the guild's configured tracked category (if one is set).
-  for (const guild of readyClient.guilds.cache.values()) {
-    let trackedCategoryId: string | null;
-    try {
-      trackedCategoryId = await getTrackedVcCategoryId(guild.id);
-    } catch (err) {
-      logger.error(`[vc] startup: getTrackedVcCategoryId error guildId=${guild.id}`, err);
-      continue; // fail closed — skip this guild rather than tracking every channel
-    }
-    for (const channel of guild.channels.cache.values()) {
-      if (channel.type !== ChannelType.GuildVoice) continue;
-      const channelParentId = channel.parentId ?? null;
-      // Skip channels that fall outside the configured tracked category.
-      if (trackedCategoryId !== null && channelParentId !== trackedCategoryId) continue;
-      for (const [userId, member] of channel.members) {
-        const isExile = resolveIsExile(member);
-        await openSession(guild.id, userId, channel.id, isExile).catch(() => {});
-      }
-    }
-  }
+  // Record all currently occupied VCs from this observation onward.
+  await restoreVcHistorySessions(readyClient.guilds.cache.values());
 
   // ── Daily ranking post ────────────────────────────────────────────────────
   // Fires once a day at midnight JST (UTC+9 = 15:00 UTC).
@@ -495,8 +471,6 @@ client.on(Events.GuildMemberRemove, async (member) => {
 // ─── VoiceStateUpdate ────────────────────────────────────────────────────────
 
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-  try { await observeZombieGuild(newState.guild); }
-  catch { logger.warn("[zombie] VC観測を更新できませんでした。"); }
   await handleVoiceStateUpdate({
     guildId: newState.guild.id,
     userId: newState.id,
@@ -505,6 +479,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     channelParentId: newState.channel?.parentId ?? null,
     member: newState.member,
   });
+  try { await observeZombieGuild(newState.guild); }
+  catch { logger.warn("[zombie] VC観測を更新できませんでした。"); }
 });
 client.on(Events.ShardDisconnect, () => resetZombieConnection(false));
 client.on(Events.ShardReady, () => resetZombieConnection(true));

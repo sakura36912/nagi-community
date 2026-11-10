@@ -1,214 +1,72 @@
-/**
- * Tests that the ClientReady startup re-open sweep respects the tracked-category filter.
- *
- * The updated startup sweep in index.ts reads getTrackedVcCategoryId once per guild,
- * then skips any GuildVoice channel whose parentId does not match the configured category.
- *
- * Covers:
- *   - openSession IS called for a channel inside the tracked category
- *   - openSession is NOT called for a channel outside the tracked category
- *   - openSession IS called for all channels when no category is configured (null)
- *   - openSession is NOT called when getTrackedVcCategoryId throws (fail closed)
- *   - Only the failing guild is skipped when one guild throws and another succeeds
- */
-
-import { vi, describe, it, expect, beforeEach } from "vitest";
-
-// ─── Hoist mock functions ─────────────────────────────────────────────────────
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType, type Guild } from "discord.js";
 const mocks = vi.hoisted(() => ({
-  openSession:            vi.fn().mockResolvedValue(null),
-  getTrackedVcCategoryId: vi.fn<() => Promise<string | null>>(),
-  loggerError:            vi.fn(),
-  loggerInfo:             vi.fn(),
-  loggerWarn:             vi.fn(),
+  openVcSessionIfTracked: vi.fn().mockResolvedValue(undefined),
+  closeSessionAndGetDuration: vi.fn().mockResolvedValue(null),
 }));
+vi.mock("../lib/community.js", () => mocks);
+vi.mock("../lib/logger.js", () => ({ logger: { error: vi.fn() } }));
+import { restoreVcHistorySessions, handleVoiceStateUpdate } from "../lib/vc-session-handler.js";
 
-// ─── Mock community lib ───────────────────────────────────────────────────────
-vi.mock("../lib/community.js", () => ({
-  openSession:            mocks.openSession,
-  getTrackedVcCategoryId: mocks.getTrackedVcCategoryId,
-  closeAllOpenSessions:   vi.fn().mockResolvedValue(undefined),
-}));
-
-// ─── Mock logger ──────────────────────────────────────────────────────────────
-vi.mock("../lib/logger.js", () => ({
-  logger: {
-    error: mocks.loggerError,
-    info:  mocks.loggerInfo,
-    warn:  mocks.loggerWarn,
-  },
-}));
-
-// ─── Inline simulation – mirrors the ClientReady startup sweep exactly ────────
-//
-// We cannot import index.ts directly because it creates a Discord client and
-// starts cron jobs on module load.  We replicate the exact startup sweep logic
-// so the tests exercise the same code path that runs on bot startup.
-
-import { openSession, getTrackedVcCategoryId } from "../lib/community.js";
-import { resolveIsExile } from "../lib/vc-exile.js";
-import { logger } from "../lib/logger.js";
-
-const GUILD_VOICE = "GUILD_VOICE" as const;
-
-interface FakeMember {
-  roles: { cache: { some(predicate: (role: { name: string }) => boolean): boolean } };
+const member = { roles: { cache: { some: () => false } } };
+function guild(channels: { id: string; type: ChannelType; parentId: string | null }[], id = "guild") {
+  return {
+    id,
+    channels: { cache: new Map(channels.map(ch => [ch.id, {
+      ...ch, members: new Map([["user", member]]),
+    }])) },
+  } as unknown as Guild;
 }
 
-interface FakeChannel {
-  type: typeof GUILD_VOICE;
-  id: string;
-  parentId: string | null;
-  members: Map<string, FakeMember>;
-}
+describe("production all-VC startup and event handlers", () => {
+  beforeEach(() => vi.clearAllMocks());
 
-interface FakeGuild {
-  id: string;
-  channels: { cache: Map<string, FakeChannel> };
-}
-
-/** Build a regular (non-exile) member stub. */
-function makeRegularMember(): FakeMember {
-  return { roles: { cache: { some: () => false } } };
-}
-
-async function simulateStartupSweep(guilds: FakeGuild[]): Promise<void> {
-  for (const guild of guilds) {
-    let trackedCategoryId: string | null;
-    try {
-      trackedCategoryId = await getTrackedVcCategoryId(guild.id);
-    } catch (err) {
-      logger.error(`[vc] startup: getTrackedVcCategoryId error guildId=${guild.id}`, err);
-      continue; // fail closed — skip this guild
-    }
-    for (const channel of guild.channels.cache.values()) {
-      if (channel.type !== GUILD_VOICE) continue;
-      const channelParentId = channel.parentId ?? null;
-      if (trackedCategoryId !== null && channelParentId !== trackedCategoryId) continue;
-      for (const [userId, member] of channel.members) {
-        const isExile = resolveIsExile(member);
-        await openSession(guild.id, userId, channel.id, isExile).catch(() => {});
-      }
-    }
-  }
-}
-
-// ─── Tests ────────────────────────────────────────────────────────────────────
-
-describe("ClientReady startup sweep – tracked-category filter", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  it("restores ordinary, private/shop, Hub, root and stage VCs, not text channels", async () => {
+    await restoreVcHistorySessions([guild([
+      { id: "ordinary", type: ChannelType.GuildVoice, parentId: "cat-A" },
+      { id: "shop-private", type: ChannelType.GuildVoice, parentId: "cat-B" },
+      { id: "hub-child", type: ChannelType.GuildVoice, parentId: "cat-C" },
+      { id: "root", type: ChannelType.GuildVoice, parentId: null },
+      { id: "stage", type: ChannelType.GuildStageVoice, parentId: null },
+      { id: "text", type: ChannelType.GuildText, parentId: null },
+    ])]);
+    expect(mocks.openVcSessionIfTracked.mock.calls.map(call => call[2]))
+      .toEqual(["ordinary", "shop-private", "hub-child", "root", "stage"]);
   });
 
-  it("calls openSession for a channel inside the tracked category", async () => {
-    mocks.getTrackedVcCategoryId.mockResolvedValueOnce("cat-A");
-
-    await simulateStartupSweep([{
-      id: "guild-1",
-      channels: { cache: new Map([
-        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
-      ]) },
-    }]);
-
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-1", false);
+  it("keeps guild scopes separate", async () => {
+    const channel = { id: "vc", type: ChannelType.GuildVoice, parentId: null };
+    await restoreVcHistorySessions([guild([channel], "A"), guild([channel], "B")]);
+    expect(mocks.openVcSessionIfTracked.mock.calls.map(call => call[0])).toEqual(["A", "B"]);
   });
 
-  it("does NOT call openSession for a channel outside the tracked category", async () => {
-    mocks.getTrackedVcCategoryId.mockResolvedValueOnce("cat-A");
-
-    await simulateStartupSweep([{
-      id: "guild-1",
-      channels: { cache: new Map([
-        ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-B", members: new Map([["user-2", makeRegularMember()]]) }],
-      ]) },
-    }]);
-
-    expect(mocks.openSession).not.toHaveBeenCalled();
+  it("records a new entry without a source session", async () => {
+    await handleVoiceStateUpdate({ guildId: "guild", userId: "user", oldChannelId: null,
+      newChannelId: "private", channelParentId: "outside", member });
+    expect(mocks.openVcSessionIfTracked).toHaveBeenCalledWith("guild", "user", "private", "outside", false);
+    expect(mocks.closeSessionAndGetDuration).not.toHaveBeenCalled();
   });
 
-  it("calls openSession for all channels when no category is configured (null = track all)", async () => {
-    mocks.getTrackedVcCategoryId.mockResolvedValueOnce(null);
-
-    await simulateStartupSweep([{
-      id: "guild-1",
-      channels: { cache: new Map([
-        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
-        ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-B", members: new Map([["user-2", makeRegularMember()]]) }],
-      ]) },
-    }]);
-
-    expect(mocks.openSession).toHaveBeenCalledTimes(2);
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-1", false);
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-2", "ch-2", false);
+  it("closes a source before recording the destination on a move", async () => {
+    await handleVoiceStateUpdate({ guildId: "guild", userId: "user", oldChannelId: "A",
+      newChannelId: "B", channelParentId: null, member });
+    expect(mocks.closeSessionAndGetDuration).toHaveBeenCalledWith("guild", "user");
+    expect(mocks.openVcSessionIfTracked).toHaveBeenCalledWith("guild", "user", "B", null, false);
+    expect(mocks.closeSessionAndGetDuration.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.openVcSessionIfTracked.mock.invocationCallOrder[0]);
   });
 
-  it("does NOT call openSession when getTrackedVcCategoryId throws (fail closed)", async () => {
-    mocks.getTrackedVcCategoryId.mockRejectedValueOnce(new Error("DB error"));
-
-    await simulateStartupSweep([{
-      id: "guild-1",
-      channels: { cache: new Map([
-        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
-      ]) },
-    }]);
-
-    expect(mocks.openSession).not.toHaveBeenCalled();
+  it("closes on disconnect without opening a new session", async () => {
+    await handleVoiceStateUpdate({ guildId: "guild", userId: "user", oldChannelId: "A",
+      newChannelId: null, channelParentId: null, member });
+    expect(mocks.closeSessionAndGetDuration).toHaveBeenCalledWith("guild", "user");
+    expect(mocks.openVcSessionIfTracked).not.toHaveBeenCalled();
   });
 
-  it("logs an error when getTrackedVcCategoryId throws", async () => {
-    const dbError = new Error("connection lost");
-    mocks.getTrackedVcCategoryId.mockRejectedValueOnce(dbError);
-
-    await simulateStartupSweep([{
-      id: "guild-1",
-      channels: { cache: new Map([
-        ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
-      ]) },
-    }]);
-
-    expect(mocks.loggerError).toHaveBeenCalledWith(
-      expect.stringContaining("getTrackedVcCategoryId"),
-      dbError,
-    );
-  });
-
-  it("skips only the failing guild when one guild throws and another succeeds", async () => {
-    mocks.getTrackedVcCategoryId
-      .mockRejectedValueOnce(new Error("DB error")) // guild-1 fails
-      .mockResolvedValueOnce("cat-A");              // guild-2 succeeds
-
-    await simulateStartupSweep([
-      {
-        id: "guild-1",
-        channels: { cache: new Map([
-          ["ch-1", { type: GUILD_VOICE, id: "ch-1", parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
-        ]) },
-      },
-      {
-        id: "guild-2",
-        channels: { cache: new Map([
-          ["ch-2", { type: GUILD_VOICE, id: "ch-2", parentId: "cat-A", members: new Map([["user-2", makeRegularMember()]]) }],
-        ]) },
-      },
-    ]);
-
-    expect(mocks.openSession).toHaveBeenCalledTimes(1);
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-2", "user-2", "ch-2", false);
-  });
-
-  it("only opens sessions for the tracked channel when one channel is inside and one outside", async () => {
-    mocks.getTrackedVcCategoryId.mockResolvedValueOnce("cat-A");
-
-    await simulateStartupSweep([{
-      id: "guild-1",
-      channels: { cache: new Map([
-        ["ch-in",  { type: GUILD_VOICE, id: "ch-in",  parentId: "cat-A", members: new Map([["user-1", makeRegularMember()]]) }],
-        ["ch-out", { type: GUILD_VOICE, id: "ch-out", parentId: "cat-B", members: new Map([["user-2", makeRegularMember()]]) }],
-      ]) },
-    }]);
-
-    expect(mocks.openSession).toHaveBeenCalledTimes(1);
-    expect(mocks.openSession).toHaveBeenCalledWith("guild-1", "user-1", "ch-in", false);
-    expect(mocks.openSession).not.toHaveBeenCalledWith("guild-1", "user-2", "ch-out", false);
+  it("does not split history on mute or stream toggles", async () => {
+    await handleVoiceStateUpdate({ guildId: "guild", userId: "user", oldChannelId: "A",
+      newChannelId: "A", channelParentId: null, member });
+    expect(mocks.closeSessionAndGetDuration).not.toHaveBeenCalled();
+    expect(mocks.openVcSessionIfTracked).not.toHaveBeenCalled();
   });
 });

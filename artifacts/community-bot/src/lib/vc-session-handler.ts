@@ -7,6 +7,7 @@
  */
 
 import { closeSessionAndGetDuration, openVcSessionIfTracked } from "./community.js";
+import { ChannelType, type Guild } from "discord.js";
 import { logger } from "./logger.js";
 import { resolveIsExile, type ExileCheckMember } from "./vc-exile.js";
 
@@ -19,6 +20,24 @@ export interface VoiceStateUpdateParams {
   channelParentId: string | null;
   /** GuildMember-like object used to resolve the exile flag (null/undefined = safe fallback). */
   member: ExileCheckMember | null | undefined;
+}
+
+/**
+ * Reconcile currently connected users after stale sessions have been closed.
+ * Starts observations at recovery time; never invents history during downtime.
+ * Covers ordinary and stage VCs, including private, root-level and Hub rooms.
+ */
+export async function restoreVcHistorySessions(guilds: Iterable<Pick<Guild, "id" | "channels">>): Promise<void> {
+  for (const guild of guilds) {
+    for (const channel of guild.channels.cache.values()) {
+      if (channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice) continue;
+      for (const [userId, member] of channel.members) {
+        await openVcSessionIfTracked(
+          guild.id, userId, channel.id, channel.parentId ?? null, resolveIsExile(member),
+        );
+      }
+    }
+  }
 }
 
 /**

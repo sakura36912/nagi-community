@@ -60,8 +60,6 @@ import {
   countCompletedSessionsOlderThan,
   buildTempVcCsv,
   wipeGuildVcSessions,
-  getTrackedVcCategoryId,
-  setTrackedVcCategoryId,
   getTicketSettings,
   getTicketPanel,
   upsertTicketSettings,
@@ -408,16 +406,16 @@ const rankingCommand: Command = {
     .addSubcommand((sub) =>
       sub
         .setName("tracked-category")
-        .setDescription("VC滞在時間を計測するカテゴリーを設定します（管理者用）")
+        .setDescription("全VCの記録方針を確認します（旧カテゴリー制限は廃止）")
         .addChannelOption((opt) =>
           opt
             .setName("category")
-            .setDescription("追跡対象のカテゴリー（省略すると現在の設定を表示）")
+            .setDescription("旧設定の互換入力（指定しても全VCを記録します）")
             .setRequired(false)
             .addChannelTypes(ChannelType.GuildCategory),
         )
         .addBooleanOption((opt) =>
-          opt.setName("clear").setDescription("カテゴリー制限を解除して全チャンネルを追跡する").setRequired(false),
+          opt.setName("clear").setDescription("旧設定の互換入力（全VCの記録は常に有効）").setRequired(false),
         ),
     )
     .addSubcommand((sub) =>
@@ -676,27 +674,8 @@ const rankingCommand: Command = {
     }
 
     if (sub === "tracked-category") {
-      const clear = interaction.options.getBoolean("clear");
-      const category = interaction.options.getChannel("category");
-
-      if (clear) {
-        await setTrackedVcCategoryId(guildId, null);
-        await interaction.reply({ content: "✅ カテゴリー制限を解除しました。全チャンネルのVC滞在時間を記録します。", ephemeral: true });
-        return;
-      }
-
-      if (!category) {
-        const current = await getTrackedVcCategoryId(guildId);
-        const msg = current
-          ? `現在の追跡カテゴリー: <#${current}>\nすべてのチャンネルに戻すには \`clear: true\` を指定してください。`
-          : "現在カテゴリー制限はありません（全チャンネルを記録中）。";
-        await interaction.reply({ content: msg, ephemeral: true });
-        return;
-      }
-
-      await setTrackedVcCategoryId(guildId, category.id);
       await interaction.reply({
-        content: `✅ VC滞在時間の追跡を <#${category.id}> カテゴリー内のチャンネルのみに設定しました。`,
+        content: "入退室履歴は全VCを記録します。旧カテゴリー制限は適用しません。音声は録音せず、記録拒否設定と既存の保存期間は維持します。酒場ランキング・報酬の対象条件は変わりません。",
         ephemeral: true,
       });
       return;

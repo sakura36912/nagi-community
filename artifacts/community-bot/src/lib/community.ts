@@ -1273,20 +1273,11 @@ export interface OpenVcSessionIfTrackedDeps {
 }
 
 /**
- * Opens a VC session for the user when the destination channel belongs to the
- * guild's configured tracked category (or when no category restriction is set).
- *
- * This function is the canonical decision point for category-gating.  It is
- * exported so tests can import and call it directly (with injected mock deps)
- * rather than duplicating the logic inline and risking silent divergence.
- *
- * Behaviour:
- *   - Reads trackedVcCategoryId via getTrackedVcCategoryId (or the injected override).
- *   - If the read throws, logs the error and returns (fail closed — does NOT
- *     fall back to "track everything").
- *   - If trackedVcCategoryId is null, every channel is tracked.
- *   - If trackedVcCategoryId is set, only channels whose parentId matches are
- *     tracked; others are silently skipped.
+ * Records entry to every VC, independent of the legacy category restriction.
+ * The historical function name/signature is retained for existing callers.
+ * openSession still performs the mandatory guild/global privacy checks and
+ * fails closed if those checks cannot be completed. Ranking and rewards keep
+ * their own channel filters; widening history does not widen those filters.
  *
  * @param deps  Optional dependency overrides.  Production code omits this
  *              parameter (defaults to the real implementations).  Tests pass
@@ -1300,22 +1291,12 @@ export async function openVcSessionIfTracked(
   isExile: boolean,
   deps: OpenVcSessionIfTrackedDeps = { getTrackedVcCategoryId, openSession },
 ): Promise<void> {
-  let trackedCategoryId: string | null;
-  try {
-    trackedCategoryId = await deps.getTrackedVcCategoryId(guildId);
-  } catch (err) {
-    logger.error(`[vc] getTrackedVcCategoryId error guildId=${guildId} user=${userId}`, err);
-    return;
-  }
-  const isTracked = !trackedCategoryId || channelParentId === trackedCategoryId;
-  if (isTracked) {
-    const session = await deps.openSession(guildId, userId, channelId, isExile).catch((err: unknown) => {
-      logger.error(`[vc] openSession error user=${userId}`, err);
-      return null;
-    });
-    if (session === null) {
-      logger.warn(`[vc] openSession returned null user=${userId} guildId=${guildId}; user may be opted out or DB unavailable`);
-    }
+  const session = await deps.openSession(guildId, userId, channelId, isExile).catch((err: unknown) => {
+    logger.error(`[vc] openSession error user=${userId}`, err);
+    return null;
+  });
+  if (session === null) {
+    logger.warn(`[vc] openSession returned null user=${userId} guildId=${guildId}; user may be opted out or DB unavailable`);
   }
 }
 
