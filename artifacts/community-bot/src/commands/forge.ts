@@ -60,6 +60,24 @@ function resultText(result: ForgeActionResult & { repeated?: boolean }) {
     `消費：${money(result.cost ?? 0)}`, `決済後残高：${money(result.balance ?? 0)}`,
   ].filter(Boolean).join("\n");
 }
+function nextUpgradeControls(userId: string) {
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`forge:upgrade:${userId}`).setLabel("次の強化の費用を確認").setStyle(ButtonStyle.Primary),
+  )];
+}
+async function showUpgradeConfirmation(interaction: Interaction, guildId: string) {
+  await assertRpgCardChannel(interaction);
+  const request = await createForgeUpgradeRequest(interaction.id, guildId, interaction.user.id);
+  const embed = forgePublicEmbed({ weaponType: request.weaponType, weaponLevel: request.weaponLevel },
+    { cost: request.cost, successRate: request.successRate })
+    .setTitle("武器強化 — 支払い確認")
+    .setDescription("失敗した場合も費用を消費します。レベル低下・武器破壊はありません。\nこの確認は2分間有効です。");
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`forge:confirm:${request.id}`).setLabel("支払って強化").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`forge:cancel:${request.id}`).setLabel("キャンセル").setStyle(ButtonStyle.Secondary),
+  );
+  await interaction.editReply({ embeds: [embed], components: [row] });
+}
 async function showForgeError(interaction: Interaction, error: unknown) {
   const known = error instanceof ForgeError;
   if (!known) logger.error("[forge] Operation failed", error);
@@ -95,17 +113,7 @@ export async function executeForgeCommand(interaction: ChatInputCommandInteracti
       return;
     }
     if (name === "強化") {
-      await assertRpgCardChannel(interaction);
-      const request = await createForgeUpgradeRequest(interaction.id, guildId, userId);
-      const embed = forgePublicEmbed({ weaponType: request.weaponType, weaponLevel: request.weaponLevel },
-        { cost: request.cost, successRate: request.successRate })
-        .setTitle("武器強化 — 支払い確認")
-        .setDescription("失敗した場合も費用を消費します。レベル低下・武器破壊はありません。\nこの確認は2分間有効です。");
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(`forge:confirm:${request.id}`).setLabel("支払って強化").setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId(`forge:cancel:${request.id}`).setLabel("キャンセル").setStyle(ButtonStyle.Secondary),
-      );
-      await interaction.editReply({ embeds: [embed], components: [row] });
+      await showUpgradeConfirmation(interaction, guildId);
       return;
     }
     if (name === "武器変更" || name === "武器リセット") {
@@ -160,15 +168,20 @@ export async function handleForgeButton(interaction: ButtonInteraction): Promise
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     const [, action, id] = interaction.customId.split(":");
-    if (!id || !["confirm", "cancel"].includes(action!)) throw new ForgeError("無効な確認ボタンです。");
+    if (!id || !["confirm", "cancel", "upgrade"].includes(action!)) throw new ForgeError("無効な確認ボタンです。");
     const guildId = await requireForgeAccess(interaction);
+    if (action === "upgrade") {
+      if (id !== interaction.user.id) throw new ForgeError("この強化ボタンは武器の所有者本人のみ使用できます。");
+      await showUpgradeConfirmation(interaction, guildId);
+      return true;
+    }
     if (action === "cancel") {
       await cancelForgeUpgrade(id, guildId, interaction.user.id);
       await interaction.editReply("強化をキャンセルしました。費用は消費していません。");
     } else {
       const channelId = await assertRpgCardChannel(interaction);
       const result = await settleForgeUpgrade(id, guildId, interaction.user.id, undefined, channelId);
-      await interaction.editReply(resultText(result));
+      await interaction.editReply({ content: resultText(result), components: nextUpgradeControls(interaction.user.id) });
       void runRpgCards(interaction.client);
     }
     // 返信失敗でも決済記録は維持する。古いボタンの再押下にも重複防止が効く。

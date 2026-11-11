@@ -17,6 +17,7 @@ export interface BossConfig {
   attackCooldownSeconds?: number; healCooldownSeconds?: number;
   playerHpSource?: "wallet";
   healingMode?: "max_hp_10_percent";
+  bossHpPercent?: number;
 }
 export interface BossWeaponSnapshot {
   weaponType: string; weaponLevel: number; attack: number; defense: number; roleMultiplier: number;
@@ -48,6 +49,7 @@ export function validateBossConfig(type: string, config: BossConfig) {
   if (!Object.hasOwn(BOSS_NAMES, type)) throw new BossError("未対応のボスです。");
   if (config.playerHpSource !== undefined && config.playerHpSource !== "wallet") throw new BossError("HPの設定が不正です。");
   if (config.healingMode !== undefined && config.healingMode !== "max_hp_10_percent") throw new BossError("回復の設定が不正です。");
+  if (config.bossHpPercent !== undefined && config.bossHpPercent !== { kraken: 50, megalodon: 80, leviathan: 100 }[type as BossType]) throw new BossError("ボスHP率が不正です。");
   for (const key of ["soloHp", "partyHp", "attack", "playerHp", "healAmount"] as const) bossInteger(config[key], 1);
   for (const key of ["defense", "reward"] as const) bossInteger(config[key]);
   bossInteger(config.durationSeconds, 1, 604800);
@@ -80,15 +82,22 @@ export function generateBossCombatStats(type: BossType, roll: () => number = for
   } as const;
   const integer = (min: number, max: number) => min + Math.floor(random(roll) * (max - min + 1));
   const profile = profiles[type];
-  const soloHp = integer(profile.hp[0], profile.hp[1]);
   return {
-    soloHp, partyHp: Math.round(soloHp * integer(250, 300) / 100),
+    // Legacy required fields are placeholders; the real HP is set from confirmed members.
+    soloHp: 1, partyHp: 1, bossHpPercent: { kraken: 50, megalodon: 80, leviathan: 100 }[type],
     attack: integer(profile.attack[0], profile.attack[1]),
     defense: integer(profile.defense[0], profile.defense[1]),
     // Required legacy fields remain valid; new events use wallet HP and percentage healing instead.
     healAmount: 1, playerHp: 1, playerHpSource: "wallet" as const, healingMode: "max_hp_10_percent" as const,
     counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
   };
+}
+export function bossHpFromMembers(percent: number, maximums: number[]) {
+  if (!maximums.length) throw new BossError("ボスHPの計算に参加者が必要です。");
+  for (const hp of maximums) bossInteger(hp, 1);
+  const hp = Math.max(1, Math.floor(maximums.reduce((sum, value) => sum + value, 0) * percent / 100));
+  if (hp > FORGE_MAX_INT) throw new BossError("参加者の最大HP合計から計算したボスHPが保存上限を超えます。参加は確定していません。");
+  return bossInteger(hp, 1);
 }
 const clampDamage = (value: number) => Math.min(FORGE_MAX_INT, Math.max(1, Math.floor(value)));
 export function splitBossReward(reward: number, userIds: string[]) {

@@ -27,6 +27,7 @@ export const pvpActionsTable = pgTable("pvp_actions", {
 });
 
 export interface RpgCard {
+  forgeOwnerId?: string;
   title: string; description: string; color: number;
   fields?: { name: string; value: string; inline?: boolean }[];
   duelId?: string; phase?: "pending" | "active" | "finished";

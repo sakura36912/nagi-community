@@ -23,6 +23,11 @@ export function rpgCardMessage(card: RpgCard) {
   const embed = new EmbedBuilder().setTitle(card.title).setColor(card.color).setDescription(card.description);
   if (card.fields?.length) embed.addFields(card.fields);
   const components: ActionRowBuilder<ButtonBuilder>[] = [];
+  if (card.forgeOwnerId) {
+    components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`forge:upgrade:${card.forgeOwnerId}`)
+        .setLabel("次の強化（本人専用）").setStyle(ButtonStyle.Primary)));
+  }
   if (card.duelId && card.phase !== "finished") {
     const buttons = card.phase === "pending"
       ? [["accept", "承諾して対戦", ButtonStyle.Success], ["decline", "辞退", ButtonStyle.Secondary], ["cancel", "募集を取り消す", ButtonStyle.Danger]] as const

@@ -30,7 +30,9 @@ export function bossEventEmbed(event: BossEvent) {
   return new EmbedBuilder().setTitle(`ボス討伐：${BOSS_NAMES[event.bossType]}`).setColor(0x447bb8)
     .setDescription("**本船員・武器所持者向けの討伐イベント**\n`/参加` でソロ／パーティを選択 → 条件を確認して参加確定\n攻撃は無料、回復は有料です。")
     .addFields(
-      { name: "ボスHP", value: `ソロ **${event.config.soloHp.toLocaleString("ja-JP")}** ／ パーティ **${event.config.partyHp.toLocaleString("ja-JP")}**` },
+      { name: "ボスHP", value: event.config.bossHpPercent !== undefined
+        ? `参加者の最大HP合計の **${event.config.bossHpPercent}%**\nソロは本人、パーティは参加確定者全員が基準（端数切り捨て・最低1）。戦闘開始後は固定。`
+        : `ソロ **${event.config.soloHp.toLocaleString("ja-JP")}** ／ パーティ **${event.config.partyHp.toLocaleString("ja-JP")}**` },
       { name: "報酬総額 / 1討伐", value: `**${bossMoney(event.config.reward * (event.config.special === "double_reward" ? 2 : 1))}**\n参加者で均等分配`, inline: true },
       { name: "パーティ受付", value: `**2〜4人 / ${bossDuration(event.config.lobbySeconds)}**\n4人で即開始`, inline: true },
       { name: "開催終了予定", value: bossDeadline(event.endsAt) },

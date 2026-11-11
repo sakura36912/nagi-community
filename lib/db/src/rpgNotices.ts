@@ -13,6 +13,7 @@ export async function queueForgeCard(tx: Tx, id: string, guildId: string, userId
   const weapon = FORGE_WEAPONS[result.weaponType];
   await queueRpgCard(tx, `forge-public:${id}`, guildId, channelId, {
     title: result.action === "select" ? "⚔️ 武器を選択しました" : result.success ? "✨ 武器強化成功！" : "🔨 武器強化失敗",
+    forgeOwnerId: userId,
     description: `<@${userId}>\n${result.action === "upgrade" && !result.success ? "費用は消費しました。レベル低下・武器破壊はありません。" : ""}`,
     color: result.action === "select" ? 0xd49b43 : result.success ? 0x2ecc71 : 0xe67e22,
     fields: [
