@@ -142,8 +142,20 @@ export async function handleBossButton(interaction: ButtonInteraction): Promise<
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     const [, action, id] = interaction.customId.split(":");
-    if (!id || !["join", "cancel"].includes(action!)) throw new BossError("無効な参加ボタンです。");
+    if (!id || !["join", "cancel", "attack", "heal"].includes(action!)) throw new BossError("無効なボス操作ボタンです。");
     const guildId = await requireForgeAccess(interaction);
+    if (action === "attack" || action === "heal") {
+      const result = await performBossAction(interaction.id, guildId, interaction.user.id, action, { battleId: id });
+      await interaction.editReply({ content: bossActionText(result), allowedMentions: { parse: [] } });
+      // Keep shared party buttons available after each action. Only terminal
+      // battles lose their controls; errors never change another player's card.
+      if (!["waiting", "active"].includes(result.state)) {
+        try { await interaction.message.edit({ components: [] }); }
+        catch (error) { logger.warn("[boss] Could not disable finished battle controls", error); }
+      }
+      void runBossRecovery(interaction.client);
+      return true;
+    }
     if (action === "cancel") {
       await cancelBossJoinRequest(id, guildId, interaction.user.id);
       await interaction.editReply("参加確認をキャンセルしました。料金は消費していません。");

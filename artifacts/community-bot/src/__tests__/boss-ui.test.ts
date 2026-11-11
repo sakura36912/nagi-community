@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bossBattleNotice, bossDeadline, bossDuration, bossEventEmbed, bossHp } from "../lib/bossUi";
+import { bossBattleNotice, bossBattleControls, bossDeadline, bossDuration, bossEventEmbed, bossHp } from "../lib/bossUi";
 import type { BossEvent, BossNoticeBundle } from "@workspace/db";
 
 const event = {
@@ -16,6 +16,23 @@ function bundle(status: string): BossNoticeBundle {
   } as BossNoticeBundle;
 }
 describe("readable Discord boss embeds", () => {
+  it("places attack and priced healing controls only on active public battle cards", () => {
+    const battle = bundle("active").battle;
+    const row = bossBattleControls(battle)[0]!.toJSON();
+    expect(row.components).toMatchObject([
+      { custom_id: "boss:attack:test", label: "攻撃（無料）" },
+      { custom_id: "boss:heal:test", label: "回復（$50,000）", disabled: false },
+    ]);
+    expect(bossBattleNotice(bundle("active")).toJSON().description).toContain("下のボタン");
+    for (const status of ["waiting", "won", "failed", "cancelled"]) {
+      expect(bossBattleControls(bundle(status).battle)).toEqual([]);
+    }
+  });
+  it("disables unconfigured healing without disabling free attacks", () => {
+    const row = bossBattleControls({ ...bundle("active").battle, healCost: 0 })[0]!.toJSON();
+    expect(row.components[0]).toMatchObject({ custom_id: "boss:attack:test" });
+    expect(row.components[1]).toMatchObject({ label: "回復（料金未設定）", disabled: true });
+  });
   it("explains wallet HP and maximum-HP percentage healing without exposing weapon stats", () => {
     const output = JSON.stringify(bossEventEmbed({ ...event, config: { ...event.config,
       playerHpSource: "wallet", healingMode: "max_hp_10_percent" } }).toJSON());

@@ -67,6 +67,57 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
   const heal = (user: string, seconds: number, operation = id()) =>
     performBossAction(operation, guild, user, "heal", { now: at(seconds), roll: () => 0.5 });
 
+  it("rejects another battle's public buttons before damage, healing or ledger changes", async () => {
+    await host(); await prepare("a"); await prepare("b");
+    const a = await join("a"), b = await join("b");
+    for (const action of ["attack", "heal"] as const) {
+      await expect(performBossAction(id(), guild, "a", action,
+        { now: at(1), battleId: b.battleId })).rejects.toThrow("このカード");
+    }
+    expect((await getBossBattleBundle(a.battleId))!.battle.actionCount).toBe(0);
+    expect((await getBossBattleBundle(b.battleId))!.battle.actionCount).toBe(0);
+    expect(await balance("a")).toBe(1000);
+  });
+  it("old finished-battle buttons cannot act on the same user's newly joined battle", async () => {
+    await host({ soloHp: 1 }); await prepare("a");
+    const old = await join("a"); await attack("a");
+    const current = await join("a");
+    await expect(performBossAction(id(), guild, "a", "heal",
+      { now: at(2), battleId: old.battleId })).rejects.toThrow("このカード");
+    expect((await getBossBattleBundle(current.battleId))!.battle.actionCount).toBe(0);
+  });
+  it("party members share the card but attack and heal only their own character", async () => {
+    await host({ counterEvery: 1 }); await prepare("a"); await prepare("b");
+    const a = await join("a", "party"); await join("b", "party");
+    const first = await performBossAction(id(), guild, "a", "attack",
+      { now: at(11), roll: () => 0.5, battleId: a.battleId });
+    const second = await performBossAction(id(), guild, "b", "attack",
+      { now: at(12), roll: () => 0.5, battleId: a.battleId });
+    expect(first.battleId).toBe(second.battleId);
+    const bundle = (await getBossBattleBundle(a.battleId))!;
+    expect(bundle.members.map(p => p.attackCount)).toEqual([1, 1]);
+    const damaged = bundle.members.find(p => p.hp < p.maxHp)!;
+    const other = bundle.members.find(p => p.userId !== damaged.userId)!;
+    const before = await balance(damaged.userId);
+    const result = await performBossAction(id(), guild, damaged.userId, "heal",
+      { now: at(13), roll: () => 0.5, battleId: a.battleId });
+    expect(result.paid).toBe(20);
+    expect(await balance(damaged.userId)).toBe(before! - 20);
+    expect(await balance(other.userId)).toBe(1000);
+  });
+  it("buttons and slash commands share cooldowns and idempotency; receipt IDs cannot switch battles", async () => {
+    await host(); await prepare("a");
+    const joined = await join("a"), operation = id();
+    const first = await performBossAction(operation, guild, "a", "attack",
+      { now: at(1), roll: () => 0.5, battleId: joined.battleId });
+    const repeated = await performBossAction(operation, guild, "a", "attack",
+      { now: at(1), roll: () => { throw new Error("must not reroll"); }, battleId: joined.battleId });
+    expect(repeated).toMatchObject({ repeated: true, damage: first.damage });
+    await expect(attack("a", 1)).rejects.toThrow("お待ちください");
+    await expect(performBossAction(operation, guild, "a", "attack",
+      { now: at(1), battleId: "other-battle" })).rejects.toThrow("討伐ID");
+    expect((await getBossBattleBundle(joined.battleId))!.battle.actionCount).toBe(1);
+  });
   it("commits a combo and its narration once, with one cooldown, counter and ledger action", async () => {
     await host({ soloHp: 10000, counterEvery: 1 });
     await prepare("a"); const joined = await join("a");

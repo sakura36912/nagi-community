@@ -1,4 +1,4 @@
-import { EmbedBuilder, escapeMarkdown } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, escapeMarkdown } from "discord.js";
 import { BOSS_NAMES, bossCooldownSeconds, type BossConfig, type BossEvent, type BossNoticeBundle, type BossActionResult } from "@workspace/db";
 
 export const bossMoney = (value: number | null) => value === null ? "未設定（新規参加不可）" : `$${value.toLocaleString("ja-JP")}`;
@@ -55,7 +55,7 @@ export function bossBattleNotice(bundle: BossNoticeBundle) {
       battle.status === "failed" ? "**討伐未達成。今回の報酬はありません。**" :
       battle.status === "cancelled" ? "今回の受付は終了しました。" :
       battle.status === "waiting" ? `**${members.length} / 4人が参加中** — 2人以上で開始できます。` :
-      "`/攻撃` で攻撃　`/回復` で自分のHPを回復")
+      "下のボタン、または `/攻撃`・`/回復` で操作できます。\n参加者本人のキャラクターだけを操作します。")
     .addFields({ name: "ボス残りHP", value: bossHp(battle.currentHp, battle.maxHp) },
       { name: `参加者（${members.length}人）`, value: names.slice(0, 1024) });
   if (battle.status === "waiting") embed.addFields(
@@ -84,6 +84,16 @@ export function bossBattleNotice(bundle: BossNoticeBundle) {
   }
   if (battle.reason) embed.addFields({ name: "終了理由", value: battle.reason });
   return embed.setFooter({ text: `${ended ? "終了時の記録" : "投稿時点の記録 / 最新は /ボス情報"} | 討伐ID：${battle.id}` });
+}
+/** Shared party controls always operate the clicking member, never the card's author. */
+export function bossBattleControls(battle: BossNoticeBundle["battle"]) {
+  if (battle.status !== "active") return [];
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`boss:attack:${battle.id}`).setLabel("攻撃（無料）").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`boss:heal:${battle.id}`)
+      .setLabel(battle.healCost > 0 ? `回復（${bossMoney(battle.healCost)}）` : "回復（料金未設定）")
+      .setStyle(ButtonStyle.Success).setDisabled(battle.healCost <= 0),
+  )];
 }
 export function bossActionText(result: BossActionResult) {
   return [

@@ -11,15 +11,23 @@ import { bossCombo, bossAttackPresentation, type BossAttackPresentation } from "
 /** 攻撃無料・回復課金・個別クールタイム・勝利報酬を同時に確定する。 */
 export async function performBossAction(
   id: string, guildId: string, userId: string, action: "attack" | "heal",
-  options: { now?: Date; roll?: () => number } = {},
+  options: { now?: Date; roll?: () => number; battleId?: string } = {},
 ) {
   const now = options.now ?? new Date(), roll = options.roll ?? forgeRoll;
   await advanceBossGuild(guildId, now);
   return withBossGuild(guildId, async tx => {
     const previous = await previousBossAction(tx, id, guildId, userId, action);
-    if (previous) return previous;
+    if (previous) {
+      if (options.battleId && previous.battleId !== options.battleId) throw new BossError("操作の討伐IDが一致しません。");
+      return previous;
+    }
     const [membership] = await tx.select().from(active).where(and(eq(active.guildId, guildId), eq(active.userId, userId)));
     if (!membership) throw new BossError("討伐に参加していません。/参加 を使用してください。");
+    // Check inside the same guild transaction as the action: an old card must
+    // never attack or charge healing in a newer/different battle.
+    if (options.battleId && membership.battleId !== options.battleId) {
+      throw new BossError("このカードの討伐には参加していません。参加中の討伐カードを使用してください。");
+    }
     const [battle] = await tx.select().from(battles).where(eq(battles.id, membership.battleId));
     if (!battle || battle.status !== "active" || battle.endsAt <= now) throw new BossError("戦闘中ではありません。受付中または終了済みです。");
     const [event] = await tx.select().from(events).where(eq(events.id, battle.eventId));

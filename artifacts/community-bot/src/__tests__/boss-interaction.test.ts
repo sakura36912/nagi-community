@@ -62,6 +62,36 @@ beforeEach(() => {
   m.recover.mockResolvedValue(undefined);
 });
 describe("boss commands and displays", () => {
+  it.each(["attack", "heal"])("routes public %s buttons to the clicking member's exact battle", async action => {
+    const i = fixture(); i.customId = `boss:${action}:battle`;
+    await click(i);
+    expect(m.action).toHaveBeenCalledWith(i.id, "guild", "user", action, { battleId: "battle" });
+    expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "user", force: true });
+    // Do not remove shared party controls after one person's action.
+    expect(i.message.edit).not.toHaveBeenCalled();
+    expect(m.recover).toHaveBeenCalled();
+  });
+  it("rejects public combat buttons after role revocation and does not edit the public card", async () => {
+    const i = fixture(); i.customId = "boss:attack:battle"; i.flags.crew = false;
+    await click(i);
+    expect(m.action).not.toHaveBeenCalled();
+    expect(i.message.edit).not.toHaveBeenCalled();
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("本船員");
+  });
+  it.each(["次の回復まで30秒お待ちください。", "残高が不足しています。", "このカードの討伐には参加していません。"])(
+    "returns a private combat error without changing shared controls: %s", async message => {
+      const i = fixture(); i.customId = "boss:heal:battle";
+      m.action.mockRejectedValueOnce(new BossError(message));
+      await click(i);
+      expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: message }));
+      expect(i.message.edit).not.toHaveBeenCalled();
+    });
+  it("removes combat controls when the button action ends the battle", async () => {
+    const i = fixture(); i.customId = "boss:attack:battle";
+    m.action.mockResolvedValueOnce({ battleId: "battle", mode: "solo", state: "won", bossHp: 0, messages: [] });
+    await click(i);
+    expect(i.message.edit).toHaveBeenCalledWith({ components: [] });
+  });
   it("builds eight commands with automatic combat settings and no bulk command replacement", () => {
     expect(bossCommands).toHaveLength(8);
     const host = bossCommands.find(c => c.data.name === "ボス開催")!.data.toJSON();
