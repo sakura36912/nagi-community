@@ -1,6 +1,7 @@
 // Export your models here. Add one export per file
 export * from "./forge";
 export * from "./boss";
+export * from "./pvp";
 export * from "./zombie";
 // export * from "./posts";
 //

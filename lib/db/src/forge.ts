@@ -5,6 +5,7 @@ import { forgeWeaponsTable as weapons, forgeUpgradeSettingsTable as settings,
   forgeUpgradeRequestsTable as requests, forgeActionsTable as actions,
   type ForgeActionResult } from "./schema/forge";
 import { ensureForgeSchema } from "./forgeSchema";
+import { queueForgeCard } from "./rpgNotices";
 import { ForgeError, forgeInteger, forgeStats, isForgeWeaponType, resolveForgeSetting, forgeRoll,
   type ForgeWeaponType } from "./forgeRules";
 
@@ -53,7 +54,7 @@ export async function listForgeSettings(guildId: string) {
   const levels = [...new Set([1, 2, 3, ...overrides.map(row => row.level)])].sort((a, b) => a - b);
   return levels.map(level => resolveForgeSetting(level, overrides.find(row => row.level === level)));
 }
-export async function selectForgeWeapon(id: string, guildId: string, userId: string, type: ForgeWeaponType) {
+export async function selectForgeWeapon(id: string, guildId: string, userId: string, type: ForgeWeaponType, channelId?: string) {
   await ensureForgeSchema();
   if (!isForgeWeaponType(type)) throw new ForgeError("未対応の武器です。");
   return db.transaction(async tx => {
@@ -63,7 +64,9 @@ export async function selectForgeWeapon(id: string, guildId: string, userId: str
     const [exists] = await tx.select().from(weapons).where(weaponWhere(guildId, userId));
     if (exists) throw new ForgeError("武器は既に選択済みです。変更・リセットは管理者に依頼してください。");
     await tx.insert(weapons).values({ guildId, userId, weaponType: type, weaponLevel: 1, ...forgeStats(type, 1) });
-    return recordAction(tx, id, guildId, userId, userId, { action: "select", weaponType: type, level: 1 });
+    const result = await recordAction(tx, id, guildId, userId, userId, { action: "select", weaponType: type, level: 1 });
+    if (channelId) await queueForgeCard(tx, id, guildId, userId, channelId, result);
+    return result;
   });
 }
 export async function createForgeUpgradeRequest(id: string, guildId: string, userId: string) {
@@ -93,7 +96,7 @@ export async function cancelForgeUpgrade(id: string, guildId: string, userId: st
     await tx.update(requests).set({ state: "cancelled" }).where(eq(requests.id, id));
   });
 }
-export async function settleForgeUpgrade(id: string, guildId: string, userId: string, roll: () => number = forgeRoll) {
+export async function settleForgeUpgrade(id: string, guildId: string, userId: string, roll: () => number = forgeRoll, channelId?: string) {
   await ensureForgeSchema();
   return db.transaction(async tx => {
     await lockSettings(tx, guildId);
@@ -130,6 +133,7 @@ export async function settleForgeUpgrade(id: string, guildId: string, userId: st
     await tx.update(requests).set({ state: "paid" }).where(eq(requests.id, id));
     const result = await recordAction(tx, `forge:${id}`, guildId, userId, userId,
       { action: "upgrade", weaponType: weapon.weaponType, level, success, cost: request.cost, balance: wallet.balance });
+    if (channelId) await queueForgeCard(tx, id, guildId, userId, channelId, result);
     return { ...result, repeated: false };
   });
 }

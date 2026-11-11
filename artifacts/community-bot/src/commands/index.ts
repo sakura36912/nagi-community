@@ -17,6 +17,7 @@ import { logger } from "../lib/logger.js";
 import { zombieCommands } from "./zombie.js";
 import { forgeCommands } from "./forge.js";
 import { bossCommands } from "./boss.js";
+import { pvpCommands } from "./pvp.js";
 import {
   addParticipant,
   createEvent,
@@ -2483,6 +2484,7 @@ import { periodicCommand } from "./periodic.js";
 export const commands: Command[] = [
   ...forgeCommands,
   ...bossCommands,
+  ...pvpCommands,
   ...zombieCommands,
   rankingCommand,
   vcRankCommand,

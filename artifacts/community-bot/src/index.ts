@@ -16,6 +16,7 @@ import { syncZombieCommands } from "./lib/zombieRegistration.js";
 import { ensureBossSchema, isRpgCommandName } from "@workspace/db";
 import { handleForgeButton } from "./commands/forge.js";
 import { handleBossButton } from "./commands/boss.js";
+import { handlePvpButton } from "./commands/pvp.js";
 import { startRpgRuntime } from "./lib/rpgRuntime.js";
 import {
   closeAllOpenSessions,
@@ -522,6 +523,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith("forge:")) { await handleForgeButton(interaction); return; }
       if (interaction.customId.startsWith("boss:")) { await handleBossButton(interaction); return; }
+      if (interaction.customId.startsWith("pvp:")) { await handlePvpButton(interaction); return; }
       if (await handleZombieButton(interaction)) return;
       const id = interaction.customId;
 

@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-const m = vi.hoisted(() => ({ schema: vi.fn(), recovery: vi.fn(), forge: vi.fn(), boss: vi.fn() }));
+const m = vi.hoisted(() => ({ schema: vi.fn(), recovery: vi.fn(), forge: vi.fn(), boss: vi.fn(), cards: vi.fn(), registerPvp: vi.fn() }));
 vi.mock("@workspace/db", () => ({ ensureBossSchema: m.schema }));
 vi.mock("../lib/bossRecovery.js", () => ({ startBossRecovery: m.recovery }));
 vi.mock("../lib/forgeCommandRegistration.js", () => ({ syncForgeCommandRegistration: m.forge }));
 vi.mock("../lib/bossCommandRegistration.js", () => ({ syncBossCommandRegistration: m.boss }));
+vi.mock("../lib/rpgCards", () => ({ startRpgCards: m.cards }));
+vi.mock("../commands/pvp", () => ({ pvpCommands: [{ data: { toJSON: () => ({ name: "pvp" }) } }] }));
 import { startRpgRuntime } from "../lib/rpgRuntime.js";
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
 describe("community RPG startup", () => {
@@ -12,14 +14,16 @@ describe("community RPG startup", () => {
     m.schema.mockResolvedValue(undefined);
     m.forge.mockRejectedValueOnce(new Error("rate limit")).mockResolvedValue(undefined);
     m.boss.mockResolvedValue(undefined);
-    const stop = startRpgRuntime({} as never);
+    const stop = startRpgRuntime({ application: { commands: { create: m.registerPvp } } } as never);
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(m.recovery).toHaveBeenCalledTimes(1);
+      expect(m.registerPvp).not.toHaveBeenCalled();
       expect(m.forge).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(60000);
       expect(m.forge).toHaveBeenCalledTimes(2);
       expect(m.boss).toHaveBeenCalledTimes(2);
+      expect(m.registerPvp).toHaveBeenCalledWith({ name: "pvp" });
       expect(m.recovery).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(60000);
       expect(m.forge).toHaveBeenCalledTimes(2);
@@ -30,7 +34,7 @@ describe("community RPG startup", () => {
     m.schema.mockRejectedValueOnce(new Error("DB offline")).mockResolvedValue(undefined);
     m.forge.mockResolvedValue(undefined);
     m.boss.mockResolvedValue(undefined);
-    const stop = startRpgRuntime({} as never);
+    const stop = startRpgRuntime({ application: { commands: { create: m.registerPvp } } } as never);
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(m.recovery).not.toHaveBeenCalled();

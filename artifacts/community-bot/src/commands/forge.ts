@@ -10,6 +10,7 @@ import {
   isForgeWeaponType, type ForgeActionResult,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { assertRpgCardChannel, runRpgCards } from "../lib/rpgCards";
 
 // モジュール読込時にはDBへ接続せず、コマンド定義だけを生成する。
 const choices = [
@@ -74,8 +75,10 @@ export async function executeForgeCommand(interaction: ChatInputCommandInteracti
     if (name === "武器選択") {
       const type = interaction.options.getString("種類", true);
       if (!isForgeWeaponType(type)) throw new ForgeError("未対応の武器です。");
-      await selectForgeWeapon(interaction.id, guildId, userId, type);
+      const channelId = await assertRpgCardChannel(interaction);
+      await selectForgeWeapon(interaction.id, guildId, userId, type, channelId);
       await interaction.editReply(`${FORGE_WEAPONS[type].name}を選択しました（Lv1）。以後の変更・リセットは管理者のみ行えます。`);
+      void runRpgCards(interaction.client);
       return;
     }
     if (name === "武器" || name === "武器確認") {
@@ -92,6 +95,7 @@ export async function executeForgeCommand(interaction: ChatInputCommandInteracti
       return;
     }
     if (name === "強化") {
+      await assertRpgCardChannel(interaction);
       const request = await createForgeUpgradeRequest(interaction.id, guildId, userId);
       const embed = forgePublicEmbed({ weaponType: request.weaponType, weaponLevel: request.weaponLevel },
         { cost: request.cost, successRate: request.successRate })
@@ -162,8 +166,10 @@ export async function handleForgeButton(interaction: ButtonInteraction): Promise
       await cancelForgeUpgrade(id, guildId, interaction.user.id);
       await interaction.editReply("強化をキャンセルしました。費用は消費していません。");
     } else {
-      const result = await settleForgeUpgrade(id, guildId, interaction.user.id);
+      const channelId = await assertRpgCardChannel(interaction);
+      const result = await settleForgeUpgrade(id, guildId, interaction.user.id, undefined, channelId);
       await interaction.editReply(resultText(result));
+      void runRpgCards(interaction.client);
     }
     // 返信失敗でも決済記録は維持する。古いボタンの再押下にも重複防止が効く。
     try { await interaction.message.edit({ components: [] }); }

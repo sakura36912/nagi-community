@@ -14,23 +14,29 @@ vi.mock("@workspace/db", async original => ({
   resetForgeSettings: m.reset, listForgeSettings: m.list,
 }));
 vi.mock("../lib/logger", () => ({ logger: { error: m.error, warn: m.warn, info: vi.fn() } }));
+vi.mock("../lib/rpgCards", async original => ({
+  ...await original<typeof import("../lib/rpgCards")>(), runRpgCards: vi.fn().mockResolvedValue(undefined),
+}));
 import { ForgeError } from "@workspace/db";
 import { executeForgeCommand, forgeCommands, handleForgeButton } from "../commands/forge";
 import { syncForgeCommandRegistration } from "../lib/forgeCommandRegistration";
 
 function fixture(name = "武器") {
-  const flags = { admin: false, crew: true };
+  const flags = { admin: false, crew: true, card: true };
   const roles = new Collection([["crew", { id: "crew", name: "本船員" }]]);
   const options: Record<string, unknown> = {};
   return {
     flags, roles, values: options,
     id: "1234567890123456789", commandName: name, customId: "forge:confirm:1234567890123456789",
     guild: { id: "guild", roles: { fetch: vi.fn(async () => roles) },
-      members: { fetch: vi.fn(async () => ({
+      members: { me: {}, fetch: vi.fn(async () => ({
         permissions: { has: () => flags.admin },
         roles: { cache: { has: () => flags.crew } },
       })) } },
     user: { id: "user" },
+    client: {},
+    channel: { id: "channel", isDMBased: () => false, isTextBased: () => true, isThread: () => false,
+      send: vi.fn(), permissionsFor: () => ({ has: () => flags.card }) },
     options: {
       getString: (key: string) => options[key] ?? null,
       getInteger: (key: string) => options[key] ?? null,
@@ -88,7 +94,7 @@ describe("forge command permissions and UI", () => {
   it("allows crew to select exactly one of the six types", async () => {
     const i = fixture("武器選択"); i.values["種類"] = "staff";
     await run(i);
-    expect(m.select).toHaveBeenCalledWith(i.id, "guild", "user", "staff");
+    expect(m.select).toHaveBeenCalledWith(i.id, "guild", "user", "staff", "channel");
     expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("杖"));
   });
   it("shows only public information for /武器", async () => {
@@ -129,7 +135,7 @@ describe("forge command permissions and UI", () => {
   it("handles confirmation and disables the paid panel", async () => {
     const i = fixture();
     await click(i);
-    expect(m.settle).toHaveBeenCalledWith(i.id, "guild", "user");
+    expect(m.settle).toHaveBeenCalledWith(i.id, "guild", "user", undefined, "channel");
     expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("強化成功"));
     expect(i.message.edit).toHaveBeenCalledWith({ components: [] });
   });
@@ -138,6 +144,14 @@ describe("forge command permissions and UI", () => {
     await click(i);
     expect(m.cancel).toHaveBeenCalledWith(i.id, "guild", "user");
     expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("refuses selection or paid upgrades before mutation when public card permissions are missing", async () => {
+    const i = fixture("武器選択"); i.values["種類"] = "bow"; i.flags.card = false;
+    await run(i);
+    expect(m.select).not.toHaveBeenCalled();
+    await click(i);
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("埋め込みリンク");
   });
   it("does not settle after crew role revocation", async () => {
     const i = fixture(); i.flags.crew = false;

@@ -4,6 +4,8 @@ import { startBossRecovery } from "./bossRecovery.js";
 import { syncForgeCommandRegistration } from "./forgeCommandRegistration.js";
 import { syncBossCommandRegistration } from "./bossCommandRegistration.js";
 import { logger } from "./logger.js";
+import { startRpgCards } from "./rpgCards";
+import { pvpCommands } from "../commands/pvp";
 
 /** Restart order and transient REST failures must not strand the command transfer. */
 export function startRpgRuntime(client: Client) {
@@ -14,10 +16,13 @@ export function startRpgRuntime(client: Client) {
     try {
       await ensureBossSchema();
       if (!recoveryStarted) { startBossRecovery(client); recoveryStarted = true; }
+      startRpgCards(client);
       await Promise.all([syncForgeCommandRegistration(client), syncBossCommandRegistration(client)]);
+      // Upsert just PvP; do not replace or delete unrelated community commands.
+      for (const command of pvpCommands) await client.application!.commands.create(command.data.toJSON());
       complete = true;
       clearInterval(timer);
-      logger.info("[rpg] 武器11件・ボス8件を多機能Botへ登録しました。");
+      logger.info("[rpg] 武器・ボス・PvPコマンドを多機能Botへ登録しました。");
     } catch {
       logger.warn("[rpg] 初期化・個別登録に失敗しました。60秒後に再試行します。");
     } finally { running = false; }
