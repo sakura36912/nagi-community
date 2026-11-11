@@ -1,0 +1,79 @@
+import { AttachmentBuilder, EmbedBuilder, escapeMarkdown } from "discord.js";
+import { KpTicketError, type KpTicketSession } from "@workspace/db";
+
+const date = (value: Date | null) => value
+  ? value.toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", hour12: false }) + " JST"
+  : "未記録";
+
+/** Paid order snapshots are the source of truth: no second customer ledger or new debit. */
+export function kpCustomers(
+  orders: KpTicketSession[], currency: string, userId?: string, page = 1,
+) {
+  const selected = orders.filter(order => order.phase === "paid" && (!userId || order.userId === userId));
+  const customers = new Map<string, {
+    id: string; tickets: Set<string>; orders: number; total: bigint;
+    first: Date | null; last: Date | null; casts: Set<string>;
+  }>();
+  for (const order of selected) {
+    if (!order.selection.quote) throw new KpTicketError("支払い済み注文の明細が不完全です。管理者に確認を依頼してください。");
+    const customer = customers.get(order.userId) ?? {
+      id: order.userId, tickets: new Set<string>(), orders: 0, total: 0n,
+      first: null, last: null, casts: new Set<string>(),
+    };
+    customer.tickets.add(order.channelId);
+    customer.orders++;
+    customer.total += BigInt(order.selection.quote.total);
+    if (order.selection.castId) customer.casts.add(order.selection.castId);
+    if (order.paidAt) {
+      if (!customer.first || order.paidAt < customer.first) customer.first = order.paidAt;
+      if (!customer.last || order.paidAt > customer.last) customer.last = order.paidAt;
+    }
+    customers.set(order.userId, customer);
+  }
+  const rows = [...customers.values()].sort((a, b) =>
+    (b.last?.getTime() ?? 0) - (a.last?.getTime() ?? 0) || a.id.localeCompare(b.id));
+  const detail = [...selected].sort((a, b) =>
+    (b.paidAt?.getTime() ?? 0) - (a.paidAt?.getTime() ?? 0) || a.id.localeCompare(b.id));
+  const size = userId ? 8 : 10;
+  const pages = Math.max(1, Math.ceil((userId ? detail.length : rows.length) / size));
+  if (!Number.isInteger(page) || page < 1 || page > pages) throw new KpTicketError(`ページは1〜${pages}で指定してください。`);
+  const summary = (row: typeof rows[number]) => [
+    `顧客ID: ${row.id}`,
+    `利用チケット: ${row.tickets.size}件 / 注文: ${row.orders}件 / 累計: ${row.total.toLocaleString()}${currency}`,
+    `初回支払い: ${date(row.first)} / 最終支払い: ${date(row.last)}`,
+    `担当キャストID: ${[...row.casts].sort().join(", ") || "未記録"}`,
+  ].join("\n");
+  const orderText = (order: KpTicketSession) => {
+    const quote = order.selection.quote!;
+    return `支払日時: ${date(order.paidAt)}\n注文ID: ${order.id} / チケットID: ${order.channelId}\n`
+      + `キャストID: ${order.selection.castId ?? "未記録"}\n`
+      + `${quote.itemName} × ${quote.quantity} / 支払額: ${quote.total.toLocaleString()}${currency}`;
+  };
+  const offset = (page - 1) * size;
+  const preview = userId
+    ? detail.slice(offset, offset + size).map(order =>
+      `${date(order.paidAt)} / ${escapeMarkdown(order.selection.quote!.itemName.slice(0, 80))} × ${order.selection.quote!.quantity}\n`
+      + `${order.selection.quote!.total.toLocaleString()}${currency} / キャスト: ${order.selection.castId ? `<@${order.selection.castId}>` : "未記録"}\nチケットID: ${order.channelId}`)
+    : rows.slice(offset, offset + size).map(row =>
+      `<@${row.id}>\nチケット ${row.tickets.size}件 / 注文 ${row.orders}件 / 累計 ${row.total.toLocaleString()}${currency}\n最終支払い: ${date(row.last)}`);
+  const embed = new EmbedBuilder().setTitle(userId ? "KP島 — 顧客の利用履歴" : "KP島 — 利用顧客一覧")
+    .setColor(0xd49b43)
+    .setDescription(preview.join("\n\n") || "支払い済みの利用記録はありません。")
+    .setFooter({ text: `${page}/${pages}ページ・全期間・削除済みチケットを含む・追加の引き落としなし` });
+  if (userId) {
+    const row = customers.get(userId);
+    embed.addFields({ name: "顧客", value: `<@${userId}>（${userId}）` },
+      { name: "累計", value: row ? `${row.tickets.size}チケット / ${row.orders}注文 / ${row.total.toLocaleString()}${currency}` : "記録なし" });
+  } else {
+    embed.addFields({ name: "顧客数", value: `${rows.length}人` });
+  }
+  const text = "KP島 利用顧客記録（全期間・支払い済みのみ・日時は日本時間）\n"
+    + "チケット数はチャンネルIDの重複を除外。追加注文は注文数に含みます。\n\n"
+    + rows.map(summary).join("\n\n")
+    + (userId ? "\n\n【全注文履歴】\n" + detail.map(orderText).join("\n\n") : "");
+  return {
+    embeds: [embed],
+    files: [new AttachmentBuilder(Buffer.from(text, "utf8"), { name: userId ? "kp-customer-history.txt" : "kp-customers.txt" })],
+    allowedMentions: { parse: [] as never[] },
+  };
+}

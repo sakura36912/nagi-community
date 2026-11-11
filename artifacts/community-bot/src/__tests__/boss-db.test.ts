@@ -67,6 +67,32 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
   const heal = (user: string, seconds: number, operation = id()) =>
     performBossAction(operation, guild, user, "heal", { now: at(seconds), roll: () => 0.5 });
 
+  it.each([["kraken", 50], ["megalodon", 80], ["leviathan", 100]] as const)(
+    "%s uses the solo member's snapshotted maximum HP at %s percent", async (type, percent) => {
+      await createBossEvent(id(), guild, "channel", type,
+        { ...base, ...generateBossCombatStats(type, () => 0) }, now);
+      await prepare("a"); await wallet("a", 12345);
+      const result = await join("a");
+      expect(result.bossHp).toBe(Math.floor(12345 * percent / 100));
+      await wallet("a", 900);
+      expect((await getBossBattleBundle(result.battleId))!.battle.maxHp).toBe(result.bossHp);
+    });
+  it.each([2, 3, 4])("freezes the sum of %s party members' maximum HP on either start path", async count => {
+    await host({ ...generateBossCombatStats("megalodon", () => 0), bossHpPercent: 50 });
+    // The event type is kraken; its validated percentage is 50%.
+    let battleId = "";
+    for (let n = 1; n <= count; n++) {
+      const user = `p${n}`; await prepare(user); await wallet(user, n * 1000);
+      battleId = (await join(user, "party")).battleId;
+    }
+    await advanceBossGuild(guild, at(11));
+    const bundle = (await getBossBattleBundle(battleId))!;
+    expect(bundle.battle.status).toBe("active");
+    expect(bundle.battle.maxHp).toBe((count * (count + 1) / 2) * 500);
+    await wallet("p1", 50000);
+    await advanceBossGuild(guild, at(12));
+    expect((await getBossBattleBundle(battleId))!.battle.maxHp).toBe(bundle.battle.maxHp);
+  });
   it("rejects another battle's public buttons before damage, healing or ledger changes", async () => {
     await host(); await prepare("a"); await prepare("b");
     const a = await join("a"), b = await join("b");

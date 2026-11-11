@@ -22,7 +22,7 @@ describe("shop command access boundary", () => {
   it("removes the parent administrator restriction so ticket installers can invoke it", () => {
     expect(definition.default_member_permissions).toBeNull();
   });
-  it.each(definition.options!.map(option => option.name).filter(name => name !== "ticket-panel"))(
+  it.each(definition.options!.map(option => option.name).filter(name => !["ticket-panel", "customers"].includes(name)))(
     "keeps %s administrator-only even though the parent command is visible", async subcommand => {
       const interaction = { guildId: "guild", options: { getSubcommand: () => subcommand },
         memberPermissions: { has: () => false }, reply: vi.fn() };

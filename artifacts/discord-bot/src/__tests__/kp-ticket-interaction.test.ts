@@ -570,6 +570,26 @@ describe("KP ticket price administration", () => {
     };
   }
   it.each([
+    { roles: ["夜鴉"], admin: false }, { roles: ["黒兵"], admin: false }, { roles: [], admin: true },
+  ])("lets approved staff privately read customers without a ticket panel: %j", async ({ roles, admin }) => {
+    const interaction = panelAccessFixture(roles, admin);
+    interaction.options.getSubcommand = () => "customers";
+    Object.assign(interaction.options, { getUser: () => ({ id: "buyer" }), getInteger: () => 1 });
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(m.paidOrders).toHaveBeenCalledWith("guild");
+    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(interaction.channel.send).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(JSON.stringify(interaction.editReply.mock.calls)).toContain("顧客の利用履歴");
+  });
+  it("does not read customer data after staff role revocation despite stale permissions", async () => {
+    const interaction = panelAccessFixture([]);
+    interaction.options.getSubcommand = () => "customers";
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("夜鴉・黒兵"));
+  });
+  it.each([
     { roles: ["夜鴉"], admin: false }, { roles: ["黒兵"], admin: false },
     { roles: ["夜鴉", "黒兵"], admin: false }, { roles: [], admin: true },
   ])("allows only approved panel installers: %j", async ({ roles, admin }) => {

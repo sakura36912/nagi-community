@@ -14,6 +14,12 @@ vi.mock("../lib/rpgCards", async original => ({
 vi.mock("../lib/logger", () => ({ logger: { error: vi.fn(), warn: vi.fn() } }));
 import { executePvpCommand, handlePvpButton, pvpCommands } from "../commands/pvp";
 import { rpgCardMessage } from "../lib/rpgCards";
+it("adds an owner-bound repeat-upgrade control to public forge cards", () => {
+  const message = rpgCardMessage({ title: "強化成功", description: "Lv2", color: 0x2ecc71, forgeOwnerId: "owner" });
+  expect(message.components[0]!.toJSON().components[0]).toMatchObject({
+    custom_id: "forge:upgrade:owner", label: "次の強化（本人専用）",
+  });
+});
 import { pvpPublicCard, type PvpDuel } from "@workspace/db";
 function fixture(sub = "募集") {
   const flags = { crew: true, bot: false, send: true };

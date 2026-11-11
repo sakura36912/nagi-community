@@ -128,9 +128,9 @@ describe("boss commands and displays", () => {
       counterEvery: 3, criticalPercent: 10, criticalMultiplier: 1.5, levelBonusPercent: 5,
     }));
     const config = m.host.mock.calls[0]![4];
-    expect(config.soloHp).toBeGreaterThanOrEqual(300);
-    expect(config.soloHp).toBeLessThanOrEqual(450);
-    expect(config.partyHp).toBeGreaterThan(config.soloHp);
+    expect(config.bossHpPercent).toBe(50);
+    expect(config.soloHp).toBe(1);
+    expect(config.partyHp).toBe(1);
     expect(config.attack).toBeGreaterThanOrEqual(25);
     expect(config.attack).toBeLessThanOrEqual(35);
     expect(config.defense).toBeGreaterThanOrEqual(0);

@@ -125,7 +125,7 @@ import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
 import { KP_SHOP_CATEGORY, KP_SHOP_NAME, purchaseKpItem, supportsKpEffect } from "../lib/kpShop";
-import { executeKpTicketCommand, kpTicketPanelSubcommand, kpTicketPricesSubcommand } from "./kpTicket";
+import { executeKpTicketCommand, kpTicketPanelSubcommand, kpTicketPricesSubcommand, kpCustomersSubcommand } from "./kpTicket";
 import { giveCommand } from "./give";
 
 interface Command {
@@ -1841,16 +1841,17 @@ const shopCommand: Command = {
     .addSubcommand((sub) => sub.setName("cast-roles").setDescription("この投稿のキャスト対象ロールを複数選択して設定します（管理者）"))
     .addSubcommand(kpTicketPanelSubcommand)
     .addSubcommand(kpTicketPricesSubcommand)
+    .addSubcommand(kpCustomersSubcommand)
     ,
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub     = interaction.options.getSubcommand();
-    if (sub !== "ticket-panel" && !requireManageGuild(interaction)) {
+    if (sub !== "ticket-panel" && sub !== "customers" && !requireManageGuild(interaction)) {
       await interaction.reply({ content: "このショップ操作には管理者権限が必要です。", ephemeral: true });
       return;
     }
-    if (sub === "ticket-panel" || sub === "ticket-prices") {
+    if (sub === "ticket-panel" || sub === "ticket-prices" || sub === "customers") {
       await executeKpTicketCommand(interaction);
       return;
     }

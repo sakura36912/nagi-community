@@ -28,8 +28,8 @@ describe("boss combat rules", () => {
   ] as const)("generates inclusive, valid %s combat settings", (type, minHp, maxHp, minAttack, maxAttack, minDefense, maxDefense) => {
     const low = generateBossCombatStats(type, () => 0);
     const high = generateBossCombatStats(type, () => 0.999999);
-    expect(low).toMatchObject({ soloHp: minHp, partyHp: Math.round(minHp * 2.5), attack: minAttack, defense: minDefense, healingMode: "max_hp_10_percent", playerHpSource: "wallet" });
-    expect(high).toMatchObject({ soloHp: maxHp, partyHp: maxHp * 3, attack: maxAttack, defense: maxDefense });
+    expect(low).toMatchObject({ soloHp: 1, partyHp: 1, bossHpPercent: { kraken: 50, megalodon: 80, leviathan: 100 }[type], attack: minAttack, defense: minDefense, healingMode: "max_hp_10_percent", playerHpSource: "wallet" });
+    expect(high).toMatchObject({ soloHp: 1, partyHp: 1, attack: maxAttack, defense: maxDefense });
     for (const generated of [low, high]) expect(() => validateBossConfig(type, { ...config, ...generated })).not.toThrow();
   });
   it.each([NaN, Infinity, -0.1, 1])("rejects an invalid generation roll: %s", roll => {

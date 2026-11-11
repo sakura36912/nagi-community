@@ -60,6 +60,22 @@ beforeEach(() => {
 });
 
 describe("forge command permissions and UI", () => {
+  it("opens a fresh private payment confirmation from the owner's repeat button without charging", async () => {
+    const i = fixture(); i.customId = "forge:upgrade:user";
+    await click(i);
+    expect(m.create).toHaveBeenCalledWith(i.id, "guild", "user");
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(i.message.edit).not.toHaveBeenCalled();
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("支払って強化");
+  });
+  it("rejects another member pressing the public repeat-upgrade button", async () => {
+    const i = fixture(); i.customId = "forge:upgrade:another-user";
+    await click(i);
+    expect(m.create).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("本人のみ");
+    expect(i.message.edit).not.toHaveBeenCalled();
+  });
   it("defines eleven Japanese slash commands, with admin defaults only on admin commands", () => {
     expect(forgeCommands).toHaveLength(11);
     const names = forgeCommands.map(c => c.data.name);
@@ -136,7 +152,7 @@ describe("forge command permissions and UI", () => {
     const i = fixture();
     await click(i);
     expect(m.settle).toHaveBeenCalledWith(i.id, "guild", "user", undefined, "channel");
-    expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("強化成功"));
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("強化成功"), components: expect.any(Array) }));
     expect(i.message.edit).toHaveBeenCalledWith({ components: [] });
   });
   it("supports cancelling without settling", async () => {

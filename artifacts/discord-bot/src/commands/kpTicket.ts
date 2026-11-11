@@ -18,6 +18,7 @@ import { confirmTicketRows, KP_TICKET_PREFIX, pagedTicketMenu, ticketControls,
 import { logger } from "../lib/logger";
 import { kpTicketStatement } from "../lib/kpTicketStatement";
 import { kpCastSales } from "../lib/kpCastSales";
+import { kpCustomers } from "../lib/kpCustomers";
 import { grantKpTicketCastAccess } from "../lib/kpTicketAccess";
 import { kpBusinessDay, latestKpBusinessDate, type KpBusinessDay } from "../lib/kpBusinessDay";
 
@@ -32,6 +33,10 @@ export const kpTicketPricesSubcommand = new SlashCommandSubcommandBuilder()
   .addStringOption(o => o.setName("unset").setDescription("指定した料金を未設定に戻す（他の料金指定と併用不可）").addChoices(
     { name: "VIP", value: "vip" }, { name: "延長", value: "extension" }, { name: "両方", value: "all" },
   ));
+export const kpCustomersSubcommand = new SlashCommandSubcommandBuilder()
+  .setName("customers").setDescription("KP島の支払い済み利用顧客・履歴を確認（夜鴉・黒兵・管理者）")
+  .addUserOption(o => o.setName("user").setDescription("指定すると、この顧客の利用履歴を表示"))
+  .addIntegerOption(o => o.setName("page").setDescription("表示ページ（省略時は1）").setMinValue(1));
 
 const priceLabel = (price: number | null, currency: string) => price === null ? "未設定（希望時は支払い不可）" : `${price.toLocaleString()}${currency}`;
 
@@ -75,13 +80,20 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
   await interaction.deferReply({ ephemeral: true });
   try {
     const subcommand = interaction.options.getSubcommand();
-    if (subcommand === "ticket-panel") {
+    if (subcommand === "ticket-panel" || subcommand === "customers") {
       // Re-fetch the caller: a removed role must not remain authorized through cached membership.
       await requireKpStaff(interaction);
     } else if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
       throw new KpTicketError("サーバー管理権限が必要です。");
     }
     const { currencyName } = await getGuildSettings(interaction.guildId);
+    if (subcommand === "customers") {
+      const target = interaction.options.getUser("user");
+      const page = interaction.options.getInteger("page") ?? 1;
+      const orders = await listPaidKpTicketOrders(interaction.guildId);
+      await interaction.editReply(kpCustomers(orders, currencyName, target?.id, page));
+      return;
+    }
     if (subcommand === "ticket-prices") {
       const vip = interaction.options.getInteger("vip"), extension = interaction.options.getInteger("extension");
       const unset = interaction.options.getString("unset");
