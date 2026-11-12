@@ -883,6 +883,38 @@ function makeShopSelectMenuInteraction() {
   };
 }
 
+describe("island resurface purchase role requirement", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it.each(["button", "select"])("blocks %s purchases before any charge", async entry => {
+    const interaction = entry === "button" ? makeShopBuyBtnInteraction() : makeShopSelectMenuInteraction();
+    interaction.guild.members.fetch.mockResolvedValue({
+      roles: { cache: { some: () => false } },
+    } as never);
+    mocks.getShopItem.mockResolvedValue({
+      id: ITEM_ID, name: "オチテモータ島浮上券", effectType: "eval_resurface", category: "island",
+    });
+    await (entry === "button" ? handleShopBuyButton : handleShopSelectMenu)(interaction as never);
+    expect(mocks.buyItem).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining("本船員ロール"), ephemeral: true,
+    }));
+  });
+  it.each(["button", "select"])("allows %s purchases with the actual 本船員 role", async entry => {
+    const interaction = entry === "button" ? makeShopBuyBtnInteraction() : makeShopSelectMenuInteraction();
+    interaction.guild.members.fetch.mockResolvedValue({
+      roles: { cache: { some: (predicate: (role: { name: string }) => boolean) => predicate({ name: "本船員" }) } },
+    } as never);
+    mocks.getShopItem.mockResolvedValue({
+      id: ITEM_ID, name: "オチテモータ島浮上券", effectType: "eval_resurface", category: "island",
+    });
+    mocks.getGuildSettings.mockResolvedValue(makeSettings());
+    mocks.buyItem.mockResolvedValue({ ok: false, reason: "残高不足" });
+    await (entry === "button" ? handleShopBuyButton : handleShopSelectMenu)(interaction as never);
+    expect(mocks.buyItem).toHaveBeenCalledOnce();
+    expect(interaction.editReply).toHaveBeenCalledWith("残高不足");
+  });
+});
+
 describe("高級船室は1人1室", () => {
   function preparePurchase(interaction: ReturnType<typeof makeShopBuyBtnInteraction> | ReturnType<typeof makeShopSelectMenuInteraction>) {
     const guild = interaction.guild as typeof interaction.guild & {

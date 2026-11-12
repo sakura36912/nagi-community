@@ -1,3 +1,4 @@
+import { islandResurfacePurchaseError } from "../lib/islandResurfacePurchase";
 import { applySheetEmbedUpdate, buildSheetEmbed, buildSheetThreadName, findSelfIntro, refreshSheetEmbedForUser } from "../lib/sheet";
 import { saveSchedule } from "../lib/vc";
 import { extendOrRepairVcSchedule } from "../lib/vcScheduleRepair";
@@ -715,6 +716,11 @@ async function completeForumPurchase(
     await interaction.editReply("この購入パネルは見つからないか、すでに無効です。");
     return;
   }
+  const eligibilityError = await islandResurfacePurchaseError(interaction.guild, interaction.user.id, item);
+  if (eligibilityError) {
+    await interaction.editReply(eligibilityError);
+    return;
+  }
   if (!panel.logChannelId) {
     await interaction.editReply("購入ログ先が未設定です。管理者にパネルの再設定を依頼してください。");
     return;
@@ -887,6 +893,12 @@ export async function handleShopBuyButton(interaction: ButtonInteraction): Promi
   const item = await getShopItem(interaction.guildId, itemId);
   if (!item) {
     await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+    return;
+  }
+
+  const eligibilityError = await islandResurfacePurchaseError(interaction.guild, interaction.user.id, item);
+  if (eligibilityError) {
+    await interaction.reply({ content: eligibilityError, ephemeral: true });
     return;
   }
 
@@ -1187,6 +1199,12 @@ async function applyShopPurchase(
   const item = await getShopItem(interaction.guildId, itemId);
   if (!item) {
     await interaction.reply({ content: "そのアイテムは見つかりませんでした。", ephemeral: true });
+    return;
+  }
+
+  const eligibilityError = await islandResurfacePurchaseError(interaction.guild, interaction.user.id, item);
+  if (eligibilityError) {
+    await interaction.reply({ content: eligibilityError, ephemeral: true });
     return;
   }
 
