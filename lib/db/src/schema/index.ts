@@ -1,3 +1,4 @@
+export * from "./pet";
 // Export your models here. Add one export per file
 export * from "./forge";
 export * from "./boss";

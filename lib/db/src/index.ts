@@ -43,3 +43,5 @@ export * from "./dealerCasino";
 export * from "./bounty";
 export * from "./kpTicket";
 export * from "./kpTicketPricing";
+export * from "./petRules";
+export * from "./pet";

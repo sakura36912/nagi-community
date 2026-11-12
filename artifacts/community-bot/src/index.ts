@@ -18,6 +18,8 @@ import { handleForgeButton } from "./commands/forge.js";
 import { handleBossButton } from "./commands/boss.js";
 import { handlePvpButton } from "./commands/pvp.js";
 import { startRpgRuntime } from "./lib/rpgRuntime.js";
+import { startPetRuntime } from "./lib/petRuntime.js";
+import { handlePetButton } from "./commands/pet.js";
 import {
   closeAllOpenSessions,
   getAllRankingSettings,
@@ -96,6 +98,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
   ],
 });
 
@@ -195,6 +198,7 @@ async function runEventReminderScheduler(): Promise<void> {
 client.once(Events.ClientReady, async (readyClient) => {
   logger.info(`Community Bot logged in as ${readyClient.user.tag}`);
   startRpgRuntime(client);
+  startPetRuntime(client);
   try {
     await ensureZombieSchema();
     startZombieRuntime(client);
@@ -521,6 +525,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith("pet:")) { await handlePetButton(interaction); return; }
       if (interaction.customId.startsWith("forge:")) { await handleForgeButton(interaction); return; }
       if (interaction.customId.startsWith("boss:")) { await handleBossButton(interaction); return; }
       if (interaction.customId.startsWith("pvp:")) { await handlePvpButton(interaction); return; }
