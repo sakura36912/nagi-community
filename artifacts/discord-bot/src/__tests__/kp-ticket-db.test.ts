@@ -5,6 +5,7 @@ import {
   ensureKpTicketSchema, getKpTicketSession, kpTicketPanelsTable, kpTicketSessionsTable, kpTicketSettingsTable,
   inventoryItemsTable, quoteKpTicket, settleKpTicket, shopItemsTable, transactionsTable, walletsTable, listPaidKpTicketOrders,
   type KpTicketSelection, type KpTicketSession,
+  deliverKpVipRoom, listKpVipOrders,
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 
@@ -45,12 +46,99 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
   }
   const settle = (session: KpTicketSession) => settleKpTicket(session.id, session.version, user, guild, channel, ["black", "white"]);
 
+  async function extraReady(ticket: string, selection: KpTicketSelection) {
+    const session = await createKpTicketSession(randomUUID(), guild, ticket, user);
+    selection.quote = quoteKpTicket(null, { vipPrice: 1, extensionPrice: 1 }, selection);
+    return advanceKpTicketSession(session, "confirm", selection);
+  }
+  const payExtra = (s: KpTicketSession) => settleKpTicket(s.id, s.version, user, guild, s.channelId, ["black", "white"]);
+  const vipSelection = (tier: "solo" | "shared"): KpTicketSelection => ({
+    castId: "test-cast", vip: true, extension: false, serviceVersion: 2, vipTier: tier,
+    ...(tier === "shared" ? { guestId: "guest" } : {}),
+  });
+
+  it.each([["solo", 200000], ["shared", 100000]] as const)("persists %s VIP once, without inventing drink inventory", async (tier, price) => {
+    const ticket = randomUUID();
+    await wallet(500000);
+    const order = await extraReady(ticket, vipSelection(tier));
+    const result = await Promise.all([payExtra(order), payExtra(order)]);
+    expect(result.map(r => r.status).sort()).toEqual(["already", "paid"]);
+    expect(await balance()).toBe(500000 - price);
+    const orders = await listKpVipOrders(guild, user);
+    expect(orders.some(o => o.id === order.id)).toBe(true);
+    expect((await listKpVipOrders(guild, "test-cast")).some(o => o.id === order.id)).toBe(true);
+    expect((await listKpVipOrders(guild, "guest")).some(o => o.id === order.id)).toBe(tier === "shared");
+    expect(await listKpVipOrders(guild, "outsider")).toHaveLength(0);
+    const rows = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${order.id}`));
+    expect(rows).toHaveLength(1); expect(rows[0]!.amount).toBe(-price);
+    const additional = await createAdditionalKpTicketSession(randomUUID(), guild, ticket, user);
+    expect(additional.phase).toBe("drink");
+    expect(additional.selection.vipActive).toBe(true);
+  });
+
+  it("charges extension-only once and retains the amount in deleted-ticket statements", async () => {
+    const ticket = randomUUID();
+    await wallet(200000);
+    const [base] = await db.insert(kpTicketSessionsTable).values({
+      id: randomUUID(), guildId: guild, channelId: ticket, userId: user, phase: "paid",
+      selection: { castId: "test-cast", vip: false, extension: false }, expiresAt: new Date(0), paidAt: new Date(),
+    }).returning();
+    const order = await extraReady(ticket, { castId: "test-cast", fixedCastId: "test-cast",
+      baseOrderId: base!.id, vip: false, extension: true, serviceVersion: 2 });
+    expect((await payExtra(order)).session.selection.quote!.total).toBe(50000);
+    expect((await payExtra(order)).status).toBe("already");
+    expect(await balance()).toBe(150000);
+    expect((await listPaidKpTicketOrders(guild, ticket)).find(o => o.id === order.id)!.selection.quote!.extensionPrice).toBe(50000);
+  });
+
+  it("rejects a forged base order and stops concurrent VIP double booking", async () => {
+    const ticket = randomUUID();
+    await wallet(500000);
+    const extension = await extraReady(ticket, { castId: "test-cast", fixedCastId: "test-cast", baseOrderId: "missing",
+      vip: false, extension: true, serviceVersion: 2 });
+    await expect(payExtra(extension)).rejects.toThrow("元の支払い済み");
+    expect(await balance()).toBe(500000);
+    const a = await extraReady(ticket, vipSelection("solo")), b = await extraReady(ticket, vipSelection("solo"));
+    const results = await Promise.allSettled([payExtra(a), payExtra(b)]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await balance()).toBe(300000);
+  });
+
+  it("checks fresh VIP history at payment, not the stale extension screen", async () => {
+    const ticket = randomUUID();
+    await wallet(500000);
+    const [base] = await db.insert(kpTicketSessionsTable).values({
+      id: randomUUID(), guildId: guild, channelId: ticket, userId: user, phase: "paid",
+      selection: { castId: "test-cast" }, expiresAt: new Date(0), paidAt: new Date(),
+    }).returning();
+    const extension = await extraReady(ticket, { castId: "test-cast", fixedCastId: "test-cast", baseOrderId: base!.id,
+      vip: false, extension: true, serviceVersion: 2, vipActive: false });
+    await payExtra(await extraReady(ticket, vipSelection("shared")));
+    await expect(payExtra(extension)).rejects.toThrow("延長");
+    expect(await balance()).toBe(400000);
+  });
+
+  it("serializes VIP room creation and reuses its persisted ID after a retry", async () => {
+    const ticket = randomUUID();
+    await wallet(500000);
+    const { session } = await payExtra(await extraReady(ticket, vipSelection("solo")));
+    let creates = 0;
+    const use = async (s: KpTicketSession) => s.selection.vipRoomId ?? (creates++, "synthetic-vip-room");
+    expect(await Promise.all([deliverKpVipRoom(session.id, guild, use), deliverKpVipRoom(session.id, guild, use)]))
+      .toEqual(["synthetic-vip-room", "synthetic-vip-room"]);
+    expect(creates).toBe(1);
+    expect((await listKpVipOrders(guild, undefined, "synthetic-vip-room"))[0]!.id).toBe(session.id);
+    await expect(deliverKpVipRoom(session.id, "other-guild", use)).rejects.toThrow("確認できません");
+    expect(await balance()).toBe(300000);
+  });
+
   it("inherits only this buyer's paid cast in this ticket and keeps it locked through payment", async () => {
     await wallet(5000);
     await settle(await ready());
     const order = await createAdditionalKpTicketSession(randomUUID(), guild, channel, user);
-    expect(order.phase).toBe("drink");
-    expect(order.selection).toEqual({ castId: "test-cast", fixedCastId: "test-cast", vip: false, extension: false });
+    expect(order.phase).toBe("vip");
+    expect(order.selection).toMatchObject({ castId: "test-cast", fixedCastId: "test-cast", vip: false, extension: false,
+      serviceVersion: 2, vipActive: false });
     await expect(createAdditionalKpTicketSession(randomUUID(), guild, channel, "other")).rejects.toThrow("支払い済み");
     await expect(createAdditionalKpTicketSession(randomUUID(), guild, "other", user)).rejects.toThrow("支払い済み");
     await expect(createAdditionalKpTicketSession(randomUUID(), `${guild}-other`, channel, user)).rejects.toThrow("支払い済み");

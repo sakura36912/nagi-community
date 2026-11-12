@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, lt, or, sql } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
 import { db } from "./index";
 import { inventoryItemsTable, shopItemsTable, transactionsTable, walletsTable } from "./schema/economy";
@@ -67,7 +67,8 @@ export async function isKpTicketPanel(messageId: string, guildId: string, channe
 
 export async function createKpTicketSession(id: string, guildId: string, channelId: string, userId: string) {
   const [session] = await db.insert(kpTicketSessionsTable).values({
-    id, guildId, channelId, userId, expiresAt: new Date(Date.now() + 20 * 60_000),
+    id, guildId, channelId, userId, selection: { serviceVersion: 2 },
+    expiresAt: new Date(Date.now() + 20 * 60_000),
   }).returning();
   return session!;
 }
@@ -82,9 +83,13 @@ export async function createAdditionalKpTicketSession(id: string, guildId: strin
     throw new KpTicketError("このチケットでご自身が支払い済みの注文がありません。先に「注文する」から注文してください。");
   }
   const castId = previous.selection.castId;
+  const paid = await listPaidKpTicketOrders(guildId, channelId);
+  const vipActive = paid.some(order => order.selection.vip
+    && (order.userId === userId || order.selection.guestId === userId));
   const [session] = await db.insert(kpTicketSessionsTable).values({
-    id, guildId, channelId, userId, phase: "drink",
-    selection: { castId, fixedCastId: castId, vip: false, extension: false },
+    id, guildId, channelId, userId, phase: vipActive ? "drink" : "vip",
+    selection: { castId, fixedCastId: castId, vip: false, extension: false,
+      serviceVersion: 2, baseOrderId: previous.id, vipActive },
     expiresAt: new Date(Date.now() + 20 * 60_000),
   }).returning();
   return session!;
@@ -117,6 +122,10 @@ export async function advanceKpTicketSession(session: KpTicketSession, phase: Kp
     || selection.fixedCastId !== session.selection.fixedCastId)) {
     throw new KpTicketError("追加注文の指名キャストは変更できません。");
   }
+  if (session.selection.fixedCastId && (selection.baseOrderId !== session.selection.baseOrderId
+    || selection.vipActive !== session.selection.vipActive)) {
+    throw new KpTicketError("追加注文の利用条件は変更できません。");
+  }
   const [next] = await db.update(kpTicketSessionsTable).set({ phase, selection, version: session.version + 1 })
     .where(and(eq(kpTicketSessionsTable.id, session.id), eq(kpTicketSessionsTable.userId, session.userId),
       eq(kpTicketSessionsTable.phase, session.phase), eq(kpTicketSessionsTable.version, session.version),
@@ -129,6 +138,8 @@ export async function settleKpTicket(
   id: string, version: number, userId: string, guildId: string, channelId: string, validatedRoleIds: string[],
 ): Promise<{ status: "paid" | "already" | "changed"; session: KpTicketSession }> {
   return db.transaction(async tx => {
+    // One ticket lock also serializes VIP purchases and extensions from different sessions.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`kp-ticket:${guildId}:${channelId}`}))`);
     const [session] = await tx.select().from(kpTicketSessionsTable)
       .where(eq(kpTicketSessionsTable.id, id)).for("update");
     if (!session || session.userId !== userId || session.guildId !== guildId || session.channelId !== channelId) {
@@ -147,6 +158,27 @@ export async function settleKpTicket(
     }
     if (JSON.stringify([...settings.castRoleIds].sort()) !== JSON.stringify([...validatedRoleIds].sort())) {
       throw new KpTicketError("キャスト対象ロールが変更されました。最初から選び直してください。");
+    }
+    const s = session.selection;
+    if (s.fixedCastId) {
+      const [base] = await tx.select().from(kpTicketSessionsTable).where(and(
+        eq(kpTicketSessionsTable.id, s.baseOrderId ?? ""),
+        eq(kpTicketSessionsTable.guildId, guildId), eq(kpTicketSessionsTable.channelId, channelId),
+        eq(kpTicketSessionsTable.userId, userId), eq(kpTicketSessionsTable.phase, "paid"),
+      ));
+      if (!base || base.selection.castId !== s.castId) throw new KpTicketError("追加注文の元の支払い済み注文を確認できません。");
+    }
+    if (s.vip || s.extension) {
+      const paid = await tx.select().from(kpTicketSessionsTable).where(and(
+        eq(kpTicketSessionsTable.guildId, guildId), eq(kpTicketSessionsTable.channelId, channelId),
+        eq(kpTicketSessionsTable.phase, "paid"),
+      ));
+      const customers = [userId, ...(s.vipTier === "shared" ? [s.guestId] : [])];
+      if (paid.some(order => order.selection.vip && customers.some(id => id
+        && (order.userId === id || order.selection.guestId === id)))) {
+        throw new KpTicketError("VIP利用者はVIPの重複購入・延長を行えません。");
+      }
+      if (s.vip && s.vipTier === "shared" && s.guestId === userId) throw new KpTicketError("同伴者に購入者本人は指定できません。");
     }
     const quote = quoteKpTicket(item ?? null, settings, session.selection);
     if (!isDeepStrictEqual(quote, session.selection.quote)) {
@@ -174,6 +206,35 @@ export async function settleKpTicket(
     const [paid] = await tx.update(kpTicketSessionsTable).set({ phase: "paid", paidAt: new Date() })
       .where(eq(kpTicketSessionsTable.id, id)).returning();
     return { status: "paid", session: paid! };
+  });
+}
+
+/** Paid VIP entitlement only. A ticket must still exist; the Discord caller checks that live. */
+export async function listKpVipOrders(guildId: string, memberId?: string, roomId?: string) {
+  return db.select().from(kpTicketSessionsTable).where(and(
+    eq(kpTicketSessionsTable.guildId, guildId), eq(kpTicketSessionsTable.phase, "paid"),
+    sql`${kpTicketSessionsTable.selection}->>'serviceVersion' = '2'`,
+    sql`${kpTicketSessionsTable.selection}->>'vip' = 'true'`,
+    memberId ? or(eq(kpTicketSessionsTable.userId, memberId),
+      sql`${kpTicketSessionsTable.selection}->>'guestId' = ${memberId}`,
+      sql`${kpTicketSessionsTable.selection}->>'castId' = ${memberId}`) : undefined,
+    roomId ? sql`${kpTicketSessionsTable.selection}->>'vipRoomId' = ${roomId}` : undefined,
+  )).orderBy(desc(kpTicketSessionsTable.paidAt));
+}
+
+/** Persist room association across restarts; serialize buyer/guest/cast arriving together. */
+export async function deliverKpVipRoom(id: string, guildId: string, useRoom: (order: KpTicketSession) => Promise<string>) {
+  return db.transaction(async tx => {
+    const [order] = await tx.select().from(kpTicketSessionsTable).where(and(
+      eq(kpTicketSessionsTable.id, id), eq(kpTicketSessionsTable.guildId, guildId),
+    )).for("update");
+    if (!order || order.phase !== "paid" || !order.selection.vip || order.selection.serviceVersion !== 2) {
+      throw new KpTicketError("支払い済みVIPを確認できませんでした。");
+    }
+    const vipRoomId = await useRoom(order);
+    await tx.update(kpTicketSessionsTable).set({ selection: { ...order.selection, vipRoomId } })
+      .where(eq(kpTicketSessionsTable.id, id));
+    return vipRoomId;
   });
 }
 

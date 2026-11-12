@@ -44,6 +44,7 @@ import { getTavernChannelNames } from "../lib/chestTracker";
 import { logger } from "../lib/logger";
 import { isBeachVoiceChannel } from "../lib/vcRewardEligibility";
 import { isVcStreamingEnabled, toggleVcStreaming } from "../lib/vcStreaming";
+import { handleKpVipHubJoin, handleKpVipHubLeave } from "../lib/kpVipVc";
 
 // ─── Hub VC panel constants ──────────────────────────────────────────────────
 
@@ -633,6 +634,7 @@ export function hubVoiceOverwrites(source: VoiceChannel) {
  */
 export async function handleHubJoin(newState: VoiceState): Promise<void> {
   if (!newState.channelId || !newState.member) return;
+  if (await handleKpVipHubJoin(newState)) return;
   logger.info(`[vcHub] handleHubJoin called: channelId=${newState.channelId} member=${newState.member.id}`);
 
   const hub = await getHubByChannelId(newState.channelId);
@@ -842,6 +844,7 @@ export async function refreshExistingBeachHubPanels(
  */
 export async function handleHubLeave(oldState: VoiceState): Promise<void> {
   if (!oldState.channelId) return;
+  if (await handleKpVipHubLeave(oldState)) return;
 
   const session = await getHubSession(oldState.channelId);
   if (!session) return;

@@ -119,6 +119,7 @@ import { handleKpTicketInteraction, handleKpTicketSalesDate } from "./commands/k
 import { handleRetiredBankRpgInteraction, startBankRpgCleanup } from "./lib/rpgCommandMigration";
 import { startRetiredBankCommandCleanup } from "./lib/retiredBankCommands";
 import { KP_TICKET_PREFIX } from "./lib/kpTicketUi";
+import { KP_VIP_PREFIX, handleKpVipControl } from "./lib/kpVipVc";
 import {
   getExpiredSchedules,
   getSchedulesExpiringSoon,
@@ -2557,6 +2558,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if ((interaction.isButton() || interaction.isModalSubmit()) && interaction.customId.startsWith(KP_VIP_PREFIX)) {
+      await handleKpVipControl(interaction);
+      return;
+    }
     if ((interaction.isButton() || interaction.isModalSubmit())
       && (interaction.customId.startsWith(`${KP_TICKET_PREFIX}sales-date:`)
         || interaction.customId.startsWith(`${KP_TICKET_PREFIX}sales-modal:`))) {

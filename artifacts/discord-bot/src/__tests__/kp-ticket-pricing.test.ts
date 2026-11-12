@@ -7,6 +7,32 @@ const item = { id: 1, name: "ドリンク", price: 100, category: "kp", effectTy
 const selection: KpTicketSelection = { castId: "cast", itemId: 1, quantity: 3, vip: false, extension: false };
 
 describe("KP ticket pricing and paging", () => {
+  const settings = { vipPrice: null, extensionPrice: null };
+  const vip = (tier: "solo" | "shared"): KpTicketSelection => ({
+    castId: "cast", vip: true, extension: false, serviceVersion: 2, vipTier: tier,
+    ...(tier === "shared" ? { guestId: "guest" } : {}),
+  });
+  it.each([["shared", 100000], ["solo", 200000]] as const)("charges the fixed %s VIP rate, not old settings", (tier, price) => {
+    expect(quoteKpTicket(null, settings, vip(tier))).toMatchObject({ itemId: null, quantity: 0, vipPrice: price, total: price });
+    expect(quoteKpTicket(item, { vipPrice: 1, extensionPrice: 1 }, { ...selection, ...vip(tier) }).total).toBe(price + 300);
+  });
+  it("charges 50,000 only for additional extension with or without drinks", () => {
+    const extension: KpTicketSelection = { castId: "cast", fixedCastId: "cast", baseOrderId: "paid",
+      serviceVersion: 2, vip: false, extension: true };
+    expect(quoteKpTicket(null, settings, extension)).toMatchObject({ total: 50000, extensionPrice: 50000, vipPrice: 0 });
+    expect(quoteKpTicket(item, settings, { ...selection, ...extension }).total).toBe(50300);
+    expect(() => quoteKpTicket(null, settings, { ...extension, fixedCastId: undefined })).toThrow("追加注文");
+    expect(() => quoteKpTicket(null, settings, { ...extension, baseOrderId: undefined })).toThrow("追加注文");
+    expect(() => quoteKpTicket(null, settings, { ...extension, vipActive: true })).toThrow("延長を追加できません");
+    expect(() => quoteKpTicket(null, settings, { ...extension, vip: true, vipTier: "solo" })).toThrow("延長を追加できません");
+  });
+  it("requires a distinct companion for shared VIP and rejects malformed extras", () => {
+    expect(() => quoteKpTicket(null, settings, { ...vip("shared"), guestId: undefined })).toThrow("お客様");
+    expect(() => quoteKpTicket(null, settings, { ...vip("shared"), guestId: "cast" })).toThrow("お客様");
+    expect(() => quoteKpTicket(null, settings, { ...vip("solo"), vipActive: true })).toThrow("重複");
+    expect(() => quoteKpTicket(null, settings, { ...vip("solo"), vipTier: undefined })).toThrow("選び直し");
+    expect(() => quoteKpTicket(null, settings, { ...vip("solo"), quantity: 1 })).toThrow("不完全");
+  });
   it("quotes additional VIP or extension without forcing a drink purchase", () => {
     const extra = { castId: "cast", fixedCastId: "cast", vip: true, extension: true };
     expect(() => quoteKpTicket(null, { vipPrice: 500, extensionPrice: 200 }, extra)).toThrow("受付は終了");

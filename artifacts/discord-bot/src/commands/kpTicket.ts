@@ -8,6 +8,7 @@ import {
   advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, deliverKpTicketLog,
   getKpTicketSession, getKpTicketSettings, isKpDrink, isKpTicketPanel, KpTicketError,
   quoteKpTicket, registerKpTicketPanel, settleKpTicket, listPaidKpTicketOrders,
+  KP_VIP_PRICES, KP_EXTENSION_PRICE, KP_VIP_HUB_ID,
   type KpTicketSession, type KpTicketSettings,
 } from "@workspace/db";
 import { getGuildSettings, getShopItem, listShopItems } from "../lib/economy";
@@ -21,24 +22,18 @@ import { kpCastSales } from "../lib/kpCastSales";
 import { kpCustomers } from "../lib/kpCustomers";
 import { grantKpTicketCastAccess } from "../lib/kpTicketAccess";
 import { kpBusinessDay, latestKpBusinessDate, type KpBusinessDay } from "../lib/kpBusinessDay";
+import { validateKpVipSource } from "../lib/kpVipVc";
 
 export const kpTicketPanelSubcommand = new SlashCommandSubcommandBuilder()
   .setName("ticket-panel").setDescription("チケット内にKPshopパネルを設置します（夜鴉・黒兵・管理者）")
   .addRoleOption(o => o.setName("black_role").setDescription("黒真珠ロール（省略時は名前で検索）"))
   .addRoleOption(o => o.setName("white_role").setDescription("白真珠ロール（省略時は名前で検索）"));
 export const kpTicketPricesSubcommand = new SlashCommandSubcommandBuilder()
-  .setName("ticket-prices").setDescription("VIP・延長料金を後から設定します。引数なしで現在の設定を表示（管理者）")
-  .addIntegerOption(o => o.setName("vip").setDescription("VIP追加料金（0は無料。省略で変更なし）").setMinValue(0).setMaxValue(2_147_483_647))
-  .addIntegerOption(o => o.setName("extension").setDescription("延長1回分の追加料金（0は無料。省略で変更なし）").setMinValue(0).setMaxValue(2_147_483_647))
-  .addStringOption(o => o.setName("unset").setDescription("指定した料金を未設定に戻す（他の料金指定と併用不可）").addChoices(
-    { name: "VIP", value: "vip" }, { name: "延長", value: "extension" }, { name: "両方", value: "all" },
-  ));
+  .setName("ticket-prices").setDescription("VIP2種類と通常利用の延長の固定料金を表示します（管理者）");
 export const kpCustomersSubcommand = new SlashCommandSubcommandBuilder()
   .setName("customers").setDescription("KP島の支払い済み利用顧客・履歴を確認（夜鴉・黒兵・管理者）")
   .addUserOption(o => o.setName("user").setDescription("指定すると、この顧客の利用履歴を表示"))
   .addIntegerOption(o => o.setName("page").setDescription("表示ページ（省略時は1）").setMinValue(1));
-
-const priceLabel = (price: number | null, currency: string) => price === null ? "未設定（希望時は支払い不可）" : `${price.toLocaleString()}${currency}`;
 
 function canPost(interaction: ButtonInteraction | ChatInputCommandInteraction | StringSelectMenuInteraction) {
   const channel = interaction.channel, me = interaction.guild?.members.me;
@@ -97,15 +92,8 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
     if (subcommand === "ticket-prices") {
       const vip = interaction.options.getInteger("vip"), extension = interaction.options.getInteger("extension");
       const unset = interaction.options.getString("unset");
-      if (unset && (vip !== null || extension !== null)) throw new KpTicketError("未設定に戻す操作と料金指定は分けて実行してください。");
-      let settings = await getKpTicketSettings(interaction.guildId);
-      const patch: { vipPrice?: number | null; extensionPrice?: number | null } = {};
-      if (vip !== null) patch.vipPrice = vip;
-      if (extension !== null) patch.extensionPrice = extension;
-      if (unset === "vip" || unset === "all") patch.vipPrice = null;
-      if (unset === "extension" || unset === "all") patch.extensionPrice = null;
-      if (Object.keys(patch).length) settings = await configureKpTicket(interaction.guildId, patch);
-      await interaction.editReply(`VIP料金: ${priceLabel(settings?.vipPrice ?? null, currencyName)}\n延長1回分: ${priceLabel(settings?.extensionPrice ?? null, currencyName)}\n未設定と0（無料）は区別されます。`);
+      if (vip !== null || extension !== null || unset) throw new KpTicketError("料金は固定です。VIP（お客様2人）は10万、VIP（お客様1人）は20万、通常利用の延長は5万です。旧料金設定は適用しません。");
+      await interaction.editReply(`VIP（お客様2人・キャスト1人）: ${KP_VIP_PRICES.shared.toLocaleString()}${currencyName}\nVIP（お客様1人・キャスト1人）: ${KP_VIP_PRICES.solo.toLocaleString()}${currencyName}\n延長1回: ${KP_EXTENSION_PRICE.toLocaleString()}${currencyName}（通常利用の追加注文のみ。VIP延長不可）`);
       return;
     }
     if (!interaction.channel || !(interaction.channel.type === ChannelType.GuildText || interaction.channel.isThread()) || !canPost(interaction)) {
@@ -222,14 +210,39 @@ export async function renderKpTicket(interaction: TicketInteraction, session: Kp
       break;
     }
     case "vip":
+      await interaction.editReply({ content, embeds: [], components: [
+        ticketMenu(session, "vip", "VIPの利用方法を選択（VIPは延長不可）", [
+          { label: "通常利用（VIPなし）", value: "none" },
+          { label: "VIP：お客様2人・キャスト1人 — 100,000＄", value: "shared", description: "購入者が10万＄を支払い、同伴のお客様を1人選びます。" },
+          { label: "VIP：お客様1人・キャスト1人 — 200,000＄", value: "solo" },
+        ]), ticketControls(session),
+      ] });
+      break;
+    case "guest": {
+      const members = await interaction.guild!.members.fetch();
+      const candidates = [...members.values()].filter(m => !m.user.bot && m.id !== session.userId && m.id !== session.selection.castId);
+      if (!candidates.length) throw new KpTicketError("同伴できるお客様がいません。VIPを選び直してください。");
+      await interaction.editReply({ content, embeds: [], components: pagedTicketMenu(session, "guest", "同伴のお客様を1人選択", candidates.map(m => ({
+        label: m.displayName, value: m.id, description: `ユーザーID: ${m.id}`,
+      })), page) });
+      break;
+    }
     case "extension":
-      throw new KpTicketError("注文手順が変更されました。「最初から選び直す」か新しい注文からやり直してください。");
+      await interaction.editReply({ content, embeds: [], components: [
+        ticketMenu(session, "extension", "通常利用の延長を追加しますか？", [
+          { label: "延長しない", value: "no" }, { label: "延長1回 — 50,000＄", value: "yes" },
+        ]), ticketControls(session),
+      ] });
+      break;
     case "drink": {
       const items = (await listShopItems(session.guildId, KP_SHOP_CATEGORY)).filter(isKpDrink);
-      if (!items.length) throw new KpTicketError("KPshopの通常ドリンク商品が未登録です。管理者が /shop add で登録してください。");
+      if (!items.length && !session.selection.vip && !session.selection.extension) throw new KpTicketError("KPshopの通常ドリンク商品が未登録です。管理者が /shop add で登録してください。");
       const components = items.length ? pagedTicketMenu(session, "drink", "ドリンクを選択", items.map(item => ({
         label: item.name, value: String(item.id), description: `${item.price.toLocaleString()}${currencyName}`,
       })), page) : [ticketControls(session)];
+      if (session.selection.vip || session.selection.extension) components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(ticketId("extras-only", session)).setLabel("ドリンクなしで確認へ").setStyle(ButtonStyle.Primary),
+      ));
       await interaction.editReply({ content, embeds: [], components });
       break;
     }
@@ -266,7 +279,9 @@ async function postPaidReceipt(interaction: TicketInteraction, session: KpTicket
   }
   await interaction.editReply({
     content: `${already ? "この注文は支払い済みです。二重の引き落としは行っていません。" : "支払いが完了しました。"}\n`
-      + (logged ? "購入ログをこのチケット内に記録しました。" : "購入ログの投稿に失敗しました。権限を確認後、下の「ログを再送」から再送できます。再決済はしません。"),
+      + (logged ? "購入ログをこのチケット内に記録しました。" : "購入ログの投稿に失敗しました。権限を確認後、下の「ログを再送」から再送できます。再決済はしません。")
+      + (session.selection.vip && session.selection.serviceVersion === 2
+        ? `\nVIP転送元 <#${KP_VIP_HUB_ID}> に入室すると専用VCへ転送します。初期は非公開です。購入者がVC内パネルで公開・非公開・名前を変更できます。VIPは延長不可です。` : ""),
     embeds: [ticketSummary(session, currencyName, true)],
     components: logged ? [] : [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(ticketId("retry-log", session)).setLabel("ログを再送（再決済なし）").setStyle(ButtonStyle.Secondary),
@@ -339,22 +354,38 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
     }
     if (action === "reset") {
       const fixedCastId = session.selection.fixedCastId;
-      await renderKpTicket(interaction, await advanceKpTicketSession(session, fixedCastId ? "drink" : "cast",
-        fixedCastId ? { castId: fixedCastId, fixedCastId, vip: false, extension: false } : {}));
+      await renderKpTicket(interaction, await advanceKpTicketSession(session, fixedCastId ? (session.selection.vipActive ? "drink" : "vip") : "cast",
+        fixedCastId ? { castId: fixedCastId, fixedCastId, vip: false, extension: false, serviceVersion: 2,
+          baseOrderId: session.selection.baseOrderId, vipActive: session.selection.vipActive } : { serviceVersion: 2 }));
       return;
     }
-    if ((action === "cast-page" && session.phase === "cast") || (action === "drink-page" && session.phase === "drink")) {
+    if ((action === "cast-page" && session.phase === "cast") || (action === "drink-page" && session.phase === "drink")
+      || (action === "guest-page" && session.phase === "guest")) {
       await renderKpTicket(interaction, session, page);
       return;
     }
     const settings = await currentSettings(session.guildId);
-    if (["vip", "extension", "extras-only"].includes(action ?? "") || session.selection.vip || session.selection.extension) {
-      throw new KpTicketError("VIP・延長の受付は終了しました。「最初から選び直す」でドリンクを選び直してください。引き落としは行っていません。");
+    if ((session.selection.vip || session.selection.extension) && session.selection.serviceVersion !== 2) {
+      throw new KpTicketError("以前のVIP・延長の受付は終了しました。「最初から選び直す」で新料金を選び直してください。");
+    }
+    if (action === "extras-only" && session.phase === "drink" && interaction.isButton()) {
+      const selection = { ...session.selection, itemId: undefined, quantity: undefined };
+      selection.quote = quoteKpTicket(null, settings, selection);
+      await renderKpTicket(interaction, await advanceKpTicketSession(session, "confirm", selection));
+      return;
     }
     if (action === "confirm" && session.phase === "confirm" && interaction.isButton()) {
       if (!canPost(interaction)) throw new KpTicketError("チケット内に購入ログを送信できません。権限を確認してください。引き落としは行っていません。");
       const cast = await checkCast(interaction.guild, settings, session.selection.castId!);
       await grantKpTicketCastAccess(interaction, cast);
+      if (session.selection.vip) {
+        await validateKpVipSource(interaction.guild);
+        if (session.selection.vipTier === "shared") {
+          const guest = await interaction.guild.members.fetch({ user: session.selection.guestId!, force: true }).catch(() => null);
+          if (!guest || guest.user.bot || guest.id === interaction.user.id || guest.id === cast.id) throw new KpTicketError("同伴のお客様を確認できません。最初から選び直してください。");
+          await grantKpTicketCastAccess(interaction, guest);
+        }
+      }
       const result = await settleKpTicket(session.id, version, interaction.user.id, interaction.guildId, interaction.channelId, settings.castRoleIds);
       if (result.status === "changed") {
         await renderKpTicket(interaction, result.session, 0, "商品または追加料金が変更されたため、引き落としていません。新しい金額を確認し、もう一度確定してください。");
@@ -376,7 +407,29 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         notice = "指名キャストをこのチケットに追加しました。";
         selection.vip = false;
         selection.extension = false;
-        next = "drink";
+        selection.serviceVersion = 2;
+        next = "vip";
+        break;
+      case "vip":
+        if (selection.vipActive) throw new KpTicketError("VIP利用者はVIPの重複購入・延長を行えません。");
+        if (!["none", "shared", "solo"].includes(value ?? "")) throw new KpTicketError("VIPの種類を選択してください。");
+        selection.serviceVersion = 2;
+        selection.vip = value !== "none";
+        selection.vipTier = value === "shared" || value === "solo" ? value : undefined;
+        selection.guestId = undefined;
+        selection.extension = false;
+        next = value === "shared" ? "guest" : value === "none" && selection.fixedCastId ? "extension" : "drink";
+        break;
+      case "guest": {
+        const guest = value ? await interaction.guild.members.fetch({ user: value, force: true }).catch(() => null) : null;
+        if (!guest || guest.user.bot || guest.id === session.userId || guest.id === selection.castId) throw new KpTicketError("購入者・キャスト・Bot以外のお客様を選択してください。");
+        selection.guestId = guest.id; next = "drink";
+        break;
+      }
+      case "extension":
+        if (!selection.fixedCastId || !selection.baseOrderId || selection.vip || selection.vipActive) throw new KpTicketError("延長は通常利用の追加注文のみです。VIPは延長できません。");
+        if (value !== "yes" && value !== "no") throw new KpTicketError("延長の有無を選択してください。");
+        selection.extension = value === "yes"; next = "drink";
         break;
       case "drink": {
         const item = await getShopItem(session.guildId, Number(value));
