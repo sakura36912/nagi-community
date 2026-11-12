@@ -8,23 +8,28 @@ import {
   type PetRarity, type PetItem, type PetSettingKey,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { handlePetTreatment, proposePetTreatment } from "../lib/petClinic";
 
 const rarityChoices = PET_RARITIES.map(value => ({ name: PET_RARITY_NAMES[value], value }));
-const shopChoices = [{ name: "ノーマル卵", value: "normal" }, { name: "レア卵", value: "rare" }, { name: "エサ", value: "food" }];
+const shopChoices = [{ name: "ノーマル卵", value: "normal" }, { name: "レア卵", value: "rare" },
+  { name: "エサ", value: "food" }, { name: "おもちゃ", value: "toy" }];
 const rewardChoices = [...rarityChoices.map(c => ({ name: `${c.name}卵`, value: c.value })),
-  { name: "エサ", value: "food" }, { name: "クエスト経験値", value: "xp" }];
-const adminCommands = new Set(["grant", "egg", "food", "delete", "price", "config", "species", "reward"]);
+  { name: "エサ", value: "food" }, { name: "おもちゃ", value: "toy" }, { name: "クエスト経験値", value: "xp" }];
+const adminCommands = new Set(["grant", "egg", "food", "delete", "price", "config", "species", "reward", "panel"]);
 type Interaction = ChatInputCommandInteraction | ButtonInteraction;
 const data = new SlashCommandBuilder().setName("pet").setDescription("1人1匹のペットを卵から育てます").setDMPermission(false)
   .addSubcommand(s => s.setName("info").setDescription("ペットの状態と今日のお世話回数を確認"))
-  .addSubcommand(s => s.setName("inventory").setDescription("所持している卵とエサを確認"))
+  .addSubcommand(s => s.setName("inventory").setDescription("所持している卵・エサ・おもちゃを確認"))
   .addSubcommand(s => s.setName("hatch").setDescription("所持している卵を選んで即時孵化")
     .addStringOption(o => o.setName("egg").setDescription("孵化する卵").setRequired(true).addChoices(...rarityChoices)))
   .addSubcommand(s => s.setName("feed").setDescription("エサを1個使います"))
   .addSubcommand(s => s.setName("pet").setDescription("1日1回撫でます（日本時間）"))
-  .addSubcommand(s => s.setName("play").setDescription("1日3回遊べます（日本時間）"))
+  .addSubcommand(s => s.setName("play").setDescription("おもちゃ1個を使い遊びます（1日3回・日本時間）"))
   .addSubcommand(s => s.setName("release").setDescription("確認後にペットを手放します（取り消せません）"))
   .addSubcommand(s => s.setName("shop").setDescription("卵・エサの価格を確認"))
+  .addSubcommand(s => s.setName("panel").setDescription("管理者：卵・エサ・おもちゃのショップパネルを設置"))
+  .addSubcommand(s => s.setName("treat").setDescription("獣医限定：弱っているペットの治療を提案")
+    .addUserOption(o => o.setName("user").setDescription("ペットの飼い主").setRequired(true)))
   .addSubcommand(s => s.setName("buy").setDescription("購入内容と価格を確認してから支払います")
     .addStringOption(o => o.setName("item").setDescription("商品").setRequired(true).addChoices(...shopChoices))
     .addIntegerOption(o => o.setName("quantity").setDescription("数量").setMinValue(1).setMaxValue(1000)))
@@ -71,6 +76,17 @@ function confirmation(customId: string, label: string, danger = false, cancelId 
     new ButtonBuilder().setCustomId(cancelId).setLabel("キャンセル").setStyle(ButtonStyle.Secondary),
   )];
 }
+async function showPetPurchase(i: Interaction, guildId: string, item: PetItem, quantity: number) {
+  if (!shopChoices.some(c => c.value === item)) throw new PetError("販売対象ではありません。");
+  const s = await getPetSettings(guildId), price = petSetting(s, `${item}_price` as PetSettingKey);
+  if (item !== "food" && item !== "toy" && !petSpecies(s, item).length) throw new PetError("この卵のペット種類が未登録です。販売を停止しています。");
+  if (price * quantity > 2_147_483_647) throw new PetError("購入合計が上限を超えています。数量を減らしてください。");
+  const expires = Math.floor(Date.now() / 1000) + 120;
+  const label = shopChoices.find(c => c.value === item)!.name;
+  await i.editReply({ content: `${label} ×${quantity}\n単価 $${price.toLocaleString()} / 合計 **$${(price * quantity).toLocaleString()}**\n銀行の共有残高から引き落とします。確認は2分間有効です。`,
+    components: confirmation(`pet:buy:${i.user.id}:${item}:${quantity}:${price}:${expires}:${i.id}`, "支払って購入",
+      false, `pet:cancelbuy:${i.user.id}:${i.id}`) });
+}
 async function errorReply(i: Interaction, e: unknown) {
   if (!(e instanceof PetError)) logger.error("[pet] Operation failed", e);
   await i.editReply({ content: e instanceof PetError ? e.message : "ペットの処理に失敗しました。状態を /pet info・inventory で確認してください。同じ購入確認を再実行しても二重課金されません。",
@@ -83,6 +99,20 @@ export async function executePet(i: ChatInputCommandInteraction) {
     const guildId = await access(i, adminCommands.has(sub));
     const userId = i.user.id;
     let text = "";
+    if (sub === "treat") { await proposePetTreatment(i); return; }
+    if (sub === "panel") {
+      const channel = i.channel;
+      if (!channel || !("send" in channel)) throw new PetError("パネルを送信できるチャンネルで操作してください。");
+      await channel.send({
+        embeds: [new EmbedBuilder().setTitle("ペットショップ").setColor(0x68b88c)
+          .setDescription("卵・エサ・おもちゃを販売しています。\nボタンで1個の購入確認を開きます。押すだけでは引き落としません。\n最新の価格は確認画面に表示します。未設定の商品は購入できません。\nまとめ買いは /pet buy から操作できます。")],
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(...shopChoices.map(c =>
+          new ButtonBuilder().setCustomId(`pet:shop:${c.value}`).setLabel(c.name).setStyle(ButtonStyle.Primary)))],
+        allowedMentions: { parse: [] },
+      });
+      await i.editReply("ペットショップパネルを設置しました。");
+      return;
+    }
     if (sub === "info" || sub === "inventory") {
       const a = await getPetAccount(guildId, userId);
       const p = a.pet;
@@ -93,10 +123,14 @@ export async function executePet(i: ChatInputCommandInteraction) {
           { name: "レベル・経験値", value: `Lv${p.level} / ${p.xp.toLocaleString()} XP`, inline: true },
           { name: "満腹度", value: `${p.hunger}/100${p.hunger === 0 ? "（空腹）" : ""}`, inline: true },
           { name: "親密度", value: `${p.bond}/100`, inline: true },
+          { name: "健康状態", value: p.weak
+            ? `弱っています（${p.weak.reason === "both" ? "エサ・遊び不足" : p.weak.reason === "feed" ? "エサ不足" : "遊び不足"}）\n獣医へ治療を依頼してください。`
+            : "弱った状態ではありません。", inline: false },
           { name: "誕生日", value: `<t:${Math.floor(p.bornAt / 1000)}:f>`, inline: true },
           { name: "今日のお世話（日本時間）", value: `撫でる ${a.petsToday}/1回 / 遊ぶ ${a.playsToday}/3回` },
           { name: "オーナー・個体ID", value: `<@${userId}>\n${p.id}` });
-      } else embed.setDescription([...PET_RARITIES.map(r => `${PET_RARITY_NAMES[r]}卵：${a.eggs[r] ?? 0}個`), `エサ：${a.food}個`].join("\n"));
+      } else embed.setDescription([...PET_RARITIES.map(r => `${PET_RARITY_NAMES[r]}卵：${a.eggs[r] ?? 0}個`),
+        `エサ：${a.food}個`, `おもちゃ：${a.toys ?? 0}個`].join("\n"));
       await i.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
       return;
     }
@@ -104,7 +138,7 @@ export async function executePet(i: ChatInputCommandInteraction) {
       const s = await getPetSettings(guildId);
       const lines = sub === "shop" ? shopChoices.map(c => {
         const price = s[`${c.value}_price` as PetSettingKey];
-        const missing = c.value !== "food" && !petSpecies(s, c.value as PetRarity).length;
+        const missing = c.value !== "food" && c.value !== "toy" && !petSpecies(s, c.value as PetRarity).length;
         return `${c.name}：${price === undefined ? "価格未設定（販売停止）" : `$${price.toLocaleString()}`}${missing ? " / 種類未登録（販売停止）" : ""}`;
       }) : Object.entries(PET_SETTING_LABELS).map(([key, label]) =>
         `${label}：${s[key as PetSettingKey] ?? (key === "level_cap" ? 100 : "未設定")}`);
@@ -116,20 +150,14 @@ export async function executePet(i: ChatInputCommandInteraction) {
     else if (sub === "feed" || sub === "pet" || sub === "play") text = await carePet(i.id, guildId, userId, sub);
     else if (sub === "buy") {
       const item = i.options.getString("item", true) as PetItem, quantity = i.options.getInteger("quantity") ?? 1;
-      const s = await getPetSettings(guildId), price = petSetting(s, `${item}_price` as PetSettingKey);
-      if (item !== "food" && !petSpecies(s, item).length) throw new PetError("この卵のペット種類が未登録です。販売を停止しています。");
-      if (price * quantity > 2_147_483_647) throw new PetError("購入合計が上限を超えています。数量を減らしてください。");
-      const expires = Math.floor(Date.now() / 1000) + 120;
-      await i.editReply({ content: `${item === "food" ? "エサ" : PET_RARITY_NAMES[item] + "卵"} ×${quantity}\n単価 $${price.toLocaleString()} / 合計 **$${(price * quantity).toLocaleString()}**\n銀行の共有残高から引き落とします。確認は2分間有効です。`,
-        components: confirmation(`pet:buy:${userId}:${item}:${quantity}:${price}:${expires}:${i.id}`, "支払って購入",
-          false, `pet:cancelbuy:${userId}:${i.id}`) });
+      await showPetPurchase(i, guildId, item, quantity);
       return;
     } else if (sub === "release" || sub === "delete") {
       const target = sub === "delete" ? i.options.getUser("user", true) : i.user;
       const a = await getPetAccount(guildId, target.id);
       if (!a.pet) throw new PetError("対象のペットはいません。");
       const expires = Math.floor(Date.now() / 1000) + 120;
-      await i.editReply({ content: `「${a.pet.name}」を手放しますか？育成データは取り消せません。卵とエサは残ります。`,
+      await i.editReply({ content: `「${a.pet.name}」を手放しますか？育成データは取り消せません。卵・エサ・おもちゃは残ります。`,
         components: confirmation(`pet:remove:${userId}:${target.id}:${a.pet.id}:${expires}`, "手放す（取り消し不可）", true),
         allowedMentions: { parse: [] } });
       return;
@@ -155,6 +183,15 @@ export async function executePet(i: ChatInputCommandInteraction) {
 export async function handlePetButton(i: ButtonInteraction) {
   await i.deferReply({ flags: MessageFlags.Ephemeral });
   try {
+    if (i.customId.startsWith("pet:shop:")) {
+      const guildId = await access(i);
+      await showPetPurchase(i, guildId, i.customId.split(":")[2] as PetItem, 1);
+      return;
+    }
+    if (i.customId.startsWith("pet:treat:") || i.customId.startsWith("pet:canceltreat:")) {
+      await handlePetTreatment(i);
+      return;
+    }
     if (i.customId === "pet:cancel") {
       await i.message.edit({ components: [] });
       await i.editReply("キャンセルしました。");

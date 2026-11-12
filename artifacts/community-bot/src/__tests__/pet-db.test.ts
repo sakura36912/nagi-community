@@ -6,6 +6,7 @@ import {
   communityVcPrivacyTable, communityVcPrivacyGlobalTable,
   getPetAccount, getPetSettings, configurePet, grantPetReward, hatchPet, buyPetItem, carePet, removePet,
   awardPetMessage, observePetVoice, cancelPetPurchase, type PetSettingKey,
+  createPetTreatment, getPetTreatment, settlePetTreatment, petTreatmentRequestsTable,
 } from "@workspace/db";
 
 describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows", () => {
@@ -16,7 +17,7 @@ describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows"
   const now = Date.parse("2026-11-12T12:00:00Z");
   beforeEach(() => { guild = `pet-test-${id()}`; guilds.push(guild); });
   afterAll(async () => {
-    for (const guildId of guilds) for (const table of [petActionsTable, petAccountsTable, petSettingsTable,
+    for (const guildId of guilds) for (const table of [petTreatmentRequestsTable, petActionsTable, petAccountsTable, petSettingsTable,
       transactionsTable, walletsTable, communityVcPrivacyTable]) await db.delete(table).where(eq(table.guildId, guildId));
     for (const user of globalUsers) await db.delete(communityVcPrivacyGlobalTable).where(eq(communityVcPrivacyGlobalTable.userId, user));
   });
@@ -114,12 +115,14 @@ describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows"
   });
   it("enforces persistent daily pet/play limits and JST reset", async () => {
     await setup(); await growth();
+    await grantPetReward(id(), guild, "user", "admin", "toy", 3);
     await set("pet_bond", 5); await set("play_bond", 2); await set("play_xp", 1);
     await carePet(id(), guild, "user", "pet", now);
     await expect(carePet(id(), guild, "user", "pet", now + 1)).rejects.toThrow("1日1回");
     for (let n = 0; n < 3; n++) await carePet(id(), guild, "user", "play", now);
     await expect(carePet(id(), guild, "user", "play", now)).rejects.toThrow("1日3回");
     expect((await getPetAccount(guild, "user", now)).pet?.bond).toBe(11);
+    expect((await getPetAccount(guild, "user", now)).toys).toBe(0);
     await carePet(id(), guild, "user", "pet", Date.parse("2026-11-12T15:00:00Z"));
     expect((await getPetAccount(guild, "user", Date.parse("2026-11-12T15:00:00Z"))).petsToday).toBe(1);
   });
@@ -209,5 +212,98 @@ describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows"
     await expect(set("level_cap", 101)).rejects.toThrow();
     expect((await getPetSettings(guild)).level_cap).toBeUndefined();
     expect(await getPetSettings(`unused-${id()}`)).toEqual({});
+  });
+  it("buys toys through the same atomic wallet and inventory path", async () => {
+    await wallet(); await set("toy_price", 40);
+    const operation = id();
+    await buyPetItem(operation, guild, "user", "toy", 3, 40);
+    await buyPetItem(operation, guild, "user", "toy", 3, 40);
+    expect((await getPetAccount(guild, "user")).toys).toBe(3);
+    expect(await balance()).toBe(880);
+  });
+  it("requires a toy for every play without losing daily allowance on failure", async () => {
+    await setup(); await growth(); await set("play_xp", 1); await set("play_bond", 2);
+    await expect(carePet(id(), guild, "user", "play", now)).rejects.toThrow("おもちゃ");
+    expect((await getPetAccount(guild, "user", now)).playsToday).toBe(0);
+    await grantPetReward(id(), guild, "user", "admin", "toy", 1);
+    await carePet(id(), guild, "user", "play", now);
+    const a = await getPetAccount(guild, "user", now);
+    expect([a.toys, a.playsToday]).toEqual([0, 1]);
+  });
+  it("does not consume a toy for missing growth settings", async () => {
+    await setup(); await grantPetReward(id(), guild, "user", "admin", "toy", 1);
+    await expect(carePet(id(), guild, "user", "play", now)).rejects.toThrow("未設定");
+    expect((await getPetAccount(guild, "user", now)).toys).toBe(1);
+  });
+  async function clinic() {
+    await setup(); await wallet();
+    await set("feed_neglect_interval", 60); await set("play_neglect_interval", 120);
+    await set("vet_price", 50); await set("vet_hunger", 10);
+  }
+  it("does not charge when a vet proposes treatment, and binds it to the owner", async () => {
+    await clinic();
+    const r = await createPetTreatment(id(), guild, "user", "vet", now + 61000);
+    expect(await balance()).toBe(1000);
+    expect(r).toMatchObject({ price: 50, hunger: 10, state: "pending", vetId: "vet" });
+    await expect(getPetTreatment(r.id, guild, "other")).rejects.toThrow("操作できません");
+    await expect(settlePetTreatment(r.id, guild, "other", false, now + 62000)).rejects.toThrow("飼い主のみ");
+    expect(await balance()).toBe(1000);
+  });
+  it("charges exactly once and clears weakness only on confirmed veterinary treatment", async () => {
+    await clinic();
+    const r = await createPetTreatment(id(), guild, "user", "vet", now + 61000);
+    await Promise.all([settlePetTreatment(r.id, guild, "user", false, now + 62000),
+      settlePetTreatment(r.id, guild, "user", false, now + 62000)]);
+    expect(await balance()).toBe(950);
+    const a = await getPetAccount(guild, "user", now + 62000);
+    expect(a.pet?.weak).toBeUndefined();
+    expect(a.pet?.treatedAt).toBe(now + 62000);
+    expect((await getPetTreatment(r.id, guild, "user")).state).toBe("paid");
+    expect(await db.select().from(transactionsTable).where(eq(transactionsTable.guildId, guild))).toHaveLength(1);
+  });
+  it("rejects treating healthy pets or missing treatment prices", async () => {
+    await setup();
+    await expect(createPetTreatment(id(), guild, "user", "vet", now)).rejects.toThrow("未設定");
+    await set("vet_price", 1); await set("vet_hunger", 1);
+    await expect(createPetTreatment(id(), guild, "user", "vet", now)).rejects.toThrow("弱っていない");
+  });
+  it("never charges stale, expired or replaced-pet treatment approvals", async () => {
+    await clinic();
+    const r = await createPetTreatment(id(), guild, "user", "vet", now + 61000);
+    await expect(settlePetTreatment(r.id, guild, "user", false, now + 182000)).rejects.toThrow("期限切れ");
+    await set("vet_price", 60);
+    await expect(settlePetTreatment(r.id, guild, "user", false, now + 62000)).rejects.toThrow("設定が変更");
+    await set("vet_price", 50);
+    await removePet(id(), guild, "user", "user", r.petId);
+    await hatchPet(id(), guild, "user", "rare", now + 62000);
+    await expect(settlePetTreatment(r.id, guild, "user", false, now + 63000)).rejects.toThrow("変更");
+    expect(await balance()).toBe(1000);
+  });
+  it("rolls back insufficient-balance treatment and persists cancellation", async () => {
+    await clinic(); await set("vet_price", 1001);
+    const r = await createPetTreatment(id(), guild, "user", "vet", now + 61000);
+    await expect(settlePetTreatment(r.id, guild, "user", false, now + 62000)).rejects.toThrow("不足");
+    expect((await getPetAccount(guild, "user", now + 62000)).pet?.weak).toBeTruthy();
+    await settlePetTreatment(r.id, guild, "user", true, now + 62000);
+    expect(await settlePetTreatment(r.id, guild, "user", false, now + 63000)).toContain("キャンセル");
+    expect(await balance()).toBe(1000);
+  });
+  it("prevents two vets' requests from charging twice for the same weakness", async () => {
+    await clinic();
+    const r1 = await createPetTreatment(id(), guild, "user", "vet-a", now + 61000);
+    const r2 = await createPetTreatment(id(), guild, "user", "vet-b", now + 61000);
+    const results = await Promise.allSettled([settlePetTreatment(r1.id, guild, "user", false, now + 62000),
+      settlePetTreatment(r2.id, guild, "user", false, now + 62000)]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await balance()).toBe(950);
+  });
+  it("normal feeding cannot replace a vet once weakness has occurred", async () => {
+    await clinic(); await growth();
+    await set("feed_xp", 1); await set("feed_hunger", 1); await set("feed_bond", 1);
+    await grantPetReward(id(), guild, "user", "admin", "food", 1);
+    await carePet(id(), guild, "user", "feed", now + 61000);
+    const a = await getPetAccount(guild, "user", now + 61000);
+    expect(a.pet?.lastFeedAt).toBe(now + 61000);
+    expect(a.pet?.weak).toBeTruthy();
   });
 });

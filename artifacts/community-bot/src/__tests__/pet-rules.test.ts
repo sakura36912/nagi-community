@@ -69,4 +69,33 @@ describe("pet growth rules", () => {
     refreshPet(a, { hunger_interval: 60, hunger_loss: 1 }, 1060000);
     expect(a.pet.hunger).toBe(99);
   });
+  it("marks weakness from either food or play neglect, not only both", () => {
+    const a = newPetAccount(); a.pet = individual();
+    refreshPet(a, { feed_neglect_interval: 60, play_neglect_interval: 120 }, 60000);
+    expect(a.pet.weak).toEqual({ since: 60000, reason: "feed" });
+    const b = newPetAccount(); b.pet = individual();
+    refreshPet(b, { feed_neglect_interval: 120, play_neglect_interval: 60 }, 60000);
+    expect(b.pet.weak?.reason).toBe("play");
+  });
+  it("has no arbitrary neglect threshold and supports old stock records", () => {
+    const a = newPetAccount(); a.pet = individual(); delete a.toys;
+    refreshPet(a, {}, 1000000000000);
+    expect(a.pet.weak).toBeUndefined();
+    expect(a.toys).toBe(0);
+  });
+  it("does not clear latched weakness from ordinary feeding or play", () => {
+    const a = newPetAccount(); a.pet = individual();
+    refreshPet(a, { feed_neglect_interval: 60 }, 60000);
+    a.pet.lastFeedAt = 60000; a.pet.lastPlayAt = 60000;
+    refreshPet(a, { feed_neglect_interval: 60 }, 60001);
+    expect(a.pet.weak).toBeTruthy();
+  });
+  it("provides a new care interval after treatment, without fabricating feeding history", () => {
+    const a = newPetAccount(); a.pet = individual(); a.pet.treatedAt = 100000;
+    refreshPet(a, { feed_neglect_interval: 60 }, 159999);
+    expect(a.pet.weak).toBeUndefined();
+    expect(a.pet.lastFeedAt).toBeUndefined();
+    refreshPet(a, { feed_neglect_interval: 60 }, 160000);
+    expect(a.pet.weak?.reason).toBe("feed");
+  });
 });

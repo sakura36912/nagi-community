@@ -1,7 +1,8 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./index";
-import { petAccountsTable as accounts, petSettingsTable as settings, petActionsTable as actions } from "./schema/pet";
+import { petAccountsTable as accounts, petSettingsTable as settings, petActionsTable as actions,
+  petTreatmentRequestsTable as treatments } from "./schema/pet";
 import { walletsTable as wallets, transactionsTable } from "./schema/economy";
 import { communityVcPrivacyTable, communityVcPrivacyGlobalTable } from "./schema/community";
 import {
@@ -95,25 +96,26 @@ export async function getPetAccount(guildId: string, userId: string, now = Date.
     return a;
   });
 }
-export type PetItem = PetRarity | "food";
+export type PetItem = PetRarity | "food" | "toy";
 export async function buyPetItem(id: string, guildId: string, userId: string, item: PetItem, quantity: number, quotedPrice: number) {
   petInteger(quantity, 1, 1000);
-  if (!["normal", "rare", "food"].includes(item)) throw new PetError("販売対象ではありません。");
+  if (!["normal", "rare", "food", "toy"].includes(item)) throw new PetError("販売対象ではありません。");
   return mutate(id, guildId, userId, userId, "buy", async (a, s, tx) => {
     const price = petSetting(s, `${item}_price` as PetSettingKey);
     if (price !== quotedPrice) throw new PetError("価格が変更されました。課金していません。/pet buy から確認し直してください。");
-    if (item !== "food" && !petSpecies(s, item).length) throw new PetError("この卵のペット種類が未登録です。");
+    if (item !== "food" && item !== "toy" && !petSpecies(s, item).length) throw new PetError("この卵のペット種類が未登録です。");
     const cost = petInteger(price * quantity, 0, 2_147_483_647);
-    const oldStock = item === "food" ? a.food : a.eggs[item] ?? 0;
+    const oldStock = item === "food" ? a.food : item === "toy" ? a.toys ?? 0 : a.eggs[item] ?? 0;
     petInteger(oldStock + quantity);
     const [paid] = await tx.update(wallets).set({ balance: sql`${wallets.balance} - ${cost}`, updatedAt: new Date() })
       .where(and(eq(wallets.guildId, guildId), eq(wallets.userId, userId), sql`${wallets.balance} >= ${cost}`)).returning();
     if (!paid) throw new PetError("残高が不足しているか、銀行のウォレットがありません。");
     if (item === "food") a.food += quantity;
+    else if (item === "toy") a.toys = (a.toys ?? 0) + quantity;
     else a.eggs[item] = (a.eggs[item] ?? 0) + quantity;
     await tx.insert(transactionsTable).values({ guildId, userId, amount: -cost,
       reason: `ペットショップ: ${item} ×${quantity} / ${id}` });
-    return `${item === "food" ? "エサ" : PET_RARITY_NAMES[item] + "卵"}を${quantity}個購入しました。支払い：$${cost.toLocaleString()}`;
+    return `${item === "food" ? "エサ" : item === "toy" ? "おもちゃ" : PET_RARITY_NAMES[item] + "卵"}を${quantity}個購入しました。支払い：$${cost.toLocaleString()}`;
   });
 }
 export async function cancelPetPurchase(id: string, guildId: string, userId: string) {
@@ -145,6 +147,7 @@ export async function carePet(id: string, guildId: string, userId: string, actio
       addPetXp(p, s, xp);
       p.hunger = Math.min(100, p.hunger + hunger);
       p.bond = Math.min(100, p.bond + bond);
+      p.lastFeedAt = now;
       a.food--;
     } else if (action === "pet") {
       if (a.petsToday >= 1) throw new PetError("撫でるのは1日1回です。日本時間0時にリセットされます。");
@@ -152,9 +155,12 @@ export async function carePet(id: string, guildId: string, userId: string, actio
       a.petsToday++;
     } else {
       if (a.playsToday >= 3) throw new PetError("遊ぶのは1日3回です。日本時間0時にリセットされます。");
+      if (!(a.toys! > 0)) throw new PetError("おもちゃを所持していません。ショップパネルで購入してください。");
       const bond = petSetting(s, "play_bond"), xp = petSetting(s, "play_xp");
       addPetXp(p, s, xp);
       p.bond = Math.min(100, p.bond + bond);
+      p.lastPlayAt = now;
+      a.toys = (a.toys ?? 0) - 1;
       a.playsToday++;
     }
     return `${p.name}と${action === "feed" ? "食事をしました" : action === "pet" ? "触れ合いました" : "遊びました"}。\nLv${p.level} / 経験値 ${p.xp} / 満腹度 ${p.hunger} / 親密度 ${p.bond}`;
@@ -167,21 +173,79 @@ export async function removePet(id: string, guildId: string, userId: string, act
     a.pet = null;
     delete a.vc;
     delete a.messageAt;
-    return `${name}を手放しました。卵・エサの在庫は残ります。`;
+    return `${name}を手放しました。卵・エサ・おもちゃの在庫は残ります。`;
   });
 }
 export async function grantPetReward(id: string, guildId: string, userId: string, actorId: string,
   item: PetItem | "xp", quantity: number) {
   petInteger(quantity, 1);
-  if (!PET_RARITIES.includes(item as PetRarity) && item !== "food" && item !== "xp") throw new PetError("未対応の報酬です。");
+  if (!PET_RARITIES.includes(item as PetRarity) && item !== "food" && item !== "toy" && item !== "xp") throw new PetError("未対応の報酬です。");
   return mutate(id, guildId, userId, actorId, "grant", (a, s) => {
     if (item === "xp") {
       if (!a.pet) throw new PetError("対象者にペットがいません。");
       addPetXp(a.pet, s, quantity);
     } else if (item === "food") a.food = petInteger(a.food + quantity);
+    else if (item === "toy") a.toys = petInteger((a.toys ?? 0) + quantity);
     else a.eggs[item] = petInteger((a.eggs[item] ?? 0) + quantity);
-    return `${item === "xp" ? "経験値" : item === "food" ? "エサ" : PET_RARITY_NAMES[item] + "卵"}を${quantity}付与しました。`;
+    return `${item === "xp" ? "経験値" : item === "food" ? "エサ" : item === "toy" ? "おもちゃ" : PET_RARITY_NAMES[item] + "卵"}を${quantity}付与しました。`;
   });
+}
+
+export async function createPetTreatment(id: string, guildId: string, ownerId: string, vetId: string, now = Date.now()) {
+  return db.transaction(async tx => {
+    await lockSettings(tx, guildId);
+    await lock(tx, JSON.stringify(["pet-user", guildId, ownerId]));
+    const [existing] = await tx.select().from(treatments).where(eq(treatments.id, id));
+    if (existing) {
+      if (existing.guildId !== guildId || existing.ownerId !== ownerId || existing.vetId !== vetId) throw new PetError("治療情報が一致しません。");
+      return existing;
+    }
+    const s = await loadSettings(tx, guildId);
+    const price = petSetting(s, "vet_price"), hunger = petSetting(s, "vet_hunger");
+    const [row] = await tx.select().from(accounts).where(where(guildId, ownerId));
+    if (!row?.data.pet) throw new PetError("対象者にペットがいません。");
+    refreshPet(row.data, s, now);
+    if (!row.data.pet.weak) throw new PetError("このペットは弱っていないため治療できません。");
+    await tx.update(accounts).set({ data: row.data }).where(where(guildId, ownerId));
+    const [request] = await tx.insert(treatments).values({
+      id, guildId, ownerId, vetId, petId: row.data.pet.id, price, hunger, expiresAt: new Date(now + 120_000),
+    }).returning();
+    return request!;
+  });
+}
+export async function getPetTreatment(id: string, guildId: string, ownerId: string) {
+  const [r] = await db.select().from(treatments).where(and(eq(treatments.id, id),
+    eq(treatments.guildId, guildId), eq(treatments.ownerId, ownerId)));
+  if (!r) throw new PetError("この治療依頼は操作できません。");
+  return r;
+}
+/** Caller verifies the named vet's live role; owner approval is bound below. */
+export async function settlePetTreatment(id: string, guildId: string, ownerId: string, cancel = false, now = Date.now()) {
+  return mutate(`pet-treat:${id}`, guildId, ownerId, ownerId, "treat", async (a, s, tx) => {
+    const [r] = await tx.select().from(treatments).where(eq(treatments.id, id)).for("update");
+    if (!r || r.guildId !== guildId || r.ownerId !== ownerId) throw new PetError("この治療依頼は飼い主のみ操作できます。");
+    if (r.state !== "pending") throw new PetError("この治療依頼は終了しています。");
+    if (cancel) {
+      await tx.update(treatments).set({ state: "cancelled" }).where(eq(treatments.id, id));
+      return "治療をキャンセルしました。引き落としはありません。";
+    }
+    if (r.expiresAt.getTime() <= now) throw new PetError("治療確認の期限切れです。獣医に再依頼してください。");
+    if (!a.pet || a.pet.id !== r.petId) throw new PetError("ペットが変更されています。引き落としはありません。");
+    if (!a.pet.weak) throw new PetError("既に回復しています。引き落としはありません。");
+    if (petSetting(s, "vet_price") !== r.price || petSetting(s, "vet_hunger") !== r.hunger) {
+      throw new PetError("治療設定が変更されています。引き落としはありません。獣医に再依頼してください。");
+    }
+    const [paid] = await tx.update(wallets).set({ balance: sql`${wallets.balance} - ${r.price}`, updatedAt: new Date() })
+      .where(and(eq(wallets.guildId, guildId), eq(wallets.userId, ownerId), sql`${wallets.balance} >= ${r.price}`)).returning();
+    if (!paid) throw new PetError("飼い主の残高が不足しているか、ウォレットがありません。");
+    await tx.insert(transactionsTable).values({ guildId, userId: ownerId, amount: -r.price,
+      reason: `ペット獣医治療 / ${id} / 獣医:${r.vetId}` });
+    a.pet.hunger = Math.min(100, a.pet.hunger + r.hunger);
+    a.pet.treatedAt = now;
+    delete a.pet.weak;
+    await tx.update(treatments).set({ state: "paid" }).where(eq(treatments.id, id));
+    return `${a.pet.name}の治療が完了しました。弱った状態から回復しました。\n治療費：$${r.price.toLocaleString()} / 満腹度 ${a.pet.hunger}/100`;
+  }, now);
 }
 /** No content is read or retained; Discord message IDs provide durable deduplication. */
 export async function awardPetMessage(id: string, guildId: string, userId: string, now = Date.now()) {

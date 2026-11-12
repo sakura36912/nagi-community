@@ -12,7 +12,7 @@ export const PET_SPECIES: Record<PetRarity, string[]> = {
 };
 /** Prices and growth amounts deliberately have no economic defaults. */
 export const PET_SETTING_LABELS = {
-  normal_price: "ノーマル卵の価格", rare_price: "レア卵の価格", food_price: "エサの価格",
+  normal_price: "ノーマル卵の価格", rare_price: "レア卵の価格", food_price: "エサの価格", toy_price: "おもちゃの価格",
   xp_base: "必要経験値の基準（次レベル＝基準×現在Lv）", xp_multiplier: "経験値倍率",
   level_cap: "レベル上限（1～100）", message_xp: "メッセージ経験値",
   message_interval: "メッセージ経験値の獲得間隔（秒）",
@@ -20,6 +20,9 @@ export const PET_SETTING_LABELS = {
   hunger_interval: "満腹度が減る間隔（秒）", hunger_loss: "1間隔あたり満腹度減少",
   feed_hunger: "エサの満腹度回復", feed_xp: "エサの経験値", feed_bond: "エサの親密度",
   pet_bond: "撫でる親密度", play_xp: "遊ぶ経験値", play_bond: "遊ぶ親密度",
+  feed_neglect_interval: "エサ不足で弱るまで（秒）",
+  play_neglect_interval: "遊び不足で弱るまで（秒）",
+  vet_price: "獣医の治療費", vet_hunger: "治療による満腹度回復",
 } as const;
 export type PetSettingKey = keyof typeof PET_SETTING_LABELS;
 export type PetSettings = Partial<Record<PetSettingKey, number>> & { species?: Partial<Record<PetRarity, string[]>> };
@@ -49,21 +52,33 @@ export function petSpecies(settings: PetSettings, rarity: PetRarity) {
 export type PetIndividual = {
   id: string; name: string; species: string; rarity: PetRarity; level: number; xp: number;
   hunger: number; bond: number; bornAt: number; hungerAt: number;
+  lastFeedAt?: number; lastPlayAt?: number; treatedAt?: number;
+  weak?: { since: number; reason: "feed" | "play" | "both" };
 };
 export type PetAccount = {
   pet: PetIndividual | null;
-  eggs: Partial<Record<PetRarity, number>>; food: number;
+  eggs: Partial<Record<PetRarity, number>>; food: number; toys?: number;
   day: string; petsToday: number; playsToday: number;
   messageAt?: number; vc?: { epoch: string; channel: string; at: number; seconds: number };
 };
 export function newPetAccount(): PetAccount {
-  return { pet: null, eggs: {}, food: 0, day: "", petsToday: 0, playsToday: 0 };
+  return { pet: null, eggs: {}, food: 0, toys: 0, day: "", petsToday: 0, playsToday: 0 };
 }
 /** Lazy decay also covers bot downtime; no timer is needed for hunger. */
 export function refreshPet(a: PetAccount, s: PetSettings, now: number) {
+  a.toys ??= 0;
   if (a.day !== petDay(now)) { a.day = petDay(now); a.petsToday = 0; a.playsToday = 0; }
   const p = a.pet;
   if (!p) return;
+  // Weakness is latched: normal care remains possible, but only a vet clears it.
+  if (!p.weak) {
+    const feedDeadline = s.feed_neglect_interval === undefined ? Infinity
+      : Math.max(p.lastFeedAt ?? p.bornAt, p.treatedAt ?? p.bornAt) + s.feed_neglect_interval * 1000;
+    const playDeadline = s.play_neglect_interval === undefined ? Infinity
+      : Math.max(p.lastPlayAt ?? p.bornAt, p.treatedAt ?? p.bornAt) + s.play_neglect_interval * 1000;
+    const feed = now >= feedDeadline, play = now >= playDeadline;
+    if (feed || play) p.weak = { since: Math.min(feedDeadline, playDeadline), reason: feed && play ? "both" : feed ? "feed" : "play" };
+  }
   if (s.hunger_interval === undefined || s.hunger_loss === undefined) {
     p.hungerAt = now; // Do not retroactively decay an unconfigured period.
     return;

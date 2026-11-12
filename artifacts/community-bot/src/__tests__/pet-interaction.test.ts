@@ -27,7 +27,7 @@ function button(customId: string, admin = false) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.settings.mockResolvedValue({ rare_price: 123 });
+  mocks.settings.mockResolvedValue({ rare_price: 123, toy_price: 50, food_price: 20 });
   mocks.account.mockResolvedValue({ pet: { id: "12345678-1234-1234-1234-123456789012", name: "キツネ" } });
   for (const fn of [mocks.buy, mocks.cancel, mocks.hatch, mocks.care, mocks.remove, mocks.grant, mocks.configure]) fn.mockResolvedValue("成功");
 });
@@ -104,5 +104,29 @@ describe("pet slash and button integration", () => {
     const i = command("hatch", { egg: "mythic" });
     await executePet(i as never);
     expect(mocks.hatch).toHaveBeenCalledWith(i.id, "guild", owner, "mythic");
+  });
+  it("blocks panel installation without live administrator permission", async () => {
+    const i = command("panel");
+    await executePet(i as never);
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("管理者のみ") }));
+  });
+  it("installs a public panel for eggs, food and toys", async () => {
+    const i = { ...command("panel", {}, true), channel: { send: vi.fn() } };
+    await executePet(i as never);
+    expect(i.channel.send).toHaveBeenCalledOnce();
+    const row = i.channel.send.mock.calls[0]![0].components[0];
+    expect(row.components.map((c: { data: { custom_id: string } }) => c.data.custom_id))
+      .toEqual(["pet:shop:normal", "pet:shop:rare", "pet:shop:food", "pet:shop:toy"]);
+    expect(mocks.buy).not.toHaveBeenCalled();
+  });
+  it("opens an individual purchase confirmation from a public panel without modifying it", async () => {
+    const i = button("pet:shop:toy");
+    await handlePetButton(i as never);
+    expect(mocks.buy).not.toHaveBeenCalled();
+    expect(i.message.edit).not.toHaveBeenCalled();
+    const reply = i.editReply.mock.calls[0]![0];
+    expect(reply.content).toContain("おもちゃ ×1");
+    expect(reply.content).toContain("$50");
+    expect(reply.components[0].components[0].data.custom_id).toContain(`pet:buy:${owner}:toy:1:50:`);
   });
 });
