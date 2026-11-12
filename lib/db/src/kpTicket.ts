@@ -84,8 +84,7 @@ export async function createAdditionalKpTicketSession(id: string, guildId: strin
   }
   const castId = previous.selection.castId;
   const paid = await listPaidKpTicketOrders(guildId, channelId);
-  const vipActive = paid.some(order => order.selection.vip
-    && (order.userId === userId || order.selection.guestId === userId));
+  const vipActive = paid.some(order => order.selection.vip && order.userId === userId);
   const [session] = await db.insert(kpTicketSessionsTable).values({
     id, guildId, channelId, userId, phase: vipActive ? "drink" : "vip",
     selection: { castId, fixedCastId: castId, vip: false, extension: false,
@@ -173,12 +172,9 @@ export async function settleKpTicket(
         eq(kpTicketSessionsTable.guildId, guildId), eq(kpTicketSessionsTable.channelId, channelId),
         eq(kpTicketSessionsTable.phase, "paid"),
       ));
-      const customers = [userId, ...(s.vipTier === "shared" ? [s.guestId] : [])];
-      if (paid.some(order => order.selection.vip && customers.some(id => id
-        && (order.userId === id || order.selection.guestId === id)))) {
+      if (paid.some(order => order.selection.vip && order.userId === userId)) {
         throw new KpTicketError("VIP利用者はVIPの重複購入・延長を行えません。");
       }
-      if (s.vip && s.vipTier === "shared" && s.guestId === userId) throw new KpTicketError("同伴者に購入者本人は指定できません。");
     }
     const quote = quoteKpTicket(item ?? null, settings, session.selection);
     if (!isDeepStrictEqual(quote, session.selection.quote)) {
@@ -203,7 +199,10 @@ export async function settleKpTicket(
       sessionKey: `kp-ticket:${id}`,
       reason: `kp-ticket:${quote.itemName} x${quote.quantity}; VIP=${session.selection.vip}; 延長=${session.selection.extension}; ticket=${channelId}`,
     });
-    const [paid] = await tx.update(kpTicketSessionsTable).set({ phase: "paid", paidAt: new Date() })
+    // Unpaid screens from the earlier companion flow cannot grant companion access.
+    const selection = { ...session.selection };
+    delete selection.guestId;
+    const [paid] = await tx.update(kpTicketSessionsTable).set({ phase: "paid", paidAt: new Date(), selection })
       .where(eq(kpTicketSessionsTable.id, id)).returning();
     return { status: "paid", session: paid! };
   });
@@ -216,13 +215,12 @@ export async function listKpVipOrders(guildId: string, memberId?: string, roomId
     sql`${kpTicketSessionsTable.selection}->>'serviceVersion' = '2'`,
     sql`${kpTicketSessionsTable.selection}->>'vip' = 'true'`,
     memberId ? or(eq(kpTicketSessionsTable.userId, memberId),
-      sql`${kpTicketSessionsTable.selection}->>'guestId' = ${memberId}`,
       sql`${kpTicketSessionsTable.selection}->>'castId' = ${memberId}`) : undefined,
     roomId ? sql`${kpTicketSessionsTable.selection}->>'vipRoomId' = ${roomId}` : undefined,
   )).orderBy(desc(kpTicketSessionsTable.paidAt));
 }
 
-/** Persist room association across restarts; serialize buyer/guest/cast arriving together. */
+/** Persist room association across restarts; serialize buyer/cast arriving together. */
 export async function deliverKpVipRoom(id: string, guildId: string, useRoom: (order: KpTicketSession) => Promise<string>) {
   return db.transaction(async tx => {
     const [order] = await tx.select().from(kpTicketSessionsTable).where(and(

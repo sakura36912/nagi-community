@@ -27,10 +27,6 @@ export function quoteKpTicket(
   if (selection.vip && (selection.vipActive || !selection.vipTier || !(selection.vipTier in KP_VIP_PRICES))) {
     throw new KpTicketError("VIPを選び直してください。VIPの重複購入はできません。");
   }
-  if (selection.vip && selection.vipTier === "shared"
-    && (!selection.guestId || selection.guestId === selection.castId)) {
-    throw new KpTicketError("VIPを一緒に利用するお客様を選択してください。");
-  }
   if (selection.fixedCastId && selection.castId !== selection.fixedCastId) {
     throw new KpTicketError("追加注文の指名キャストは変更できません。");
   }

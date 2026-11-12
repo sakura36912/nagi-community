@@ -80,7 +80,7 @@ async function ticketExists(guild: Guild, order: KpTicketSession) {
 }
 
 function participants(order: KpTicketSession, botId: string) {
-  return [order.userId, order.selection.castId!, ...(order.selection.guestId ? [order.selection.guestId] : []), botId];
+  return [order.userId, order.selection.castId!, botId];
 }
 
 /** VIP source is intercepted before the ordinary/free Hub handler. No purchase happens here. */
@@ -94,7 +94,7 @@ export async function handleKpVipHubJoin(state: VoiceState): Promise<boolean> {
     for (const candidate of orders) {
       if (await ticketExists(state.guild, candidate)) { order = candidate; break; }
     }
-    if (!order) throw new KpTicketError("このVCは支払い済みVIPのお客様・同伴者・指名キャスト専用です。先にチケットでVIPを注文してください。");
+    if (!order) throw new KpTicketError("このVCは支払い済みVIPのお客様・指名キャスト専用です。先にチケットでVIPを注文してください。");
     const hub = await validateKpVipSource(state.guild);
     const bot = await state.guild.members.fetchMe();
     const settings = await getKpTicketSettings(state.guild.id);
@@ -187,7 +187,7 @@ export async function handleKpVipControl(interaction: ButtonInteraction | ModalS
           }
         }
       }
-      await interaction.editReply(action === "public" ? "VIPのVCを公開しました。ほかのメンバーも閲覧・接続できます。" : "VIPのVCを非公開にしました。購入者・同伴者・指名キャストのみ閲覧・接続できます（管理者を除く）。");
+      await interaction.editReply(action === "public" ? "VIPのVCを公開しました。ほかのメンバーも閲覧・接続できます。" : "VIPのVCを非公開にしました。購入者・指名キャストのみ閲覧・接続できます（管理者を除く）。");
     } else throw new KpTicketError("この操作は使用できません。");
   } catch (error) {
     logger.error("[kp-vip] Control failed", error);

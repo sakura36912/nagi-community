@@ -111,18 +111,25 @@ describe("KP ticket component flow", () => {
     expect(m.settle).toHaveBeenCalledOnce();
     expect(i.editReply.mock.calls.at(-1)![0].content).toContain("1570354388462215248");
   });
-  it("selects a second customer for the 100,000 shared VIP and gives access only in this ticket", async () => {
+  it("purchases 100,000 VIP directly without selecting or adding a companion", async () => {
     const i = fixture(); await choose(i, "black-cast"); await choose(i, "shared");
-    expect(session.phase).toBe("guest");
-    await choose(i, "black-cast");
-    expect(session.phase).toBe("guest"); expect(m.settle).not.toHaveBeenCalled();
-    await choose(i, "outsider");
+    expect(session.phase).toBe("drink");
+    expect(session.selection.guestId).toBeUndefined();
     await extrasOnly(i);
     expect(session.selection.quote).toMatchObject({ total: 100000, vipPrice: 100000 });
     i.customId = ticketId("confirm", session); await run(i);
-    expect(i.channel.members.add).toHaveBeenCalledWith("outsider");
+    expect(i.channel.members.add.mock.calls.every(call => call[0] === "black-cast")).toBe(true);
     expect(m.settle).toHaveBeenCalledOnce();
     expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
+  });
+  it("rejects an old companion menu without granting access or charging", async () => {
+    const i = fixture();
+    session.phase = "guest";
+    session.selection = { castId: "black-cast", serviceVersion: 2, vip: true, vipTier: "shared", extension: false };
+    await choose(i, "outsider");
+    expect(i.channel.members.add).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("同伴者の選択はなくなりました") }));
   });
   it("offers 50,000 extension only through additional normal orders, without forcing a drink", async () => {
     const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);

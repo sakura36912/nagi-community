@@ -54,7 +54,6 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
   const payExtra = (s: KpTicketSession) => settleKpTicket(s.id, s.version, user, guild, s.channelId, ["black", "white"]);
   const vipSelection = (tier: "solo" | "shared"): KpTicketSelection => ({
     castId: "test-cast", vip: true, extension: false, serviceVersion: 2, vipTier: tier,
-    ...(tier === "shared" ? { guestId: "guest" } : {}),
   });
 
   it.each([["solo", 200000], ["shared", 100000]] as const)("persists %s VIP once, without inventing drink inventory", async (tier, price) => {
@@ -67,13 +66,26 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     const orders = await listKpVipOrders(guild, user);
     expect(orders.some(o => o.id === order.id)).toBe(true);
     expect((await listKpVipOrders(guild, "test-cast")).some(o => o.id === order.id)).toBe(true);
-    expect((await listKpVipOrders(guild, "guest")).some(o => o.id === order.id)).toBe(tier === "shared");
+    expect((await listKpVipOrders(guild, "guest")).some(o => o.id === order.id)).toBe(false);
     expect(await listKpVipOrders(guild, "outsider")).toHaveLength(0);
     const rows = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${order.id}`));
     expect(rows).toHaveLength(1); expect(rows[0]!.amount).toBe(-price);
     const additional = await createAdditionalKpTicketSession(randomUUID(), guild, ticket, user);
     expect(additional.phase).toBe("drink");
     expect(additional.selection.vipActive).toBe(true);
+  });
+  it("does not authorize legacy companion IDs or retain them on new payments", async () => {
+    const ticket = randomUUID();
+    await wallet(500000);
+    const order = await extraReady(ticket, { ...vipSelection("shared"), guestId: "legacy-guest" });
+    const paid = await payExtra(order);
+    expect(paid.session.selection.guestId).toBeUndefined();
+    // Preserve an older paid receipt as history, but never use its companion as an entitlement.
+    await db.update(kpTicketSessionsTable).set({ selection: { ...paid.session.selection, guestId: "legacy-guest" } })
+      .where(eq(kpTicketSessionsTable.id, order.id));
+    expect(await listKpVipOrders(guild, "legacy-guest")).toHaveLength(0);
+    expect((await listKpVipOrders(guild, user)).some(o => o.id === order.id)).toBe(true);
+    expect(await balance()).toBe(400000);
   });
 
   it("charges extension-only once and retains the amount in deleted-ticket statements", async () => {

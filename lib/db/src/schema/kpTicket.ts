@@ -17,6 +17,7 @@ export interface KpTicketSelection {
   fixedCastId?: string;
   serviceVersion?: 2;
   vipTier?: "shared" | "solo";
+  /** Historical receipts only; new purchases do not select or authorize a companion. */
   guestId?: string;
   baseOrderId?: string;
   vipActive?: boolean;

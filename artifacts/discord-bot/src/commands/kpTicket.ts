@@ -213,20 +213,13 @@ export async function renderKpTicket(interaction: TicketInteraction, session: Kp
       await interaction.editReply({ content, embeds: [], components: [
         ticketMenu(session, "vip", "VIPの利用方法を選択（VIPは延長不可）", [
           { label: "通常利用（VIPなし）", value: "none" },
-          { label: "VIP：お客様2人・キャスト1人 — 100,000＄", value: "shared", description: "購入者が10万＄を支払い、同伴のお客様を1人選びます。" },
+          { label: "VIP：お客様2人・キャスト1人 — 100,000＄", value: "shared", description: "購入者が10万＄を支払います。同伴者の指定はありません。" },
           { label: "VIP：お客様1人・キャスト1人 — 200,000＄", value: "solo" },
         ]), ticketControls(session),
       ] });
       break;
-    case "guest": {
-      const members = await interaction.guild!.members.fetch();
-      const candidates = [...members.values()].filter(m => !m.user.bot && m.id !== session.userId && m.id !== session.selection.castId);
-      if (!candidates.length) throw new KpTicketError("同伴できるお客様がいません。VIPを選び直してください。");
-      await interaction.editReply({ content, embeds: [], components: pagedTicketMenu(session, "guest", "同伴のお客様を1人選択", candidates.map(m => ({
-        label: m.displayName, value: m.id, description: `ユーザーID: ${m.id}`,
-      })), page) });
-      break;
-    }
+    case "guest":
+      throw new KpTicketError("同伴者の選択はなくなりました。「最初から選び直す」で注文を再開してください。引き落としはしていません。");
     case "extension":
       await interaction.editReply({ content, embeds: [], components: [
         ticketMenu(session, "extension", "通常利用の延長を追加しますか？", [
@@ -359,8 +352,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
           baseOrderId: session.selection.baseOrderId, vipActive: session.selection.vipActive } : { serviceVersion: 2 }));
       return;
     }
-    if ((action === "cast-page" && session.phase === "cast") || (action === "drink-page" && session.phase === "drink")
-      || (action === "guest-page" && session.phase === "guest")) {
+    if ((action === "cast-page" && session.phase === "cast") || (action === "drink-page" && session.phase === "drink")) {
       await renderKpTicket(interaction, session, page);
       return;
     }
@@ -380,11 +372,6 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       await grantKpTicketCastAccess(interaction, cast);
       if (session.selection.vip) {
         await validateKpVipSource(interaction.guild);
-        if (session.selection.vipTier === "shared") {
-          const guest = await interaction.guild.members.fetch({ user: session.selection.guestId!, force: true }).catch(() => null);
-          if (!guest || guest.user.bot || guest.id === interaction.user.id || guest.id === cast.id) throw new KpTicketError("同伴のお客様を確認できません。最初から選び直してください。");
-          await grantKpTicketCastAccess(interaction, guest);
-        }
       }
       const result = await settleKpTicket(session.id, version, interaction.user.id, interaction.guildId, interaction.channelId, settings.castRoleIds);
       if (result.status === "changed") {
@@ -418,14 +405,10 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         selection.vipTier = value === "shared" || value === "solo" ? value : undefined;
         selection.guestId = undefined;
         selection.extension = false;
-        next = value === "shared" ? "guest" : value === "none" && selection.fixedCastId ? "extension" : "drink";
+        next = value === "none" && selection.fixedCastId ? "extension" : "drink";
         break;
-      case "guest": {
-        const guest = value ? await interaction.guild.members.fetch({ user: value, force: true }).catch(() => null) : null;
-        if (!guest || guest.user.bot || guest.id === session.userId || guest.id === selection.castId) throw new KpTicketError("購入者・キャスト・Bot以外のお客様を選択してください。");
-        selection.guestId = guest.id; next = "drink";
-        break;
-      }
+      case "guest":
+        throw new KpTicketError("同伴者の選択はなくなりました。「最初から選び直す」で注文を再開してください。");
       case "extension":
         if (!selection.fixedCastId || !selection.baseOrderId || selection.vip || selection.vipActive) throw new KpTicketError("延長は通常利用の追加注文のみです。VIPは延長できません。");
         if (value !== "yes" && value !== "no") throw new KpTicketError("延長の有無を選択してください。");

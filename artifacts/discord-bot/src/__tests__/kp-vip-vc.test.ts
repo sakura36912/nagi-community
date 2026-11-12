@@ -21,7 +21,7 @@ beforeEach(() => {
     selection: { serviceVersion: 2, vip: true, vipTier: "shared", castId: "cast", guestId: "guest" },
     expiresAt: new Date(0), createdAt: new Date(), paidAt: new Date(), logMessageId: "receipt" };
   m.list.mockImplementation(async (guild, member, room) => guild === "guild"
-    && (!member || ["buyer", "guest", "cast"].includes(member))
+    && (!member || ["buyer", "cast"].includes(member))
     && (!room || room === order.selection.vipRoomId) ? [order] : []);
   m.deliver.mockImplementation(async (_id, _guild, use) => {
     const room = await use(order);
@@ -56,7 +56,7 @@ function fixture(user = "buyer") {
     id: "guild",
     channels: {
       fetch: vi.fn(async id => channels.get(id) ?? null),
-      create: vi.fn(async () => { channels.set("room", room); return room; }),
+      create: vi.fn(async (_options: unknown) => { channels.set("room", room); return room; }),
     },
     members: {
       fetchMe: vi.fn().mockResolvedValue({ id: "bot" }),
@@ -107,7 +107,7 @@ describe("VIP privacy overwrites", () => {
 });
 
 describe("VIP transfer and persisted room recovery", () => {
-  it.each(["buyer", "guest", "cast"])("creates a private shared room when the paid %s enters", async user => {
+  it.each(["buyer", "cast"])("creates a private shared room when the paid %s enters", async user => {
     const f = fixture(user);
     expect(await handleKpVipHubJoin(f.state as unknown as VoiceState)).toBe(true);
     expect(f.guild.channels.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -116,7 +116,15 @@ describe("VIP transfer and persisted room recovery", () => {
     expect(f.member.voice.setChannel).toHaveBeenCalledWith("room");
     expect(order.selection.vipRoomId).toBe("room");
     expect(f.room.send).toHaveBeenCalledOnce();
+    const overwrites = f.guild.channels.create.mock.calls[0]![0] as unknown as { permissionOverwrites: { id: string }[] };
+    expect(overwrites.permissionOverwrites.some(row => row.id === "guest")).toBe(false);
     expect(f.hub.permissionOverwrites.cache).toHaveLength(1);
+  });
+  it("does not transfer a legacy companion or grant access based on the old ID", async () => {
+    const f = fixture("guest");
+    await handleKpVipHubJoin(f.state as unknown as VoiceState);
+    expect(f.member.voice.setChannel).not.toHaveBeenCalled();
+    expect(f.guild.channels.create).not.toHaveBeenCalled();
   });
   it("uses two slots for solo VIP and reuses an existing room after restart", async () => {
     const f = fixture(); order.selection.vipTier = "solo"; delete order.selection.guestId;

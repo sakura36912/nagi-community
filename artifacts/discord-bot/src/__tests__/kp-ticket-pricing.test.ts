@@ -10,7 +10,6 @@ describe("KP ticket pricing and paging", () => {
   const settings = { vipPrice: null, extensionPrice: null };
   const vip = (tier: "solo" | "shared"): KpTicketSelection => ({
     castId: "cast", vip: true, extension: false, serviceVersion: 2, vipTier: tier,
-    ...(tier === "shared" ? { guestId: "guest" } : {}),
   });
   it.each([["shared", 100000], ["solo", 200000]] as const)("charges the fixed %s VIP rate, not old settings", (tier, price) => {
     expect(quoteKpTicket(null, settings, vip(tier))).toMatchObject({ itemId: null, quantity: 0, vipPrice: price, total: price });
@@ -26,9 +25,8 @@ describe("KP ticket pricing and paging", () => {
     expect(() => quoteKpTicket(null, settings, { ...extension, vipActive: true })).toThrow("延長を追加できません");
     expect(() => quoteKpTicket(null, settings, { ...extension, vip: true, vipTier: "solo" })).toThrow("延長を追加できません");
   });
-  it("requires a distinct companion for shared VIP and rejects malformed extras", () => {
-    expect(() => quoteKpTicket(null, settings, { ...vip("shared"), guestId: undefined })).toThrow("お客様");
-    expect(() => quoteKpTicket(null, settings, { ...vip("shared"), guestId: "cast" })).toThrow("お客様");
+  it("does not require a companion for shared VIP and rejects malformed extras", () => {
+    expect(quoteKpTicket(null, settings, vip("shared")).total).toBe(100000);
     expect(() => quoteKpTicket(null, settings, { ...vip("solo"), vipActive: true })).toThrow("重複");
     expect(() => quoteKpTicket(null, settings, { ...vip("solo"), vipTier: undefined })).toThrow("選び直し");
     expect(() => quoteKpTicket(null, settings, { ...vip("solo"), quantity: 1 })).toThrow("不完全");
