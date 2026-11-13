@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Collection, PermissionFlagsBits, PermissionsBitField, type VoiceChannel } from "discord.js";
-import { buildHubVcPanelMessage, hubVoiceOverwrites, isBeachTransferHub, vcCommand } from "../commands/vc.js";
+import {
+  buildHubVcPanelMessage, hubVcPermissionFailure, hubVoiceOverwrites,
+  isBeachTransferHub, vcCommand,
+} from "../commands/vc.js";
 import {
   buildShiftEmbeds,
   buildShiftPanelComponents,
@@ -9,6 +12,12 @@ import {
 } from "../commands/shift.js";
 
 describe("Hub VCインチャットパネル", () => {
+  it("VC生成前にBotのチャンネル管理・メンバー移動権限を確認する", () => {
+    expect(hubVcPermissionFailure(false, true)).toContain("チャンネルの管理");
+    expect(hubVcPermissionFailure(true, false)).toContain("メンバーを移動");
+    expect(hubVcPermissionFailure(true, true)).toBeNull();
+  });
+
   it("転送先に Hub の島民・賭博師・賭博頭領の権限上書きをそのまま複製する", () => {
     const source = {
       permissionOverwrites: {

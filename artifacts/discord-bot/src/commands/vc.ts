@@ -626,6 +626,37 @@ export function hubVoiceOverwrites(source: VoiceChannel) {
   }));
 }
 
+export function hubVcPermissionFailure(canManageChannels: boolean, canMoveMembers: boolean): string | null {
+  if (!canManageChannels) {
+    return "VCを作成できません。Botにサーバーの「チャンネルの管理」権限を付与してください。";
+  }
+  if (!canMoveMembers) {
+    return "VCは作成できますが、入室者を転送できません。BotにHub VCの「メンバーを移動」権限を付与してください。";
+  }
+  return null;
+}
+
+function hubVcFailureMessage(error: unknown): string {
+  if (error instanceof Error && error.name === "HubJoinSetupError") return error.message;
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : "";
+  if (code === "50013") {
+    return "VCの作成または転送に必要なBot権限がありません。管理者にHub VCと生成先カテゴリの権限を確認してもらってください。";
+  }
+  if (code === "50001" || code === "10003") {
+    return "Hub VCまたは生成先カテゴリにアクセスできません。管理者にHub設定とBotの閲覧権限を確認してもらってください。";
+  }
+  return "VCの作成または転送に失敗しました。管理者にHub設定とBotの権限を確認してもらってください。";
+}
+
+async function notifyHubVcFailure(member: VoiceState["member"], reason: string): Promise<void> {
+  if (!member) return;
+  await member.send(`🔧 ${reason}`).catch((error) => {
+    logger.warn(`[vcHub] Could not DM member=${member.id} about VC creation failure`, error);
+  });
+}
+
 /**
  * メンバーが Hub チャンネルに入ったとき:
  *   1. 新しいVCを生成
@@ -637,7 +668,15 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
   if (await handleKpVipHubJoin(newState)) return;
   logger.info(`[vcHub] handleHubJoin called: channelId=${newState.channelId} member=${newState.member.id}`);
 
-  const hub = await getHubByChannelId(newState.channelId);
+  const member = newState.member;
+  let hub;
+  try {
+    hub = await getHubByChannelId(newState.channelId);
+  } catch (err) {
+    logger.error(`[vcHub] Failed to look up Hub channel=${newState.channelId} member=${member.id}`, err);
+    await notifyHubVcFailure(member, hubVcFailureMessage(err));
+    return;
+  }
   logger.info(`[vcHub] getHubByChannelId result: ${hub ? `found template="${hub.nameTemplate}" panelOnly=${hub.panelOnly}` : "null (not a hub)"}`);
   if (!hub) return;
 
@@ -646,20 +685,50 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
   if (hub.panelOnly) return;
 
   const guild       = newState.guild;
-  const member      = newState.member;
   const displayName = member.displayName;
   const channelName = hub.nameTemplate.replace("{user}", displayName).slice(0, 100);
 
   // 生成先カテゴリ: hub 設定 → hub 自身の親カテゴリ → なし
   // カテゴリと Hub の権限は異なる場合があるため、転送元を最新状態で取得する。
-  const hubChannel = await guild.channels.fetch(hub.hubChannelId, { force: true });
+  let hubChannel: VoiceChannel | null;
+  try {
+    const fetchedHub = await guild.channels.fetch(hub.hubChannelId, { force: true });
+    hubChannel = fetchedHub?.type === ChannelType.GuildVoice ? fetchedHub : null;
+  } catch (err) {
+    logger.error(`[vcHub] Failed to fetch source Hub channel=${hub.hubChannelId} member=${member.id}`, err);
+    await notifyHubVcFailure(member, hubVcFailureMessage(err));
+    return;
+  }
   if (!hubChannel || hubChannel.type !== ChannelType.GuildVoice) {
     logger.error(`[vcHub] Source voice channel missing hub=${hub.hubChannelId}`);
+    await notifyHubVcFailure(member, "登録されたHub VCが見つかりません。管理者にHub登録を確認してもらってください。");
     return;
   }
   const categoryId = hub.categoryId ?? hubChannel?.parentId ?? undefined;
 
+  let createdVc: VoiceChannel | null = null;
   try {
+    const botMember = await guild.members.fetchMe();
+    const permissionFailure = hubVcPermissionFailure(
+      botMember.permissions.has(PermissionFlagsBits.ManageChannels),
+      hubChannel.permissionsFor(botMember)?.has(PermissionFlagsBits.MoveMembers) ?? false,
+    );
+    if (permissionFailure) {
+      logger.warn(`[vcHub] Permission preflight failed member=${member.id} hub=${hub.hubChannelId}: ${permissionFailure}`);
+      await notifyHubVcFailure(member, permissionFailure);
+      return;
+    }
+
+    if (categoryId) {
+      const category = await guild.channels.fetch(categoryId).catch(() => null);
+      if (!category || category.type !== ChannelType.GuildCategory) {
+        throw Object.assign(new Error("登録された生成先カテゴリが見つからないか、カテゴリではありません。管理者に/vc hub addの設定を確認してもらってください。"), { name: "HubJoinSetupError" });
+      }
+    }
+
+    // 遅いDB/Discord応答の間に本人がHubを離れていたら、部屋を作らない。
+    if (member.voice.channelId !== hub.hubChannelId) return;
+
     // client.user.id は常に利用可能（guild.members.me はキャッシュ未取得の場合がある）
     const botId = newState.client.user?.id ?? guild.members.me?.id;
 
@@ -669,7 +738,7 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
 
     // カテゴリだけを継承すると、Hub 独自の賭博師・賭博頭領などの
     // UseApplicationCommands 許可が落ちる。Hub の上書きを全件コピーする。
-    const newVc = await guild.channels.create({
+    createdVc = await guild.channels.create({
       name: channelName,
       type: ChannelType.GuildVoice,
       parent: categoryId,
@@ -677,34 +746,46 @@ export async function handleHubJoin(newState: VoiceState): Promise<void> {
       ...(hub.userLimit != null ? { userLimit: hub.userLimit } : {}),
     });
 
-    await createHubSession(guild.id, newVc.id, member.id, hub.id);
+    await createHubSession(guild.id, createdVc.id, member.id, hub.id);
 
-    logger.info(`[vcHub] panel check: channel=${newVc.id} template="${hub.nameTemplate}" isTavern=${isTavern} botId=${botId ?? "none"}`);
+    logger.info(`[vcHub] panel check: channel=${createdVc.id} template="${hub.nameTemplate}" isTavern=${isTavern} botId=${botId ?? "none"}`);
     if (!isTavern) {
-      await newVc
-        .send(buildHubVcPanelMessage(newVc.id, member.id, isHubStreamEnabled(newVc, guild.roles.everyone.id)))
+      await createdVc
+        .send(buildHubVcPanelMessage(createdVc.id, member.id, isHubStreamEnabled(createdVc, guild.roles.everyone.id)))
         .catch((err) => logger.error("[vcHub] Failed to send hub panel", err));
-      logger.info(`[vcHub] panel sent to channel=${newVc.id}`);
+      logger.info(`[vcHub] panel sent to channel=${createdVc.id}`);
     }
     // 酒場ハブから生成されたチャンネルを永続ログに記録（過去データ検索に使用）
     if (isTavern) {
       await db.insert(communityTavernChannelsTable)
-        .values({ guildId: guild.id, channelId: newVc.id, hubName: hub.nameTemplate })
+        .values({ guildId: guild.id, channelId: createdVc.id, hubName: hub.nameTemplate })
         .onConflictDoNothing()
         .catch(() => {}); // ログ失敗は無視
     }
 
     // メンバーを新VCに転送
-    await member.voice.setChannel(newVc).catch(async () => {
-      // 転送失敗（権限不足など）→ 作成した空VCを削除
-      await deleteHubSession(newVc.id);
-      await newVc.delete().catch(() => {});
-    });
+    if (member.voice.channelId !== hub.hubChannelId) {
+      await deleteHubSession(createdVc.id);
+      await createdVc.delete("利用者がHubを離れたため");
+      createdVc = null;
+      return;
+    }
+    await member.voice.setChannel(createdVc);
+    logger.info(`[vcHub] created and transferred member=${member.id} hub=${hub.hubChannelId} channel=${createdVc.id}`);
   } catch (err) {
     logger.error(
       `[vcHub] handleHubJoin error member=${member.id} hub=${hub.hubChannelId}`,
       err,
     );
+    if (createdVc) {
+      await deleteHubSession(createdVc.id).catch((cleanupError) =>
+        logger.error(`[vcHub] Failed to clear session channel=${createdVc!.id}`, cleanupError),
+      );
+      await createdVc.delete("Hub VC setup or member transfer failed").catch((cleanupError) =>
+        logger.error(`[vcHub] Failed to delete incomplete VC channel=${createdVc!.id}`, cleanupError),
+      );
+    }
+    await notifyHubVcFailure(member, hubVcFailureMessage(err));
   }
 }
 
