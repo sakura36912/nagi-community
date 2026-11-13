@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(), getData: vi.fn(), setField: vi.fn(),
   setDisplayRole: vi.fn(), setRankRole: vi.fn(), setAppearance: vi.fn(),
+  getBackgroundImage: vi.fn(), setBackgroundAsset: vi.fn(),
   getBackground: vi.fn(), fetchImage: vi.fn(), renderCard: vi.fn(), clearBackground: vi.fn(),
 }));
 vi.mock("@workspace/db", async importOriginal => {
@@ -12,10 +13,12 @@ vi.mock("@workspace/db", async importOriginal => {
     ...actual,
     getProfileSettings: mocks.getSettings,
     getProfileData: mocks.getData,
+    getProfileBackgroundImage: mocks.getBackgroundImage,
     setProfileField: mocks.setField,
     setProfileDisplayRole: mocks.setDisplayRole,
     setProfileRankRole: mocks.setRankRole,
     setProfileAppearance: mocks.setAppearance,
+    setProfileBackgroundAsset: mocks.setBackgroundAsset,
   };
 });
 vi.mock("../lib/profileCardImage.js", () => ({
@@ -62,6 +65,7 @@ function interaction({ admin = false, subcommand = "", options = {} }: {
       getString: (key: string) => options[key] ?? null,
       getBoolean: (key: string) => options[key] ?? null,
       getRole: (key: string) => options[key] ?? null,
+      getAttachment: (key: string) => options[key] ?? null,
     },
     deferReply: vi.fn(), editReply: vi.fn(),
   };
@@ -71,7 +75,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getSettings.mockResolvedValue(configured);
   mocks.getData.mockResolvedValue(data);
-  for (const fn of [mocks.setField, mocks.setDisplayRole, mocks.setRankRole, mocks.setAppearance]) fn.mockResolvedValue(configured);
+  mocks.getBackgroundImage.mockResolvedValue(null);
+  for (const fn of [mocks.setField, mocks.setDisplayRole, mocks.setRankRole, mocks.setAppearance, mocks.setBackgroundAsset]) fn.mockResolvedValue(configured);
   mocks.getBackground.mockResolvedValue(Buffer.from("background"));
   mocks.fetchImage.mockResolvedValue(Buffer.from("avatar"));
   mocks.renderCard.mockResolvedValue(Buffer.from("png"));
@@ -85,6 +90,10 @@ describe("profile slash commands", () => {
     expect(definition.options?.map(option => option.name)).toEqual([
       "項目", "表示ロール追加", "表示ロール削除", "ランクロール", "ランクロール解除", "色", "画像", "枠",
     ]);
+    const imageOptions = JSON.parse(JSON.stringify(definition.options?.find(option => option.name === "画像"))) as {
+      options?: { name: string }[];
+    };
+    expect(imageOptions.options?.map(option => option.name)).toEqual(["url", "ファイル"]);
     expect(JSON.stringify(definition.options?.find(option => option.name === "項目"))).not.toContain("銀行残高");
   });
 
@@ -133,6 +142,16 @@ describe("profile slash commands", () => {
     }));
   });
 
+  it("renders with a background image saved from a direct upload", async () => {
+    const saved = { imageData: Buffer.from("saved-background"), contentType: "image/png" };
+    mocks.getBackgroundImage.mockResolvedValue(saved);
+    const i = interaction();
+    await profileCommand.execute(i as never);
+    expect(mocks.renderCard).toHaveBeenCalledWith(expect.objectContaining({
+      backgroundBuffer: saved.imageData,
+    }));
+  });
+
   it("requires administrator permission before changing display settings", async () => {
     const i = interaction({ subcommand: "項目", options: { "項目": "casino", "表示": false } });
     await profileSettingsCommand.execute(i as never);
@@ -144,5 +163,33 @@ describe("profile slash commands", () => {
     const i = interaction({ admin: true, subcommand: "項目", options: { "項目": "casino", "表示": false } });
     await profileSettingsCommand.execute(i as never);
     expect(mocks.setField).toHaveBeenCalledWith("guild", "casino", false);
+  });
+
+  it("saves a validated directly attached PNG for all profile cards", async () => {
+    const attachment = {
+      url: "https://cdn.discordapp.com/attachments/sample/profile.png",
+      contentType: "image/png",
+      size: 512,
+    };
+    const i = interaction({ admin: true, subcommand: "画像", options: { "ファイル": attachment } });
+    await profileSettingsCommand.execute(i as never);
+    expect(mocks.fetchImage).toHaveBeenCalledWith(attachment.url);
+    expect(mocks.setBackgroundAsset).toHaveBeenCalledWith("guild", {
+      kind: "upload",
+      imageData: Buffer.from("avatar"),
+      contentType: "image/png",
+    });
+    expect(mocks.clearBackground).toHaveBeenCalled();
+  });
+
+  it("rejects unsupported direct image types without changing the saved background", async () => {
+    const i = interaction({
+      admin: true,
+      subcommand: "画像",
+      options: { "ファイル": { url: "https://cdn.discordapp.com/file.gif", contentType: "image/gif", size: 512 } },
+    });
+    await profileSettingsCommand.execute(i as never);
+    expect(mocks.setBackgroundAsset).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalledWith({ content: "添付できる画像はPNGまたはJPEGです。" });
   });
 });

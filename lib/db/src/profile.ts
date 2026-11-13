@@ -5,7 +5,7 @@ import { getForgeWeapon } from "./forge";
 import {
   bossBattlesTable, bossMembersTable, dealerCasinoBetsTable, dealerCasinoGamesTable,
   dealerCasinoSettlementsTable, petAccountsTable, pvpBountiesTable, pvpDuelsTable,
-  profileSettingsTable, transactionsTable,
+  profileBackgroundsTable, profileSettingsTable, transactionsTable,
   guildSettingsTable,
 } from "./schema";
 import { ensureProfileSchema } from "./profileSchema";
@@ -83,6 +83,46 @@ export async function setProfileAppearance(
     throw new Error("カード枠の種類が不正です。");
   }
   return updateConfig(guildId, settings => ({ ...settings, ...patch }));
+}
+
+export async function setProfileBackgroundAsset(
+  guildId: string,
+  source:
+    | { kind: "url"; url: string }
+    | { kind: "upload"; imageData: Buffer; contentType: "image/png" | "image/jpeg" }
+    | { kind: "clear" },
+) {
+  await ensureProfileSchema();
+  return db.transaction(async tx => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["profile-settings", guildId])}, 0))`);
+    const [row] = await tx.select().from(profileSettingsTable)
+      .where(eq(profileSettingsTable.guildId, guildId)).for("update");
+    const settings = normalizeSettings(row?.settings);
+    const nextSettings = { ...settings, backgroundUrl: source.kind === "url" ? source.url : null };
+    await tx.insert(profileSettingsTable).values({ guildId, settings: nextSettings })
+      .onConflictDoUpdate({ target: profileSettingsTable.guildId, set: { settings: nextSettings } });
+
+    if (source.kind === "upload") {
+      await tx.insert(profileBackgroundsTable).values({
+        guildId, imageData: source.imageData, contentType: source.contentType,
+      }).onConflictDoUpdate({
+        target: profileBackgroundsTable.guildId,
+        set: { imageData: source.imageData, contentType: source.contentType },
+      });
+    } else {
+      await tx.delete(profileBackgroundsTable).where(eq(profileBackgroundsTable.guildId, guildId));
+    }
+    return nextSettings;
+  });
+}
+
+export async function getProfileBackgroundImage(guildId: string) {
+  await ensureProfileSchema();
+  const [row] = await db.select({
+    imageData: profileBackgroundsTable.imageData,
+    contentType: profileBackgroundsTable.contentType,
+  }).from(profileBackgroundsTable).where(eq(profileBackgroundsTable.guildId, guildId));
+  return row ?? null;
 }
 
 export async function getProfileData(guildId: string, userId: string) {

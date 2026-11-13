@@ -2,14 +2,16 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import {
-  db, getProfileData, getProfileSettings, setProfileAppearance, setProfileDisplayRole,
-  setProfileField, setProfileRankRole, petAccountsTable, profileSettingsTable,
+  db, getProfileBackgroundImage, getProfileData, getProfileSettings, setProfileAppearance,
+  setProfileBackgroundAsset, setProfileDisplayRole, setProfileField, setProfileRankRole,
+  petAccountsTable, profileBackgroundsTable, profileSettingsTable,
 } from "@workspace/db";
 
 describe.skipIf(process.env.RUN_PROFILE_DB_TESTS !== "1")("profile settings and saved data", () => {
   const guildId = `profile-test-${randomUUID()}`;
   const stockUserId = `stock-${randomUUID()}`;
   afterAll(async () => {
+    await db.delete(profileBackgroundsTable).where(eq(profileBackgroundsTable.guildId, guildId));
     await db.delete(petAccountsTable).where(eq(petAccountsTable.guildId, guildId));
     await db.delete(profileSettingsTable).where(eq(profileSettingsTable.guildId, guildId));
   });
@@ -24,6 +26,15 @@ describe.skipIf(process.env.RUN_PROFILE_DB_TESTS !== "1")("profile settings and 
     expect(settings.rankRoles).toEqual([{ roleId: "role-vip", tier: "vip" }]);
     expect(settings.visibleFields.casino).toBe(false);
     expect(settings).toMatchObject({ color: 0x123abc, backgroundUrl: "https://example.com/card.png", frameStyle: "gold" });
+  });
+
+  it("persists directly uploaded background bytes and removes them when switching to a URL", async () => {
+    const imageData = Buffer.from("profile-background-test");
+    await setProfileBackgroundAsset(guildId, { kind: "upload", imageData, contentType: "image/png" });
+    expect(await getProfileBackgroundImage(guildId)).toMatchObject({ imageData, contentType: "image/png" });
+    await setProfileBackgroundAsset(guildId, { kind: "url", url: "https://example.com/profile.png" });
+    expect(await getProfileBackgroundImage(guildId)).toBeNull();
+    expect((await getProfileSettings(guildId)).backgroundUrl).toBe("https://example.com/profile.png");
   });
 
   it("loads absent profile stats from existing storage without creating personal records", async () => {

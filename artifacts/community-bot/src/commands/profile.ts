@@ -4,7 +4,7 @@ import {
 } from "discord.js";
 import {
   PROFILE_FIELD_LABELS, PROFILE_RANK_LABELS, configuredProfileRank,
-  getProfileData, getProfileSettings, setProfileAppearance, setProfileDisplayRole,
+  getProfileBackgroundImage, getProfileData, getProfileSettings, setProfileAppearance, setProfileBackgroundAsset, setProfileDisplayRole,
   setProfileField, setProfileRankRole, type ProfileField, type ProfileFrameStyle, type ProfileRankTier,
 } from "@workspace/db";
 import { logger } from "../lib/logger.js";
@@ -35,9 +35,10 @@ export const profileCommand = {
     try {
       if (!i.guild) throw new ProfileCommandError("サーバー内で使用してください。");
       const member = await i.guild.members.fetch({ user: i.user.id, force: true });
-      const [settings, profile] = await Promise.all([
+      const [settings, profile, savedBackground] = await Promise.all([
         getProfileSettings(i.guild.id),
         getProfileData(i.guild.id, i.user.id),
+        getProfileBackgroundImage(i.guild.id),
       ]);
       const avatar = i.user.displayAvatarURL({ extension: "png", size: 256 });
       const rankTier = configuredProfileRank([...member.roles.cache.keys()], settings.rankRoles);
@@ -120,6 +121,8 @@ export const profileCommand = {
           logger.warn("[profile] 背景画像を読み込めませんでした。", error);
           throw new ProfileCommandError("背景画像を読み込めません。管理者は公開HTTPSのPNG/JPEG画像URLを確認してください。");
         }
+      } else if (savedBackground) {
+        backgroundBuffer = savedBackground.imageData;
       }
       let avatarBuffer: Buffer | null = null;
       try {
@@ -187,8 +190,9 @@ export const profileSettingsCommand = {
       .addRoleOption(o => o.setName("ロール").setDescription("解除するロール").setRequired(true)))
     .addSubcommand(s => s.setName("色").setDescription("カードの色を設定（解除はdefault）")
       .addStringOption(o => o.setName("カラー").setDescription("#RRGGBB形式、またはdefault").setRequired(true).setMaxLength(7)))
-    .addSubcommand(s => s.setName("画像").setDescription("カード背景画像を設定（解除はoff）")
-      .addStringOption(o => o.setName("url").setDescription("公開HTTPSのPNG/JPEG URL、またはoff").setRequired(true).setMaxLength(400)))
+     .addSubcommand(s => s.setName("画像").setDescription("カード背景画像を設定（URLまたは画像を添付、解除はoff）")
+       .addStringOption(o => o.setName("url").setDescription("公開HTTPSのPNG/JPEG URL、またはoff").setRequired(false).setMaxLength(400))
+       .addAttachmentOption(o => o.setName("ファイル").setDescription("PNG/JPEG画像（5MB以下）").setRequired(false)))
     .addSubcommand(s => s.setName("枠").setDescription("基本カードの枠テーマを設定")
       .addStringOption(o => o.setName("デザイン").setDescription("枠テーマ").setRequired(true)
         .addChoices(...frameChoices))),
@@ -217,19 +221,40 @@ export const profileSettingsCommand = {
           await setProfileAppearance(guildId, { color: Number.parseInt(match[1]!, 16) });
         }
       } else if (sub === "画像") {
-        const raw = i.options.getString("url", true).trim();
-        if (raw.toLowerCase() === "off") {
-          await setProfileAppearance(guildId, { backgroundUrl: null });
-          clearProfileBackgroundCache();
+        const raw = i.options.getString("url")?.trim() ?? "";
+        const attachment = i.options.getAttachment("ファイル");
+        if (attachment && raw) {
+          throw new ProfileCommandError("画像URLと添付ファイルは同時に指定できません。どちらか一方を選んでください。");
+        }
+        if (attachment) {
+          const contentType = attachment.contentType?.split(";")[0]?.trim().toLowerCase();
+          if (contentType !== "image/png" && contentType !== "image/jpeg") {
+            throw new ProfileCommandError("添付できる画像はPNGまたはJPEGです。");
+          }
+          if (attachment.size > 5 * 1024 * 1024) {
+            throw new ProfileCommandError("画像は5MB以下にしてください。");
+          }
+          let imageData: Buffer;
+          try {
+            imageData = await fetchProfileImage(attachment.url);
+          } catch (error) {
+            logger.warn("[profile] 添付された背景画像を読み込めませんでした。", error);
+            throw new ProfileCommandError("添付画像を検証できません。PNG/JPEGの画像をもう一度添付してください。");
+          }
+          await setProfileBackgroundAsset(guildId, { kind: "upload", imageData, contentType });
+        } else if (!raw) {
+          throw new ProfileCommandError("公開HTTPSの画像URL、画像ファイル、またはoffを指定してください。");
+        } else if (raw.toLowerCase() === "off") {
+          await setProfileBackgroundAsset(guildId, { kind: "clear" });
         } else {
           let url: URL;
           try { url = new URL(raw); } catch { throw new ProfileCommandError("画像URLが正しくありません。"); }
           if (url.protocol !== "https:" || (url.port && url.port !== "443") || url.username || url.password) {
             throw new ProfileCommandError("画像URLは公開HTTPSのURL（標準ポート）で指定してください。");
           }
-          await setProfileAppearance(guildId, { backgroundUrl: url.toString() });
-          clearProfileBackgroundCache();
+          await setProfileBackgroundAsset(guildId, { kind: "url", url: url.toString() });
         }
+        clearProfileBackgroundCache();
       } else if (sub === "枠") {
         const frame = i.options.getString("デザイン", true) as ProfileFrameStyle;
         await setProfileAppearance(guildId, { frameStyle: frame });
