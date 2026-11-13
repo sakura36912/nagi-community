@@ -7,8 +7,10 @@ Use an Embed for `/プロフィール`. Determine KP島ランク from administra
 
 Never display the user's bank balance on the profile card.
 
+In the inventory field, show only counts for eggs by rarity, food, and toys. Keep the pet's identity in its separate pet field; do not list generic shop items there.
+
 Embed images are displayed as the card's image/banner, not as a true background texture; Discord embeds do not support a custom background behind their text.
 
-**Why:** The user chose Embed format, role-based KP rank, and existing saved data only, and explicitly excluded bank balance from display. The image placement is a platform limitation of the selected format.
+**Why:** The user chose Embed format, role-based KP rank, and existing saved data only, explicitly excluded bank balance, and limited the inventory field to pet consumable/egg counts. The image placement is a platform limitation of the selected format.
 
 **How to apply:** Keep profile data sourced from existing persisted records. If a future request needs a parchment texture behind the text, confirm whether the user wants to change from Embed to a generated image card.

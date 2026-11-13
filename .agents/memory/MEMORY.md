@@ -42,4 +42,4 @@
 - [Halloween感染ゲーム](zombie-event-policy.md) — 多機能Botの秘密役職。感染・治療は連続3分後に承認不要。治療班は勝敗から除外、報酬は銀行残高へ。
 - [航海日誌の購入条件](voyage-journal-policy.md) — 航海日誌の購入は酒場VC累計100時間以上に限定する。
 - [全VC入退室記録](all-vc-history-policy.md) — 今後の履歴は全VCを対象にし、酒場報酬条件・記録拒否・保持期間は維持する。
-- [Profile card policy](profile-card-policy.md) — Embed card, role-based KP rank, saved stats only, and never show bank balance; images are banners, not backgrounds.
+- [Profile card policy](profile-card-policy.md) — Embed, role-based KP rank, saved stats only, no bank balance; inventory shows egg/food/toy counts.

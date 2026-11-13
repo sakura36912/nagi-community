@@ -96,11 +96,9 @@ export const profileCommand = {
           : "保存済み記録なし", inline: false });
       }
       if (settings.visibleFields.inventory !== false) {
-        const items = [
-          ...profile.inventory.map(item => `${escapeMarkdown(item.name)} ×${item.quantity}`),
-          ...profile.petInventory.map(item => escapeMarkdown(item)),
-        ];
-        embed.addFields({ name: "🎒 所持品", value: items.length ? items.slice(0, 16).join("\n") : "所持品なし", inline: false });
+        embed.addFields({ name: "🎒 所持品", value: profile.petStock.length
+          ? profile.petStock.map(item => escapeMarkdown(item)).join("\n")
+          : "卵・エサ・おもちゃなし", inline: false });
       }
       if (settings.visibleFields.pet !== false) {
         embed.addFields({ name: "🐾 ペット", value: profile.pet

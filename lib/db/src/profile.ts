@@ -1,11 +1,12 @@
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { db } from "./index";
 import { ensureBossSchema } from "./bossSchema";
 import { getForgeWeapon } from "./forge";
+import { PET_RARITIES, PET_RARITY_NAMES } from "./petRules";
 import {
   bossBattlesTable, bossMembersTable, dealerCasinoBetsTable, dealerCasinoGamesTable,
-  dealerCasinoSettlementsTable, inventoryItemsTable, petAccountsTable, pvpBountiesTable,
-  pvpDuelsTable, profileSettingsTable, shopItemsTable, transactionsTable,
+  dealerCasinoSettlementsTable, petAccountsTable, pvpBountiesTable, pvpDuelsTable,
+  profileSettingsTable, transactionsTable,
   guildSettingsTable,
 } from "./schema";
 import { ensureProfileSchema } from "./profileSchema";
@@ -87,7 +88,7 @@ export async function setProfileAppearance(
 
 export async function getProfileData(guildId: string, userId: string) {
   await Promise.all([ensureProfileSchema(), ensureBossSchema()]);
-  const [weapon, bountyRows, currencyRows, petRows, inventoryRows, bossRows, duelRows,
+  const [weapon, bountyRows, currencyRows, petRows, bossRows, duelRows,
     casinoLedgerRows, dealerRows] = await Promise.all([
     getForgeWeapon(guildId, userId),
     db.select({ amount: pvpBountiesTable.amount }).from(pvpBountiesTable).where(and(
@@ -98,10 +99,6 @@ export async function getProfileData(guildId: string, userId: string) {
     db.select({ data: petAccountsTable.data }).from(petAccountsTable).where(and(
       eq(petAccountsTable.guildId, guildId), eq(petAccountsTable.userId, userId),
     )),
-    db.select({ name: shopItemsTable.name, quantity: inventoryItemsTable.quantity })
-      .from(inventoryItemsTable).innerJoin(shopItemsTable, eq(inventoryItemsTable.shopItemId, shopItemsTable.id))
-      .where(and(eq(inventoryItemsTable.guildId, guildId), eq(inventoryItemsTable.userId, userId)))
-      .orderBy(desc(inventoryItemsTable.quantity)),
     db.select({ status: bossBattlesTable.status, damage: bossMembersTable.damage })
       .from(bossMembersTable).innerJoin(bossBattlesTable, eq(bossMembersTable.battleId, bossBattlesTable.id))
       .where(and(eq(bossMembersTable.guildId, guildId), eq(bossMembersTable.userId, userId))),
@@ -136,24 +133,20 @@ export async function getProfileData(guildId: string, userId: string) {
     else pvp.losses++;
   }
   const pet = petRows[0]?.data.pet ?? null;
-  const petInventory: string[] = [];
   const account = petRows[0]?.data;
-  if (pet) petInventory.push(`${pet.name}（Lv${pet.level}）`);
+  const petStock: string[] = [];
   if (account) {
-    const rarityNames: Record<string, string> = { normal: "ノーマル", rare: "レア", epic: "エピック", legend: "レジェンド", mythic: "ミシック" };
-    for (const [rarity, quantity] of Object.entries(account.eggs ?? {})) {
-      if (quantity) petInventory.push(`${rarityNames[rarity] ?? rarity}卵 ×${quantity}`);
+    for (const rarity of PET_RARITIES) {
+      petStock.push(`${PET_RARITY_NAMES[rarity]}卵：${account.eggs[rarity] ?? 0}個`);
     }
-    if (account.food) petInventory.push(`エサ ×${account.food}`);
-    if (account.toys) petInventory.push(`おもちゃ ×${account.toys}`);
+    petStock.push(`エサ：${account.food ?? 0}個`, `おもちゃ：${account.toys ?? 0}個`);
   }
   return {
     weapon,
     bounty: bountyRows[0]?.amount ?? null,
     currencyName: currencyRows[0]?.currencyName ?? "$",
-    inventory: inventoryRows,
     pet,
-    petInventory,
+    petStock,
     battle: {
       defeats: bossRows.filter(row => row.status === "won").length,
       maxDamage: bossRows.reduce((max, row) => Math.max(max, Number(row.damage)), 0),

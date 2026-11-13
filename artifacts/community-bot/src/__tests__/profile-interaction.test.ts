@@ -31,7 +31,8 @@ const data = {
   weapon: { weaponType: "greatsword", weaponLevel: 3, attack: 999 },
   bounty: 500000, currencyName: "$",
   inventory: [{ name: "宝箱", quantity: 2 }],
-  pet: { name: "キツネ", level: 4, bond: 50 }, petInventory: ["キツネ（Lv4）"],
+  pet: { name: "キツネ", level: 4, bond: 50 },
+  petStock: ["ノーマル卵：0個", "レア卵：1個", "エピック卵：0個", "レジェンド卵：0個", "ミシック卵：0個", "エサ：2個", "おもちゃ：1個"],
   battle: { defeats: 2, maxDamage: 9500, participated: 3 },
   pvp: { wins: 4, losses: 2, draws: 1 },
   casino: { totalBet: 5000, net: -300, wins: 5, maxPayout: 9000, games: 12 },
@@ -89,6 +90,12 @@ describe("profile slash commands", () => {
     expect(fields?.find(field => field.name === "⚔️ 戦闘情報")?.value).toContain("大剣 Lv3");
     expect(fields?.find(field => field.name === "⚔️ 戦闘情報")?.value).not.toContain("999");
     expect(fields?.find(field => field.name === "🎰 カジノ（保存済み記録）")?.value).toContain("総BET");
+    const inventory = fields?.find(field => field.name === "🎒 所持品")?.value ?? "";
+    expect(inventory).toContain("レア卵：1個");
+    expect(inventory).toContain("エサ：2個");
+    expect(inventory).toContain("おもちゃ：1個");
+    expect(inventory).not.toContain("宝箱");
+    expect(inventory).not.toContain("キツネ");
   });
 
   it("requires administrator permission before changing display settings", async () => {

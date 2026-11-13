@@ -3,12 +3,14 @@ import { afterAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import {
   db, getProfileData, getProfileSettings, setProfileAppearance, setProfileDisplayRole,
-  setProfileField, setProfileRankRole, profileSettingsTable,
+  setProfileField, setProfileRankRole, petAccountsTable, profileSettingsTable,
 } from "@workspace/db";
 
 describe.skipIf(process.env.RUN_PROFILE_DB_TESTS !== "1")("profile settings and saved data", () => {
   const guildId = `profile-test-${randomUUID()}`;
+  const stockUserId = `stock-${randomUUID()}`;
   afterAll(async () => {
+    await db.delete(petAccountsTable).where(eq(petAccountsTable.guildId, guildId));
     await db.delete(profileSettingsTable).where(eq(profileSettingsTable.guildId, guildId));
   });
 
@@ -28,11 +30,23 @@ describe.skipIf(process.env.RUN_PROFILE_DB_TESTS !== "1")("profile settings and 
     const profile = await getProfileData(guildId, `missing-${randomUUID()}`);
     expect(profile).toMatchObject({
       bounty: null, currencyName: "$",
-      inventory: [], petInventory: [], pet: null,
+      petStock: [], pet: null,
       battle: { defeats: 0, maxDamage: 0, participated: 0 },
       pvp: { wins: 0, losses: 0, draws: 0 },
       casino: { totalBet: 0, net: 0, wins: 0, maxPayout: 0, games: 0 },
     });
     expect(profile.weapon).toBeUndefined();
+  });
+
+  it("returns only egg, food, and toy counts for the inventory section", async () => {
+    await db.insert(petAccountsTable).values({
+      guildId, userId: stockUserId,
+      data: { pet: null, eggs: { rare: 1 }, food: 2, toys: 1, day: "", petsToday: 0, playsToday: 0 },
+    });
+    const profile = await getProfileData(guildId, stockUserId);
+    expect(profile.petStock).toEqual([
+      "ノーマル卵：0個", "レア卵：1個", "エピック卵：0個", "レジェンド卵：0個",
+      "ミシック卵：0個", "エサ：2個", "おもちゃ：1個",
+    ]);
   });
 });
