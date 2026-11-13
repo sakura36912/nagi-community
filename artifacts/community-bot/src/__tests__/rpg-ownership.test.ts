@@ -7,7 +7,7 @@ import { commands } from "../commands/index";
 const commandsByName = new Map(commands.map(c => [c.data.name, c]));
 describe("community RPG command ownership", () => {
   it("owns all weapon, boss and PvP commands without renaming or omissions", () => {
-    expect(forgeCommands).toHaveLength(11);
+    expect(forgeCommands).toHaveLength(12);
     expect(bossCommands).toHaveLength(8);
     const moved = [...forgeCommands, ...bossCommands, ...pvpCommands];
     expect(moved.map(c => c.data.name).sort()).toEqual([...RPG_COMMAND_NAMES].sort());

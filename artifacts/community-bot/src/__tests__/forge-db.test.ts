@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import {
   db, ensureForgeSchema, forgeWeaponsTable, forgeUpgradeSettingsTable, forgeUpgradeRequestsTable, forgeActionsTable,
   walletsTable, transactionsTable, selectForgeWeapon, getForgeWeapon, getForgeSetting,
-  createForgeUpgradeRequest, settleForgeUpgrade, cancelForgeUpgrade, adminForgeWeapon,
+  createForgeUpgradeRequest, settleForgeUpgrade, cancelForgeUpgrade, adminForgeWeapon, adminSetForgeLevel,
   configureForgeSetting, resetForgeSettings, listForgeSettings,
 } from "@workspace/db";
 
@@ -115,6 +115,18 @@ describe.skipIf(process.env.RUN_FORGE_DB_TESTS !== "1")("forge atomic database o
     await selectForgeWeapon(id(), guild, user, "greatsword");
     await expect(settleForgeUpgrade(second.id, guild, user)).rejects.toThrow();
     expect(await balance(user)).toBe(10000);
+  });
+  it("admin level setting recalculates stats, preserves balance, and invalidates pending upgrades", async () => {
+    const user = freshUser(), quote = await ready(user);
+    const result = await adminSetForgeLevel(id(), guild, user, "admin", 4);
+    const weapon = await getForgeWeapon(guild, user);
+    const [request] = await db.select().from(forgeUpgradeRequestsTable).where(eq(forgeUpgradeRequestsTable.id, quote.id));
+    expect(result).toMatchObject({ action: "set-level", weaponType: "greatsword", level: 4 });
+    expect(weapon).toMatchObject({ weaponLevel: 4, attack: 28, defense: 16 });
+    expect(await balance(user)).toBe(10000);
+    expect(request?.state).toBe("cancelled");
+    await expect(settleForgeUpgrade(quote.id, guild, user)).rejects.toThrow();
+    await expect(adminSetForgeLevel(id(), guild, user, "admin", 0)).rejects.toThrow();
   });
   it("rolls back weapon and debit if ledger insertion fails", async () => {
     const user = freshUser(), quote = await ready(user);

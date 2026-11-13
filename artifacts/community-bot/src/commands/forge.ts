@@ -6,7 +6,7 @@ import {
 import {
   ForgeError, FORGE_WEAPONS, publicForgeWeapon, getForgeWeapon, getForgeSetting,
   selectForgeWeapon, createForgeUpgradeRequest, settleForgeUpgrade, cancelForgeUpgrade,
-  adminForgeWeapon, configureForgeSetting, listForgeSettings, resetForgeSettings,
+  adminForgeWeapon, adminSetForgeLevel, configureForgeSetting, listForgeSettings, resetForgeSettings,
   isForgeWeaponType, type ForgeActionResult,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
@@ -20,7 +20,7 @@ const choices = [
 ];
 type Interaction = ChatInputCommandInteraction | ButtonInteraction;
 type ForgeAccessInteraction = Interaction | StringSelectMenuInteraction;
-const ADMIN_COMMANDS = new Set(["武器変更", "武器リセット", "武器確認",
+const ADMIN_COMMANDS = new Set(["武器変更", "武器リセット", "武器レベル設定", "武器確認",
   "強化費用設定", "強化費用リセット", "強化成功率設定", "強化成功率リセット"]);
 
 export async function requireForgeAccess(interaction: ForgeAccessInteraction, admin = false) {
@@ -131,6 +131,17 @@ export async function executeForgeCommand(interaction: ChatInputCommandInteracti
       });
       return;
     }
+    if (name === "武器レベル設定") {
+      const target = interaction.options.getUser("ユーザー", true);
+      const level = interaction.options.getInteger("レベル", true);
+      if (!interaction.options.getBoolean("確認", true)) throw new ForgeError("実行するには「確認」をTrueにしてください。");
+      const result = await adminSetForgeLevel(interaction.id, guildId, target.id, userId, level);
+      await interaction.editReply({
+        content: `${target.id} の武器をLv${result.level}に設定しました。武器能力を再計算し、残高は変更していません。保留中の強化確認は無効になりました。`,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
     if (name === "強化費用設定" || name === "強化成功率設定") {
       const level = interaction.options.getInteger("レベル", true);
       const patch = name === "強化費用設定"
@@ -215,6 +226,10 @@ export const forgeCommands = [
   base("武器変更", "管理者専用：ユーザーの武器を変更（レベル維持）")
     .addUserOption(o => o.setName("ユーザー").setDescription("対象ユーザー").setRequired(true))
     .addStringOption(o => o.setName("種類").setDescription("変更後の武器").setRequired(true).addChoices(...choices))
+    .addBooleanOption(o => o.setName("確認").setDescription("実行する場合はTrue").setRequired(true)),
+  base("武器レベル設定", "管理者専用：指定ユーザーの武器Lvを設定")
+    .addUserOption(o => o.setName("ユーザー").setDescription("対象ユーザー").setRequired(true))
+    .addIntegerOption(o => o.setName("レベル").setDescription("設定する武器レベル").setRequired(true).setMinValue(1).setMaxValue(2147483647))
     .addBooleanOption(o => o.setName("確認").setDescription("実行する場合はTrue").setRequired(true)),
   base("武器リセット", "管理者専用：武器を削除し再選択可能にする（返金なし）")
     .addUserOption(o => o.setName("ユーザー").setDescription("対象ユーザー").setRequired(true))

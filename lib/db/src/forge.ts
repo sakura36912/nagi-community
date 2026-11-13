@@ -157,6 +157,27 @@ export async function adminForgeWeapon(id: string, guildId: string, userId: stri
       { action, weaponType: type ?? weapon.weaponType, level: weapon.weaponLevel, reset: type === null });
   });
 }
+export async function adminSetForgeLevel(id: string, guildId: string, userId: string, actorId: string, level: number) {
+  await ensureForgeSchema();
+  forgeInteger(level, 1);
+  return db.transaction(async tx => {
+    await lockWeapon(tx, guildId, userId);
+    const previous = await previousAction(tx, id, guildId, userId, actorId, "set-level");
+    if (previous) return previous;
+    const [weapon] = await tx.select().from(weapons).where(weaponWhere(guildId, userId));
+    if (!weapon) throw new ForgeError("このユーザーは武器を持っていません。先に本人が /武器選択 を実行してください。");
+    if (!isForgeWeaponType(weapon.weaponType)) throw new ForgeError("武器設定が不正です。");
+    // 管理者によるレベル変更後に古い強化確認を通さない。
+    await tx.update(requests).set({ state: "cancelled" }).where(and(eq(requests.guildId, guildId),
+      eq(requests.userId, userId), eq(requests.state, "pending")));
+    await tx.update(weapons).set({
+      weaponLevel: level, ...forgeStats(weapon.weaponType, level),
+      version: weapon.version + 1, updatedAt: new Date(),
+    }).where(weaponWhere(guildId, userId));
+    return recordAction(tx, id, guildId, userId, actorId,
+      { action: "set-level", weaponType: weapon.weaponType, level });
+  });
+}
 export async function configureForgeSetting(id: string, guildId: string, actorId: string, level: number,
   patch: { cost?: number; successRate?: number }) {
   await ensureForgeSchema();

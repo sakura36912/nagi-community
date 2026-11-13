@@ -3,14 +3,14 @@ import { Collection, PermissionFlagsBits, type ChatInputCommandInteraction, type
 
 const m = vi.hoisted(() => ({
   select: vi.fn(), getWeapon: vi.fn(), getSetting: vi.fn(), create: vi.fn(), settle: vi.fn(),
-  cancel: vi.fn(), admin: vi.fn(), configure: vi.fn(), reset: vi.fn(), list: vi.fn(),
+  cancel: vi.fn(), admin: vi.fn(), adminSetLevel: vi.fn(), configure: vi.fn(), reset: vi.fn(), list: vi.fn(),
   error: vi.fn(), warn: vi.fn(),
 }));
 vi.mock("@workspace/db", async original => ({
   ...await original<typeof import("@workspace/db")>(),
   selectForgeWeapon: m.select, getForgeWeapon: m.getWeapon, getForgeSetting: m.getSetting,
   createForgeUpgradeRequest: m.create, settleForgeUpgrade: m.settle, cancelForgeUpgrade: m.cancel,
-  adminForgeWeapon: m.admin, configureForgeSetting: m.configure,
+  adminForgeWeapon: m.admin, adminSetForgeLevel: m.adminSetLevel, configureForgeSetting: m.configure,
   resetForgeSettings: m.reset, listForgeSettings: m.list,
 }));
 vi.mock("../lib/logger", () => ({ logger: { error: m.error, warn: m.warn, info: vi.fn() } }));
@@ -56,6 +56,7 @@ beforeEach(() => {
   m.create.mockResolvedValue({ id: "1234567890123456789", weaponType: "bow", weaponLevel: 1, cost: 1000, successRate: 100 });
   m.settle.mockResolvedValue({ action: "upgrade", weaponType: "bow", level: 2, success: true, cost: 1000, balance: 9000 });
   m.admin.mockResolvedValue({ level: 4 });
+  m.adminSetLevel.mockResolvedValue({ level: 8 });
   m.list.mockResolvedValue([{ level: 1, cost: 1000, successRate: 100 }]);
 });
 
@@ -77,12 +78,14 @@ describe("forge command permissions and UI", () => {
     expect(i.message.edit).not.toHaveBeenCalled();
   });
   it("defines eleven Japanese slash commands, with admin defaults only on admin commands", () => {
-    expect(forgeCommands).toHaveLength(11);
+    expect(forgeCommands).toHaveLength(12);
     const names = forgeCommands.map(c => c.data.name);
-    expect(new Set(names).size).toBe(11);
+    expect(new Set(names).size).toBe(12);
     expect(names).not.toContain("baccarat");
     expect(names).not.toContain("calendar");
     expect(forgeCommands.find(c => c.data.name === "武器確認")?.data.toJSON().default_member_permissions)
+      .toBe(PermissionFlagsBits.Administrator.toString());
+    expect(forgeCommands.find(c => c.data.name === "武器レベル設定")?.data.toJSON().default_member_permissions)
       .toBe(PermissionFlagsBits.Administrator.toString());
     expect(forgeCommands.find(c => c.data.name === "武器")?.data.toJSON().default_member_permissions).toBeUndefined();
   });
@@ -121,12 +124,13 @@ describe("forge command permissions and UI", () => {
     expect(output).not.toMatch(/9999|8888|内部攻撃力|内部防御力/);
   });
   it("requires administrator permissions for internal stats and changes", async () => {
-    for (const name of ["武器確認", "武器変更", "武器リセット", "強化費用設定", "強化成功率設定"]) {
+    for (const name of ["武器確認", "武器変更", "武器リセット", "武器レベル設定", "強化費用設定", "強化成功率設定"]) {
       const i = fixture(name);
       await run(i);
       expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("管理者のみ") }));
     }
     expect(m.admin).not.toHaveBeenCalled();
+    expect(m.adminSetLevel).not.toHaveBeenCalled();
     expect(m.configure).not.toHaveBeenCalled();
     expect(m.getWeapon).not.toHaveBeenCalled();
   });
@@ -201,6 +205,19 @@ describe("forge command permissions and UI", () => {
     await run(i);
     expect(m.admin).toHaveBeenCalledWith(i.id, "guild", "target", "user", null);
   });
+  it("sets a selected member's weapon level only after explicit admin confirmation", async () => {
+    const i = fixture("武器レベル設定"); i.flags.admin = true;
+    i.values["ユーザー"] = { id: "target" };
+    i.values["レベル"] = 8;
+    i.values["確認"] = false;
+    await run(i);
+    expect(m.adminSetLevel).not.toHaveBeenCalled();
+    i.values["確認"] = true;
+    await run(i);
+    expect(m.adminSetLevel).toHaveBeenCalledWith(i.id, "guild", "target", "user", 8);
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("Lv8");
+    expect(JSON.stringify(i.editReply.mock.calls)).toContain("残高は変更していません");
+  });
   it("accepts zero cost and does not change chance at the same time", async () => {
     const i = fixture("強化費用設定"); i.flags.admin = true;
     i.values["レベル"] = 5; i.values["金額"] = 0;
@@ -223,7 +240,7 @@ describe("forge command permissions and UI", () => {
     };
     await syncForgeCommandRegistration({ application: { commands: manager } } as never);
     expect(manager.edit).toHaveBeenCalledTimes(1);
-    expect(manager.create).toHaveBeenCalledTimes(10);
+    expect(manager.create).toHaveBeenCalledTimes(11);
     expect(manager.fetch).toHaveBeenCalledWith("existing", { force: true });
     expect(manager.set).not.toHaveBeenCalled();
     expect(manager.delete).not.toHaveBeenCalled();
