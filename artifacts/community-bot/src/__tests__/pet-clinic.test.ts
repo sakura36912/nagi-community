@@ -62,6 +62,13 @@ describe("veterinary role and owner consent", () => {
     expect(m.settle).toHaveBeenCalledWith("request", "guild", "owner", false);
     expect(i.message.edit).toHaveBeenCalledWith(expect.objectContaining({ components: [] }));
   });
+  it("keeps a successful treatment result when confirmation-card cleanup fails", async () => {
+    const i = { guild: guild(), user: { id: "owner" }, customId: "pet:treat:request",
+      editReply: vi.fn(), message: { edit: vi.fn().mockRejectedValue(new Error("cleanup failed")) } };
+    await expect(handlePetTreatment(i as never)).resolves.toBeUndefined();
+    expect(m.settle).toHaveBeenCalledWith("request", "guild", "owner", false);
+    expect(i.editReply).toHaveBeenCalledWith({ content: "治療しました", allowedMentions: { parse: [] } });
+  });
   it("refuses payment after the vet's role is revoked", async () => {
     const i = { guild: guild(false), user: { id: "owner" }, customId: "pet:treat:request" };
     await expect(handlePetTreatment(i as never)).rejects.toThrow("獣医");
