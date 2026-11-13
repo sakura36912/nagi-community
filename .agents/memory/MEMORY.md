@@ -1,4 +1,4 @@
-- [ペット初期版](pet-system-policy.md) — 多機能Botで1匹育成。指定40種、数値は管理者が後設定し、イベント・クエスト報酬も管理者が登録。
+- [ペット初期版](pet-system-policy.md) — 多機能Botで1匹育成。指定40種、価格は管理者設定・他の育成値は標準値。報酬は管理者が登録。
 - [Sticky message dedup fix](sticky-dedup.md) — `message.author.bot` を使う。`client.user?.id` 比較は reconnect 時に null になりループが止まらない。
 - [High-low payout rules](highlow-payout-rules.md) — 1ゲーム単位の固定配当と、引き分け時の掛け金返却を維持する。
 - [Blackjack payout policy](blackjack-payout-policy.md) — 倍率は純利益に適用し掛け金は別途返却。ゲーム開始時の設定を終了まで維持する。

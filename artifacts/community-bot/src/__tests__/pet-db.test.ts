@@ -45,6 +45,24 @@ describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows"
     expect(a.pet).toMatchObject({ level: 1, xp: 0, hunger: 100, bond: 0, rarity: "rare", bornAt: now });
     expect(a.pet?.id).toBeTruthy();
   });
+  it("initializes all non-price settings while preserving explicitly configured prices", async () => {
+    await configurePet(id(), guild, "admin", { key: "rare_price", value: 456 });
+    const first = await getPetSettings(guild);
+    expect(first).toMatchObject({
+      xp_base: 100, xp_multiplier: 1, level_cap: 100,
+      message_xp: 5, message_interval: 60, vc_xp: 10, vc_interval: 300,
+      hunger_interval: 3600, hunger_loss: 2,
+      feed_hunger: 30, feed_xp: 10, feed_bond: 5, pet_bond: 3,
+      play_xp: 15, play_bond: 8, feed_neglect_interval: 259200,
+      play_neglect_interval: 259200, vet_hunger: 100, rare_price: 456,
+    });
+    expect(first.normal_price).toBeUndefined();
+    expect(first.food_price).toBeUndefined();
+    expect(first.toy_price).toBeUndefined();
+    expect(first.vet_price).toBeUndefined();
+    const [saved] = await db.select().from(petSettingsTable).where(eq(petSettingsTable.guildId, guild));
+    expect(saved?.settings).toEqual(first);
+  });
   it("allows only one concurrent hatch and consumes exactly one egg", async () => {
     await grantPetReward(id(), guild, "user", "admin", "rare", 2);
     const results = await Promise.allSettled([hatchPet(id(), guild, "user", "rare", now), hatchPet(id(), guild, "user", "rare", now)]);
@@ -132,12 +150,11 @@ describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows"
     expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
     expect((await getPetAccount(guild, "user", now)).pet?.bond).toBe(2);
   });
-  it("does not consume food when any required growth setting is missing", async () => {
-    await setup(); await grantPetReward(id(), guild, "user", "admin", "food", 1);
+  it("uses defaults for non-price settings when feeding", async () => {
+    await grantPetReward(id(), guild, "user", "admin", "rare", 3);
+    await grantPetReward(id(), guild, "user", "admin", "food", 1);
+    await hatchPet(id(), guild, "user", "rare", now);
     await set("feed_hunger", 20); await set("feed_bond", 3); await set("feed_xp", 5);
-    await expect(carePet(id(), guild, "user", "feed", now)).rejects.toThrow("未設定");
-    expect((await getPetAccount(guild, "user", now)).food).toBe(1);
-    await growth();
     await carePet(id(), guild, "user", "feed", now);
     const a = await getPetAccount(guild, "user", now);
     expect([a.food, a.pet?.hunger, a.pet?.bond, a.pet?.xp]).toEqual([0, 100, 3, 5]);
@@ -168,12 +185,12 @@ describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows"
     await awardPetMessage(id(), guild, "user", now + 60000);
     expect((await getPetAccount(guild, "user", now + 60000)).pet?.xp).toBe(6);
   });
-  it("does not award any XP for unconfigured message/VC gains", async () => {
+  it("uses default message experience and does not accrue a full VC interval early", async () => {
     await setup();
     await awardPetMessage(id(), guild, "user", now);
     await observePetVoice(guild, "user", "vc", "epoch", now);
     await observePetVoice(guild, "user", "vc", "epoch", now + 60000);
-    expect((await getPetAccount(guild, "user", now + 60000)).pet?.xp).toBe(0);
+    expect((await getPetAccount(guild, "user", now + 60000)).pet?.xp).toBe(5);
   });
   it("counts observed VC time only; restart and outages are not backfilled", async () => {
     await setup(); await growth(); await set("vc_xp", 3); await set("vc_interval", 60);
@@ -210,8 +227,10 @@ describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows"
   it("configurations are isolated per guild and invalid settings roll back", async () => {
     await set("rare_price", 20);
     await expect(set("level_cap", 101)).rejects.toThrow();
-    expect((await getPetSettings(guild)).level_cap).toBeUndefined();
-    expect(await getPetSettings(`unused-${id()}`)).toEqual({});
+    expect((await getPetSettings(guild)).level_cap).toBe(100);
+    const other = await getPetSettings(`unused-${id()}`);
+    expect(other.level_cap).toBe(100);
+    expect(other.rare_price).toBeUndefined();
   });
   it("buys toys through the same atomic wallet and inventory path", async () => {
     await wallet(); await set("toy_price", 40);
@@ -230,10 +249,10 @@ describe.skipIf(process.env.RUN_PET_DB_TESTS !== "1")("pet durable atomic flows"
     const a = await getPetAccount(guild, "user", now);
     expect([a.toys, a.playsToday]).toEqual([0, 1]);
   });
-  it("does not consume a toy for missing growth settings", async () => {
+  it("uses default growth settings when playing", async () => {
     await setup(); await grantPetReward(id(), guild, "user", "admin", "toy", 1);
-    await expect(carePet(id(), guild, "user", "play", now)).rejects.toThrow("未設定");
-    expect((await getPetAccount(guild, "user", now)).toys).toBe(1);
+    await carePet(id(), guild, "user", "play", now);
+    expect((await getPetAccount(guild, "user", now)).toys).toBe(0);
   });
   async function clinic() {
     await setup(); await wallet();

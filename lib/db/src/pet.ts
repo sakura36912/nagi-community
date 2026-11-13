@@ -6,7 +6,7 @@ import { petAccountsTable as accounts, petSettingsTable as settings, petActionsT
 import { walletsTable as wallets, transactionsTable } from "./schema/economy";
 import { communityVcPrivacyTable, communityVcPrivacyGlobalTable } from "./schema/community";
 import {
-  addPetXp, newPetAccount, PET_RARITIES, PET_RARITY_NAMES, PetError, petInteger,
+  addPetXp, newPetAccount, PET_DEFAULT_SETTINGS, PET_RARITIES, PET_RARITY_NAMES, PetError, petInteger,
   petSetting, petSpecies, refreshPet, validatePetSetting,
   type PetAccount, type PetRarity, type PetSettings, type PetSettingKey,
 } from "./petRules";
@@ -18,14 +18,28 @@ async function lock(tx: Tx, key: string) {
 }
 async function loadSettings(tx: Tx | typeof db, guildId: string) {
   const [row] = await tx.select().from(settings).where(eq(settings.guildId, guildId));
-  return row?.settings ?? {};
+  const current = row?.settings ?? {};
+  const missingDefaults = Object.keys(PET_DEFAULT_SETTINGS)
+    .some(key => current[key as keyof typeof PET_DEFAULT_SETTINGS] === undefined);
+  if (!row || missingDefaults) {
+    const initialized = { ...PET_DEFAULT_SETTINGS, ...current };
+    await tx.insert(settings).values({ guildId, settings: initialized })
+      .onConflictDoUpdate({ target: settings.guildId, set: { settings: initialized } });
+    return initialized;
+  }
+  return current;
 }
-export async function getPetSettings(guildId: string) { return loadSettings(db, guildId); }
 /** Shared settings lock orders configuration changes before member operations. */
 async function lockSettings(tx: Tx, guildId: string, exclusive = false) {
   const key = JSON.stringify(["pet-settings", guildId]);
   if (exclusive) await lock(tx, key);
   else await tx.execute(sql`SELECT pg_advisory_xact_lock_shared(hashtextextended(${key}, 0))`);
+}
+export async function getPetSettings(guildId: string) {
+  return db.transaction(async tx => {
+    await lockSettings(tx, guildId);
+    return loadSettings(tx, guildId);
+  });
 }
 export async function configurePet(id: string, guildId: string, actorId: string,
   patch: { key: PetSettingKey; value: number } | { rarity: PetRarity; species: string[] }) {

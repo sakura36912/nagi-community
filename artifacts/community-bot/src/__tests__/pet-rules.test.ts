@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  PET_SPECIES, PET_RARITIES, addPetXp, newPetAccount, petDay, petSetting, refreshPet, validatePetSetting,
+  PET_SPECIES, PET_RARITIES, PET_DEFAULT_SETTINGS, PET_SETTING_LABELS,
+  addPetXp, newPetAccount, petDay, petSetting, refreshPet, validatePetSetting,
   type PetIndividual,
 } from "@workspace/db";
 
@@ -9,6 +10,12 @@ const individual = (): PetIndividual => ({
   hunger: 100, bond: 0, bornAt: 0, hungerAt: 0,
 });
 describe("pet growth rules", () => {
+  it("defines defaults for every non-price setting and leaves prices unset", () => {
+    const priceKeys = Object.keys(PET_SETTING_LABELS).filter(key => key.endsWith("_price"));
+    const nonPriceKeys = Object.keys(PET_SETTING_LABELS).filter(key => !key.endsWith("_price"));
+    expect(Object.keys(PET_DEFAULT_SETTINGS).sort()).toEqual(nonPriceKeys.sort());
+    expect(priceKeys).toEqual(["normal_price", "rare_price", "food_price", "toy_price", "vet_price"]);
+  });
   it("contains exactly the 40 requested species, no invented normal pets", () => {
     expect(PET_SPECIES.normal).toEqual([]);
     expect(PET_RARITIES.flatMap(r => PET_SPECIES[r])).toHaveLength(40);
@@ -24,7 +31,7 @@ describe("pet growth rules", () => {
     expect(petDay(Date.parse("2026-11-12T14:59:59Z"))).toBe("2026-11-12");
     expect(petDay(Date.parse("2026-11-12T15:00:00Z"))).toBe("2026-11-13");
   });
-  it("does not invent missing prices or growth values", () => {
+  it("rejects missing values in a raw partial setting object", () => {
     expect(() => petSetting({}, "rare_price")).toThrow("未設定");
     expect(() => petSetting({}, "feed_xp")).toThrow("未設定");
   });

@@ -141,9 +141,9 @@ export async function executePet(i: ChatInputCommandInteraction) {
         const missing = c.value !== "food" && c.value !== "toy" && !petSpecies(s, c.value as PetRarity).length;
         return `${c.name}：${price === undefined ? "価格未設定（販売停止）" : `$${price.toLocaleString()}`}${missing ? " / 種類未登録（販売停止）" : ""}`;
       }) : Object.entries(PET_SETTING_LABELS).map(([key, label]) =>
-        `${label}：${s[key as PetSettingKey] ?? (key === "level_cap" ? 100 : "未設定")}`);
+        `${label}：${s[key as PetSettingKey] ?? "未設定（価格は管理者が設定）"}`);
       await i.editReply({ embeds: [new EmbedBuilder().setColor(0x68b88c).setTitle(sub === "shop" ? "ペットショップ" : "ペット設定")
-        .setDescription(lines.join("\n")).setFooter({ text: "価格・育成量は管理者が設定。卵の種類内は同確率です。" })] });
+        .setDescription(lines.join("\n")).setFooter({ text: "育成値は標準設定。各価格は管理者が設定してください。卵の種類内は同確率です。" })] });
       return;
     }
     if (sub === "hatch") text = await hatchPet(i.id, guildId, userId, i.options.getString("egg", true) as PetRarity);

@@ -26,6 +26,27 @@ export const PET_SETTING_LABELS = {
 } as const;
 export type PetSettingKey = keyof typeof PET_SETTING_LABELS;
 export type PetSettings = Partial<Record<PetSettingKey, number>> & { species?: Partial<Record<PetRarity, string[]>> };
+/** Operational defaults; all prices remain unset until an administrator chooses them. */
+export const PET_DEFAULT_SETTINGS = {
+  xp_base: 100,
+  xp_multiplier: 1,
+  level_cap: 100,
+  message_xp: 5,
+  message_interval: 60,
+  vc_xp: 10,
+  vc_interval: 300,
+  hunger_interval: 3600,
+  hunger_loss: 2,
+  feed_hunger: 30,
+  feed_xp: 10,
+  feed_bond: 5,
+  pet_bond: 3,
+  play_xp: 15,
+  play_bond: 8,
+  feed_neglect_interval: 259200,
+  play_neglect_interval: 259200,
+  vet_hunger: 100,
+} satisfies Partial<Record<PetSettingKey, number>>;
 export class PetError extends Error {}
 export function petInteger(n: number, min = 0, max = 1_000_000_000) {
   if (!Number.isSafeInteger(n) || n < min || n > max) throw new PetError(`数値は${min}～${max}の整数で指定してください。`);
