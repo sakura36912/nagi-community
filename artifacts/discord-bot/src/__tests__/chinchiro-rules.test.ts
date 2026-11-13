@@ -4,12 +4,14 @@ import {
   buildActiveEmbed,
   buildChallengeEmbed,
   buildResultEmbed,
+  calculateChinchiroPayout,
   compareChinchiroOutcomes,
   evaluateChinchiroRoll,
   getChinchiroDisplayName,
   isChinchiroHandComplete,
   rollChinchiroHand,
   rollChinchiroOnce,
+  rollChinchiroThrow,
 } from "../commands/chinchiro";
 
 describe("対人チンチロの役判定", () => {
@@ -27,11 +29,7 @@ describe("対人チンチロの役判定", () => {
   });
 
   it("目なしなら最大3回振り、途中で役が出たら終了する", () => {
-    const values = [
-      0 / 6, 1 / 6, 3 / 6,
-      1 / 6, 2 / 6, 4 / 6,
-      3 / 6, 4 / 6, 5 / 6,
-    ];
+    const values = [100.5 / 200, 0.5, 100.5 / 200, 0.5, 6.5 / 200, 0.5, 0.5];
     let index = 0;
     const result = rollChinchiroHand(() => values[index++]!);
     expect(result.kind).toBe("shigoro");
@@ -39,23 +37,108 @@ describe("対人チンチロの役判定", () => {
   });
 
   it("手動ロールは1回のボタン操作につき1投だけ追加する", () => {
-    const firstValues = [0 / 6, 1 / 6, 3 / 6];
+    const firstValues = [100.5 / 200, 0.5];
     const first = rollChinchiroOnce([], () => firstValues.shift()!);
     expect(first.attempts).toHaveLength(1);
     expect(first.kind).toBe("menashi");
     expect(isChinchiroHandComplete(first)).toBe(false);
 
-    const secondValues = [1 / 6, 2 / 6, 4 / 6];
+    const secondValues = [100.5 / 200, 0.5];
     const second = rollChinchiroOnce(first.attempts, () => secondValues.shift()!);
     expect(second.attempts).toHaveLength(2);
     expect(second.kind).toBe("menashi");
     expect(isChinchiroHandComplete(second)).toBe(false);
 
-    const thirdValues = [0 / 6, 3 / 6, 5 / 6];
+    const thirdValues = [100.5 / 200, 0.5];
     const third = rollChinchiroOnce(second.attempts, () => thirdValues.shift()!);
     expect(third.attempts).toHaveLength(3);
     expect(third.kind).toBe("menashi");
     expect(isChinchiroHandComplete(third)).toBe(true);
+  });
+
+  it("提示された200区分の割合どおりに役を抽選する", () => {
+    const counts = new Map<string, number>();
+    const pointCounts = new Map<number, number>();
+    for (let unit = 0; unit < 200; unit++) {
+      let first = true;
+      const outcome = rollChinchiroThrow(() => {
+        if (first) {
+          first = false;
+          return (unit + 0.5) / 200;
+        }
+        return 0.5;
+      });
+      counts.set(outcome.kind, (counts.get(outcome.kind) ?? 0) + 1);
+      if (outcome.kind === "point") {
+        pointCounts.set(outcome.rank, (pointCounts.get(outcome.rank) ?? 0) + 1);
+      }
+    }
+    expect(Object.fromEntries(counts)).toEqual({
+      pinzoro: 1,
+      arashi: 5,
+      shigoro: 5,
+      hifumi: 5,
+      point: 84,
+      menashi: 96,
+      shonben: 4,
+    });
+    expect(Object.fromEntries(pointCounts)).toEqual({
+      1: 14,
+      2: 14,
+      3: 14,
+      4: 14,
+      5: 14,
+      6: 14,
+    });
+  });
+
+  it("目・ゾロ目・特殊役の出目を確率カテゴリに合わせて生成する", () => {
+    const rollAt = (unit: number) => {
+      let first = true;
+      return rollChinchiroThrow(() => {
+        if (first) {
+          first = false;
+          return (unit + 0.5) / 200;
+        }
+        return 0.5;
+      });
+    };
+
+    const point = rollAt(16);
+    expect(point.kind).toBe("point");
+    expect(point.dice.filter((die) => die === point.rank)).toHaveLength(1);
+    const pair = point.dice.filter((die) => die !== point.rank);
+    expect(pair).toHaveLength(2);
+    expect(pair[0]).toBe(pair[1]);
+
+    const menashi = rollAt(100);
+    expect(menashi.kind).toBe("menashi");
+    expect(new Set(menashi.dice).size).toBe(3);
+    expect([...menashi.dice].sort().join("")).not.toBe("123");
+    expect([...menashi.dice].sort().join("")).not.toBe("456");
+    expect(rollAt(196).kind).toBe("shonben");
+  });
+
+  it("ションベンはその場で手番を終え、目なしは最大3投まで振り直せる", () => {
+    const values = [100.5 / 200, 0.5, 196.5 / 200, 0.5, 0.5, 0.5];
+    let index = 0;
+    const result = rollChinchiroHand(() => values[index++]!);
+    expect(result.kind).toBe("shonben");
+    expect(result.attempts).toHaveLength(2);
+    expect(isChinchiroHandComplete(result)).toBe(true);
+  });
+
+  it("勝者へは元の賭け金返却と役倍率分を加算し、ヒフミ敗北は最低2倍にする", () => {
+    expect(calculateChinchiroPayout(
+      1_000,
+      { kind: "pinzoro" },
+      { kind: "point" },
+    )).toEqual({ multiplier: 5, winnerNet: 5_000 });
+    expect(calculateChinchiroPayout(
+      1_000,
+      { kind: "point" },
+      { kind: "hifumi" },
+    )).toEqual({ multiplier: 2, winnerNet: 2_000 });
   });
 
   it("役の強さで勝敗を比較し、同じ強さは引き分けにする", () => {

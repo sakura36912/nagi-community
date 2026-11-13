@@ -77,4 +77,55 @@ describe("対人チンチロの期限切れ返金", () => {
       [opponentId, 9_000],
     ]));
   });
+
+  it("新ルールの承認済みゲームでは最大5倍分を両者へ一度だけ返金する", async () => {
+    await db.update(walletsTable)
+      .set({ balance: 4_000 })
+      .where(and(
+        eq(walletsTable.guildId, guildId),
+        inArray(walletsTable.userId, [challengerId, opponentId]),
+      ));
+    await db.insert(chinchiroGamesTable).values({
+      guildId,
+      channelId: "channel",
+      challengerId,
+      opponentId,
+      bet: 1_000,
+      currencyName: "$",
+      status: "active_weighted",
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+
+    expect(await refundExpiredChinchiroGames()).toBe(1);
+    expect(await balances()).toEqual(new Map([
+      [challengerId, 9_000],
+      [opponentId, 9_000],
+    ]));
+    expect(await refundExpiredChinchiroGames()).toBe(0);
+  });
+
+  it("新ルールの未承認挑戦では、挑戦者の最大5倍分だけを返金する", async () => {
+    await db.update(walletsTable)
+      .set({ balance: 4_000 })
+      .where(and(
+        eq(walletsTable.guildId, guildId),
+        eq(walletsTable.userId, challengerId),
+      ));
+    await db.insert(chinchiroGamesTable).values({
+      guildId,
+      channelId: "channel",
+      challengerId,
+      opponentId,
+      bet: 1_000,
+      currencyName: "$",
+      status: "pending_weighted",
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+
+    expect(await refundExpiredChinchiroGames()).toBe(1);
+    expect(await balances()).toEqual(new Map([
+      [challengerId, 9_000],
+      [opponentId, 9_000],
+    ]));
+  });
 });

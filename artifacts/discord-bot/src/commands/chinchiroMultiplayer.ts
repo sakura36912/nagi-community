@@ -15,10 +15,12 @@ import { getGuildSettings } from "../lib/economy";
 import { logger } from "../lib/logger";
 import { dealerTransferAmount, refundOpenRound, reserveBet, settleRound } from "../lib/chinchiroMultiplayerMoney";
 import {
+  chinchiroPairMultiplier,
   isChinchiroHandComplete,
   rollChinchiroOnce,
   type ChinchiroOutcome,
 } from "./chinchiro";
+export { chinchiroMultiplier } from "./chinchiro";
 
 export const MULTIPLAYER_CHINCHIRO_PREFIX = "chinchiro-mp:";
 const RECRUIT_MS = 5 * 60_000, BET_MS = 2 * 60_000, TURN_MS = 60_000;
@@ -28,27 +30,12 @@ export function pairStake(parentBet: number, childBet: number): number {
   return Math.min(parentBet, childBet);
 }
 
-/** The winning hand's multiplier is used for each parent/child pair. */
-export function chinchiroMultiplier(outcome: Pick<ChinchiroOutcome, "kind">): number {
-  switch (outcome.kind) {
-    case "pinzoro": return 5;
-    case "arashi": return 3;
-    case "shigoro": return 2;
-    case "hifumi": return 2;
-    case "point":
-    case "menashi": return 1;
-  }
-}
-
 export function plannedPairResult(parentBet: number, childBet: number, parent: ChinchiroOutcome, child: ChinchiroOutcome) {
   const stake = pairStake(parentBet, childBet);
   const winner = parent.rank >= child.rank ? "parent" as const : "child" as const;
   const winning = winner === "parent" ? parent : child;
   const losing = winner === "parent" ? child : parent;
-  const multiplier = Math.max(
-    chinchiroMultiplier(winning),
-    losing.kind === "hifumi" ? 2 : 1,
-  );
+  const multiplier = chinchiroPairMultiplier(winning, losing);
   return { stake, winner, multiplier, amount: stake * multiplier };
 }
 
@@ -222,7 +209,8 @@ function turnRollComponents(tableId: number, attempt: number) {
 }
 
 function dice(outcome: ChinchiroOutcome): string {
-  return outcome.dice.map((die) => ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][die - 1]).join(" ");
+  const shown = outcome.dice.map((die) => ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][die - 1]).join(" ");
+  return outcome.kind === "shonben" ? `${shown} 💨（椀の外）` : shown;
 }
 export function buildMultiplayerChinchiroPanel(t: ChinchiroTable, ps: ChinchiroTablePlayer[]) {
   const suffix = t.testMode === 1 ? "（テストモード）" : "（実残高で精算）";

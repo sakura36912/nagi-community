@@ -35,7 +35,16 @@ describe("multiplayer chinchiro planning helpers", () => {
   it("uses the pair minimum and the winning hand multiplier", () => {
     expect(pairStake(2_000, 500)).toBe(500);
     expect(chinchiroMultiplier({ kind: "pinzoro" })).toBe(5);
-    expect(chinchiroMultiplier({ kind: "hifumi" })).toBe(2);
+    expect(chinchiroMultiplier({ kind: "arashi" })).toBe(3);
+    expect(chinchiroMultiplier({ kind: "shigoro" })).toBe(2);
+    expect(chinchiroMultiplier({ kind: "hifumi" })).toBe(1);
+    const hifumiLoses = plannedPairResult(
+      1_000,
+      1_000,
+      evaluateChinchiroRoll([[2, 2, 6]]),
+      evaluateChinchiroRoll([[1, 2, 3]]),
+    );
+    expect(hifumiLoses).toMatchObject({ multiplier: 2, amount: 2_000 });
   });
 
   it("awards equal-ranked rolls to the parent", () => {
