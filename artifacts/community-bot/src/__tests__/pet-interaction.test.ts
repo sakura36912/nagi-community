@@ -116,7 +116,7 @@ describe("pet slash and button integration", () => {
     expect(i.channel.send).toHaveBeenCalledOnce();
     const row = i.channel.send.mock.calls[0]![0].components[0];
     expect(row.components.map((c: { data: { custom_id: string } }) => c.data.custom_id))
-      .toEqual(["pet:shop:normal", "pet:shop:rare", "pet:shop:food", "pet:shop:toy"]);
+      .toEqual(["pet:shop:rare", "pet:shop:food", "pet:shop:toy"]);
     expect(mocks.buy).not.toHaveBeenCalled();
   });
   it("opens an individual purchase confirmation from a public panel without modifying it", async () => {
@@ -128,5 +128,13 @@ describe("pet slash and button integration", () => {
     expect(reply.content).toContain("おもちゃ ×1");
     expect(reply.content).toContain("$50");
     expect(reply.components[0].components[0].data.custom_id).toContain(`pet:buy:${owner}:toy:1:50:`);
+  });
+  it("rejects a normal egg button left on an older panel", async () => {
+    const i = button("pet:shop:normal");
+    await handlePetButton(i as never);
+    expect(mocks.buy).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining("パネルでは販売していません"),
+    }));
   });
 });

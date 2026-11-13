@@ -13,6 +13,7 @@ import { handlePetTreatment, proposePetTreatment } from "../lib/petClinic";
 const rarityChoices = PET_RARITIES.map(value => ({ name: PET_RARITY_NAMES[value], value }));
 const shopChoices = [{ name: "ノーマル卵", value: "normal" }, { name: "レア卵", value: "rare" },
   { name: "エサ", value: "food" }, { name: "おもちゃ", value: "toy" }];
+const panelShopChoices = shopChoices.filter(choice => choice.value !== "normal");
 const rewardChoices = [...rarityChoices.map(c => ({ name: `${c.name}卵`, value: c.value })),
   { name: "エサ", value: "food" }, { name: "おもちゃ", value: "toy" }, { name: "クエスト経験値", value: "xp" }];
 const adminCommands = new Set(["grant", "egg", "food", "delete", "price", "config", "species", "reward", "panel"]);
@@ -105,8 +106,8 @@ export async function executePet(i: ChatInputCommandInteraction) {
       if (!channel || !("send" in channel)) throw new PetError("パネルを送信できるチャンネルで操作してください。");
       await channel.send({
         embeds: [new EmbedBuilder().setTitle("ペットショップ").setColor(0x68b88c)
-          .setDescription("卵・エサ・おもちゃを販売しています。\nボタンで1個の購入確認を開きます。押すだけでは引き落としません。\n最新の価格は確認画面に表示します。未設定の商品は購入できません。\nまとめ買いは /pet buy から操作できます。")],
-        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(...shopChoices.map(c =>
+          .setDescription("レア卵・エサ・おもちゃを販売しています。\nボタンで1個の購入確認を開きます。押すだけでは引き落としません。\n最新の価格は確認画面に表示します。未設定の商品は購入できません。\nまとめ買いは /pet buy から操作できます。")],
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(...panelShopChoices.map(c =>
           new ButtonBuilder().setCustomId(`pet:shop:${c.value}`).setLabel(c.name).setStyle(ButtonStyle.Primary)))],
         allowedMentions: { parse: [] },
       });
@@ -185,7 +186,11 @@ export async function handlePetButton(i: ButtonInteraction) {
   try {
     if (i.customId.startsWith("pet:shop:")) {
       const guildId = await access(i);
-      await showPetPurchase(i, guildId, i.customId.split(":")[2] as PetItem, 1);
+      const item = i.customId.split(":")[2] as PetItem;
+      if (!panelShopChoices.some(choice => choice.value === item)) {
+        throw new PetError("この商品はショップパネルでは販売していません。");
+      }
+      await showPetPurchase(i, guildId, item, 1);
       return;
     }
     if (i.customId.startsWith("pet:treat:") || i.customId.startsWith("pet:canceltreat:")) {
