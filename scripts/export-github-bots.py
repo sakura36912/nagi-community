@@ -117,6 +117,11 @@ def export_bot(output, repository, bot_dir, title, prefix):
         "node_modules/\ndist/\ncoverage/\n*.tsbuildinfo\n.env\n.env.*\n!.env.example\n"
         "*.db\n*.sqlite\n*.sqlite3\n*.log\nbackups/\ngenerated-artifacts/\n.DS_Store\n"
     )
+    profile_font_setup = (
+        "\n多機能BOTのプロフィールカード画像には日本語フォント Noto Sans CJK JP が必要です。"
+        "Ubuntu/Debian では `sudo apt-get install fonts-noto-cjk` を実行してからBotを起動してください。\n"
+        if prefix == "COMMUNITY" else ""
+    )
     readme = f"""# {title}
 
 このリポジトリは既存Botのソース保存用スナップショットです。
@@ -136,6 +141,7 @@ Bot本体と必要な共有 `lib/db` を同梱しています。もう一方のB
 ## 環境
 
 Node.js 24系、pnpm 10.26.1。依存関係の設定は現在のLinux x64向け設定を引き継ぎます。
+{profile_font_setup}
 
 ```bash
 pnpm install --frozen-lockfile

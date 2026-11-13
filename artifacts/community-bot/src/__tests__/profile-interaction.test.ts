@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(), getData: vi.fn(), setField: vi.fn(),
   setDisplayRole: vi.fn(), setRankRole: vi.fn(), setAppearance: vi.fn(),
+  getBackground: vi.fn(), fetchImage: vi.fn(), renderCard: vi.fn(), clearBackground: vi.fn(),
 }));
 vi.mock("@workspace/db", async importOriginal => {
   const actual = await importOriginal<typeof import("@workspace/db")>();
@@ -17,6 +18,12 @@ vi.mock("@workspace/db", async importOriginal => {
     setProfileAppearance: mocks.setAppearance,
   };
 });
+vi.mock("../lib/profileCardImage.js", () => ({
+  clearProfileBackgroundCache: mocks.clearBackground,
+  fetchProfileImage: mocks.fetchImage,
+  getCachedProfileBackground: mocks.getBackground,
+  renderProfileCard: mocks.renderCard,
+}));
 
 import { DEFAULT_PROFILE_SETTINGS, type ProfileSettings } from "@workspace/db";
 import { profileCommand, profileSettingsCommand } from "../commands/profile";
@@ -65,6 +72,9 @@ beforeEach(() => {
   mocks.getSettings.mockResolvedValue(configured);
   mocks.getData.mockResolvedValue(data);
   for (const fn of [mocks.setField, mocks.setDisplayRole, mocks.setRankRole, mocks.setAppearance]) fn.mockResolvedValue(configured);
+  mocks.getBackground.mockResolvedValue(Buffer.from("background"));
+  mocks.fetchImage.mockResolvedValue(Buffer.from("avatar"));
+  mocks.renderCard.mockResolvedValue(Buffer.from("png"));
 });
 
 describe("profile slash commands", () => {
@@ -81,21 +91,45 @@ describe("profile slash commands", () => {
   it("renders configured roles, rank, saved stats, and hides internal weapon attack", async () => {
     const i = interaction();
     await profileCommand.execute(i as never);
-    const embed = i.editReply.mock.calls[0]![0].embeds[0].toJSON();
-    const fields = embed.fields as { name: string; value: string }[] | undefined;
+    const response = i.editReply.mock.calls[0]![0];
+    const embed = response.embeds[0].toJSON();
     expect(embed.title).toContain("VIP");
-    expect(fields?.map(field => field.name)).toContain("🎭 ロール");
-    expect(fields?.map(field => field.name)).not.toContain("銀行残高");
-    expect(fields?.find(field => field.name === "🎭 ロール")?.value).toContain("軍師");
-    expect(fields?.find(field => field.name === "⚔️ 戦闘情報")?.value).toContain("大剣 Lv3");
-    expect(fields?.find(field => field.name === "⚔️ 戦闘情報")?.value).not.toContain("999");
-    expect(fields?.find(field => field.name === "🎰 カジノ（保存済み記録）")?.value).toContain("総BET");
-    const inventory = fields?.find(field => field.name === "🎒 所持品")?.value ?? "";
+    expect(embed.fields ?? []).toHaveLength(0);
+    expect(embed.description).toContain("画像カード");
+    expect(embed.image?.url).toBe("attachment://profile-card.png");
+    const card = mocks.renderCard.mock.calls[0]![0];
+    const cardSections = card.sections as { title: string; lines: string[] }[];
+    const renderedText = JSON.stringify(cardSections);
+    expect(renderedText).toContain("軍師");
+    expect(renderedText).toContain("大剣 Lv3");
+    expect(renderedText).toContain("総BET");
+    expect(renderedText).not.toContain("999");
+    expect(renderedText).not.toContain("銀行残高");
+    const inventory = cardSections.find(section => section.title.includes("所持品"))?.lines.join("\n") ?? "";
     expect(inventory).toContain("レア卵：1個");
     expect(inventory).toContain("エサ：2個");
     expect(inventory).toContain("おもちゃ：1個");
     expect(inventory).not.toContain("宝箱");
     expect(inventory).not.toContain("キツネ");
+    expect(response.files).toHaveLength(1);
+    expect(card).toMatchObject({
+      displayName: "Sakura",
+      username: "SakuraUser",
+      bountyValue: "500,000$",
+      backgroundBuffer: null,
+      avatarBuffer: Buffer.from("avatar"),
+    });
+    expect(cardSections.some(section => section.title.includes("懸賞金"))).toBe(false);
+  });
+
+  it("loads and overlays the configured background image", async () => {
+    mocks.getSettings.mockResolvedValue({ ...configured, backgroundUrl: "https://images.example/card.jpg" });
+    const i = interaction();
+    await profileCommand.execute(i as never);
+    expect(mocks.getBackground).toHaveBeenCalledWith("https://images.example/card.jpg");
+    expect(mocks.renderCard).toHaveBeenCalledWith(expect.objectContaining({
+      backgroundBuffer: Buffer.from("background"),
+    }));
   });
 
   it("requires administrator permission before changing display settings", async () => {

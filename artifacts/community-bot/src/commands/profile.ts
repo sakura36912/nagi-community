@@ -1,5 +1,5 @@
 import {
-  EmbedBuilder, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, escapeMarkdown,
+  AttachmentBuilder, EmbedBuilder, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, escapeMarkdown,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import {
@@ -8,6 +8,9 @@ import {
   setProfileField, setProfileRankRole, type ProfileField, type ProfileFrameStyle, type ProfileRankTier,
 } from "@workspace/db";
 import { logger } from "../lib/logger.js";
+import {
+  clearProfileBackgroundCache, fetchProfileImage, getCachedProfileBackground, renderProfileCard,
+} from "../lib/profileCardImage.js";
 
 const fieldChoices = Object.entries(PROFILE_FIELD_LABELS)
   .map(([value, name]) => ({ name, value }));
@@ -105,7 +108,56 @@ export const profileCommand = {
           ? `${escapeMarkdown(profile.pet.name)} / Lv${profile.pet.level} / 親密度 ${profile.pet.bond}`
           : "所持ペットなし", inline: true });
       }
-      await i.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+      const sections = (embed.toJSON().fields ?? []).map(field => ({
+        title: field.name ?? "",
+        lines: (field.value ?? "").split("\n"),
+      }));
+      let backgroundBuffer: Buffer | null = null;
+      if (settings.backgroundUrl) {
+        try {
+          backgroundBuffer = await getCachedProfileBackground(settings.backgroundUrl);
+        } catch (error) {
+          logger.warn("[profile] 背景画像を読み込めませんでした。", error);
+          throw new ProfileCommandError("背景画像を読み込めません。管理者は公開HTTPSのPNG/JPEG画像URLを確認してください。");
+        }
+      }
+      let avatarBuffer: Buffer | null = null;
+      try {
+        avatarBuffer = await fetchProfileImage(avatar);
+      } catch {
+        // Keep the card usable when Discord's avatar CDN is temporarily unreachable.
+      }
+      let cardBuffer: Buffer;
+      try {
+        const bountyFieldVisible = settings.visibleFields.bounty !== false;
+        cardBuffer = await renderProfileCard({
+          displayName: member.displayName,
+          username: i.user.username,
+          avatarUrl: avatar,
+          cardTitle: title,
+          rankLabel: rankTier ? PROFILE_RANK_LABELS[rankTier] : null,
+          bountyLabel: "懸賞金",
+          bountyValue: bountyFieldVisible
+            ? profile.bounty === null ? "未設定" : `${profile.bounty.toLocaleString("ja-JP")}${profile.currencyName}`
+            : null,
+          sections: sections.filter(section => !section.title.includes("懸賞金")),
+          accentColor: settings.color ?? (rankTier ? rankColor[rankTier] : 0xc49a5a),
+          backgroundBuffer,
+          avatarBuffer,
+        });
+      } catch (error) {
+        logger.error("[profile] 画像カードの生成に失敗しました。", error);
+        throw new ProfileCommandError("カード画像を生成できません。サーバーの日本語フォント設定を確認してください。");
+      }
+      const filename = "profile-card.png";
+      embed.setFields([])
+        .setDescription("プロフィール情報は背景付きの画像カードに表示しています。")
+        .setImage(`attachment://${filename}`);
+      await i.editReply({
+        embeds: [embed],
+        files: [new AttachmentBuilder(cardBuffer, { name: filename })],
+        allowedMentions: { parse: [] },
+      });
     } catch (error) {
       if (error instanceof ProfileCommandError) {
         await i.editReply({ content: error.message, embeds: [] });
@@ -135,8 +187,8 @@ export const profileSettingsCommand = {
       .addRoleOption(o => o.setName("ロール").setDescription("解除するロール").setRequired(true)))
     .addSubcommand(s => s.setName("色").setDescription("カードの色を設定（解除はdefault）")
       .addStringOption(o => o.setName("カラー").setDescription("#RRGGBB形式、またはdefault").setRequired(true).setMaxLength(7)))
-    .addSubcommand(s => s.setName("画像").setDescription("カード画像を設定（解除はoff）")
-      .addStringOption(o => o.setName("url").setDescription("HTTPS画像URL、またはoff").setRequired(true).setMaxLength(400)))
+    .addSubcommand(s => s.setName("画像").setDescription("カード背景画像を設定（解除はoff）")
+      .addStringOption(o => o.setName("url").setDescription("公開HTTPSのPNG/JPEG URL、またはoff").setRequired(true).setMaxLength(400)))
     .addSubcommand(s => s.setName("枠").setDescription("基本カードの枠テーマを設定")
       .addStringOption(o => o.setName("デザイン").setDescription("枠テーマ").setRequired(true)
         .addChoices(...frameChoices))),
@@ -166,12 +218,17 @@ export const profileSettingsCommand = {
         }
       } else if (sub === "画像") {
         const raw = i.options.getString("url", true).trim();
-        if (raw.toLowerCase() === "off") await setProfileAppearance(guildId, { backgroundUrl: null });
-        else {
+        if (raw.toLowerCase() === "off") {
+          await setProfileAppearance(guildId, { backgroundUrl: null });
+          clearProfileBackgroundCache();
+        } else {
           let url: URL;
           try { url = new URL(raw); } catch { throw new ProfileCommandError("画像URLが正しくありません。"); }
-          if (url.protocol !== "https:") throw new ProfileCommandError("画像URLはHTTPSで指定してください。");
+          if (url.protocol !== "https:" || (url.port && url.port !== "443") || url.username || url.password) {
+            throw new ProfileCommandError("画像URLは公開HTTPSのURL（標準ポート）で指定してください。");
+          }
           await setProfileAppearance(guildId, { backgroundUrl: url.toString() });
+          clearProfileBackgroundCache();
         }
       } else if (sub === "枠") {
         const frame = i.options.getString("デザイン", true) as ProfileFrameStyle;

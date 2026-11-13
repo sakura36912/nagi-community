@@ -32,6 +32,7 @@ timeoutMs = 60000
 
 [nix]
 channel = "stable-25_05"
+packages = ["noto-fonts-cjk-sans"]
 
 [objectStorage]
 defaultBucketID = "replit-objstore-4be7b4fc-42f4-4359-bb92-df3804dde369"
