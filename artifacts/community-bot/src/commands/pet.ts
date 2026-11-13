@@ -182,9 +182,9 @@ export async function executePet(i: ChatInputCommandInteraction) {
   } catch (e) { await errorReply(i, e); }
 }
 export async function handlePetButton(i: ButtonInteraction) {
-  await i.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     if (i.customId.startsWith("pet:shop:")) {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
       const guildId = await access(i);
       const item = i.customId.split(":")[2] as PetItem;
       if (!panelShopChoices.some(choice => choice.value === item)) {
@@ -194,12 +194,16 @@ export async function handlePetButton(i: ButtonInteraction) {
       return;
     }
     if (i.customId.startsWith("pet:treat:") || i.customId.startsWith("pet:canceltreat:")) {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
       await handlePetTreatment(i);
       return;
     }
+    // Confirmations are ephemeral messages. A component update edits their source
+    // through the interaction webhook; Message#edit uses a channel-message route
+    // that cannot reliably edit ephemeral messages.
+    await i.deferUpdate();
     if (i.customId === "pet:cancel") {
-      await i.message.edit({ components: [] });
-      await i.editReply("キャンセルしました。");
+      await i.editReply({ content: "キャンセルしました。", embeds: [], components: [], allowedMentions: { parse: [] } });
       return;
     }
     const [, action, owner, ...args] = i.customId.split(":");
@@ -219,8 +223,7 @@ export async function handlePetButton(i: ButtonInteraction) {
       if (target !== i.user.id) await access(i, true);
       text = await removePet(`pet-remove:${guildId}:${petId}`, guildId, target, i.user.id, petId);
     } else throw new PetError("未対応のボタンです。");
-    await i.editReply({ content: text, allowedMentions: { parse: [] } });
-    await i.message.edit({ components: [] });
+    await i.editReply({ content: text, embeds: [], components: [], allowedMentions: { parse: [] } });
   } catch (e) { await errorReply(i, e); }
 }
 export const petCommand = { data, execute: executePet };

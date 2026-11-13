@@ -23,7 +23,7 @@ function command(sub: string, options: Record<string, unknown> = {}, admin = fal
   };
 }
 function button(customId: string, admin = false) {
-  return { ...command("", {}, admin), customId, message: { edit: vi.fn() } };
+  return { ...command("", {}, admin), customId, deferUpdate: vi.fn(), message: { edit: vi.fn() } };
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -71,9 +71,12 @@ describe("pet slash and button integration", () => {
   });
   it("routes a valid payment with the stable request ID, amount and quantity", async () => {
     const i = button(`pet:buy:${owner}:rare:2:123:9999999999:request`);
+    i.message.edit.mockRejectedValueOnce(new Error("ephemeral message cannot be edited as a channel message"));
     await handlePetButton(i as never);
     expect(mocks.buy).toHaveBeenCalledWith("pet-buy:request", "guild", owner, "rare", 2, 123);
-    expect(i.message.edit).toHaveBeenCalledWith({ components: [] });
+    expect(i.deferUpdate).toHaveBeenCalledOnce();
+    expect(i.message.edit).not.toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: "成功", components: [] }));
   });
   it("cancels a purchase through the durable receipt, not just the display", async () => {
     const i = button(`pet:cancelbuy:${owner}:request`);
@@ -124,6 +127,7 @@ describe("pet slash and button integration", () => {
     await handlePetButton(i as never);
     expect(mocks.buy).not.toHaveBeenCalled();
     expect(i.message.edit).not.toHaveBeenCalled();
+    expect(i.deferReply).toHaveBeenCalledOnce();
     const reply = i.editReply.mock.calls[0]![0];
     expect(reply.content).toContain("おもちゃ ×1");
     expect(reply.content).toContain("$50");

@@ -3,6 +3,7 @@ import {
   type ButtonInteraction, type ChatInputCommandInteraction, type Guild,
 } from "discord.js";
 import { PetError, createPetTreatment, getPetTreatment, settlePetTreatment } from "@workspace/db";
+import { logger } from "./logger";
 
 /** Administrator alone does not grant veterinary authority. */
 export async function requirePetVet(guild: Guild, userId: string) {
@@ -49,5 +50,11 @@ export async function handlePetTreatment(i: ButtonInteraction) {
   if (!cancel) await requirePetVet(i.guild, r.vetId);
   const text = await settlePetTreatment(id, i.guild.id, i.user.id, cancel);
   await i.editReply({ content: text, allowedMentions: { parse: [] } });
-  await i.message.edit({ content: "ペットの治療確認は終了しました。", embeds: [], components: [], allowedMentions: { parse: [] } });
+  try {
+    await i.message.edit({ content: "ペットの治療確認は終了しました。", embeds: [], components: [], allowedMentions: { parse: [] } });
+  } catch (error) {
+    // The settlement is already committed. A failed public-card cleanup must
+    // not replace the owner's successful result with a false failure message.
+    logger.warn("[pet] 治療後の確認カードを更新できませんでした。", error);
+  }
 }
