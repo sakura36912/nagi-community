@@ -27,7 +27,7 @@ describe.skipIf(process.env.RUN_PROFILE_DB_TESTS !== "1")("profile settings and 
   it("loads absent profile stats from existing storage without creating personal records", async () => {
     const profile = await getProfileData(guildId, `missing-${randomUUID()}`);
     expect(profile).toMatchObject({
-      bounty: null, balance: null, currencyName: "$",
+      bounty: null, currencyName: "$",
       inventory: [], petInventory: [], pet: null,
       battle: { defeats: 0, maxDamage: 0, participated: 0 },
       pvp: { wins: 0, losses: 0, draws: 0 },

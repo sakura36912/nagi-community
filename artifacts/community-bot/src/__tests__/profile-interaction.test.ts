@@ -29,7 +29,7 @@ const configured: ProfileSettings = {
 };
 const data = {
   weapon: { weaponType: "greatsword", weaponLevel: 3, attack: 999 },
-  bounty: 500000, balance: 123456, currencyName: "$",
+  bounty: 500000, currencyName: "$",
   inventory: [{ name: "宝箱", quantity: 2 }],
   pet: { name: "キツネ", level: 4, bond: 50 }, petInventory: ["キツネ（Lv4）"],
   battle: { defeats: 2, maxDamage: 9500, participated: 3 },
@@ -74,6 +74,7 @@ describe("profile slash commands", () => {
     expect(definition.options?.map(option => option.name)).toEqual([
       "項目", "表示ロール追加", "表示ロール削除", "ランクロール", "ランクロール解除", "色", "画像", "枠",
     ]);
+    expect(JSON.stringify(definition.options?.find(option => option.name === "項目"))).not.toContain("銀行残高");
   });
 
   it("renders configured roles, rank, saved stats, and hides internal weapon attack", async () => {
@@ -83,6 +84,7 @@ describe("profile slash commands", () => {
     const fields = embed.fields as { name: string; value: string }[] | undefined;
     expect(embed.title).toContain("VIP");
     expect(fields?.map(field => field.name)).toContain("🎭 ロール");
+    expect(fields?.map(field => field.name)).not.toContain("銀行残高");
     expect(fields?.find(field => field.name === "🎭 ロール")?.value).toContain("軍師");
     expect(fields?.find(field => field.name === "⚔️ 戦闘情報")?.value).toContain("大剣 Lv3");
     expect(fields?.find(field => field.name === "⚔️ 戦闘情報")?.value).not.toContain("999");

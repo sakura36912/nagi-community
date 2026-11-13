@@ -1,6 +1,5 @@
 export const PROFILE_FIELD_LABELS = {
   joinDate: "加入日",
-  balance: "銀行残高",
   bounty: "懸賞金",
   roles: "ロール",
   battle: "戦闘情報",

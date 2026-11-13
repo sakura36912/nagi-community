@@ -5,7 +5,7 @@ import { getForgeWeapon } from "./forge";
 import {
   bossBattlesTable, bossMembersTable, dealerCasinoBetsTable, dealerCasinoGamesTable,
   dealerCasinoSettlementsTable, inventoryItemsTable, petAccountsTable, pvpBountiesTable,
-  pvpDuelsTable, profileSettingsTable, shopItemsTable, transactionsTable, walletsTable,
+  pvpDuelsTable, profileSettingsTable, shopItemsTable, transactionsTable,
   guildSettingsTable,
 } from "./schema";
 import { ensureProfileSchema } from "./profileSchema";
@@ -87,14 +87,11 @@ export async function setProfileAppearance(
 
 export async function getProfileData(guildId: string, userId: string) {
   await Promise.all([ensureProfileSchema(), ensureBossSchema()]);
-  const [weapon, bountyRows, walletRows, currencyRows, petRows, inventoryRows, bossRows, duelRows,
+  const [weapon, bountyRows, currencyRows, petRows, inventoryRows, bossRows, duelRows,
     casinoLedgerRows, dealerRows] = await Promise.all([
     getForgeWeapon(guildId, userId),
     db.select({ amount: pvpBountiesTable.amount }).from(pvpBountiesTable).where(and(
       eq(pvpBountiesTable.guildId, guildId), eq(pvpBountiesTable.userId, userId),
-    )),
-    db.select({ balance: walletsTable.balance }).from(walletsTable).where(and(
-      eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId),
     )),
     db.select({ currencyName: guildSettingsTable.currencyName }).from(guildSettingsTable)
       .where(eq(guildSettingsTable.guildId, guildId)),
@@ -153,7 +150,6 @@ export async function getProfileData(guildId: string, userId: string) {
   return {
     weapon,
     bounty: bountyRows[0]?.amount ?? null,
-    balance: walletRows[0]?.balance ?? null,
     currencyName: currencyRows[0]?.currencyName ?? "$",
     inventory: inventoryRows,
     pet,

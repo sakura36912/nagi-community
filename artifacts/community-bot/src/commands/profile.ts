@@ -65,10 +65,6 @@ export const profileCommand = {
         embed.addFields({ name: "加入日", value: member.joinedAt
           ? `<t:${Math.floor(member.joinedAt.getTime() / 1000)}:D>` : "取得できません", inline: true });
       }
-      if (settings.visibleFields.balance !== false) {
-        embed.addFields({ name: "銀行残高", value: profile.balance === null
-          ? "記録なし" : `${profile.balance.toLocaleString("ja-JP")}${escapeMarkdown(profile.currencyName)}`, inline: true });
-      }
       if (settings.visibleFields.kpRank !== false) {
         embed.addFields({ name: "🏝️ KP島会員ランク", value: rankTier ? PROFILE_RANK_LABELS[rankTier] : "未設定", inline: true });
       }
