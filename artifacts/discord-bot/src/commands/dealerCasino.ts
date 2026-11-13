@@ -351,8 +351,10 @@ export function gameEmbed(game: DealerCasinoGame, settings: DealerCasinoSettings
   ];
   if (game.state === "RECRUITING") {
     description.push(kind === "chohan"
-      ? "丁または半を選び、掛け金を入力してください。掛け金は参加確定時に確保されます。"
+      ? "丁または半を選び、掛け金を入力してください。賭博師は「受付終了」ボタンで締め切れます。"
       : "「参加」から掛け金を入力してください。カードは配布開始後、本人だけに表示されます。");
+  } else if (kind === "chohan" && game.state === "CLOSED") {
+    description.push("賭博師は「抽選して精算」ボタンを押すと結果確定と精算を行えます。");
   } else if (kind === "poker" && game.state === "PLAYING") {
     description.push("カードを確認して「続行」または「フォールド」を選んでください。");
   }
@@ -405,7 +407,7 @@ function resultText(result: string): string {
   return result;
 }
 
-function gameComponents(game: DealerCasinoGame): ActionRowBuilder<ButtonBuilder>[] {
+export function gameComponents(game: DealerCasinoGame): ActionRowBuilder<ButtonBuilder>[] {
   const id = game.id;
   if (game.state === "RECRUITING") {
     if (game.gameType === "chohan") {
@@ -414,12 +416,18 @@ function gameComponents(game: DealerCasinoGame): ActionRowBuilder<ButtonBuilder>
         new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}bet:${id}:han`).setLabel("🟥 半に賭ける").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}change:${id}`).setLabel("💰 掛け金変更").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}withdraw:${id}`).setLabel("❌ 参加取消").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}dealer-close:${id}`).setLabel("🔒 受付終了").setStyle(ButtonStyle.Secondary),
       )];
     }
     return [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}join:${id}`).setLabel("🎴 参加").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}change:${id}`).setLabel("💰 掛け金変更").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}withdraw:${id}`).setLabel("❌ 参加取消").setStyle(ButtonStyle.Secondary),
+    )];
+  }
+  if (game.gameType === "chohan" && game.state === "CLOSED") {
+    return [new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`${DEALER_CASINO_PREFIX}dealer-roll:${id}`).setLabel("🎲 抽選して精算").setStyle(ButtonStyle.Success),
     )];
   }
   if (game.gameType === "poker" && game.state === "PLAYING") {
@@ -494,11 +502,16 @@ async function publishSettledResultSafely(
 }
 
 async function replyAfterSettlement(
-  interaction: ChatInputCommandInteraction,
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
   content: string,
 ): Promise<void> {
   try {
-    await replyDealerCommand(interaction, { content });
+    if (interaction.isButton()) {
+      if (interaction.deferred || interaction.replied) await interaction.editReply({ content });
+      else await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+    } else {
+      await replyDealerCommand(interaction, { content });
+    }
   } catch (error) {
     logger.error("[dealer-casino] settlement completed but ephemeral confirmation failed", error);
   }
@@ -520,7 +533,7 @@ async function postPanel(interaction: ChatInputCommandInteraction, game: DealerC
         `ディーラー: <@${game.dealerId}>`,
         `掛け金: **${settings?.minBet.toLocaleString()}〜${settings?.maxBet.toLocaleString()} ${currency.currencyName}**`,
         "状態: **参加受付中**",
-        "参加するには下のボタンから予想と掛け金を入力してください。",
+        "参加するには下の丁・半ボタンから予想と掛け金を入力してください。賭博師は「受付終了」ボタンで締め切れます。",
       ].join("\n"))],
       components: gameComponents(game),
       allowedMentions: { parse: [] },
@@ -692,7 +705,7 @@ async function createGame(interaction: ChatInputCommandInteraction, gameType: De
 }
 
 async function requireOwnedActiveGame(
-  interaction: ChatInputCommandInteraction,
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
   settings: DealerCasinoSettings | null,
   allowAdminRecovery = false,
 ): Promise<DealerCasinoGame> {
@@ -716,6 +729,31 @@ async function requireOwnedActiveGame(
   return game;
 }
 
+async function requireOwnedGameById(
+  interaction: ButtonInteraction,
+  gameId: number,
+  settings: DealerCasinoSettings | null,
+): Promise<DealerCasinoGame> {
+  const guildId = interaction.guildId;
+  if (!guildId) throw new Error("サーバー内でのみ利用できます。");
+  const game = await getDealerCasinoGame(gameId);
+  if (!game || game.guildId !== guildId) throw new Error("このゲームは見つからないか、別のサーバーのゲームです。");
+  const member = await requireDealer(interaction, settings);
+  if (member.voice.channelId !== game.voiceChannelId) {
+    throw new Error("このゲームが進行しているVCに入室してください。");
+  }
+  if (member.id !== game.dealerId &&
+      !isAdmin(member) &&
+      !memberHasRole(member, settings?.directorRoleId) &&
+      !memberHasRole(member, settings?.adminRoleId)) {
+    throw new Error("このゲームを開始したディーラーのみ操作できます。");
+  }
+  if (!await isConfiguredHubVoice(guildId, game.voiceChannelId, settings?.voiceChannelId ?? null)) {
+    throw new Error("このゲームのVCは現在の設定と一致しません。管理者に確認してください。");
+  }
+  return game;
+}
+
 async function settleStoredResult(
   game: DealerCasinoGame,
 ): Promise<{ game: DealerCasinoGame; alreadySettled: boolean }> {
@@ -732,9 +770,31 @@ async function settleStoredResult(
   return { game: finished, alreadySettled: settlement.alreadySettled };
 }
 
-async function rollAndSettleChohan(interaction: ChatInputCommandInteraction, client: Client): Promise<void> {
+async function closeRecruitmentForDealer(
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
+  gameId?: number,
+): Promise<DealerCasinoGame> {
+  const settings = await getDealerCasinoSettings(interaction.guildId ?? "");
+  const game = gameId === undefined
+    ? await requireOwnedActiveGame(interaction, settings)
+    : interaction.isButton()
+      ? await requireOwnedGameById(interaction, gameId, settings)
+      : await requireOwnedActiveGame(interaction, settings);
+  if (game.state !== "RECRUITING") throw new Error("参加受付中のゲームのみ締め切れます。");
+  const closed = await transitionDealerCasinoGame(game.id, "RECRUITING", "CLOSED");
+  await editPanel(interaction.client, closed);
+  return closed;
+}
+
+async function rollAndSettleChohan(
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
+  client: Client,
+  gameId?: number,
+): Promise<void> {
   const settings = await getDealerCasinoSettings(interaction.guildId!);
-  let game = await requireOwnedActiveGame(interaction, settings);
+  let game = gameId !== undefined && interaction.isButton()
+    ? await requireOwnedGameById(interaction, gameId, settings)
+    : await requireOwnedActiveGame(interaction, settings);
   if (game.gameType !== "chohan") throw new Error("現在のゲームは丁半ではありません。");
   if (game.state !== "CLOSED") throw new Error("募集を締め切った丁半ゲームでのみサイコロを振れます。");
   const savedSettings = settings;
@@ -1039,6 +1099,17 @@ async function handleStreakDecision(interaction: ButtonInteraction, gameId: numb
 async function handleButton(interaction: ButtonInteraction): Promise<void> {
   const [, action, gameIdText, detail] = interaction.customId.split(":");
   const gameId = integerValue(gameIdText ?? "", "ゲームID");
+  if (action === "dealer-close") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const closed = await closeRecruitmentForDealer(interaction, gameId);
+    await interaction.editReply({ content: `Game #${closed.id} の受付を締め切りました。下の「抽選して精算」ボタンから結果を確定できます。` });
+    return;
+  }
+  if (action === "dealer-roll") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await rollAndSettleChohan(interaction, interaction.client, gameId);
+    return;
+  }
   if (action === "bet" || action === "join" || action === "change") {
     const choice = action === "bet" ? detail ?? null : null;
     await openBetModal(interaction, gameId, choice, action === "change");
@@ -1085,7 +1156,9 @@ export async function handleDealerCasinoInteraction(
       mode === "change",
     );
   } catch (error) {
-    if (interaction.replied || interaction.deferred) {
+    if (interaction.deferred) {
+      await interaction.editReply({ content: `❌ ${errorMessage(error)}`, embeds: [], components: [] }).catch(() => undefined);
+    } else if (interaction.replied) {
       await interaction.followUp({ content: `❌ ${errorMessage(error)}`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
     } else {
       await interaction.reply({ content: `❌ ${errorMessage(error)}`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
@@ -1250,11 +1323,8 @@ export async function handleDealerCasinoSlash(interaction: ChatInputCommandInter
       return;
     }
     if (sub === "close") {
-      const game = await requireOwnedActiveGame(interaction, settings);
-      if (game.state !== "RECRUITING") throw new Error("参加受付中のゲームのみ締め切れます。");
-      const closed = await transitionDealerCasinoGame(game.id, "RECRUITING", "CLOSED");
-      await editPanel(interaction.client, closed);
-      await replyDealerCommand(interaction, { content: `Game #${game.id} の参加を締め切りました。` });
+      const closed = await closeRecruitmentForDealer(interaction);
+      await replyDealerCommand(interaction, { content: `Game #${closed.id} の参加を締め切りました。` });
       return;
     }
     if (sub === "cancel") {
