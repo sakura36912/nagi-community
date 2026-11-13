@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bossCounter, bossHealing, bossPlayerAttack, bossCooldownSeconds, splitBossReward, validateBossConfig, generateBossCombatStats,
+import { BOSS_PARTS, bossCounter, bossHealing, bossPlayerAttack, bossCooldownSeconds, bossPartReduction, createBossParts, splitBossReward, validateBossConfig, generateBossCombatStats,
   type BossConfig, type BossFighter } from "../../../../lib/db/src/bossRules";
 
 const config: BossConfig = {
@@ -52,6 +52,16 @@ describe("boss combat rules", () => {
     expect(splitBossReward(1, ["b", "a"])).toEqual([{ userId: "a", amount: 1 }, { userId: "b", amount: 0 }]);
     expect(() => splitBossReward(1, ["a", "a"])).toThrow();
   });
+  it("creates three boss-specific parts at 20% HP and weakens counterattacks by 20% per broken part", () => {
+    expect(BOSS_PARTS.kraken.map(part => part.name)).toEqual(["左触手", "右触手", "頭"]);
+    expect(BOSS_PARTS.megalodon.map(part => part.name)).toEqual(["背びれ", "尾びれ", "顎"]);
+    expect(BOSS_PARTS.leviathan.map(part => part.name)).toEqual(["角", "翼ヒレ", "尾"]);
+    expect(Object.values(createBossParts("kraken", 1000)).map(part => part!.maxHp)).toEqual([200, 200, 200]);
+    expect(bossPartReduction(0)).toBe(1);
+    expect(bossPartReduction(1)).toBe(0.8);
+    expect(bossPartReduction(2)).toBe(0.6);
+    expect(bossPartReduction(3)).toBe(0.4);
+  });
   it("validates administrative values and doubled reward overflow", () => {
     expect(() => validateBossConfig("kraken", config)).not.toThrow();
     for (const patch of [{ lobbySeconds: 601 }, { playerHp: 0 }, { criticalPercent: 101 }, { cooldownSeconds: 0 },
@@ -99,6 +109,13 @@ describe("boss combat rules", () => {
     const all = bossCounter("kraken", 300, 1000, 2, players, config, () => 0.5);
     expect(all.fighters.every(p => p.hp === 880)).toBe(true);
     expect(all.messages.join()).toMatch(/暴走.*海流攻撃/);
+  });
+  it("reduces boss damage after part destruction", () => {
+    const player = fighter();
+    const normal = bossCounter("kraken", 1000, 1000, 1, [player], config, () => 0.5);
+    const weakened = bossCounter("kraken", 1000, 1000, 1, [player], config, () => 0.5, 1);
+    expect(1000 - weakened.fighters[0]!.hp).toBe(Math.floor((1000 - normal.fighters[0]!.hp) * 0.8));
+    expect(weakened.messages.join()).toContain("反撃威力が80%に低下");
   });
   it("megalodon selects lowest HP and applies two ticks of bleeding", () => {
     const players = [fighter("a"), fighter("b")]; players[0]!.hp = 800;

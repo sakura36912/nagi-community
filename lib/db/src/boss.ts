@@ -5,7 +5,7 @@ import { walletsTable } from "./schema/economy";
 import { bossFeesTable as fees, bossEventsTable as events, bossBattlesTable as battles,
   bossActiveUsersTable as active, bossMembersTable as members, bossJoinRequestsTable as requests,
   bossActionsTable as actions } from "./schema/boss";
-import { BossError, bossInteger, bossHpFromMembers, validateBossConfig, type BossConfig, type BossMode, type BossType } from "./bossRules";
+import { BossError, bossInteger, bossHpFromMembers, createBossParts, validateBossConfig, type BossConfig, type BossMode, type BossType } from "./bossRules";
 import { ensureBossSchema } from "./bossSchema";
 import { advanceBossGuild, withBossGuild, activeBossEvent, bossMembers, previousBossAction, recordBossAction, finishBossBattle } from "./bossStore";
 import { isForgeWeaponType } from "./forgeRules";
@@ -134,6 +134,7 @@ export async function confirmBossJoin(
         : request.mode === "solo" ? event.config.soloHp : event.config.partyHp;
       const [created] = await tx.insert(battles).values({ id, eventId: event.id, guildId, mode: request.mode,
         status: request.mode === "solo" ? "active" : "waiting", maxHp: hp, currentHp: hp,
+        parts: createBossParts(event.bossType, hp),
         attackCost: 0, healCost: request.healCost,
         startedAt: request.mode === "solo" ? now : null,
         lobbyEndsAt: request.mode === "party" ? new Date(Math.min(event.endsAt.getTime(), now.getTime() + event.config.lobbySeconds * 1000)) : null,
@@ -143,7 +144,8 @@ export async function confirmBossJoin(
     if (battle.mode === "party" && event.config.bossHpPercent !== undefined) {
       const existing = await bossMembers(tx, battle.id);
       const hp = bossHpFromMembers(event.config.bossHpPercent, [...existing.map(member => member.maxHp), playerHp]);
-      const [resized] = await tx.update(battles).set({ maxHp: hp, currentHp: hp }).where(eq(battles.id, battle.id)).returning();
+      const [resized] = await tx.update(battles).set({ maxHp: hp, currentHp: hp,
+        parts: createBossParts(event.bossType, hp) }).where(eq(battles.id, battle.id)).returning();
       battle = resized!;
     }
     await tx.insert(members).values({ battleId: battle.id, guildId, userId, displayName: displayName.slice(0, 80),

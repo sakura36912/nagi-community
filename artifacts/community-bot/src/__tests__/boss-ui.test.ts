@@ -18,21 +18,38 @@ function bundle(status: string): BossNoticeBundle {
 }
 describe("readable Discord boss embeds", () => {
   it("places attack and priced healing controls only on active public battle cards", () => {
-    const battle = bundle("active").battle;
-    const row = bossBattleControls(battle)[0]!.toJSON();
-    expect(row.components).toMatchObject([
-      { custom_id: "boss:attack:test", label: "攻撃（無料）" },
-      { custom_id: "boss:heal:test", label: "回復（$50,000）", disabled: false },
-    ]);
-    expect(bossBattleNotice(bundle("active")).toJSON().description).toContain("下のボタン");
+    const rows = bossBattleControls(bundle("active")).map(row => row.toJSON());
+    expect(rows[0]!.components[0]).toMatchObject({ custom_id: "boss:part:test", placeholder: "攻撃する部位を選択" });
+    expect((rows[0]!.components[0] as { options: { label: string; value: string }[] }).options)
+      .toContainEqual(expect.objectContaining({ label: "左触手", value: "left_tentacle" }));
+    expect(rows[1]!.components[0]).toMatchObject({
+      custom_id: "boss:heal:test", label: "回復（$50,000）", disabled: false,
+    });
+    expect(bossBattleNotice(bundle("active")).toJSON().description).toContain("部位メニュー");
     for (const status of ["waiting", "won", "failed", "cancelled"]) {
-      expect(bossBattleControls(bundle(status).battle)).toEqual([]);
+      expect(bossBattleControls(bundle(status))).toEqual([]);
     }
   });
-  it("disables unconfigured healing without disabling free attacks", () => {
-    const row = bossBattleControls({ ...bundle("active").battle, healCost: 0 })[0]!.toJSON();
-    expect(row.components[0]).toMatchObject({ custom_id: "boss:attack:test" });
-    expect(row.components[1]).toMatchObject({ label: "回復（料金未設定）", disabled: true });
+  it("disables healing when the fee is not configured while retaining part selection", () => {
+    const data = bundle("active");
+    data.battle.healCost = 0;
+    const rows = bossBattleControls(data).map(row => row.toJSON());
+    expect(rows[0]!.components[0]).toMatchObject({ custom_id: "boss:part:test" });
+    expect(rows[1]!.components[0]).toMatchObject({ label: "回復（料金未設定）", disabled: true });
+  });
+  it("disables broken parts and enables body attacks only after all parts break", () => {
+    const data = bundle("active");
+    data.battle.parts = {
+      left_tentacle: { hp: 0, maxHp: 20000 },
+      right_tentacle: { hp: 0, maxHp: 20000 },
+      head: { hp: 0, maxHp: 20000 },
+    };
+    const options = bossBattleControls(data)[0]!.toJSON().components[0] as { options: { label: string; value: string; description?: string }[] };
+    expect(options.options).toEqual([expect.objectContaining({ label: "本体", value: "body", description: "すべての部位が破壊済みです" })]);
+    const broken = bundle("active");
+    broken.battle.parts = { left_tentacle: { hp: 0, maxHp: 20000 } };
+    const partOptions = (bossBattleControls(broken)[0]!.toJSON().components[0] as { options: { value: string; disabled?: boolean; description?: string }[] }).options;
+    expect(partOptions.some(option => option.value === "left_tentacle")).toBe(false);
   });
   it("explains wallet HP and maximum-HP percentage healing without exposing weapon stats", () => {
     const output = JSON.stringify(bossEventEmbed({ ...event, config: { ...event.config,
@@ -85,6 +102,7 @@ describe("readable Discord boss embeds", () => {
     const embed = bossBattleNotice(bundle("active")).toJSON();
     expect(embed.fields?.find(f => f.name === "攻撃 / 1回")?.value).toBe("**無料（$0）**");
     expect(embed.fields?.find(f => f.name === "回復 / 1回")?.value).toBe("**$50,000**");
+    expect(embed.fields?.find(f => f.name === "部位の状態")?.value).toContain("左触手");
     expect(embed.fields?.find(f => f.name === "個別クールタイム")?.value).toContain("攻撃 5秒 ／ 回復 30秒");
     expect(embed.footer?.text).toContain("投稿時点の記録");
     expect(JSON.stringify(embed)).not.toContain("ダメージランキング");

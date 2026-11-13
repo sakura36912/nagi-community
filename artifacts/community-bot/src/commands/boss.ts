@@ -1,11 +1,11 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, MessageFlags,
   PermissionFlagsBits, SlashCommandBuilder, escapeMarkdown,
-  type ChatInputCommandInteraction, type ButtonInteraction,
+  type ChatInputCommandInteraction, type ButtonInteraction, type StringSelectMenuInteraction,
 } from "discord.js";
 import {
   BossError, ForgeError, getBossFees, configureBossFees, createBossEvent, endBossEvent, getBossInfo, generateBossCombatStats,
-  createBossJoinRequest, confirmBossJoin, cancelBossJoinRequest, performBossAction, type BossConfig, type BossType, type BossMode,
+  createBossJoinRequest, confirmBossJoin, cancelBossJoinRequest, performBossAction, type BossConfig, type BossType, type BossMode, type BossTargetPart,
 } from "@workspace/db";
 import { requireForgeAccess } from "./forge";
 import { bossActionText, bossEventEmbed, bossHp, bossImageAttachment, bossMoney, bossSpecialName } from "../lib/bossUi";
@@ -14,11 +14,23 @@ import { logger } from "../lib/logger";
 
 const ADMIN = new Set(["ボス開催", "ボス終了", "ボス料金設定"]);
 const types = [{ name: "クラーケン", value: "kraken" }, { name: "メガロドン", value: "megalodon" }, { name: "リヴァイアサン", value: "leviathan" }];
+const attackPartChoices = [
+  { name: "クラーケン：左触手", value: "left_tentacle" },
+  { name: "クラーケン：右触手", value: "right_tentacle" },
+  { name: "クラーケン：頭", value: "head" },
+  { name: "メガロドン：背びれ", value: "dorsal_fin" },
+  { name: "メガロドン：尾びれ", value: "tail_fin" },
+  { name: "メガロドン：顎", value: "jaw" },
+  { name: "リヴァイアサン：角", value: "horn" },
+  { name: "リヴァイアサン：翼ヒレ", value: "wing_fin" },
+  { name: "リヴァイアサン：尾", value: "tail" },
+  { name: "本体（全ての部位破壊後）", value: "body" },
+];
 const specials = [
   { name: "なし", value: "none" }, { name: "ボス攻撃力2倍", value: "double_attack" },
   { name: "財宝報酬2倍", value: "double_reward" }, { name: "与ダメージ1.5倍", value: "damage_boost" },
 ];
-type Interaction = ChatInputCommandInteraction | ButtonInteraction;
+type Interaction = ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
 async function bossError(interaction: Interaction, error: unknown) {
   const known = error instanceof BossError || error instanceof ForgeError;
   if (!known) logger.error("[boss] Command failed", error);
@@ -131,7 +143,11 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
       return;
     }
     if (name === "攻撃" || name === "回復") {
-      const result = await performBossAction(interaction.id, guildId, userId, name === "攻撃" ? "attack" : "heal");
+      const targetPart = name === "攻撃"
+        ? interaction.options.getString("部位", true) as BossTargetPart : undefined;
+      const result = targetPart
+        ? await performBossAction(interaction.id, guildId, userId, "attack", { targetPart })
+        : await performBossAction(interaction.id, guildId, userId, "heal");
       await interaction.editReply({ content: bossActionText(result), allowedMentions: { parse: [] } });
       void runBossRecovery(interaction.client);
       return;
@@ -172,6 +188,21 @@ export async function handleBossButton(interaction: ButtonInteraction): Promise<
   } catch (error) { await bossError(interaction, error); }
   return true;
 }
+export async function handleBossPartSelection(interaction: StringSelectMenuInteraction): Promise<boolean> {
+  if (!interaction.customId.startsWith("boss:part:")) return false;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const battleId = interaction.customId.slice("boss:part:".length);
+    const targetPart = interaction.values[0] as BossTargetPart | undefined;
+    if (!battleId || !targetPart) throw new BossError("攻撃する部位を選択してください。");
+    const guildId = await requireForgeAccess(interaction);
+    const result = await performBossAction(interaction.id, guildId, interaction.user.id, "attack",
+      { battleId, targetPart });
+    await interaction.editReply({ content: bossActionText(result), allowedMentions: { parse: [] } });
+    void runBossRecovery(interaction.client);
+  } catch (error) { await bossError(interaction, error); }
+  return true;
+}
 function base(name: string, description: string) {
   const cmd = new SlashCommandBuilder().setName(name).setDescription(description).setDMPermission(false);
   if (ADMIN.has(name)) cmd.setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
@@ -198,7 +229,11 @@ export const bossCommands = [
   base("参加", "本船員専用：条件を確認してソロまたはパーティで参加")
     .addStringOption(o => o.setName("モード").setDescription("参加方法").setRequired(true)
       .addChoices({ name: "ソロ", value: "solo" }, { name: "パーティ", value: "party" })),
-  base("攻撃", "参加中のボスへ無料で攻撃（攻撃専用クールタイムあり）"),
+  base("攻撃", "参加中のボスへ無料で攻撃。対象部位を選択（攻撃専用クールタイムあり）")
+    .addStringOption(o => o.setName("部位").setDescription("開催中のボスにある部位を選択")
+      .setRequired(true).addChoices(
+        ...attackPartChoices,
+      )),
   base("回復", "自分のHPを回復（参加時に確認した料金を消費）"),
   base("ボス料金設定", "管理者専用：新規討伐の回復料金を設定（攻撃は常に無料）")
     .addIntegerOption(o => o.setName("回復料金").setDescription("回復1回の料金（1以上）").setMinValue(1).setMaxValue(2147483647)),

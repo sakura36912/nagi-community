@@ -1,7 +1,7 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags,
   PermissionFlagsBits, SlashCommandBuilder,
-  type ButtonInteraction, type ChatInputCommandInteraction,
+  type ButtonInteraction, type ChatInputCommandInteraction, type StringSelectMenuInteraction,
 } from "discord.js";
 import {
   ForgeError, FORGE_WEAPONS, publicForgeWeapon, getForgeWeapon, getForgeSetting,
@@ -19,10 +19,11 @@ const choices = [
   { name: "双剣", value: "dual" }, { name: "杖", value: "staff" },
 ];
 type Interaction = ChatInputCommandInteraction | ButtonInteraction;
+type ForgeAccessInteraction = Interaction | StringSelectMenuInteraction;
 const ADMIN_COMMANDS = new Set(["武器変更", "武器リセット", "武器確認",
   "強化費用設定", "強化費用リセット", "強化成功率設定", "強化成功率リセット"]);
 
-export async function requireForgeAccess(interaction: Interaction, admin = false) {
+export async function requireForgeAccess(interaction: ForgeAccessInteraction, admin = false) {
   if (!interaction.guild) throw new ForgeError("サーバー内で使用してください。");
   // ロール剥奪直後でも古いメンバーキャッシュで許可しない。
   const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });

@@ -1,7 +1,7 @@
-import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, escapeMarkdown } from "discord.js";
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, escapeMarkdown } from "discord.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BOSS_NAMES, bossCooldownSeconds, type BossConfig, type BossEvent, type BossNoticeBundle, type BossActionResult } from "@workspace/db";
+import { BOSS_NAMES, bossCooldownSeconds, type BossConfig, type BossEvent, type BossNoticeBundle, type BossActionResult, type BossType } from "@workspace/db";
 
 const BOSS_IMAGE_FILES = {
   kraken: "kraken.jpg",
@@ -9,6 +9,18 @@ const BOSS_IMAGE_FILES = {
   leviathan: "leviathan.jpg",
 } as const;
 const BOSS_ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../assets/boss");
+const BOSS_PART_NAMES: Record<BossType, { key: string; name: string }[]> = {
+  kraken: [{ key: "left_tentacle", name: "左触手" }, { key: "right_tentacle", name: "右触手" }, { key: "head", name: "頭" }],
+  megalodon: [{ key: "dorsal_fin", name: "背びれ" }, { key: "tail_fin", name: "尾びれ" }, { key: "jaw", name: "顎" }],
+  leviathan: [{ key: "horn", name: "角" }, { key: "wing_fin", name: "翼ヒレ" }, { key: "tail", name: "尾" }],
+};
+function displayedBossParts(type: BossType, saved: BossNoticeBundle["battle"]["parts"], maxHp: number) {
+  const defaultHp = Math.max(1, Math.floor(maxHp * 0.2));
+  return BOSS_PART_NAMES[type].map(part => ({
+    ...part,
+    ...(saved?.[part.key as keyof typeof saved] ?? { hp: defaultHp, maxHp: defaultHp }),
+  }));
+}
 
 /** Attach the user's boss illustration so it renders reliably in Discord embeds. */
 export function bossImageAttachment(type: BossEvent["bossType"]) {
@@ -51,6 +63,7 @@ export function bossEventEmbed(event: BossEvent) {
         : `ソロ **${event.config.soloHp.toLocaleString("ja-JP")}** ／ パーティ **${event.config.partyHp.toLocaleString("ja-JP")}**` },
       { name: "報酬総額 / 1討伐", value: `**${bossMoney(event.config.reward * (event.config.special === "double_reward" ? 2 : 1))}**\n参加者で均等分配`, inline: true },
       { name: "パーティ受付", value: `**2〜4人 / ${bossDuration(event.config.lobbySeconds)}**\n4人で即開始`, inline: true },
+      { name: "部位破壊", value: "攻撃時に部位を選択。各部位のHPは戦闘開始時のボス最大HPの20%。破壊するごとにボスの反撃威力が20%低下。" },
       { name: "開催終了予定", value: bossDeadline(event.endsAt) },
       { name: "個別クールタイム", value: `攻撃 **${bossCooldownSeconds(event.config, "attack")}秒** ／ 回復 **${bossCooldownSeconds(event.config, "heal")}秒**` },
       ...(event.config.playerHpSource === "wallet" ? [{ name: "プレイヤーHP", value: "参加確定時の所持金で固定（所持金1以上）。被ダメージで残高は減りません。" }] : []),
@@ -73,7 +86,7 @@ export function bossBattleNotice(bundle: BossNoticeBundle) {
       battle.status === "failed" ? "**討伐未達成。今回の報酬はありません。**" :
       battle.status === "cancelled" ? "今回の受付は終了しました。" :
       battle.status === "waiting" ? `**${members.length} / 4人が参加中** — 2人以上で開始できます。` :
-      "下のボタン、または `/攻撃`・`/回復` で操作できます。\n参加者本人のキャラクターだけを操作します。")
+      "下の部位メニュー、または `/攻撃` で部位を選択できます。回復はボタンまたは `/回復`。\n参加者本人のキャラクターだけを操作します。")
     .addFields({ name: "ボス残りHP", value: bossHp(battle.currentHp, battle.maxHp) },
       { name: `参加者（${members.length}人）`, value: names.slice(0, 1024) });
   if (battle.status === "waiting") embed.addFields(
@@ -86,6 +99,12 @@ export function bossBattleNotice(bundle: BossNoticeBundle) {
     { name: "個別クールタイム", value: `攻撃 ${bossCooldownSeconds(event.config, "attack")}秒 ／ 回復 ${bossCooldownSeconds(event.config, "heal")}秒` },
     { name: "戦闘終了予定", value: bossDeadline(battle.endsAt) },
   );
+  if (battle.status === "active") {
+    const parts = displayedBossParts(event.bossType, battle.parts, battle.maxHp);
+    embed.addFields({ name: "部位の状態", value: parts.map(part =>
+      `${part.hp <= 0 ? "破壊済み" : `${part.hp.toLocaleString("ja-JP")} / ${part.maxHp.toLocaleString("ja-JP")}`} — ${part.name}`,
+    ).join("\n") });
+  }
   if (["won", "failed"].includes(battle.status)) {
     const ranking = [...members].sort((a, b) => b.damage - a.damage || a.userId.localeCompare(b.userId));
     const total = members.reduce((sum, p) => sum + p.damage, 0);
@@ -104,14 +123,29 @@ export function bossBattleNotice(bundle: BossNoticeBundle) {
   return embed.setFooter({ text: `${ended ? "終了時の記録" : "投稿時点の記録 / 最新は /ボス情報"} | 討伐ID：${battle.id}` });
 }
 /** Shared party controls always operate the clicking member, never the card's author. */
-export function bossBattleControls(battle: BossNoticeBundle["battle"]) {
+export function bossBattleControls(bundle: BossNoticeBundle) {
+  const { battle, event } = bundle;
   if (battle.status !== "active") return [];
-  return [new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(`boss:attack:${battle.id}`).setLabel("攻撃（無料）").setStyle(ButtonStyle.Primary),
+  const parts = displayedBossParts(event.bossType, battle.parts, battle.maxHp);
+  const available = parts.filter(part => part.hp > 0);
+  const attackMenu = new StringSelectMenuBuilder().setCustomId(`boss:part:${battle.id}`)
+    .setPlaceholder("攻撃する部位を選択").setMinValues(1).setMaxValues(1);
+  if (available.length) {
+    attackMenu.addOptions(available.map(part => ({
+      label: part.name,
+      value: part.key,
+      description: `部位HP ${part.hp.toLocaleString("ja-JP")} / ${part.maxHp.toLocaleString("ja-JP")}`,
+    })));
+  } else {
+    attackMenu.addOptions({ label: "本体", value: "body", description: "すべての部位が破壊済みです" });
+  }
+  const partRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(attackMenu);
+  const healRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(`boss:heal:${battle.id}`)
       .setLabel(battle.healCost > 0 ? `回復（${bossMoney(battle.healCost)}）` : "回復（料金未設定）")
       .setStyle(ButtonStyle.Success).setDisabled(battle.healCost <= 0),
-  )];
+  );
+  return [partRow, healRow];
 }
 export function bossActionText(result: BossActionResult) {
   return [

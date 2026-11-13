@@ -8,6 +8,41 @@ export type BattleStatus = "waiting" | "active" | "won" | "failed" | "cancelled"
 export const BOSS_NAMES: Record<BossType, string> = {
   kraken: "クラーケン", megalodon: "メガロドン", leviathan: "リヴァイアサン",
 };
+export const BOSS_PARTS = {
+  kraken: [
+    { key: "left_tentacle", name: "左触手" },
+    { key: "right_tentacle", name: "右触手" },
+    { key: "head", name: "頭" },
+  ],
+  megalodon: [
+    { key: "dorsal_fin", name: "背びれ" },
+    { key: "tail_fin", name: "尾びれ" },
+    { key: "jaw", name: "顎" },
+  ],
+  leviathan: [
+    { key: "horn", name: "角" },
+    { key: "wing_fin", name: "翼ヒレ" },
+    { key: "tail", name: "尾" },
+  ],
+} as const satisfies Record<BossType, readonly { key: string; name: string }[]>;
+export type BossPartKey = typeof BOSS_PARTS[BossType][number]["key"];
+export type BossTargetPart = BossPartKey | "body";
+export interface BossPartState { hp: number; maxHp: number }
+export type BossPartsState = Partial<Record<BossPartKey, BossPartState>>;
+export function createBossParts(type: BossType, bossMaxHp: number): BossPartsState {
+  const partHp = Math.max(1, Math.floor(bossMaxHp * 0.2));
+  return Object.fromEntries(BOSS_PARTS[type].map(part => [part.key, { hp: partHp, maxHp: partHp }])) as BossPartsState;
+}
+export function bossPartReduction(brokenParts: number) {
+  return Math.max(0.4, 1 - Math.max(0, Math.min(3, brokenParts)) * 0.2);
+}
+export function getBossParts(type: BossType, parts: BossPartsState | null | undefined, bossMaxHp: number) {
+  const initial = createBossParts(type, bossMaxHp);
+  return BOSS_PARTS[type].map(part => ({
+    ...part,
+    ...(parts?.[part.key] ?? initial[part.key]!),
+  }));
+}
 export interface BossConfig {
   soloHp: number; partyHp: number; attack: number; defense: number; reward: number;
   durationSeconds: number; lobbySeconds: number; playerHp: number; healAmount: number;
@@ -134,7 +169,7 @@ export function bossHealing(player: BossFighter, config: BossConfig) {
 /** ボス別の行動順と閾値を定義。乱数はテスト時に差し替えられる。 */
 export function bossCounter(
   type: BossType, hp: number, maxHp: number, turn: number, fighters: BossFighter[],
-  config: BossConfig, roll: () => number = forgeRoll,
+  config: BossConfig, roll: () => number = forgeRoll, brokenParts = 0,
 ) {
   const players = fighters.map(p => ({ ...p, effects: { ...p.effects } }));
   const messages: string[] = [];
@@ -149,6 +184,8 @@ export function bossCounter(
   const living = players.filter(p => p.hp > 0);
   if (!living.length) return { hp: currentHp, fighters: players, messages };
   const phase = (turn - 1) % (type === "leviathan" ? 4 : 3);
+  const partReduction = bossPartReduction(brokenParts);
+  if (brokenParts > 0) messages.push(`部位破壊によりボスの反撃威力が${Math.round(partReduction * 100)}%に低下`);
   const enraged = hp / maxHp <= (type === "kraken" ? 0.3 : type === "megalodon" ? 0.5 : 0.2);
   const rage = enraged ? (type === "leviathan" ? 2 : 1.5) : 1;
   if (enraged) messages.push(type === "kraken" ? "クラーケンが暴走！" : type === "megalodon" ? "メガロドンが狂暴化！" : "リヴァイアサンが覚醒！");
@@ -173,7 +210,7 @@ export function bossCounter(
       targets = living;
     }
     for (const p of targets) {
-      const raw = config.attack * factor * rage * (config.special === "double_attack" ? 2 : 1)
+      const raw = config.attack * factor * rage * partReduction * (config.special === "double_attack" ? 2 : 1)
         * (0.9 + random(roll) * 0.2);
       const damage = Math.min(p.hp, clampDamage((raw - p.weapon.defense * 0.5)
         * (p.effects.shield ? 0.5 : 1) * (p.effects.vulnerableTicks > 0 ? 1.2 : 1)));

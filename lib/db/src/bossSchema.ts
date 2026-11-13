@@ -17,6 +17,7 @@ export function ensureBossSchema(): Promise<void> {
       CREATE TABLE IF NOT EXISTS boss_battles (
         id text PRIMARY KEY, event_id text NOT NULL, guild_id text NOT NULL, mode text NOT NULL,
         status text NOT NULL, max_hp integer NOT NULL, current_hp integer NOT NULL,
+        parts jsonb NOT NULL DEFAULT '{}',
         attack_cost integer NOT NULL, heal_cost integer NOT NULL, action_count integer NOT NULL DEFAULT 0,
         counter_turn integer NOT NULL DEFAULT 0, lobby_ends_at timestamptz, started_at timestamptz,
         ends_at timestamptz NOT NULL, finished_at timestamptz, reason text, rewards jsonb NOT NULL DEFAULT '[]',
@@ -45,6 +46,7 @@ export function ensureBossSchema(): Promise<void> {
         result jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
       )
     `);
+    await tx.execute(sql`ALTER TABLE boss_battles ADD COLUMN IF NOT EXISTS parts jsonb NOT NULL DEFAULT '{}'`);
   })).catch(error => { ready = undefined; throw error; });
   return ready;
 }

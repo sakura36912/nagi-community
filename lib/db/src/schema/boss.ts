@@ -1,6 +1,6 @@
 import { bigint, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { BossActionResult, BossConfig, BossEffects, BossMode, BossType, BossWeaponSnapshot, BattleStatus } from "../bossRules";
+import type { BossActionResult, BossConfig, BossEffects, BossMode, BossPartsState, BossType, BossWeaponSnapshot, BattleStatus } from "../bossRules";
 
 export const bossFeesTable = pgTable("boss_fees", {
   guildId: text("guild_id").primaryKey(), attackCost: integer("attack_cost"), healCost: integer("heal_cost"),
@@ -18,6 +18,7 @@ export const bossBattlesTable = pgTable("boss_battles", {
   id: text("id").primaryKey(), eventId: text("event_id").notNull(), guildId: text("guild_id").notNull(),
   mode: text("mode").$type<BossMode>().notNull(), status: text("status").$type<BattleStatus>().notNull(),
   maxHp: integer("max_hp").notNull(), currentHp: integer("current_hp").notNull(),
+  parts: jsonb("parts").$type<BossPartsState>().notNull().default({}),
   attackCost: integer("attack_cost").notNull(), healCost: integer("heal_cost").notNull(),
   actionCount: integer("action_count").notNull().default(0), counterTurn: integer("counter_turn").notNull().default(0),
   lobbyEndsAt: timestamp("lobby_ends_at", { withTimezone: true }),

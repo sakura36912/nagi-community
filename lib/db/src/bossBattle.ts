@@ -3,7 +3,8 @@ import { walletsTable, transactionsTable } from "./schema/economy";
 import { bossEventsTable as events, bossBattlesTable as battles, bossMembersTable as members,
   bossActiveUsersTable as active } from "./schema/boss";
 import { advanceBossGuild, withBossGuild, bossMembers, previousBossAction, recordBossAction, finishBossBattle } from "./bossStore";
-import { BossError, bossPlayerAttack, bossHealing, bossCounter, bossCooldownSeconds, type BossActionResult } from "./bossRules";
+import { BossError, BOSS_PARTS, bossPlayerAttack, bossHealing, bossCounter, bossCooldownSeconds,
+  createBossParts, type BossActionResult, type BossPartKey, type BossTargetPart } from "./bossRules";
 import { forgeRoll, isForgeWeaponType } from "./forgeRules";
 import { forgeWeaponsTable } from "./schema/forge";
 import { bossCombo, bossAttackPresentation, type BossAttackPresentation } from "./bossAttackEffects";
@@ -11,7 +12,7 @@ import { bossCombo, bossAttackPresentation, type BossAttackPresentation } from "
 /** 攻撃無料・回復課金・個別クールタイム・勝利報酬を同時に確定する。 */
 export async function performBossAction(
   id: string, guildId: string, userId: string, action: "attack" | "heal",
-  options: { now?: Date; roll?: () => number; battleId?: string } = {},
+  options: { now?: Date; roll?: () => number; battleId?: string; targetPart?: BossTargetPart } = {},
 ) {
   const now = options.now ?? new Date(), roll = options.roll ?? forgeRoll;
   await advanceBossGuild(guildId, now);
@@ -41,7 +42,9 @@ export async function performBossAction(
     const paid = action === "attack" ? 0 : battle.healCost;
     if (action === "heal" && paid <= 0) throw new BossError("この討伐の有料回復料金が未設定です。管理者にお問い合わせください。");
     const messages: string[] = [];
-    let bossHp = battle.currentHp, damage = 0, healed = 0, critical = false, skill: string | undefined;
+    let bossHp = battle.currentHp, parts = Object.keys(battle.parts ?? {}).length
+      ? { ...battle.parts } : createBossParts(event.bossType, battle.maxHp);
+    let damage = 0, healed = 0, critical = false, skill: string | undefined;
     let presentation: BossAttackPresentation | undefined;
     if (action === "attack") {
       // Refresh only the selected weapon's offensive growth. HP, role bonus,
@@ -57,6 +60,24 @@ export async function performBossAction(
       if (!isForgeWeaponType(player.weapon.weaponType)) throw new BossError("未対応の武器です。");
       const combo = bossCombo(player.weapon.weaponType, attack.damage, bossHp, roll);
       damage = combo.damage;
+      const definitions = BOSS_PARTS[event.bossType];
+      const availableParts = definitions.filter(part => (parts[part.key as BossPartKey]?.hp ?? 0) > 0);
+      const targetPart = options.targetPart ?? availableParts[0]?.key ?? "body";
+      if (targetPart === "body") {
+        if (availableParts.length) throw new BossError("部位が残っています。攻撃する部位を選択してください。");
+      } else {
+        const definition = definitions.find(part => part.key === targetPart);
+        if (!definition) throw new BossError("このボスに存在しない部位です。ボスに合った部位を選択してください。");
+        const part = parts[definition.key as BossPartKey];
+        if (!part || part.hp <= 0) throw new BossError("その部位は既に破壊されています。別の部位を選択してください。");
+        const remainingHp = Math.max(0, part.hp - damage);
+        parts = { ...parts, [definition.key]: { ...part, hp: remainingHp } };
+        messages.push(`${definition.name}に${Math.min(part.hp, damage).toLocaleString("ja-JP")}ダメージ（部位HP ${remainingHp.toLocaleString("ja-JP")} / ${part.maxHp.toLocaleString("ja-JP")}）`);
+        if (remainingHp === 0) {
+          const brokenCount = definitions.filter(({ key }) => (parts[key as BossPartKey]?.hp ?? 0) <= 0).length;
+          messages.push(`${definition.name}を破壊！ボスの反撃が1部位につき20%弱体化します（現在${Math.round((1 - brokenCount * 0.2) * 100)}%）`);
+        }
+      }
       bossHp -= damage; critical = attack.critical; skill = attack.skill;
       const narration = bossAttackPresentation(player.weapon.weaponType, event.bossType, combo,
         { critical, finished: bossHp === 0, maxHp: battle.maxHp, effects: player.effects }, roll);
@@ -94,7 +115,9 @@ export async function performBossAction(
     let counterTurn = battle.counterTurn;
     if (bossHp > 0 && actionCount % event.config.counterEvery === 0) {
       counterTurn++;
-      const counter = bossCounter(event.bossType, bossHp, battle.maxHp, counterTurn, players, event.config, roll);
+      const brokenParts = BOSS_PARTS[event.bossType]
+        .filter(({ key }) => (parts[key as BossPartKey]?.hp ?? 0) <= 0).length;
+      const counter = bossCounter(event.bossType, bossHp, battle.maxHp, counterTurn, players, event.config, roll, brokenParts);
       bossHp = counter.hp;
       players = counter.fighters.map(p => ({ ...players.find(old => old.userId === p.userId)!, ...p }));
       messages.push(...counter.messages);
@@ -103,7 +126,7 @@ export async function performBossAction(
       await tx.update(members).set({ hp: p.hp, damage: p.damage, attackCount: p.attackCount, effects: p.effects, weapon: p.weapon })
         .where(and(eq(members.battleId, battle.id), eq(members.userId, p.userId)));
     }
-    const [updated] = await tx.update(battles).set({ currentHp: bossHp, actionCount, counterTurn }).where(eq(battles.id, battle.id)).returning();
+    const [updated] = await tx.update(battles).set({ currentHp: bossHp, actionCount, counterTurn, parts }).where(eq(battles.id, battle.id)).returning();
     await tx.insert(transactionsTable).values({ guildId, userId, amount: -paid,
       reason: `ボス${action === "attack" ? "攻撃" : "回復"} ${battle.id}`, sessionKey: `boss-action:${id}` });
     let finished = updated!;

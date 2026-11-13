@@ -15,7 +15,7 @@ import { observeZombieGuild, resetZombieConnection, startZombieRuntime } from ".
 import { syncZombieCommands } from "./lib/zombieRegistration.js";
 import { ensureBossSchema, isRpgCommandName } from "@workspace/db";
 import { handleForgeButton } from "./commands/forge.js";
-import { handleBossButton } from "./commands/boss.js";
+import { handleBossButton, handleBossPartSelection } from "./commands/boss.js";
 import { handlePvpButton } from "./commands/pvp.js";
 import { startRpgRuntime } from "./lib/rpgRuntime.js";
 import { startPetRuntime } from "./lib/petRuntime.js";
@@ -592,6 +592,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await handleTicketOpen(interaction);
         return;
       }
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("boss:part:")) {
+      await handleBossPartSelection(interaction);
+      return;
     }
   } catch (err) {
     logger.error("Error handling interaction", err);

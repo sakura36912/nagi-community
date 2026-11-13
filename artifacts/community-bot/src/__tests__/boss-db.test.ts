@@ -169,6 +169,28 @@ describe.skipIf(process.env.RUN_BOSS_DB_TESTS !== "1")("boss persistent atomic f
         repeated: true, presentation: result.presentation,
       });
   });
+  it("stores 20-percent part HP and applies the 20-percent counterattack reduction on destruction", async () => {
+    await host({ soloHp: 10000, counterEvery: 1, attackCooldownSeconds: 0 });
+    await prepare("a");
+    const joined = await join("a");
+    const initial = (await getBossBattleBundle(joined.battleId))!.battle.parts;
+    expect(initial).toMatchObject({
+      left_tentacle: { hp: 2000, maxHp: 2000 },
+      right_tentacle: { hp: 2000, maxHp: 2000 },
+      head: { hp: 2000, maxHp: 2000 },
+    });
+    await db.update(bossBattlesTable).set({
+      parts: { ...initial, left_tentacle: { hp: 1, maxHp: 2000 } },
+    }).where(eq(bossBattlesTable.id, joined.battleId));
+    const result = await performBossAction(id(), guild, "a", "attack", {
+      now: at(1), roll: () => 0.5, targetPart: "left_tentacle",
+    });
+    const saved = (await getBossBattleBundle(joined.battleId))!;
+    expect(saved.battle.parts.left_tentacle?.hp).toBe(0);
+    expect(result.messages.join("\n")).toContain("左触手を破壊");
+    expect(result.messages.join("\n")).toContain("現在80%");
+    expect(result.messages.join("\n")).toContain("反撃威力が80%に低下");
+  });
   it("saves overkill and finish narration but credits only the remaining HP and one reward", async () => {
     await host({ soloHp: 1, counterEvery: 1 });
     await prepare("a"); const joined = await join("a");

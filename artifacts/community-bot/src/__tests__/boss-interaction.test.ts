@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ChannelType, Collection, PermissionFlagsBits, type ChatInputCommandInteraction, type ButtonInteraction } from "discord.js";
+import { ChannelType, Collection, PermissionFlagsBits, type ChatInputCommandInteraction, type ButtonInteraction, type StringSelectMenuInteraction } from "discord.js";
 
 const m = vi.hoisted(() => ({
   fees: vi.fn(), configure: vi.fn(), host: vi.fn(), end: vi.fn(), info: vi.fn(), quote: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock("@workspace/db", async original => ({
 vi.mock("../lib/bossRecovery", () => ({ runBossRecovery: m.recover }));
 vi.mock("../lib/logger", () => ({ logger: { error: m.error, warn: m.warn, info: vi.fn() } }));
 import { BossError, type BossEvent, type BossNoticeBundle } from "@workspace/db";
-import { bossCommands, executeBossCommand, handleBossButton } from "../commands/boss";
+import { bossCommands, executeBossCommand, handleBossButton, handleBossPartSelection } from "../commands/boss";
 import { bossBattleNotice } from "../lib/bossUi";
 import { syncBossCommandRegistration } from "../lib/bossCommandRegistration";
 
@@ -28,7 +28,7 @@ const event: BossEvent = {
 };
 function fixture(name = "参加") {
   const flags = { admin: false, crew: true, channel: true };
-  const values: Record<string, unknown> = { モード: "party" };
+  const values: Record<string, unknown> = { モード: "party", 部位: "left_tentacle" };
   const roles = new Collection([["crew", { id: "crew", name: "本船員" }]]);
   return {
     flags, values, roles, id: "1234567890123456789", commandName: name, customId: "boss:join:quote",
@@ -51,6 +51,7 @@ function fixture(name = "参加") {
 }
 const run = (i: ReturnType<typeof fixture>) => executeBossCommand(i as unknown as ChatInputCommandInteraction);
 const click = (i: ReturnType<typeof fixture>) => handleBossButton(i as unknown as ButtonInteraction);
+const select = (i: ReturnType<typeof fixture>) => handleBossPartSelection(i as unknown as StringSelectMenuInteraction);
 beforeEach(() => {
   vi.clearAllMocks();
   m.fees.mockResolvedValue({ attackCost: null, healCost: null });
@@ -78,6 +79,16 @@ describe("boss commands and displays", () => {
     // Do not remove shared party controls after one person's action.
     expect(i.message.edit).not.toHaveBeenCalled();
     expect(m.recover).toHaveBeenCalled();
+  });
+  it("routes public boss-part selections to the selected part on the exact battle", async () => {
+    const i = fixture();
+    i.customId = "boss:part:battle";
+    Object.assign(i, { values: ["right_tentacle"] });
+    await select(i);
+    expect(m.action).toHaveBeenCalledWith(i.id, "guild", "user", "attack", {
+      battleId: "battle", targetPart: "right_tentacle",
+    });
+    expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "user", force: true });
   });
   it("rejects public combat buttons after role revocation and does not edit the public card", async () => {
     const i = fixture(); i.customId = "boss:attack:battle"; i.flags.crew = false;
@@ -115,6 +126,14 @@ describe("boss commands and displays", () => {
       expect(host.options!.find(o => o.name === name)).toMatchObject({ min_value: 1, max_value: 10080 });
     }
     expect(bossCommands.map(c => c.data.name)).toEqual(expect.arrayContaining(["参加", "攻撃", "回復", "ボス情報"]));
+    const attack = bossCommands.find(c => c.data.name === "攻撃")!.data.toJSON();
+    expect(attack.options?.[0]?.required).toBe(true);
+    expect(attack.options?.[0]).toMatchObject({ choices: expect.arrayContaining([
+      expect.objectContaining({ name: "クラーケン：左触手", value: "left_tentacle" }),
+      expect.objectContaining({ name: "メガロドン：顎", value: "jaw" }),
+      expect.objectContaining({ name: "リヴァイアサン：角", value: "horn" }),
+      expect.objectContaining({ name: "本体（全ての部位破壊後）", value: "body" }),
+    ]) });
     for (const name of ["攻撃間隔秒", "回復間隔秒"]) {
       expect(host.options!.find(o => o.name === name)?.required).not.toBe(true);
     }
@@ -230,7 +249,7 @@ describe("boss commands and displays", () => {
     m.action.mockResolvedValueOnce({ battleId: "battle", mode: "solo", state: "active", bossHp: 50,
       damage: 25, paid: 0, balance: 1000, userHp: 90, messages: [] });
     await run(i);
-    expect(m.action).toHaveBeenCalledWith(i.id, "guild", "user", "attack");
+    expect(m.action).toHaveBeenCalledWith(i.id, "guild", "user", "attack", { targetPart: "left_tentacle" });
     expect(JSON.stringify(i.editReply.mock.calls)).toContain("消費：$0");
     i.commandName = "回復"; await run(i);
     expect(m.action).toHaveBeenCalledWith(i.id, "guild", "user", "heal");

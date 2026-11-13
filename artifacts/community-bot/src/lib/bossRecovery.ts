@@ -21,7 +21,7 @@ export async function runBossRecovery(client: Client) {
         if (!channel || !channel.isTextBased() || !("send" in channel)) throw new Error("Boss announcement channel is unavailable");
         if (!("guildId" in channel) || channel.guildId !== bundle.event.guildId) throw new Error("Boss channel guild mismatch");
         const nonce = createHash("sha256").update(`${bundle.battle.id}:${bundle.battle.status}`).digest("hex").slice(0, 24);
-        const message = await channel.send({ embeds: [bossBattleNotice(bundle)], components: bossBattleControls(bundle.battle),
+        const message = await channel.send({ embeds: [bossBattleNotice(bundle)], components: bossBattleControls(bundle),
           allowedMentions: { parse: [] }, nonce, enforceNonce: true });
         return message.id;
       });
