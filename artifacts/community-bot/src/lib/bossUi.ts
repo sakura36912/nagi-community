@@ -3,10 +3,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BOSS_NAMES, bossCooldownSeconds, type BossConfig, type BossEvent, type BossNoticeBundle, type BossActionResult, type BossType } from "@workspace/db";
 
-const BOSS_VIDEO_FILES = {
-  kraken: "boss-kraken.mp4",
-  megalodon: "boss-megalodon.mp4",
-  leviathan: "boss-leviathan.mp4",
+const BOSS_LOOP_GIF_FILES = {
+  kraken: "boss-kraken.gif",
+  megalodon: "boss-megalodon.gif",
+  leviathan: "boss-leviathan.gif",
 } as const;
 const BOSS_ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../assets/boss");
 const BOSS_PART_NAMES: Record<BossType, { key: string; name: string }[]> = {
@@ -22,9 +22,9 @@ function displayedBossParts(type: BossType, saved: BossNoticeBundle["battle"]["p
   }));
 }
 
-/** Attach the boss clip as a directly playable Discord video file. */
-export function bossVideoAttachment(type: BossEvent["bossType"]) {
-  const name = BOSS_VIDEO_FILES[type];
+/** Attach the boss animation as an infinitely looping GIF. */
+export function bossLoopGifAttachment(type: BossEvent["bossType"]) {
+  const name = BOSS_LOOP_GIF_FILES[type];
   return new AttachmentBuilder(join(BOSS_ASSET_DIR, name), { name });
 }
 
@@ -55,7 +55,7 @@ export function bossSpecialName(special: BossConfig["special"]) {
 }
 export function bossEventEmbed(event: BossEvent) {
   return new EmbedBuilder().setTitle(`ボス討伐：${BOSS_NAMES[event.bossType]}`).setColor(0x447bb8)
-    .setDescription("**本船員・武器所持者向けの討伐イベント**\n`/参加` でソロ／パーティを選択 → 条件を確認して参加確定\n攻撃は無料、回復は有料です。\nボス動画を添付しています。")
+    .setDescription("**本船員・武器所持者向けの討伐イベント**\n`/参加` でソロ／パーティを選択 → 条件を確認して参加確定\n攻撃は無料、回復は有料です。\nボスの映像は音声なしのループGIFで添付しています。")
     .addFields(
       { name: "ボスHP", value: event.config.bossHpPercent !== undefined
         ? `参加者の最大HP合計の **${event.config.bossHpPercent}%**\nソロは本人、パーティは参加確定者全員が基準（端数切り捨て・最低1）。戦闘開始後は固定。`

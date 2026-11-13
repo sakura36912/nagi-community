@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
-import { bossBattleNotice, bossBattleControls, bossDeadline, bossDuration, bossEventEmbed, bossHp, bossVideoAttachment } from "../lib/bossUi";
+import { existsSync, readFileSync } from "node:fs";
+import { bossBattleNotice, bossBattleControls, bossDeadline, bossDuration, bossEventEmbed, bossHp, bossLoopGifAttachment } from "../lib/bossUi";
 import type { BossEvent, BossNoticeBundle } from "@workspace/db";
 
 const event = {
@@ -80,7 +80,7 @@ describe("readable Discord boss embeds", () => {
   it("groups event HP and rewards without a redundant no-special field", () => {
     const embed = bossEventEmbed(event).toJSON();
     expect(embed.image).toBeUndefined();
-    expect(embed.description).toContain("ボス動画を添付");
+    expect(embed.description).toContain("ループGIF");
     expect(embed.fields?.find(f => f.name === "ボスHP")?.value).toContain("100,000");
     expect(embed.fields?.find(f => f.name === "パーティ受付")?.value).toContain("5分");
     expect(embed.fields?.some(f => f.name === "特殊イベント")).toBe(false);
@@ -88,15 +88,19 @@ describe("readable Discord boss embeds", () => {
       .toEqual(expect.arrayContaining([expect.objectContaining({ name: "特殊イベント" })]));
   });
   it.each([
-    ["kraken", "boss-kraken.mp4"],
-    ["megalodon", "boss-megalodon.mp4"],
-    ["leviathan", "boss-leviathan.mp4"],
-  ] as const)("uses the matching video for %s", (bossType, filename) => {
+    ["kraken", "boss-kraken.gif"],
+    ["megalodon", "boss-megalodon.gif"],
+    ["leviathan", "boss-leviathan.gif"],
+  ] as const)("uses the matching looping GIF for %s", (bossType, filename) => {
     const bossEvent = { ...event, bossType } as BossEvent;
-    const attachment = bossVideoAttachment(bossType);
+    const attachment = bossLoopGifAttachment(bossType);
     expect(attachment.name).toBe(filename);
     expect(typeof attachment.attachment).toBe("string");
     expect(existsSync(attachment.attachment as string)).toBe(true);
+    const bytes = readFileSync(attachment.attachment as string);
+    const loopExtension = bytes.indexOf(Buffer.from("NETSCAPE2.0"));
+    expect(loopExtension).toBeGreaterThanOrEqual(0);
+    expect(bytes.readUInt16LE(loopExtension + 13)).toBe(0);
   });
   it("shows prices separately and identifies start posts as snapshots, not live HP", () => {
     const embed = bossBattleNotice(bundle("active")).toJSON();

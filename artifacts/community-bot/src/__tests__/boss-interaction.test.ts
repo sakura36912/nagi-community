@@ -71,8 +71,8 @@ describe("boss commands and displays", () => {
       embeds: Array<{ data: { description?: string; image?: { url: string } } }>;
       files: Array<{ name: string }>;
     };
-    expect(payload.embeds[0]!.data.description).toContain("ボス動画を添付");
-    expect(payload.files.map(file => file.name)).toEqual(["boss-kraken.mp4"]);
+    expect(payload.embeds[0]!.data.description).toContain("ループGIF");
+    expect(payload.files.map(file => file.name)).toEqual(["boss-kraken.gif"]);
   });
   it.each(["attack", "heal"])("routes public %s buttons to the clicking member's exact battle", async action => {
     const i = fixture(); i.customId = `boss:${action}:battle`;
