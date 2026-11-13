@@ -168,6 +168,7 @@ describe("profile slash commands", () => {
   it("saves a validated directly attached PNG for all profile cards", async () => {
     const attachment = {
       url: "https://cdn.discordapp.com/attachments/sample/profile.png",
+      proxyURL: "https://media.discordapp.net/attachments/sample/profile.png",
       contentType: "image/png",
       size: 512,
     };
@@ -180,6 +181,24 @@ describe("profile slash commands", () => {
       contentType: "image/png",
     });
     expect(mocks.clearBackground).toHaveBeenCalled();
+  });
+
+  it("tries Discord's proxy URL when the original attachment URL fails", async () => {
+    const attachment = {
+      url: "https://cdn.discordapp.com/ephemeral-attachments/sample/profile.png",
+      proxyURL: "https://media.discordapp.net/ephemeral-attachments/sample/profile.png",
+      contentType: "image/png",
+      size: 512,
+    };
+    mocks.fetchImage.mockRejectedValueOnce(new Error("temporary CDN redirect"))
+      .mockResolvedValueOnce(Buffer.from("proxy-image"));
+    const i = interaction({ admin: true, subcommand: "画像", options: { "ファイル": attachment } });
+    await profileSettingsCommand.execute(i as never);
+    expect(mocks.fetchImage).toHaveBeenNthCalledWith(1, attachment.url);
+    expect(mocks.fetchImage).toHaveBeenNthCalledWith(2, attachment.proxyURL);
+    expect(mocks.setBackgroundAsset).toHaveBeenCalledWith("guild", expect.objectContaining({
+      kind: "upload", imageData: Buffer.from("proxy-image"),
+    }));
   });
 
   it("rejects unsupported direct image types without changing the saved background", async () => {

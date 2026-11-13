@@ -1,6 +1,6 @@
 import { createCanvas, GlobalFonts, loadImage } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
-import { fetchProfileImage, renderProfileCard } from "../lib/profileCardImage";
+import { fetchProfileImage, renderProfileCard, resolveProfileImageRedirect } from "../lib/profileCardImage";
 
 function testImage() {
   const canvas = createCanvas(320, 240);
@@ -41,5 +41,14 @@ describe("profile card image", () => {
   it("rejects insecure and local background URLs before making a request", async () => {
     await expect(fetchProfileImage("http://example.com/image.png")).rejects.toThrow("HTTPS");
     await expect(fetchProfileImage("https://127.0.0.1/image.png")).rejects.toThrow("Private or reserved");
+  });
+
+  it("allows only bounded HTTPS redirects for public image URLs", () => {
+    expect(resolveProfileImageRedirect("https://cdn.discordapp.com/upload", "/attachments/file.jpg", 0))
+      .toBe("https://cdn.discordapp.com/attachments/file.jpg");
+    expect(() => resolveProfileImageRedirect("https://cdn.discordapp.com/upload", "http://127.0.0.1/file.jpg", 0))
+      .toThrow("public HTTPS");
+    expect(() => resolveProfileImageRedirect("https://cdn.discordapp.com/upload", "/file.jpg", 3))
+      .toThrow("redirect limit");
   });
 });
