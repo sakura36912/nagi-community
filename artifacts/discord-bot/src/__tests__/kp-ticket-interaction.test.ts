@@ -5,6 +5,7 @@ import type { KpTicketSession } from "@workspace/db";
 const m = vi.hoisted(() => ({
   settings: vi.fn(), configure: vi.fn(), getSession: vi.fn(), create: vi.fn(), advance: vi.fn(),
   panel: vi.fn(), register: vi.fn(), settle: vi.fn(), deliver: vi.fn(), paidOrders: vi.fn(), createAdditional: vi.fn(),
+  transfers: vi.fn(),
   guildSettings: vi.fn(), getItem: vi.fn(), listItems: vi.fn(), error: vi.fn(),
   vipSource: vi.fn(),
 }));
@@ -13,7 +14,7 @@ vi.mock("@workspace/db", async importOriginal => ({
   getKpTicketSettings: m.settings, configureKpTicket: m.configure,
   getKpTicketSession: m.getSession, createKpTicketSession: m.create, advanceKpTicketSession: m.advance,
   isKpTicketPanel: m.panel, registerKpTicketPanel: m.register, settleKpTicket: m.settle, deliverKpTicketLog: m.deliver,
-  listPaidKpTicketOrders: m.paidOrders,
+  listPaidKpTicketOrders: m.paidOrders, listTransfersToRecipient: m.transfers,
   createAdditionalKpTicketSession: m.createAdditional,
 }));
 vi.mock("../lib/economy", () => ({
@@ -81,6 +82,7 @@ beforeEach(() => {
   });
   m.panel.mockResolvedValue(true);
   m.paidOrders.mockResolvedValue([]);
+  m.transfers.mockResolvedValue([]);
   m.guildSettings.mockResolvedValue({ currencyName: "円" });
   m.getItem.mockResolvedValue(drink);
   m.listItems.mockResolvedValue([drink]);
@@ -184,6 +186,45 @@ describe("KP ticket component flow", () => {
     expect(i.channel.send).not.toHaveBeenCalled();
     expect(m.create).not.toHaveBeenCalled(); expect(m.advance).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
+  });
+  it("includes the transfer history when an existing all-ticket button is used", async () => {
+    const i = allStatementFixture("夜鴉");
+    m.transfers.mockResolvedValue([{
+      senderId: "sender-2", amount: -700, createdAt: new Date("2026-11-15T03:00:00.000Z"),
+    }]);
+    await run(i);
+    expect(m.transfers).toHaveBeenCalledWith("guild", "1276893567599644715");
+    const response = i.editReply.mock.calls[0]![0];
+    const transferEmbed = response.embeds.find((embed: { toJSON: () => { title?: string } }) =>
+      embed.toJSON().title === "凪への送金履歴");
+    expect(transferEmbed?.toJSON().description).toContain("<@sender-2>");
+    expect(response.files.some((file: { name?: string }) => file.name === "nagi-transfer-history.txt")).toBe(true);
+  });
+  it.each(["夜鴉", "黒兵", "admin"])("privately lists every saved transfer to 凪 for %s", async role => {
+    const i = allStatementFixture(role === "admin" ? null : role, role === "admin");
+    i.customId = `${KP_TICKET_PREFIX}nagi-transfers`;
+    m.transfers.mockResolvedValue([{
+      senderId: "sender-1", amount: -2500, createdAt: new Date("2026-11-15T03:00:00.000Z"),
+    }]);
+    await run(i);
+    expect(i.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(m.transfers).toHaveBeenCalledWith("guild", "1276893567599644715");
+    const report = i.editReply.mock.calls[0]![0];
+    expect(report.embeds[0].toJSON().description).toContain("<@sender-1>");
+    expect(report.embeds[0].toJSON().description).toContain("2,500円");
+    expect(report.files[0].name).toBe("nagi-transfer-history.txt");
+  });
+  it("does not disclose transfer history to non-staff or through an unregistered panel", async () => {
+    const nonStaff = allStatementFixture("黒真珠");
+    nonStaff.customId = `${KP_TICKET_PREFIX}nagi-transfers`;
+    await run(nonStaff);
+    expect(m.transfers).not.toHaveBeenCalled();
+
+    const unregistered = allStatementFixture("夜鴉");
+    unregistered.customId = `${KP_TICKET_PREFIX}nagi-transfers`;
+    m.panel.mockResolvedValueOnce(false);
+    await run(unregistered);
+    expect(m.transfers).not.toHaveBeenCalled();
   });
   it.each([null, "黒真珠", "夜鴉見習い"])("does not disclose other tickets to a non-staff member (%s)", async role => {
     const i = allStatementFixture(role);
@@ -739,6 +780,7 @@ describe("KP ticket price administration", () => {
       expect.objectContaining({ label: "追加注文", custom_id: `${KP_TICKET_PREFIX}additional` }),
       expect.objectContaining({ label: "明細を集計", custom_id: `${KP_TICKET_PREFIX}statement` }),
       expect.objectContaining({ label: "全チケットを集計", custom_id: `${KP_TICKET_PREFIX}all-statement` }),
+      expect.objectContaining({ label: "凪への送金履歴", custom_id: `${KP_TICKET_PREFIX}nagi-transfers` }),
     ]));
   });
 

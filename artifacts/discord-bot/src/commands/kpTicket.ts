@@ -7,7 +7,7 @@ import {
 import {
   advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, deliverKpTicketLog,
   getKpTicketSession, getKpTicketSettings, isKpDrink, isKpTicketPanel, KpTicketError,
-  quoteKpTicket, registerKpTicketPanel, settleKpTicket, listPaidKpTicketOrders,
+  quoteKpTicket, registerKpTicketPanel, settleKpTicket, listPaidKpTicketOrders, listTransfersToRecipient,
   KP_VIP_PRICES, KP_EXTENSION_PRICE, KP_VIP_HUB_ID,
   type KpTicketSession, type KpTicketSettings,
 } from "@workspace/db";
@@ -23,6 +23,9 @@ import { kpCustomers } from "../lib/kpCustomers";
 import { grantKpTicketCastAccess } from "../lib/kpTicketAccess";
 import { kpBusinessDay, latestKpBusinessDate, type KpBusinessDay } from "../lib/kpBusinessDay";
 import { validateKpVipSource } from "../lib/kpVipVc";
+import { kpTransferHistory } from "../lib/kpTransferHistory";
+
+const KP_TRANSFER_RECIPIENT_ID = "1276893567599644715";
 
 export const kpTicketPanelSubcommand = new SlashCommandSubcommandBuilder()
   .setName("ticket-panel").setDescription("チケット内にKPshopパネルを設置します（夜鴉・黒兵・管理者）")
@@ -111,6 +114,7 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}additional`).setLabel("追加注文").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}statement`).setLabel("明細を集計").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}all-statement`).setLabel("全チケットを集計").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}nagi-transfers`).setLabel("凪への送金履歴").setStyle(ButtonStyle.Secondary),
       )],
       allowedMentions: { parse: [] },
     });
@@ -129,12 +133,19 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
 
 type TicketInteraction = ButtonInteraction | StringSelectMenuInteraction;
 
-async function showKpSales(interaction: TicketInteraction | ModalSubmitInteraction, period: KpBusinessDay) {
+async function showKpSales(
+  interaction: TicketInteraction | ModalSubmitInteraction,
+  period: KpBusinessDay,
+  includeNagiTransfers = false,
+) {
   const orders = await listPaidKpTicketOrders(interaction.guildId!, undefined, { start: period.start, end: period.end });
   const { currencyName } = await getGuildSettings(interaction.guildId!);
   const statement = kpTicketStatement(orders, currencyName, true, period);
   const castSales = kpCastSales(orders, currencyName, period);
-  const embeds = [...statement.embeds, ...castSales.embeds];
+  const transferReport = includeNagiTransfers
+    ? kpTransferHistory(await listTransfersToRecipient(interaction.guildId!, KP_TRANSFER_RECIPIENT_ID), currencyName, KP_TRANSFER_RECIPIENT_ID)
+    : null;
+  const embeds = [...statement.embeds, ...castSales.embeds, ...(transferReport?.embeds ?? [])];
   // Discord's 6,000-character limit applies to all embeds in the message together.
   for (const embed of embeds) {
     const description = embed.data.description;
@@ -144,7 +155,7 @@ async function showKpSales(interaction: TicketInteraction | ModalSubmitInteracti
   }
   await interaction.editReply({
     embeds,
-    files: [...statement.files, ...castSales.files],
+    files: [...statement.files, ...castSales.files, ...(transferReport?.files ?? [])],
     allowedMentions: statement.allowedMentions,
     components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}sales-date:${interaction.user.id}`)
@@ -290,8 +301,9 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
   const encoded = interaction.customId.slice(KP_TICKET_PREFIX.length);
   const starting = encoded === "start" || encoded === "additional";
   const allTickets = encoded === "all-statement";
+  const nagiTransfers = encoded === "nagi-transfers";
   const statement = encoded === "statement" || allTickets;
-  if (allTickets) await interaction.deferReply({ ephemeral: true });
+  if (allTickets || nagiTransfers) await interaction.deferReply({ ephemeral: true });
   else if (statement) await interaction.deferReply();
   else if (starting) await interaction.deferReply({ ephemeral: true });
   else await interaction.deferUpdate();
@@ -302,12 +314,22 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       }
       await requireKpStaff(interaction);
       if (allTickets) {
-        await showKpSales(interaction, kpBusinessDay());
+        await showKpSales(interaction, kpBusinessDay(), true);
         return;
       }
       const orders = await listPaidKpTicketOrders(interaction.guildId, interaction.channelId);
       const { currencyName } = await getGuildSettings(interaction.guildId);
       await interaction.editReply(kpTicketStatement(orders, currencyName, allTickets));
+      return;
+    }
+    if (nagiTransfers) {
+      if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
+        throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
+      }
+      await requireKpStaff(interaction);
+      const transfers = await listTransfersToRecipient(interaction.guildId, KP_TRANSFER_RECIPIENT_ID);
+      const { currencyName } = await getGuildSettings(interaction.guildId);
+      await interaction.editReply(kpTransferHistory(transfers, currencyName, KP_TRANSFER_RECIPIENT_ID));
       return;
     }
     if (starting) {
@@ -434,7 +456,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
   } catch (error) {
     if (!(error instanceof KpTicketError)) logger.error("[kp-ticket] Interaction failed", error);
     const content = error instanceof KpTicketError ? error.message : "注文の処理に失敗しました。支払い操作の場合は同じ確定ボタンから結果を確認できます。";
-    if (starting || statement) await interaction.editReply({ content, components: [] });
+    if (starting || statement || nagiTransfers) await interaction.editReply({ content, components: [] });
     else await interaction.followUp({ content, ephemeral: true });
   }
 }

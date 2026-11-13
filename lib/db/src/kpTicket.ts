@@ -248,3 +248,17 @@ export async function deliverKpTicketLog(id: string, send: (session: KpTicketSes
     return messageId;
   });
 }
+
+/** Sender-side ledger rows have a negative amount and relatedUserId set to the recipient. */
+export async function listTransfersToRecipient(guildId: string, recipientId: string) {
+  return db.select({
+    senderId: transactionsTable.userId,
+    amount: transactionsTable.amount,
+    createdAt: transactionsTable.createdAt,
+  }).from(transactionsTable).where(and(
+    eq(transactionsTable.guildId, guildId),
+    eq(transactionsTable.relatedUserId, recipientId),
+    eq(transactionsTable.reason, "transfer"),
+    lt(transactionsTable.amount, 0),
+  )).orderBy(desc(transactionsTable.createdAt), desc(transactionsTable.id));
+}
