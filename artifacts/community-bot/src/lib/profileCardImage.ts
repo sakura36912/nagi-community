@@ -43,22 +43,38 @@ const backgroundCache = new Map<string, ImageCacheEntry>();
 const backgroundLoads = new Map<string, Promise<Buffer>>();
 let fontReady = false;
 
+export function hasJapaneseFontCoverage(languageTags: string): boolean {
+  return languageTags.split("|").some(tag => tag.toLowerCase() === "ja");
+}
+
+function isJapaneseFontFile(path: string): boolean {
+  try {
+    const languages = execFileSync("fc-query", ["-f", "%{lang}", path], {
+      encoding: "utf8",
+      timeout: 1_500,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return hasJapaneseFontCoverage(languages);
+  } catch {
+    return false;
+  }
+}
+
 function ensureJapaneseFont() {
   if (fontReady) return;
-  if (GlobalFonts.has(JAPANESE_FONT)) {
-    fontReady = true;
-    return;
-  }
 
   const candidates = new Set<string>();
   if (process.env.PROFILE_CARD_FONT_PATH) candidates.add(process.env.PROFILE_CARD_FONT_PATH);
   try {
-    const matchedPath = execFileSync("fc-match", ["-f", "%{file}", JAPANESE_FONT], {
+    const matched = execFileSync("fc-match", ["-f", "%{family}\n%{file}", JAPANESE_FONT], {
       encoding: "utf8",
       timeout: 1_500,
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (matchedPath) candidates.add(matchedPath);
+    }).trim().split("\n");
+    const [matchedFamily, matchedPath] = matched;
+    if (matchedPath && matchedFamily?.split(",").some(family => family.trim() === JAPANESE_FONT)) {
+      candidates.add(matchedPath);
+    }
   } catch {
     // Optional on hosts without fontconfig; explicit candidate paths are checked below.
   }
@@ -66,13 +82,13 @@ function ensureJapaneseFont() {
   candidates.add("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc");
 
   for (const path of candidates) {
-    if (!existsSync(path)) continue;
+    if (!existsSync(path) || !isJapaneseFontFile(path)) continue;
     if (GlobalFonts.registerFromPath(path, JAPANESE_FONT)) {
       fontReady = true;
       return;
     }
   }
-  throw new Error("Japanese profile font is missing; install Noto Sans CJK JP or set PROFILE_CARD_FONT_PATH.");
+  throw new Error("A Japanese-capable font is missing. Install Noto Sans CJK JP on the Bot host or set PROFILE_CARD_FONT_PATH.");
 }
 
 function isPublicIpv4(address: string): boolean {

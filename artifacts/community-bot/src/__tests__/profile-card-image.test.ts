@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createPinnedProfileLookup,
   fetchProfileImage,
+  hasJapaneseFontCoverage,
   renderProfileCard,
   resolveProfileImageRedirect,
 } from "../lib/profileCardImage";
@@ -67,5 +68,10 @@ describe("profile card image", () => {
 
     expect(standardCallback).toHaveBeenCalledWith(null, "93.184.216.34", 4);
     expect(allCallback).toHaveBeenCalledWith(null, [{ address: "93.184.216.34", family: 4 }]);
+  });
+
+  it("rejects fonts that do not declare Japanese language coverage", () => {
+    expect(hasJapaneseFontCoverage("en|fr|ja|zh-cn")).toBe(true);
+    expect(hasJapaneseFontCoverage("en|fr|zh-cn")).toBe(false);
   });
 });
