@@ -2,7 +2,7 @@ import { index, integer, jsonb, pgTable, primaryKey, text, timestamp } from "dri
 import { createInsertSchema } from "drizzle-zod";
 import type { PvpState } from "../pvpRules";
 
-/** Prize remains in escrow until exactly one settlement commits. */
+/** prize is retained only for settling pre-bounty-version duels that already escrowed money. */
 export const pvpDuelsTable = pgTable("pvp_duels", {
   id: text("id").primaryKey(),
   guildId: text("guild_id").notNull(),
@@ -17,6 +17,17 @@ export const pvpDuelsTable = pgTable("pvp_duels", {
 }, t => [index("pvp_duels_expiry_idx").on(t.status, t.expiresAt)]);
 export const insertPvpDuelSchema = createInsertSchema(pvpDuelsTable);
 export type PvpDuel = typeof pvpDuelsTable.$inferSelect;
+
+/** Per-member fixed bounty; this value never changes when a duel settles. */
+export const pvpBountiesTable = pgTable("pvp_bounties", {
+  guildId: text("guild_id").notNull(),
+  userId: text("user_id").notNull(),
+  amount: integer("amount").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [primaryKey({ columns: [t.guildId, t.userId] })]);
+export const insertPvpBountySchema = createInsertSchema(pvpBountiesTable);
+export type PvpBounty = typeof pvpBountiesTable.$inferSelect;
 
 export const pvpActiveUsersTable = pgTable("pvp_active_users", {
   guildId: text("guild_id").notNull(), userId: text("user_id").notNull(), duelId: text("duel_id").notNull(),

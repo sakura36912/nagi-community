@@ -1,6 +1,9 @@
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "./index";
-import { pvpDuelsTable as duels, pvpActiveUsersTable as slots, pvpActionsTable as actions, type PvpDuel, type RpgCard } from "./schema/pvp";
+import {
+  pvpDuelsTable as duels, pvpBountiesTable as bounties, pvpActiveUsersTable as slots,
+  pvpActionsTable as actions, type PvpDuel, type RpgCard,
+} from "./schema/pvp";
 import { walletsTable, transactionsTable } from "./schema/economy";
 import { forgeWeaponsTable } from "./schema/forge";
 import { bossFeesTable } from "./schema/boss";
@@ -37,25 +40,41 @@ function integer(value: number, min: number, max: number) {
 export function pvpPublicCard(duel: PvpDuel): RpgCard {
   const state = duel.state;
   const status = duel.status as "pending" | "active" | "finished";
-  const label = status === "pending" ? "対戦受付中" : status === "active" ? "戦闘中" : state.winnerId ? "決着" : "終了・賞金返却";
+  const fixedBounties = state.bounties;
+  const label = status === "pending" ? "対戦受付中" : status === "active" ? "戦闘中" :
+    state.winnerId ? "決着" : fixedBounties ? "終了・報酬なし" : "終了・賞金返却";
+  const bountyDetails = fixedBounties
+    ? [
+      `固定懸賞額（挑戦者 / 対象者）：**$${fixedBounties.challenger.toLocaleString("ja-JP")} / $${fixedBounties.target.toLocaleString("ja-JP")}**`,
+      "勝者には相手の懸賞額を新規付与。懸賞額自体は変わらず、銀行残高からの差し引きもありません。",
+    ]
+    : [`賞金：**$${duel.prize.toLocaleString("ja-JP")}**（旧方式・募集者が預け入れ済み）`];
+  const settledBounty = fixedBounties && state.winnerId
+    ? state.winnerId === duel.hostId ? fixedBounties.target : fixedBounties.challenger
+    : 0;
   return {
     title: `⚔️ 懸賞金PvP — ${label}`, color: status === "finished" ? 0x2ecc71 : 0xd49b43,
     description: [
-      `募集者 <@${duel.hostId}> vs <@${duel.opponentId}>`,
-      `賞金：**$${duel.prize.toLocaleString("ja-JP")}**（募集者のみ負担・預かり済み）`,
+      `挑戦者 <@${duel.hostId}> vs 対象者 <@${duel.opponentId}>`,
+      ...bountyDetails,
       ...state.lines,
       ...(state.winnerId ? [`🏆 勝者：<@${state.winnerId}>`,
-        state.winnerId === duel.hostId ? "賞金は募集者へ返却済みです。" : "賞金は勝者の銀行残高へ加算済みです。"] : []),
-      ...(!state.winnerId && status === "finished" ? ["預かり賞金は募集者へ返却済みです。"] : []),
+        fixedBounties
+          ? `固定懸賞額 $${settledBounty.toLocaleString("ja-JP")} を勝者の銀行残高へ新規付与しました。`
+          : state.winnerId === duel.hostId ? "旧方式の賞金を募集者へ返却しました。" : "旧方式の賞金を勝者の銀行残高へ加算しました。"
+      ] : []),
+      ...(!state.winnerId && status === "finished"
+        ? [fixedBounties ? "引き分け・未成立のため報酬はありません。懸賞額は維持されます。" : "預かり賞金は募集者へ返却済みです。"]
+        : []),
       ...(state.reason ? [state.reason] : []),
       status === "pending"
-        ? `相手の承諾期限：<t:${Math.floor(duel.expiresAt.getTime() / 1000)}:R>\n相手の賭け金は不要です。両者とも本船員・武器・所持金1以上が必要です。`
+        ? `相手の承諾期限：<t:${Math.floor(duel.expiresAt.getTime() / 1000)}:R>\n相手から銀行残高を差し引きません。両者とも本船員・武器・所持金1以上が必要です。`
         : status === "active" ? `終了：<t:${Math.floor(duel.expiresAt.getTime() / 1000)}:R>` : "",
     ].filter(Boolean).join("\n"),
     fields: [
       ...state.players.map(p => ({ name: p.userId === duel.hostId ? "募集者HP" : "対戦相手HP",
         value: `<@${p.userId}>\n${p.hp.toLocaleString("ja-JP")} / ${p.maxHp.toLocaleString("ja-JP")}`, inline: true })),
-      { name: "戦闘ルール", value: `攻撃：無料・5秒間隔\n回復：${state.healCost ? `$${state.healCost.toLocaleString("ja-JP")}・30秒間隔` : "料金未設定のため使用不可"}・最大HPの10%\n時間切れは引き分け・賞金返却。HP減少で所持金は減りません。` },
+      { name: "戦闘ルール", value: `攻撃：無料・5秒間隔\n回復：${state.healCost ? `$${state.healCost.toLocaleString("ja-JP")}・30秒間隔` : "料金未設定のため使用不可"}・最大HPの10%\n時間切れは引き分け。${fixedBounties ? "報酬なしで懸賞額は維持します。" : "旧方式の賞金を募集者へ返却します。"} HP減少で所持金は減りません。` },
     ],
     duelId: duel.id, phase: status,
   };
@@ -67,14 +86,27 @@ async function save(tx: Tx, duel: PvpDuel, noticeId: string) {
 /** Conditional balance update, ledger, terminal state and slot release are one transaction. */
 async function finish(tx: Tx, duel: PvpDuel, reason: string, now: Date, winnerId?: string) {
   if (duel.status === "finished") return;
-  const recipient = winnerId ?? duel.hostId;
-  await tx.insert(walletsTable).values({ guildId: duel.guildId, userId: recipient, balance: 0 }).onConflictDoNothing();
-  const [wallet] = await tx.update(walletsTable).set({ balance: sql`${walletsTable.balance} + ${duel.prize}`, updatedAt: now })
-    .where(and(walletWhere(duel.guildId, recipient), sql`${walletsTable.balance} <= ${FORGE_MAX_INT - duel.prize}`)).returning();
-  if (!wallet) throw new PvpError("残高上限により賞金を精算できません。賞金は預かり状態を維持しています。管理者に残高の確認を依頼してください。");
-  await tx.insert(transactionsTable).values({ guildId: duel.guildId, userId: recipient, amount: duel.prize,
-    reason: winnerId && winnerId !== duel.hostId ? "懸賞金PvP 勝利賞金" : "懸賞金PvP 賞金返却",
-    sessionKey: `pvp-settle:${duel.id}` });
+  const fixedBounties = duel.state.bounties;
+  const legacyEscrow = !fixedBounties;
+  const amount = fixedBounties
+    ? winnerId === duel.hostId ? fixedBounties.target : winnerId === duel.opponentId ? fixedBounties.challenger : 0
+    : duel.prize;
+  const recipient = fixedBounties ? winnerId : winnerId ?? duel.hostId;
+  if (amount > 0 && recipient) {
+    await tx.insert(walletsTable).values({ guildId: duel.guildId, userId: recipient, balance: 0 }).onConflictDoNothing();
+    const [wallet] = await tx.update(walletsTable).set({ balance: sql`${walletsTable.balance} + ${amount}`, updatedAt: now })
+      .where(and(walletWhere(duel.guildId, recipient), sql`${walletsTable.balance} <= ${FORGE_MAX_INT - amount}`)).returning();
+    if (!wallet) {
+      throw new PvpError(legacyEscrow
+        ? "残高上限により預かり賞金を返却できません。賞金は預かり状態を維持しています。管理者に残高を確認してください。"
+        : "銀行残高の上限により懸賞報酬を付与できません。結果と懸賞額は確定前のままです。管理者に確認してください。");
+    }
+    await tx.insert(transactionsTable).values({ guildId: duel.guildId, userId: recipient, amount,
+      reason: legacyEscrow
+        ? winnerId && winnerId !== duel.hostId ? "懸賞金PvP 旧方式の勝利賞金" : "懸賞金PvP 旧方式の賞金返却"
+        : "懸賞金PvP 固定懸賞報酬",
+      sessionKey: legacyEscrow ? `pvp-settle:${duel.id}` : `pvp-bounty:${duel.id}` });
+  }
   duel.status = "finished"; duel.state.winnerId = winnerId; duel.state.reason = reason;
   await tx.delete(slots).where(and(eq(slots.guildId, duel.guildId), eq(slots.duelId, duel.id)));
 }
@@ -98,38 +130,53 @@ export async function advancePvpGuild(guildId: string, now = new Date()) {
   return failures;
 }
 export async function createPvpDuel(input: {
-  id: string; guildId: string; channelId: string; hostId: string; opponentId: string; prize: number; durationMinutes: number;
+  id: string; guildId: string; channelId: string; hostId: string; opponentId: string; durationMinutes: number;
 }, now = new Date()) {
-  integer(input.prize, 1, FORGE_MAX_INT); integer(input.durationMinutes, 1, 180);
+  integer(input.durationMinutes, 1, 180);
   if (input.hostId === input.opponentId) throw new PvpError("自分自身とは対戦できません。");
   await advancePvpGuild(input.guildId, now);
   return withGuild(input.guildId, async tx => {
     const [existing] = await tx.select().from(duels).where(eq(duels.id, input.id));
     if (existing) {
       if (existing.guildId !== input.guildId || existing.hostId !== input.hostId || existing.opponentId !== input.opponentId
-        || existing.prize !== input.prize || existing.channelId !== input.channelId) throw new PvpError("操作の識別情報が一致しません。");
+        || existing.channelId !== input.channelId) throw new PvpError("操作の識別情報が一致しません。");
       return existing;
     }
     const busy = await tx.select().from(slots).where(and(eq(slots.guildId, input.guildId),
       inArray(slots.userId, [input.hostId, input.opponentId])));
     if (busy.length) throw new PvpError("どちらかが既にPvPの受付・対戦中です。");
-    // Host HP uses the pre-deposit wallet, so posting a prize itself does not reduce maximum HP.
     const host = await fighter(tx, input.guildId, input.hostId);
     await fighter(tx, input.guildId, input.opponentId);
-    const [wallet] = await tx.update(walletsTable).set({ balance: sql`${walletsTable.balance} - ${input.prize}`, updatedAt: now })
-      .where(and(walletWhere(input.guildId, input.hostId), sql`${walletsTable.balance} >= ${input.prize}`)).returning();
-    if (!wallet) throw new PvpError("募集者の賞金残高が不足しています。");
-    await tx.insert(transactionsTable).values({ guildId: input.guildId, userId: input.hostId, amount: -input.prize,
-      reason: "懸賞金PvP 賞金預かり", sessionKey: `pvp-escrow:${input.id}` });
+    const [challengerBounty] = await tx.select({ amount: bounties.amount }).from(bounties)
+      .where(and(eq(bounties.guildId, input.guildId), eq(bounties.userId, input.hostId)));
+    const [targetBounty] = await tx.select({ amount: bounties.amount }).from(bounties)
+      .where(and(eq(bounties.guildId, input.guildId), eq(bounties.userId, input.opponentId)));
     const [fees] = await tx.select().from(bossFeesTable).where(eq(bossFeesTable.guildId, input.guildId));
     const [duel] = await tx.insert(duels).values({
-      ...input, status: "pending", expiresAt: new Date(now.getTime() + 120_000),
-      state: { players: [host], healCost: fees?.healCost && fees.healCost > 0 ? fees.healCost : null,
+      ...input, prize: 0, status: "pending", expiresAt: new Date(now.getTime() + 120_000),
+      state: { players: [host], bounties: { challenger: challengerBounty?.amount ?? 0, target: targetBounty?.amount ?? 0 },
+        healCost: fees?.healCost && fees.healCost > 0 ? fees.healCost : null,
         durationMinutes: input.durationMinutes, lines: ["相手の承諾後に対戦を開始します。承諾前は募集者が取り消せます。"] },
     }).returning();
     await tx.insert(slots).values([input.hostId, input.opponentId].map(userId => ({ guildId: input.guildId, userId, duelId: input.id })));
     await queueRpgCard(tx, `pvp-create:${input.id}`, input.guildId, input.channelId, pvpPublicCard(duel!));
     return duel!;
+  });
+}
+export async function getPvpBounty(guildId: string, userId: string) {
+  const [row] = await db.select({ amount: bounties.amount }).from(bounties)
+    .where(and(eq(bounties.guildId, guildId), eq(bounties.userId, userId)));
+  return row?.amount ?? 0;
+}
+export async function setPvpBounty(guildId: string, userId: string, amount: number, updatedBy: string, now = new Date()) {
+  integer(amount, 0, FORGE_MAX_INT);
+  return withGuild(guildId, async tx => {
+    const [row] = await tx.insert(bounties).values({ guildId, userId, amount, updatedBy, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [bounties.guildId, bounties.userId],
+        set: { amount, updatedBy, updatedAt: now },
+      }).returning();
+    return row!.amount;
   });
 }
 export async function getPvpDuel(guildId: string, userId: string) {

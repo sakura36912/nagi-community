@@ -7,6 +7,8 @@ export interface PvpState {
   players: BossFighter[];
   healCost: number | null;
   durationMinutes: number;
+  /** Fixed bounty values snapshotted when this duel is created; absent only on legacy escrow duels. */
+  bounties?: { challenger: number; target: number };
   winnerId?: string;
   reason?: string;
   lines: string[];

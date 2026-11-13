@@ -5,7 +5,7 @@ import { syncForgeCommandRegistration } from "./forgeCommandRegistration.js";
 import { syncBossCommandRegistration } from "./bossCommandRegistration.js";
 import { logger } from "./logger.js";
 import { startRpgCards } from "./rpgCards";
-import { pvpCommands } from "../commands/pvp";
+import { syncPvpCommandRegistration } from "./pvpCommandRegistration.js";
 
 /** Restart order and transient REST failures must not strand the command transfer. */
 export function startRpgRuntime(client: Client) {
@@ -18,8 +18,7 @@ export function startRpgRuntime(client: Client) {
       if (!recoveryStarted) { startBossRecovery(client); recoveryStarted = true; }
       startRpgCards(client);
       await Promise.all([syncForgeCommandRegistration(client), syncBossCommandRegistration(client)]);
-      // Upsert just PvP; do not replace or delete unrelated community commands.
-      for (const command of pvpCommands) await client.application!.commands.create(command.data.toJSON());
+      await syncPvpCommandRegistration(client);
       complete = true;
       clearInterval(timer);
       logger.info("[rpg] 武器・ボス・PvPコマンドを多機能Botへ登録しました。");

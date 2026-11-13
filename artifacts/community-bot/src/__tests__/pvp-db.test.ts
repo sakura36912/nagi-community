@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import {
-  db, pvpDuelsTable as duels, pvpActiveUsersTable as slots, pvpActionsTable as actions, rpgNoticesTable as notices,
+  db, pvpDuelsTable as duels, pvpBountiesTable as bounties, pvpActiveUsersTable as slots, pvpActionsTable as actions, rpgNoticesTable as notices,
   forgeWeaponsTable as weapons, forgeActionsTable, forgeUpgradeRequestsTable, forgeUpgradeSettingsTable,
   walletsTable as wallets, transactionsTable as ledger, bossFeesTable as fees,
-  createPvpDuel, performPvpAction, advancePvpGuild, duePvpGuilds, getPvpDuel,
+  createPvpDuel, performPvpAction, advancePvpGuild, duePvpGuilds, getPvpDuel, setPvpBounty,
   selectForgeWeapon, createForgeUpgradeRequest, settleForgeUpgrade, deliverRpgCard,
 } from "@workspace/db";
 
@@ -18,14 +18,16 @@ describe.skipIf(process.env.RUN_PVP_DB_TESTS !== "1")("PvP and public RPG cards:
     const [row] = await db.select().from(wallets).where(and(eq(wallets.guildId, guildId), eq(wallets.userId, userId)));
     return row!.balance;
   }
-  async function setup(amount = 1000, prize = 100) {
+  async function setup(amount = 1000, challengerBounty = 300, targetBounty = 500) {
     const guildId = `pvp-test-${id()}`; guilds.push(guildId);
-    const input = { id: id(), guildId, channelId: "test-channel", hostId: "host", opponentId: "opponent", prize, durationMinutes: 1 };
+    const input = { id: id(), guildId, channelId: "test-channel", hostId: "host", opponentId: "opponent", durationMinutes: 1 };
     for (const userId of ["host", "opponent"]) {
       await selectForgeWeapon(id(), guildId, userId, userId === "host" ? "spear" : "dual");
       await db.insert(wallets).values({ guildId, userId, balance: amount });
     }
     await db.insert(fees).values({ guildId, healCost: 50 });
+    await setPvpBounty(guildId, "host", challengerBounty, "admin", t0);
+    await setPvpBounty(guildId, "opponent", targetBounty, "admin", t0);
     return input;
   }
   async function begin(input: Awaited<ReturnType<typeof setup>>) {
@@ -36,33 +38,43 @@ describe.skipIf(process.env.RUN_PVP_DB_TESTS !== "1")("PvP and public RPG cards:
     return (await db.select().from(duels).where(eq(duels.id, input.id)))[0]!;
   }
   afterAll(async () => {
-    for (const guildId of guilds) for (const table of [slots, actions, notices, duels, forgeUpgradeRequestsTable,
+    for (const guildId of guilds) for (const table of [slots, actions, notices, duels, bounties, forgeUpgradeRequestsTable,
       forgeActionsTable, forgeUpgradeSettingsTable, weapons, fees, ledger, wallets]) {
       await db.delete(table).where(eq(table.guildId, guildId));
     }
   });
-  it("concurrent duplicate invitations debit once and queue exactly one public card", async () => {
+  it("concurrent duplicate invitations do not debit balances or create escrow and queue one card", async () => {
     const input = await setup();
     await Promise.all(Array.from({ length: 5 }, () => createPvpDuel(input, t0)));
-    expect(await balance(input.guildId, "host")).toBe(900);
+    expect(await balance(input.guildId, "host")).toBe(1000);
     expect(await balance(input.guildId, "opponent")).toBe(1000);
-    expect(await db.select().from(ledger).where(eq(ledger.sessionKey, `pvp-escrow:${input.id}`))).toHaveLength(1);
+    expect(await db.select().from(ledger).where(eq(ledger.sessionKey, `pvp-escrow:${input.id}`))).toHaveLength(0);
     expect(await db.select().from(notices).where(eq(notices.id, `pvp-create:${input.id}`))).toHaveLength(1);
     expect((await saved(input)).state.players[0]?.maxHp).toBe(1000);
+    expect((await saved(input)).state.bounties).toEqual({ challenger: 300, target: 500 });
   });
-  it("rejects insufficient prize money without reservation, ledger or public success", async () => {
-    const input = await setup(100, 101);
-    await expect(createPvpDuel(input, t0)).rejects.toThrow("不足");
+  it("allows zero fixed bounties without changing either wallet", async () => {
+    const input = await setup(100, 0, 0);
+    await createPvpDuel(input, t0);
     expect(await balance(input.guildId, "host")).toBe(100);
-    expect(await db.select().from(slots).where(eq(slots.guildId, input.guildId))).toHaveLength(0);
-    expect(await db.select().from(notices).where(eq(notices.guildId, input.guildId))).toHaveLength(0);
+    expect(await balance(input.guildId, "opponent")).toBe(100);
+    expect((await saved(input)).state.bounties).toEqual({ challenger: 0, target: 0 });
   });
-  it("rejects self invitations, invalid amounts and a second simultaneous reservation", async () => {
+  it("rejects self invitations, invalid bounty values and a second simultaneous duel", async () => {
     const input = await setup();
     await expect(createPvpDuel({ ...input, opponentId: "host" }, t0)).rejects.toThrow("自分自身");
-    await expect(createPvpDuel({ ...input, prize: 0 }, t0)).rejects.toThrow("整数");
+    await expect(setPvpBounty(input.guildId, "host", -1, "admin", t0)).rejects.toThrow("整数");
     await createPvpDuel(input, t0);
     await expect(createPvpDuel({ ...input, id: id() }, t0)).rejects.toThrow("既に");
+  });
+  it("snapshots both admin-set bounties when the invitation is created", async () => {
+    const input = await setup();
+    await createPvpDuel(input, t0);
+    await setPvpBounty(input.guildId, "host", 900, "admin", seconds(1));
+    await setPvpBounty(input.guildId, "opponent", 800, "admin", seconds(1));
+    expect((await saved(input)).state.bounties).toEqual({ challenger: 300, target: 500 });
+    expect(await balance(input.guildId, "host")).toBe(1000);
+    expect(await balance(input.guildId, "opponent")).toBe(1000);
   });
   it("rejects unknown weapons and missing wallets before charging", async () => {
     const input = await setup();
@@ -81,26 +93,43 @@ describe.skipIf(process.env.RUN_PVP_DB_TESTS !== "1")("PvP and public RPG cards:
     expect(repeated.duel.expiresAt).toEqual(seconds(61));
     expect(repeated.duel.state.players).toHaveLength(2);
   });
-  it("cancellation refunds exactly once even under concurrent duplicate clicks", async () => {
+  it("cancellation ends the invitation once without moving either balance", async () => {
     const input = await setup(); await createPvpDuel(input, t0);
     const cancel = id();
     await Promise.all([1, 2, 3].map(() => performPvpAction(cancel, input.guildId, "host", input.id, "cancel", seconds(1))));
     expect(await balance(input.guildId, "host")).toBe(1000);
-    expect(await db.select().from(ledger).where(eq(ledger.sessionKey, `pvp-settle:${input.id}`))).toHaveLength(1);
+    expect(await balance(input.guildId, "opponent")).toBe(1000);
+    expect(await db.select().from(ledger).where(eq(ledger.sessionKey, `pvp-bounty:${input.id}`))).toHaveLength(0);
     expect(await db.select().from(slots).where(eq(slots.guildId, input.guildId))).toHaveLength(0);
   });
-  it("opponent decline refunds the host, not the opponent", async () => {
+  it("still returns escrow for an invitation created by the previous version", async () => {
+    const input = await setup(); await createPvpDuel(input, t0);
+    const old = await saved(input);
+    const legacyState = { ...old.state };
+    delete legacyState.bounties;
+    await db.update(duels).set({ prize: 100, state: legacyState })
+      .where(and(eq(duels.guildId, input.guildId), eq(duels.id, input.id)));
+    await db.update(wallets).set({ balance: 900 })
+      .where(and(eq(wallets.guildId, input.guildId), eq(wallets.userId, "host")));
+    await performPvpAction(id(), input.guildId, "host", input.id, "cancel", seconds(1));
+    expect(await balance(input.guildId, "host")).toBe(1000);
+    expect(await db.select().from(ledger).where(eq(ledger.sessionKey, `pvp-settle:${input.id}`)))
+      .toEqual([expect.objectContaining({ amount: 100, userId: "host" })]);
+  });
+  it("opponent decline ends without paying or changing the configured bounties", async () => {
     const input = await setup(); await createPvpDuel(input, t0);
     await performPvpAction(id(), input.guildId, "opponent", input.id, "decline", seconds(1));
     expect(await balance(input.guildId, "host")).toBe(1000);
     expect(await balance(input.guildId, "opponent")).toBe(1000);
+    expect((await saved(input)).state.bounties).toEqual({ challenger: 300, target: 500 });
   });
-  it("restores expired pending invitations from the database and refunds once", async () => {
+  it("restores expired pending invitations without awarding a bounty", async () => {
     const input = await setup(); await createPvpDuel(input, t0);
     expect(await duePvpGuilds(seconds(121))).toContain(input.guildId);
     await advancePvpGuild(input.guildId, seconds(121));
     await advancePvpGuild(input.guildId, seconds(122));
     expect(await balance(input.guildId, "host")).toBe(1000);
+    expect(await balance(input.guildId, "opponent")).toBe(1000);
     expect((await saved(input)).state.reason).toContain("対戦不成立");
   });
   it("active timeouts are draws even when remaining HP differ", async () => {
@@ -111,35 +140,39 @@ describe.skipIf(process.env.RUN_PVP_DB_TESTS !== "1")("PvP and public RPG cards:
     expect(await balance(input.guildId, "host")).toBe(1000);
     expect(await balance(input.guildId, "opponent")).toBe(1000);
   });
-  it("opponent victory pays the existing bank wallet and caps damage at actual HP", async () => {
+  it("opponent victory mints the challenger's fixed bounty into the target's wallet", async () => {
     const input = await setup(); await begin(input);
     await db.update(weapons).set({ attack: 5000, weaponLevel: 2 }).where(and(eq(weapons.guildId, input.guildId), eq(weapons.userId, "opponent")));
     const result = await performPvpAction(id(), input.guildId, "opponent", input.id, "attack", seconds(2), () => 0.99);
     expect(result.duel.status).toBe("finished");
     expect(result.duel.state.winnerId).toBe("opponent");
     expect(result.duel.state.players.find(p => p.userId === "opponent")?.damage).toBe(1000);
-    expect(await balance(input.guildId, "host")).toBe(900);
-    expect(await balance(input.guildId, "opponent")).toBe(1100);
+    expect(await balance(input.guildId, "host")).toBe(1000);
+    expect(await balance(input.guildId, "opponent")).toBe(1300);
+    expect(await db.select().from(ledger).where(eq(ledger.sessionKey, `pvp-bounty:${input.id}`)))
+      .toEqual([expect.objectContaining({ userId: "opponent", amount: 300 })]);
     expect(result.duel.state.lines.join("\n")).toContain("最後の一撃");
   });
-  it("host victory returns only its own prize, without charging the opponent", async () => {
+  it("challenger victory mints the target's fixed bounty without changing either bounty value", async () => {
     const input = await setup(); await begin(input);
     await performPvpAction(id(), input.guildId, "opponent", input.id, "surrender", seconds(2));
-    expect(await balance(input.guildId, "host")).toBe(1000);
+    expect(await balance(input.guildId, "host")).toBe(1500);
     expect(await balance(input.guildId, "opponent")).toBe(1000);
     expect((await saved(input)).state.winnerId).toBe("host");
+    expect((await saved(input)).state.bounties).toEqual({ challenger: 300, target: 500 });
   });
-  it("host surrender awards the opponent; active cancellation is disallowed", async () => {
+  it("challenger surrender mints the challenger's bounty to the target; active cancellation is disallowed", async () => {
     const input = await setup(); await begin(input);
     await expect(performPvpAction(id(), input.guildId, "host", input.id, "cancel", seconds(2))).rejects.toThrow("開始後");
     await performPvpAction(id(), input.guildId, "host", input.id, "surrender", seconds(2));
-    expect(await balance(input.guildId, "opponent")).toBe(1100);
+    expect(await balance(input.guildId, "host")).toBe(1000);
+    expect(await balance(input.guildId, "opponent")).toBe(1300);
   });
   it("serializes simultaneous attacks, enforcing cooldown without money consumption", async () => {
     const input = await setup(); await begin(input);
     const results = await Promise.allSettled([1, 2].map(() => performPvpAction(id(), input.guildId, "host", input.id, "attack", seconds(2), () => 0.99)));
     expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
-    expect(await balance(input.guildId, "host")).toBe(900);
+    expect(await balance(input.guildId, "host")).toBe(1000);
     expect((await saved(input)).state.players[0]?.attackCount).toBe(1);
   });
   it("heals 10% of maximum HP, charges only once and has an independent cooldown", async () => {
@@ -152,7 +185,7 @@ describe.skipIf(process.env.RUN_PVP_DB_TESTS !== "1")("PvP and public RPG cards:
     await performPvpAction(heal, input.guildId, "host", input.id, "heal", seconds(3));
     await performPvpAction(heal, input.guildId, "host", input.id, "heal", seconds(3));
     expect((await saved(input)).state.players[0]!.hp).toBe(before + 100);
-    expect(await balance(input.guildId, "host")).toBe(850);
+    expect(await balance(input.guildId, "host")).toBe(950);
     await expect(performPvpAction(id(), input.guildId, "host", input.id, "heal", seconds(4))).rejects.toThrow("待って");
     await performPvpAction(id(), input.guildId, "host", input.id, "attack", seconds(4), () => 0.99);
   });
@@ -173,19 +206,20 @@ describe.skipIf(process.env.RUN_PVP_DB_TESTS !== "1")("PvP and public RPG cards:
     await expect(performPvpAction(id(), input.guildId, "host", input.id, "heal", seconds(2))).rejects.toThrow("未設定");
     await performPvpAction(id(), input.guildId, "host", input.id, "attack", seconds(2), () => 0.99);
   });
-  it("cannot report a win if prize credit overflows; the lethal attack rolls back", async () => {
+  it("cannot report a win if a minted bounty overflows; the lethal attack rolls back", async () => {
     const input = await setup(); await begin(input);
     await db.update(weapons).set({ attack: 5000 }).where(and(eq(weapons.guildId, input.guildId), eq(weapons.userId, "opponent")));
     await db.update(wallets).set({ balance: 2147483647 }).where(and(eq(wallets.guildId, input.guildId), eq(wallets.userId, "opponent")));
-    await expect(performPvpAction(id(), input.guildId, "opponent", input.id, "attack", seconds(2), () => 0.99)).rejects.toThrow("残高上限");
+    await expect(performPvpAction(id(), input.guildId, "opponent", input.id, "attack", seconds(2), () => 0.99)).rejects.toThrow("銀行残高の上限");
     expect((await saved(input)).status).toBe("active");
     expect((await saved(input)).state.players[0]?.hp).toBe(1000);
-    expect(await db.select().from(ledger).where(eq(ledger.sessionKey, `pvp-settle:${input.id}`))).toHaveLength(0);
+    expect(await db.select().from(ledger).where(eq(ledger.sessionKey, `pvp-bounty:${input.id}`))).toHaveLength(0);
   });
   it("ledger insert failure rolls back reward, terminal state and slot release", async () => {
     const input = await setup(); await begin(input);
-    await db.insert(ledger).values({ guildId: input.guildId, userId: "host", amount: 0, reason: "failure fixture", sessionKey: `pvp-settle:${input.id}` });
+    await db.insert(ledger).values({ guildId: input.guildId, userId: "opponent", amount: 0, reason: "failure fixture", sessionKey: `pvp-bounty:${input.id}` });
     await expect(performPvpAction(id(), input.guildId, "host", input.id, "surrender", seconds(2))).rejects.toThrow();
+    expect(await balance(input.guildId, "host")).toBe(1000);
     expect(await balance(input.guildId, "opponent")).toBe(1000);
     expect((await saved(input)).status).toBe("active");
     expect(await db.select().from(slots).where(eq(slots.guildId, input.guildId))).toHaveLength(2);
