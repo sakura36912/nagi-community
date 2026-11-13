@@ -234,12 +234,20 @@ export const profileSettingsCommand = {
           if (attachment.size > 5 * 1024 * 1024) {
             throw new ProfileCommandError("画像は5MB以下にしてください。");
           }
-          let imageData: Buffer;
-          try {
-            imageData = await fetchProfileImage(attachment.url);
-          } catch (error) {
-            logger.warn("[profile] 添付された背景画像を読み込めませんでした。", error);
-            throw new ProfileCommandError("添付画像を検証できません。PNG/JPEGの画像をもう一度添付してください。");
+          let imageData: Buffer | null = null;
+          let lastError: unknown;
+          for (const url of new Set([attachment.url, attachment.proxyURL])) {
+            try {
+              imageData = await fetchProfileImage(url);
+              break;
+            } catch (error) {
+              lastError = error;
+            }
+          }
+          if (!imageData) {
+            logger.warn("[profile] 添付された背景画像を読み込めませんでした。", lastError);
+            const reason = lastError instanceof Error ? lastError.message : "画像を取得できませんでした";
+            throw new ProfileCommandError(`添付画像を読み込めません。形式・サイズ・解像度を確認してください。（${reason}）`);
           }
           await setProfileBackgroundAsset(guildId, { kind: "upload", imageData, contentType });
         } else if (!raw) {

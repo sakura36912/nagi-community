@@ -10,6 +10,7 @@ const CONTENT_WIDTH = 1060;
 const CARD_MARGIN = 70;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 20_000_000;
+const MAX_IMAGE_REDIRECTS = 3;
 const IMAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CACHED_BACKGROUNDS = 4;
 const JAPANESE_FONT = "Noto Sans CJK JP";
@@ -143,7 +144,21 @@ async function resolvePublicIpv4(hostname: string): Promise<string> {
   return ipv4[0]!.address;
 }
 
-export async function fetchProfileImage(urlText: string): Promise<Buffer> {
+export function resolveProfileImageRedirect(currentUrl: string, location: string, redirectCount: number): string {
+  if (redirectCount >= MAX_IMAGE_REDIRECTS) throw new Error("Background image exceeded the redirect limit.");
+  let target: URL;
+  try {
+    target = new URL(location, currentUrl);
+  } catch {
+    throw new Error("Background image redirect URL is invalid.");
+  }
+  if (target.protocol !== "https:" || (target.port && target.port !== "443") || target.username || target.password) {
+    throw new Error("Background image redirects must use public HTTPS on port 443.");
+  }
+  return target.toString();
+}
+
+export async function fetchProfileImage(urlText: string, redirectCount = 0): Promise<Buffer> {
   let url: URL;
   try {
     url = new URL(urlText);
@@ -155,7 +170,7 @@ export async function fetchProfileImage(urlText: string): Promise<Buffer> {
   }
   const pinnedAddress = await resolvePublicIpv4(url.hostname);
 
-  const buffer = await new Promise<Buffer>((resolve, reject) => {
+  const result = await new Promise<{ kind: "image"; buffer: Buffer } | { kind: "redirect"; location: string }>((resolve, reject) => {
     const pinnedLookup = ((hostname, options, callback) => {
       callback(null, pinnedAddress, 4);
     }) as LookupFunction;
@@ -169,6 +184,20 @@ export async function fetchProfileImage(urlText: string): Promise<Buffer> {
       servername: url.hostname,
       timeout: 8_000,
     }, response => {
+      if ([301, 302, 303, 307, 308].includes(response.statusCode ?? 0)) {
+        const location = response.headers.location;
+        response.resume();
+        if (!location) {
+          reject(new Error("Background image redirect is missing a location."));
+          return;
+        }
+        if (redirectCount >= MAX_IMAGE_REDIRECTS) {
+          reject(new Error("Background image exceeded the redirect limit."));
+          return;
+        }
+        resolve({ kind: "redirect", location });
+        return;
+      }
       const contentType = String(response.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
       if (response.statusCode !== 200 || (contentType !== "image/png" && contentType !== "image/jpeg")) {
         response.resume();
@@ -195,7 +224,7 @@ export async function fetchProfileImage(urlText: string): Promise<Buffer> {
         const image = Buffer.concat(chunks);
         try {
           validateImageDimensions(image, contentType);
-          resolve(image);
+          resolve({ kind: "image", buffer: image });
         } catch (error) {
           reject(error);
         }
@@ -206,7 +235,10 @@ export async function fetchProfileImage(urlText: string): Promise<Buffer> {
     request.on("error", reject);
     request.end();
   });
-  return buffer;
+  if (result.kind === "redirect") {
+    return fetchProfileImage(resolveProfileImageRedirect(url.toString(), result.location, redirectCount), redirectCount + 1);
+  }
+  return result.buffer;
 }
 
 export async function getCachedProfileBackground(url: string): Promise<Buffer> {
