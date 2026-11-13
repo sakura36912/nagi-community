@@ -1,6 +1,11 @@
 import { createCanvas, GlobalFonts, loadImage } from "@napi-rs/canvas";
-import { describe, expect, it } from "vitest";
-import { fetchProfileImage, renderProfileCard, resolveProfileImageRedirect } from "../lib/profileCardImage";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createPinnedProfileLookup,
+  fetchProfileImage,
+  renderProfileCard,
+  resolveProfileImageRedirect,
+} from "../lib/profileCardImage";
 
 function testImage() {
   const canvas = createCanvas(320, 240);
@@ -50,5 +55,17 @@ describe("profile card image", () => {
       .toThrow("public HTTPS");
     expect(() => resolveProfileImageRedirect("https://cdn.discordapp.com/upload", "/file.jpg", 3))
       .toThrow("redirect limit");
+  });
+
+  it("supports both standard and all-address Node lookup callback forms", () => {
+    const lookup = createPinnedProfileLookup("93.184.216.34");
+    const standardCallback = vi.fn();
+    const allCallback = vi.fn();
+
+    lookup("cdn.example", {}, standardCallback);
+    lookup("cdn.example", { all: true }, allCallback);
+
+    expect(standardCallback).toHaveBeenCalledWith(null, "93.184.216.34", 4);
+    expect(allCallback).toHaveBeenCalledWith(null, [{ address: "93.184.216.34", family: 4 }]);
   });
 });

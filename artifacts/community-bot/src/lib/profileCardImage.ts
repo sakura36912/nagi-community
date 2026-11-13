@@ -144,6 +144,17 @@ async function resolvePublicIpv4(hostname: string): Promise<string> {
   return ipv4[0]!.address;
 }
 
+export function createPinnedProfileLookup(pinnedAddress: string): LookupFunction {
+  return ((_hostname, options, callback) => {
+    const wantsAll = typeof options === "object" && options !== null && options.all === true;
+    if (wantsAll) {
+      callback(null, [{ address: pinnedAddress, family: 4 }]);
+      return;
+    }
+    callback(null, pinnedAddress, 4);
+  }) as LookupFunction;
+}
+
 export function resolveProfileImageRedirect(currentUrl: string, location: string, redirectCount: number): string {
   if (redirectCount >= MAX_IMAGE_REDIRECTS) throw new Error("Background image exceeded the redirect limit.");
   let target: URL;
@@ -171,16 +182,13 @@ export async function fetchProfileImage(urlText: string, redirectCount = 0): Pro
   const pinnedAddress = await resolvePublicIpv4(url.hostname);
 
   const result = await new Promise<{ kind: "image"; buffer: Buffer } | { kind: "redirect"; location: string }>((resolve, reject) => {
-    const pinnedLookup = ((hostname, options, callback) => {
-      callback(null, pinnedAddress, 4);
-    }) as LookupFunction;
     const request = httpsRequest({
       hostname: url.hostname,
       port: 443,
       method: "GET",
       path: `${url.pathname}${url.search}`,
       headers: { accept: "image/png,image/jpeg", "user-agent": "CommunityBot-ProfileCard/1.0" },
-      lookup: pinnedLookup,
+      lookup: createPinnedProfileLookup(pinnedAddress),
       servername: url.hostname,
       timeout: 8_000,
     }, response => {
@@ -201,7 +209,7 @@ export async function fetchProfileImage(urlText: string, redirectCount = 0): Pro
       const contentType = String(response.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
       if (response.statusCode !== 200 || (contentType !== "image/png" && contentType !== "image/jpeg")) {
         response.resume();
-        reject(new Error("Background image must be a directly accessible PNG or JPEG (redirects are not followed)."));
+        reject(new Error("Background image must be a directly accessible public PNG or JPEG."));
         return;
       }
       const declaredLength = Number(response.headers["content-length"] ?? 0);
