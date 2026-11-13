@@ -101,7 +101,7 @@ export const profileCommand = {
       if (settings.visibleFields.inventory !== false) {
         embed.addFields({ name: "🎒 所持品", value: profile.petStock.length
           ? profile.petStock.map(item => escapeMarkdown(item)).join("\n")
-          : "卵・エサ・おもちゃなし", inline: false });
+          : "所持品なし", inline: false });
       }
       if (settings.visibleFields.pet !== false) {
         embed.addFields({ name: "🐾 ペット", value: profile.pet

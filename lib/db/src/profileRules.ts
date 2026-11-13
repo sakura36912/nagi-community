@@ -1,3 +1,5 @@
+import { PET_RARITIES, PET_RARITY_NAMES, type PetRarity } from "./petRules";
+
 export const PROFILE_FIELD_LABELS = {
   joinDate: "加入日",
   bounty: "懸賞金",
@@ -43,6 +45,20 @@ export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
   backgroundUrl: null,
   frameStyle: "wanted",
 };
+
+export function formatProfilePetStock(
+  eggs: Partial<Record<PetRarity, number>> = {},
+  food = 0,
+  toys = 0,
+): string[] {
+  const items = PET_RARITIES.flatMap(rarity => {
+    const quantity = eggs[rarity] ?? 0;
+    return quantity > 0 ? [`${PET_RARITY_NAMES[rarity]}卵：${quantity}個`] : [];
+  });
+  if (food > 0) items.push(`エサ：${food}個`);
+  if (toys > 0) items.push(`おもちゃ：${toys}個`);
+  return items;
+}
 
 export interface CasinoLedgerRow {
   amount: number;

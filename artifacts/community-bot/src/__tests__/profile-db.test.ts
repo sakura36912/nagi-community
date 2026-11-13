@@ -44,9 +44,6 @@ describe.skipIf(process.env.RUN_PROFILE_DB_TESTS !== "1")("profile settings and 
       data: { pet: null, eggs: { rare: 1 }, food: 2, toys: 1, day: "", petsToday: 0, playsToday: 0 },
     });
     const profile = await getProfileData(guildId, stockUserId);
-    expect(profile.petStock).toEqual([
-      "ノーマル卵：0個", "レア卵：1個", "エピック卵：0個", "レジェンド卵：0個",
-      "ミシック卵：0個", "エサ：2個", "おもちゃ：1個",
-    ]);
+    expect(profile.petStock).toEqual(["レア卵：1個", "エサ：2個", "おもちゃ：1個"]);
   });
 });

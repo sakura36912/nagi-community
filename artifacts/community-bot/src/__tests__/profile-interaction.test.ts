@@ -39,7 +39,7 @@ const data = {
   bounty: 500000, currencyName: "$",
   inventory: [{ name: "宝箱", quantity: 2 }],
   pet: { name: "キツネ", level: 4, bond: 50 },
-  petStock: ["ノーマル卵：0個", "レア卵：1個", "エピック卵：0個", "レジェンド卵：0個", "ミシック卵：0個", "エサ：2個", "おもちゃ：1個"],
+  petStock: ["レア卵：1個", "エサ：2個", "おもちゃ：1個"],
   battle: { defeats: 2, maxDamage: 9500, participated: 3 },
   pvp: { wins: 4, losses: 2, draws: 1 },
   casino: { totalBet: 5000, net: -300, wins: 5, maxPayout: 9000, games: 12 },
@@ -109,6 +109,7 @@ describe("profile slash commands", () => {
     expect(inventory).toContain("レア卵：1個");
     expect(inventory).toContain("エサ：2個");
     expect(inventory).toContain("おもちゃ：1個");
+    expect(inventory).not.toContain("0個");
     expect(inventory).not.toContain("宝箱");
     expect(inventory).not.toContain("キツネ");
     expect(response.files).toHaveLength(1);

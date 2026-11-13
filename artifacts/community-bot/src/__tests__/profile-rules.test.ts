@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  configuredProfileRank, getProfileCasinoStats, PROFILE_RANK_TIERS,
+  configuredProfileRank, formatProfilePetStock, getProfileCasinoStats, PROFILE_RANK_TIERS,
   type ProfileSettings,
 } from "@workspace/db";
 
@@ -29,5 +29,12 @@ describe("profile card data rules", () => {
       { amount: 5000, reason: "管理者付与" },
     ], [{ bet: 200, payout: 500, result: "WON" }]);
     expect(stats).toEqual({ totalBet: 405, net: 420, wins: 4, maxPayout: 500, games: 5 });
+  });
+
+  it("shows only pet items with a positive quantity", () => {
+    expect(formatProfilePetStock({ rare: 1 }, 2, 0)).toEqual([
+      "レア卵：1個", "エサ：2個",
+    ]);
+    expect(formatProfilePetStock({ normal: 0, rare: 0 }, 0, 0)).toEqual([]);
   });
 });

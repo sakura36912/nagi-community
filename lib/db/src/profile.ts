@@ -2,7 +2,6 @@ import { and, eq, or, sql } from "drizzle-orm";
 import { db } from "./index";
 import { ensureBossSchema } from "./bossSchema";
 import { getForgeWeapon } from "./forge";
-import { PET_RARITIES, PET_RARITY_NAMES } from "./petRules";
 import {
   bossBattlesTable, bossMembersTable, dealerCasinoBetsTable, dealerCasinoGamesTable,
   dealerCasinoSettlementsTable, petAccountsTable, pvpBountiesTable, pvpDuelsTable,
@@ -11,7 +10,7 @@ import {
 } from "./schema";
 import { ensureProfileSchema } from "./profileSchema";
 import {
-  DEFAULT_PROFILE_SETTINGS, PROFILE_FIELDS, PROFILE_FRAME_STYLES, PROFILE_RANK_TIERS,
+  DEFAULT_PROFILE_SETTINGS, formatProfilePetStock, PROFILE_FIELDS, PROFILE_FRAME_STYLES, PROFILE_RANK_TIERS,
   getProfileCasinoStats, type ProfileField, type ProfileFrameStyle, type ProfileRankTier,
   type ProfileSettings,
 } from "./profileRules";
@@ -136,10 +135,7 @@ export async function getProfileData(guildId: string, userId: string) {
   const account = petRows[0]?.data;
   const petStock: string[] = [];
   if (account) {
-    for (const rarity of PET_RARITIES) {
-      petStock.push(`${PET_RARITY_NAMES[rarity]}卵：${account.eggs[rarity] ?? 0}個`);
-    }
-    petStock.push(`エサ：${account.food ?? 0}個`, `おもちゃ：${account.toys ?? 0}個`);
+    petStock.push(...formatProfilePetStock(account.eggs, account.food, account.toys));
   }
   return {
     weapon,
