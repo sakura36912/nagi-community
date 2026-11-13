@@ -136,16 +136,12 @@ type TicketInteraction = ButtonInteraction | StringSelectMenuInteraction;
 async function showKpSales(
   interaction: TicketInteraction | ModalSubmitInteraction,
   period: KpBusinessDay,
-  includeNagiTransfers = false,
 ) {
   const orders = await listPaidKpTicketOrders(interaction.guildId!, undefined, { start: period.start, end: period.end });
   const { currencyName } = await getGuildSettings(interaction.guildId!);
   const statement = kpTicketStatement(orders, currencyName, true, period);
   const castSales = kpCastSales(orders, currencyName, period);
-  const transferReport = includeNagiTransfers
-    ? kpTransferHistory(await listTransfersToRecipient(interaction.guildId!, KP_TRANSFER_RECIPIENT_ID), currencyName, KP_TRANSFER_RECIPIENT_ID)
-    : null;
-  const embeds = [...statement.embeds, ...castSales.embeds, ...(transferReport?.embeds ?? [])];
+  const embeds = [...statement.embeds, ...castSales.embeds];
   // Discord's 6,000-character limit applies to all embeds in the message together.
   for (const embed of embeds) {
     const description = embed.data.description;
@@ -155,7 +151,7 @@ async function showKpSales(
   }
   await interaction.editReply({
     embeds,
-    files: [...statement.files, ...castSales.files, ...(transferReport?.files ?? [])],
+    files: [...statement.files, ...castSales.files],
     allowedMentions: statement.allowedMentions,
     components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}sales-date:${interaction.user.id}`)
@@ -314,7 +310,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
       }
       await requireKpStaff(interaction);
       if (allTickets) {
-        await showKpSales(interaction, kpBusinessDay(), true);
+        await showKpSales(interaction, kpBusinessDay());
         return;
       }
       const orders = await listPaidKpTicketOrders(interaction.guildId, interaction.channelId);

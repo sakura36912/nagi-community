@@ -183,22 +183,10 @@ describe("KP ticket component flow", () => {
     expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "buyer", force: true });
     expect(m.paidOrders).toHaveBeenCalledWith("guild", undefined, { start: expect.any(Date), end: expect.any(Date) });
     expect(i.editReply.mock.calls[0]![0].embeds[0].toJSON().title).toContain("全チケット");
+    expect(m.transfers).not.toHaveBeenCalled();
     expect(i.channel.send).not.toHaveBeenCalled();
     expect(m.create).not.toHaveBeenCalled(); expect(m.advance).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
-  });
-  it("includes the transfer history when an existing all-ticket button is used", async () => {
-    const i = allStatementFixture("夜鴉");
-    m.transfers.mockResolvedValue([{
-      senderId: "sender-2", amount: -700, createdAt: new Date("2026-11-15T03:00:00.000Z"),
-    }]);
-    await run(i);
-    expect(m.transfers).toHaveBeenCalledWith("guild", "1276893567599644715");
-    const response = i.editReply.mock.calls[0]![0];
-    const transferEmbed = response.embeds.find((embed: { toJSON: () => { title?: string } }) =>
-      embed.toJSON().title === "凪への送金履歴");
-    expect(transferEmbed?.toJSON().description).toContain("<@sender-2>");
-    expect(response.files.some((file: { name?: string }) => file.name === "nagi-transfer-history.txt")).toBe(true);
   });
   it.each(["夜鴉", "黒兵", "admin"])("privately lists every saved transfer to 凪 for %s", async role => {
     const i = allStatementFixture(role === "admin" ? null : role, role === "admin");
