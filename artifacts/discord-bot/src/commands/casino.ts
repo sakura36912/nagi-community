@@ -610,9 +610,8 @@ export const casinoCommand = {
         .addSubcommand((sub) => sub.setName("dealer_status").setDescription("【管理者】賭博師ゲームの設定を確認する")),
     )
     .addSubcommandGroup((group) => group.setName("chohan").setDescription("賭博師が進行する丁半")
-      .addSubcommand((sub) => sub.setName("start").setDescription("丁半の参加受付を開始する"))
-      .addSubcommand((sub) => sub.setName("roll").setDescription("締切後にサイコロを振り結果を確定する")))
-    .addSubcommand((sub) => sub.setName("close").setDescription("現在のゲームの募集を締め切る"))
+      .addSubcommand((sub) => sub.setName("start").setDescription("丁半の参加受付を開始する")))
+    .addSubcommand((sub) => sub.setName("close").setDescription("ポーカーの募集を締め切る"))
     .addSubcommand((sub) => sub.setName("next").setDescription("同じゲームで次の募集を開始する"))
     .addSubcommand((sub) => sub.setName("end").setDescription("賭博場の営業を終了する"))
     .addSubcommand((sub) => sub.setName("cancel").setDescription("未精算のゲームを中止し賭け金を返す"))

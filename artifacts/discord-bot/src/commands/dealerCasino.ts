@@ -1290,10 +1290,6 @@ export async function handleDealerCasinoSlash(interaction: ChatInputCommandInter
       await replyDealerCommand(interaction, { content: "丁半の募集パネルを投稿しました。" });
       return;
     }
-    if (group === "chohan" && sub === "roll") {
-      await rollAndSettleChohan(interaction, interaction.client);
-      return;
-    }
     if (group === "poker" && sub === "start") {
       await requireDealer(interaction, settings);
       await createGame(interaction, "poker");
@@ -1323,6 +1319,10 @@ export async function handleDealerCasinoSlash(interaction: ChatInputCommandInter
       return;
     }
     if (sub === "close") {
+      const activeGame = await getActiveDealerCasinoGame(interaction.guildId);
+      if (activeGame?.gameType === "chohan") {
+        throw new Error("丁半は募集カードの「受付終了」ボタンを使用してください。");
+      }
       const closed = await closeRecruitmentForDealer(interaction);
       await replyDealerCommand(interaction, { content: `Game #${closed.id} の参加を締め切りました。` });
       return;

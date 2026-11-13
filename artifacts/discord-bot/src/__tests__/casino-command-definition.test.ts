@@ -7,4 +7,14 @@ describe("/casino command definition", () => {
     expect(groups?.map((option) => option.name)).toContain("chohan");
     expect(groups?.map((option) => option.name)).not.toContain("poker");
   });
+
+  it("keeps only chohan start and removes the redundant roll command", () => {
+    const options = casinoCommand.data.toJSON().options ?? [];
+    const chohan = options.find((option) => option.type === 2 && option.name === "chohan");
+    const chohanOptions = chohan && "options" in chohan
+      ? (chohan.options ?? []).map((option) => option.name)
+      : [];
+    expect(chohanOptions).toEqual(["start"]);
+    expect(options.map((option) => option.name)).toContain("close");
+  });
 });
