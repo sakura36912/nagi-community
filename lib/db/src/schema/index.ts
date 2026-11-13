@@ -46,4 +46,5 @@ export * from "./uraRecruitment";
 export * from "./dealerCasino";
 export * from "./bounty";
 export * from "./kpTicket";
+export * from "./profile";
 

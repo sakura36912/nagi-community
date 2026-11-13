@@ -19,6 +19,7 @@ import { forgeCommands } from "./forge.js";
 import { bossCommands } from "./boss.js";
 import { pvpCommands } from "./pvp.js";
 import { petCommand } from "./pet.js";
+import { profileCommands } from "./profile.js";
 import {
   addParticipant,
   createEvent,
@@ -2487,6 +2488,7 @@ export const commands: Command[] = [
   ...bossCommands,
   ...pvpCommands,
   petCommand,
+  ...profileCommands,
   ...zombieCommands,
   rankingCommand,
   vcRankCommand,

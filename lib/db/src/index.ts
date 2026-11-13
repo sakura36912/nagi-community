@@ -45,3 +45,5 @@ export * from "./kpTicket";
 export * from "./kpTicketPricing";
 export * from "./petRules";
 export * from "./pet";
+export * from "./profileRules";
+export * from "./profile";
