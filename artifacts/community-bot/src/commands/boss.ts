@@ -8,7 +8,7 @@ import {
   createBossJoinRequest, confirmBossJoin, cancelBossJoinRequest, performBossAction, type BossConfig, type BossType, type BossMode,
 } from "@workspace/db";
 import { requireForgeAccess } from "./forge";
-import { bossActionText, bossEventEmbed, bossHp, bossMoney, bossSpecialName } from "../lib/bossUi";
+import { bossActionText, bossEventEmbed, bossHp, bossImageAttachment, bossMoney, bossSpecialName } from "../lib/bossUi";
 import { runBossRecovery } from "../lib/bossRecovery";
 import { logger } from "../lib/logger";
 
@@ -85,7 +85,8 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
         interaction.options.getString("ボス", true) as BossType, config);
       const fees = await getBossFees(guildId);
       let announcement = "開催告知を投稿しました。";
-      try { await channel.send({ embeds: [bossEventEmbed(event)], allowedMentions: { parse: [] }, nonce: interaction.id, enforceNonce: true }); }
+      try { await channel.send({ embeds: [bossEventEmbed(event)], files: [bossImageAttachment(event.bossType)],
+        allowedMentions: { parse: [] }, nonce: interaction.id, enforceNonce: true }); }
       catch (error) { logger.error("[boss] Event created but announcement failed", error); announcement = "開催は保存済みですが告知に失敗しました。/ボス情報 で確認できます。"; }
       await interaction.editReply(`${announcement}\n特殊イベント：${bossSpecialName(config.special)}\n攻撃：無料／回復：${fees.healCost && fees.healCost > 0 ? bossMoney(fees.healCost) : "未設定（回復不可）"}\nクールタイム：攻撃${config.attackCooldownSeconds}秒／回復${config.healCooldownSeconds}秒`);
       return;
@@ -112,7 +113,8 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
         embed.addFields({ name: `${(page - 1) * 8 + index + 1}. ${battle.mode === "solo" ? "ソロ" : "パーティ"} / ${battle.status === "waiting" ? "受付中" : "戦闘中"}`,
           value: `${bossHp(battle.currentHp, battle.maxHp)}\n${players.map(p => `${escapeMarkdown(p.displayName)}：HP ${p.hp.toLocaleString("ja-JP")} / ${p.maxHp.toLocaleString("ja-JP")}`).join("\n")}`.slice(0, 480) });
       }
-      await interaction.editReply({ embeds: [embed.setFooter({ text: `討伐一覧 ${page}/${pages}ページ。ランキングは討伐終了時のみ表示。` })], allowedMentions: { parse: [] } });
+      await interaction.editReply({ embeds: [embed.setFooter({ text: `討伐一覧 ${page}/${pages}ページ。ランキングは討伐終了時のみ表示。` })],
+        files: [bossImageAttachment(info.event.bossType)], allowedMentions: { parse: [] } });
       return;
     }
     if (name === "参加") {
@@ -125,7 +127,7 @@ export async function executeBossCommand(interaction: ChatInputCommandInteractio
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`boss:join:${request.id}`).setLabel("条件を確認して参加").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`boss:cancel:${request.id}`).setLabel("キャンセル").setStyle(ButtonStyle.Secondary));
-      await interaction.editReply({ embeds: [embed], components: [row] });
+      await interaction.editReply({ embeds: [embed], files: [bossImageAttachment(event.bossType)], components: [row] });
       return;
     }
     if (name === "攻撃" || name === "回復") {

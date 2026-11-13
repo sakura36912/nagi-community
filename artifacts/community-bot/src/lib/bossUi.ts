@@ -1,5 +1,20 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, escapeMarkdown } from "discord.js";
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, escapeMarkdown } from "discord.js";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BOSS_NAMES, bossCooldownSeconds, type BossConfig, type BossEvent, type BossNoticeBundle, type BossActionResult } from "@workspace/db";
+
+const BOSS_IMAGE_FILES = {
+  kraken: "kraken.jpg",
+  megalodon: "megalodon.jpg",
+  leviathan: "leviathan.jpg",
+} as const;
+const BOSS_ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../assets/boss");
+
+/** Attach the user's boss illustration so it renders reliably in Discord embeds. */
+export function bossImageAttachment(type: BossEvent["bossType"]) {
+  const name = `boss-${type}.jpg`;
+  return new AttachmentBuilder(join(BOSS_ASSET_DIR, BOSS_IMAGE_FILES[type]), { name });
+}
 
 export const bossMoney = (value: number | null) => value === null ? "未設定（新規参加不可）" : `$${value.toLocaleString("ja-JP")}`;
 export function bossDuration(seconds: number) {
@@ -28,6 +43,7 @@ export function bossSpecialName(special: BossConfig["special"]) {
 }
 export function bossEventEmbed(event: BossEvent) {
   return new EmbedBuilder().setTitle(`ボス討伐：${BOSS_NAMES[event.bossType]}`).setColor(0x447bb8)
+    .setImage(`attachment://boss-${event.bossType}.jpg`)
     .setDescription("**本船員・武器所持者向けの討伐イベント**\n`/参加` でソロ／パーティを選択 → 条件を確認して参加確定\n攻撃は無料、回復は有料です。")
     .addFields(
       { name: "ボスHP", value: event.config.bossHpPercent !== undefined

@@ -62,6 +62,14 @@ beforeEach(() => {
   m.recover.mockResolvedValue(undefined);
 });
 describe("boss commands and displays", () => {
+  it("posts the matching boss image with the public hosting announcement", async () => {
+    const i = fixture("ボス開催"); i.flags.admin = true;
+    Object.assign(i.values, { ボス: "kraken", 制限分: 10, 受付分: 1, 報酬: 100 });
+    await run(i);
+    const payload = i.channel.send.mock.calls[0]![0] as { embeds: Array<{ data: { image?: { url: string } } }>; files: Array<{ name: string }> };
+    expect(payload.embeds[0]!.data.image?.url).toBe("attachment://boss-kraken.jpg");
+    expect(payload.files.map(file => file.name)).toEqual(["boss-kraken.jpg"]);
+  });
   it.each(["attack", "heal"])("routes public %s buttons to the clicking member's exact battle", async action => {
     const i = fixture(); i.customId = `boss:${action}:battle`;
     await click(i);
