@@ -117,7 +117,6 @@ import {
 import { getHubSession, getHubChannelById, getHubByChannelId } from "@workspace/db";
 import { handleKpTicketInteraction, handleKpTicketSalesDate } from "./commands/kpTicket";
 import { handleRetiredBankRpgInteraction, startBankRpgCleanup } from "./lib/rpgCommandMigration";
-import { startRetiredBankCommandCleanup } from "./lib/retiredBankCommands";
 import { KP_TICKET_PREFIX } from "./lib/kpTicketUi";
 import { KP_VIP_PREFIX, handleKpVipControl } from "./lib/kpVipVc";
 import {
@@ -1308,7 +1307,6 @@ client.once(Events.ClientReady, async (readyClient) => {
   startDealerCasinoRecovery(readyClient);
   startMultiplayerChinchiroRecovery(readyClient);
   startBankRpgCleanup(readyClient);
-  startRetiredBankCommandCleanup(readyClient);
   dlog(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Logged in as ${readyClient.user.tag}`);
   // Discord may still show the old command while the new version starts.

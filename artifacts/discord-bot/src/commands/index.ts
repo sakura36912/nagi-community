@@ -128,6 +128,9 @@ import { uraRecruitmentCommand } from "./uraRecruitment";
 import { KP_SHOP_CATEGORY, KP_SHOP_NAME, purchaseKpItem, supportsKpEffect } from "../lib/kpShop";
 import { executeKpTicketCommand, kpTicketPanelSubcommand, kpTicketPricesSubcommand, kpCustomersSubcommand } from "./kpTicket";
 import { giveCommand } from "./give";
+import { guideCommand } from "./guide";
+import { leavelogCommand } from "./leavelog";
+import { rouletteCommand } from "./roulette";
 
 interface Command {
   data: { name: string; toJSON: () => unknown };
@@ -4418,6 +4421,9 @@ export const commands: Command[] = [
   balanceCommand,
   payCommand,
   giveCommand,
+  guideCommand,
+  leavelogCommand,
+  rouletteCommand,
   leaderboardCommand,
   shopCommand,
   rewardCommand,
