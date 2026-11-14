@@ -150,6 +150,7 @@ vi.mock("discord.js", () => {
     addBooleanOption(fn: (o: FakeOption) => unknown){ fn(new FakeOption()); return this; }
     addRoleOption(fn: (o: FakeOption) => unknown)   { fn(new FakeOption()); return this; }
     addUserOption(fn: (o: FakeOption) => unknown)   { fn(new FakeOption()); return this; }
+    addAttachmentOption(fn: (o: FakeOption) => unknown) { fn(new FakeOption()); return this; }
   }
 
   class FakeOption {

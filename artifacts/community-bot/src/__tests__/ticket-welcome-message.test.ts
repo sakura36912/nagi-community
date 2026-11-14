@@ -75,6 +75,11 @@ vi.mock("@workspace/db", () => {
     });
 
   return {
+    PET_RARITIES: ["normal", "rare", "epic", "legend", "mythic"],
+    PET_RARITY_NAMES: { normal: "normal", rare: "rare", epic: "epic", legend: "レジェンド", mythic: "ミシック" },
+    PET_SETTING_LABELS: { level_cap: "level cap" },
+    PROFILE_FIELD_LABELS: { bounty: "bounty" },
+    PROFILE_RANK_LABELS: { regular: "regular", vip: "vip", vip_plus: "vip+", special: "special" },
     db: {
       select: mocks.select,
       insert: mocks.insert,

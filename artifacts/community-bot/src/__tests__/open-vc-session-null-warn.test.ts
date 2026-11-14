@@ -110,16 +110,25 @@ describe("openVcSessionIfTracked – warn when openSession returns null", () => 
     expect(loggerWarn).not.toHaveBeenCalled();
   });
 
-  it("does NOT log a warning when the channel is outside the tracked category (openSession not called)", async () => {
+  it("records channels outside the legacy category because history covers every VC", async () => {
     const deps = {
       getTrackedVcCategoryId: vi.fn().mockResolvedValue("cat-tracked"),
-      openSession: vi.fn(), // should never be invoked
+      openSession: vi.fn().mockResolvedValue({
+        id: 1,
+        guildId: GUILD,
+        userId: USER,
+        channelId: CHANNEL,
+        joinedAt: new Date(),
+        leftAt: null,
+        isExile: false,
+        isPrivacyClosed: false,
+      }),
     };
 
     await openVcSessionIfTracked(GUILD, USER, CHANNEL, "cat-other", false, deps);
 
     expect(loggerWarn).not.toHaveBeenCalled();
-    expect(deps.openSession).not.toHaveBeenCalled();
+    expect(deps.openSession).toHaveBeenCalledWith(GUILD, USER, CHANNEL, false);
   });
 
   it("still resolves without throwing when openSession returns null", async () => {
