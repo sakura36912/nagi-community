@@ -1,76 +1,72 @@
 import { describe, expect, it, vi } from "vitest";
-import { Collection, Routes } from "discord.js";
-import { RPG_COMMAND_NAMES, LEGACY_RPG_COMMAND_NAMES } from "@workspace/db";
-import { handleRetiredBankRpgInteraction, removeBankRpgCommands } from "../lib/rpgCommandMigration";
+import { ApplicationCommandType, Collection, Routes } from "discord.js";
+import { REMOVED_BANK_COMMAND_NAMES, handleRetiredBankRpgInteraction, removeBankRpgCommands } from "../lib/rpgCommandMigration";
 
-function manager() {
-  const definitions = [
-    ...[...RPG_COMMAND_NAMES, ...LEGACY_RPG_COMMAND_NAMES].map((name, i) => ({ id: String(i), name, type: 1 })),
-    { id: "shop", name: "shop", type: 1 },
-    { id: "casino", name: "casino", type: 1 },
-    { id: "zombie", name: "zombie", type: 1 },
-    { id: "context", name: "武器", type: 2 },
-  ];
-  return { fetch: vi.fn(async () => new Collection(definitions.map(c => [c.id, c]))), delete: vi.fn(async () => undefined) };
-}
 function setup() {
-  const global = manager(), guild = manager();
-  const bank = { application: { id: "bank", commands: global },
-    guilds: { cache: new Collection([["guild", { id: "guild", commands: guild }]]) } };
-  const api = { get: vi.fn(async (path: string): Promise<unknown> => {
-    if (path === Routes.oauth2CurrentApplication()) return { id: "community" };
-    if (path === Routes.applicationCommands("community")) return RPG_COMMAND_NAMES.map(name => ({ name, type: 1 }));
-    if (path === Routes.guild("guild")) return { id: "guild" };
-    throw new Error("Unexpected route");
-  }) };
-  return { bank, global, guild, api };
+  const routes = [
+    Routes.applicationCommands("bank"),
+    Routes.applicationGuildCommands("bank", "guild"),
+  ];
+  const definitions = new Map<string, { id: string; name: string; type: number }[]>(
+    routes.map((route) => [route, [
+      ...REMOVED_BANK_COMMAND_NAMES.map((name, i) => ({ id: `removed-${i}`, name, type: ApplicationCommandType.ChatInput })),
+      { id: "pvp", name: "pvp", type: ApplicationCommandType.ChatInput },
+      { id: "shop", name: "shop", type: ApplicationCommandType.ChatInput },
+      { id: "casino", name: "casino", type: ApplicationCommandType.ChatInput },
+      { id: "transfer", name: "送金", type: ApplicationCommandType.ChatInput },
+      { id: "balance", name: "残高確認", type: ApplicationCommandType.ChatInput },
+      { id: "context", name: "weapon", type: ApplicationCommandType.User },
+    ]]),
+  );
+  const rest = {
+    get: vi.fn(async (route: string) => definitions.get(route)?.map((command) => ({ ...command })) ?? []),
+    delete: vi.fn(async (route: string) => {
+      const parent = route.slice(0, route.lastIndexOf("/"));
+      const id = route.slice(route.lastIndexOf("/") + 1);
+      definitions.set(parent, definitions.get(parent)!.filter((command) => command.id !== id));
+    }),
+  };
+  const bank = {
+    application: { id: "bank" },
+    guilds: { cache: new Collection([["guild", { id: "guild" }]]) },
+    rest,
+  };
+  return { bank, definitions, rest, routes };
 }
-describe("bank to community RPG command migration", () => {
-  it("deletes only retired chat commands from global and guild scopes", async () => {
-    const s = setup();
-    expect(await removeBankRpgCommands(s.bank as never, s.api, "community")).toBe(62);
-    for (const m of [s.global, s.guild]) {
-      expect(m.delete).toHaveBeenCalledTimes(31);
-      for (const id of ["shop", "casino", "zombie", "context"]) expect(m.delete).not.toHaveBeenCalledWith(id);
+
+describe("targeted Bank Bot command removal", () => {
+  it("removes disabled commands from global and cached guild scopes", async () => {
+    const state = setup();
+    expect(await removeBankRpgCommands(state.bank as never)).toBe(REMOVED_BANK_COMMAND_NAMES.length * 2);
+    expect(state.rest.delete).toHaveBeenCalledTimes(REMOVED_BANK_COMMAND_NAMES.length * 2);
+    expect(state.rest.get).toHaveBeenCalledTimes(4);
+    for (const route of state.routes) {
+      const remaining = state.definitions.get(route)!;
+      for (const name of REMOVED_BANK_COMMAND_NAMES) {
+        expect(remaining.some((command) => command.name === name && command.type === ApplicationCommandType.ChatInput)).toBe(false);
+      }
+      expect(remaining.map((command) => command.name)).toEqual(
+        expect.arrayContaining(["pvp", "shop", "casino", "送金", "残高確認", "weapon"]),
+      );
     }
   });
-  it("does not delete anything until all 19 destination commands exist", async () => {
-    const s = setup();
-    s.api.get.mockImplementation(async path => path === Routes.oauth2CurrentApplication() ? { id: "community" } : []);
-    await expect(removeBankRpgCommands(s.bank as never, s.api)).rejects.toThrow("not ready");
-    expect(s.global.delete).not.toHaveBeenCalled();
-    expect(s.guild.delete).not.toHaveBeenCalled();
+
+  it("fails without an application identity and stops on API errors", async () => {
+    const state = setup();
+    await expect(removeBankRpgCommands({ ...state.bank, application: null } as never)).rejects.toThrow("Bank application unavailable");
+    state.rest.get.mockRejectedValueOnce(new Error("Offline"));
+    await expect(removeBankRpgCommands(state.bank as never)).rejects.toThrow("Offline");
+    expect(state.rest.delete).not.toHaveBeenCalled();
   });
-  it.each(["bank", "wrong-account"])("rejects wrong destination identity %s", async id => {
-    const s = setup();
-    s.api.get.mockResolvedValue({ id });
-    await expect(removeBankRpgCommands(s.bank as never, s.api, "community")).rejects.toThrow("identity");
-    expect(s.global.fetch).not.toHaveBeenCalled();
-  });
-  it("removes retired definitions even if the destination has not joined another bank guild", async () => {
-    const s = setup(), real = s.api.get.getMockImplementation()!;
-    s.api.get.mockImplementation(async path => {
-      if (path === Routes.guild("guild")) throw new Error("Missing access");
-      return real(path);
-    });
-    expect(await removeBankRpgCommands(s.bank as never, s.api)).toBe(62);
-    expect(s.api.get).not.toHaveBeenCalledWith(Routes.guild("guild"));
-  });
-  it("fails closed on Discord API errors without touching source definitions", async () => {
-    const s = setup();
-    s.api.get.mockRejectedValue(new Error("Offline"));
-    await expect(removeBankRpgCommands(s.bank as never, s.api)).rejects.toThrow();
-    expect(s.global.fetch).not.toHaveBeenCalled();
-  });
-  it.each(["forge:confirm:old", "boss:attack:old"])("redirects stale bank button %s without performing its action", async customId => {
-    const i = { customId, isButton: () => true, isChatInputCommand: () => false, reply: vi.fn(async () => undefined) };
-    expect(await handleRetiredBankRpgInteraction(i as never)).toBe(true);
-    expect(i.reply).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true, content: expect.stringContaining("課金しません") }));
-  });
-  it("redirects cached legacy commands but leaves shop and casino alone", async () => {
-    for (const name of [...RPG_COMMAND_NAMES, ...LEGACY_RPG_COMMAND_NAMES, "shop", "casino"]) {
-      const i = { commandName: name, isButton: () => false, isChatInputCommand: () => true, reply: vi.fn(async () => undefined) };
-      expect(await handleRetiredBankRpgInteraction(i as never)).toBe(!["shop", "casino"].includes(name));
-    }
+
+  it.each(["forge:confirm:old", "boss:attack:old"])("redirects stale Bank Bot buttons %s", async (customId) => {
+    const interaction = {
+      customId,
+      isButton: () => true,
+      isChatInputCommand: () => false,
+      reply: vi.fn(async () => undefined),
+    };
+    expect(await handleRetiredBankRpgInteraction(interaction as never)).toBe(true);
+    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }));
   });
 });

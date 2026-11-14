@@ -1,57 +1,89 @@
-import { ApplicationCommandType, Events, REST, Routes, type Client, type Interaction } from "discord.js";
-import { RPG_COMMAND_NAMES, isRetiredBankRpgCommand } from "@workspace/db";
+import { ApplicationCommandType, Events, Routes, type APIApplicationCommand, type Client, type Interaction } from "discord.js";
+import {
+  LEGACY_RPG_COMMAND_NAMES,
+  RPG_COMMAND_NAMES,
+  isRetiredBankRpgCommand,
+} from "@workspace/db";
 import { logger } from "./logger";
-interface DestinationApi { get(path: `/${string}`): Promise<unknown> }
+
+/** Commands intentionally removed from the Bank Bot while keeping PvP and unrelated commands. */
+export const REMOVED_BANK_COMMAND_NAMES = [
+  "guide",
+  "leavelog",
+  "roulette",
+  ...RPG_COMMAND_NAMES.filter((name) => name !== "pvp"),
+  ...LEGACY_RPG_COMMAND_NAMES,
+] as const;
+
+const removedNames = new Set<string>(REMOVED_BANK_COMMAND_NAMES);
+
 export async function handleRetiredBankRpgInteraction(interaction: Interaction) {
   if (!((interaction.isButton() && /^(boss|forge):/.test(interaction.customId)) ||
     (interaction.isChatInputCommand() && isRetiredBankRpgCommand(interaction.commandName)))) return false;
-  await interaction.reply({ content: "武器・鍛冶屋・ボス討伐は多機能Botへ移動しました。多機能Botの同名コマンドを実行してください。データと銀行残高は共通です。この操作では課金しません。", ephemeral: true });
+  await interaction.reply({
+    content: "武器・鍛冶屋・ボス討伐は多機能Botへ移動しました。多機能Botの同名コマンドを実行してください。データと銀行残高は共通です。この操作では課金しません。",
+    ephemeral: true,
+  });
   return true;
 }
-/** Verify the destination before deleting only the explicitly retired source definitions. */
-export async function removeBankRpgCommands(bank: Client, destination: DestinationApi, expectedId?: string) {
+
+/** Remove only the explicitly retired slash commands from the Bank Bot's global and cached guild scopes. */
+export async function removeBankRpgCommands(bank: Client) {
   if (!bank.application) throw new Error("Bank application unavailable");
-  const app = await destination.get(Routes.oauth2CurrentApplication()) as { id: string };
-  if (!app.id || app.id === bank.application.id || (expectedId && app.id !== expectedId))
-    throw new Error("Destination application identity mismatch");
-  const target = await destination.get(Routes.applicationCommands(app.id)) as { name: string; type: number }[];
-  if (!RPG_COMMAND_NAMES.every(name => target.some(c => c.name === name && c.type === ApplicationCommandType.ChatInput)))
-    throw new Error("Community RPG commands are not ready");
-  const guilds = [...bank.guilds.cache.values()];
-  const managers = [bank.application.commands, ...guilds.map(g => g.commands)];
+
+  const applicationId = bank.application.id;
+  const scopes = [
+    { name: "global", route: Routes.applicationCommands(applicationId) },
+    ...[...bank.guilds.cache.values()].map((guild) => ({
+      name: `guild:${guild.id}`,
+      route: Routes.applicationGuildCommands(applicationId, guild.id),
+    })),
+  ];
+
   let removed = 0;
-  for (const manager of managers) {
-    const definitions = await manager.fetch({});
-    for (const command of definitions.values()) {
-      if (command.type !== ApplicationCommandType.ChatInput || !isRetiredBankRpgCommand(command.name)) continue;
-      await manager.delete(command.id); removed++;
+  for (const scope of scopes) {
+    const current = await bank.rest.get(scope.route) as APIApplicationCommand[];
+    for (const command of current) {
+      if (command.type !== ApplicationCommandType.ChatInput || !removedNames.has(command.name)) continue;
+      await bank.rest.delete(`${scope.route}/${command.id}`);
+      removed++;
+    }
+
+    const remaining = await bank.rest.get(scope.route) as APIApplicationCommand[];
+    if (remaining.some((command) =>
+      command.type === ApplicationCommandType.ChatInput && removedNames.has(command.name))) {
+      throw new Error(`Removed Bank Bot commands remain in ${scope.name}`);
     }
   }
   return removed;
 }
-/** The two production processes can become ready in either order. Retry without logging tokens. */
+
+/** Retry until all currently known Bank Bot scopes have only the requested removals applied. */
 export function startBankRpgCleanup(client: Client) {
-  const token = process.env.COMMUNITY_BOT_TOKEN;
-  if (!token) {
-    logger.warn("[rpg-move] 多機能Botの接続設定がないため旧コマンド削除は保留しました。");
-    return;
-  }
-  const destination = new REST({ version: "10" }).setToken(token);
-  let running = false, complete = false, guildRevision = 0;
+  let running = false;
+  let complete = false;
+  let guildRevision = 0;
   const run = async () => {
     if (running || complete) return;
     running = true;
     const revision = guildRevision;
     try {
-      const count = await removeBankRpgCommands(client, destination, process.env.COMMUNITY_CLIENT_ID);
-      logger.info(`[rpg-move] 多機能Botを確認し、銀行Botの旧RPGコマンド${count}件を削除しました。`);
+      const count = await removeBankRpgCommands(client);
+      logger.info(`[bank-commands] Removed ${count} targeted obsolete boss/weapon commands and disabled slash commands.`);
       complete = revision === guildRevision;
-    } catch {
-      logger.warn("[rpg-move] 移行先の登録確認または旧定義の削除に失敗しました。60秒後に再試行します。");
-    } finally { running = false; }
+    } catch (error) {
+      logger.warn("[bank-commands] Targeted command cleanup failed; retrying in 60 seconds.", error);
+    } finally {
+      running = false;
+    }
   };
-  client.on(Events.GuildCreate, () => { guildRevision++; complete = false; void run(); });
+
+  client.on(Events.GuildCreate, () => {
+    guildRevision++;
+    complete = false;
+    void run();
+  });
   void run();
-  const timer = setInterval(() => { void run(); }, 60000);
+  const timer = setInterval(() => void run(), 60_000);
   timer.unref();
 }
