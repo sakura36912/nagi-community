@@ -3,11 +3,19 @@ import { sql } from "drizzle-orm";
 
 export type KpTicketPhase = "cast" | "cast2" | "vip" | "guest" | "extension" | "drink" | "drink2" | "quantity" | "confirm" | "paid" | "cancelled";
 export interface KpTicketQuoteItem {
+  customerId?: string;
   castId: string;
   itemId: number;
   itemName: string;
   unitPrice: number;
   quantity: number;
+}
+export interface KpTicketCustomerPayment {
+  customerId: string;
+  drinkPrice: number;
+  vipPrice: number;
+  extensionPrice: number;
+  total: number;
 }
 export interface KpTicketQuote {
   itemId: number | null;
@@ -15,6 +23,7 @@ export interface KpTicketQuote {
   unitPrice: number;
   quantity: number;
   items?: KpTicketQuoteItem[];
+  customerPayments?: KpTicketCustomerPayment[];
   vipPrice: number;
   extensionPrice: number;
   total: number;
@@ -22,14 +31,19 @@ export interface KpTicketQuote {
 export interface KpTicketSelection {
   castId?: string;
   castIds?: string[];
-  /** Each first drink is linked to the cast who receives it. */
-  drinkSelections?: { castId: string; itemId: number; quantity: number }[];
+  /** First drinks belong to a customer/cast pair. */
+  drinkSelections?: { customerId?: string; castId: string; itemId: number; quantity: number }[];
+  /** The order owner is first; an optional second customer pays their own share. */
+  customerIds?: string[];
+  /** Each customer must confirm before a two-customer order is charged. */
+  paymentApprovals?: string[];
+  paymentMessageId?: string;
   /** Additional orders keep the cast of the buyer's paid order in this ticket. */
   fixedCastId?: string;
   serviceVersion?: 2;
   vipTier?: "shared" | "solo";
   vipDiscountApplied?: boolean;
-  /** Historical receipts only; new purchases do not select or authorize a companion. */
+  /** Historical records only; current shared VIP uses customerIds. */
   guestId?: string;
   baseOrderId?: string;
   vipActive?: boolean;

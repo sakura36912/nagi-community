@@ -67,7 +67,7 @@ export async function isKpTicketPanel(messageId: string, guildId: string, channe
 
 export async function createKpTicketSession(id: string, guildId: string, channelId: string, userId: string) {
   const [session] = await db.insert(kpTicketSessionsTable).values({
-    id, guildId, channelId, userId, selection: { serviceVersion: 2 },
+    id, guildId, channelId, userId, selection: { serviceVersion: 2, customerIds: [userId] },
     expiresAt: new Date(Date.now() + 20 * 60_000),
   }).returning();
   return session!;
@@ -88,7 +88,7 @@ export async function createAdditionalKpTicketSession(id: string, guildId: strin
   const [session] = await db.insert(kpTicketSessionsTable).values({
     id, guildId, channelId, userId, phase: vipActive ? "drink" : "vip",
     selection: { castId, fixedCastId: castId, vip: false, extension: false,
-      serviceVersion: 2, baseOrderId: previous.id, vipActive },
+      serviceVersion: 2, baseOrderId: previous.id, vipActive, customerIds: [userId] },
     expiresAt: new Date(Date.now() + 20 * 60_000),
   }).returning();
   return session!;
@@ -149,6 +149,9 @@ export async function settleKpTicket(
     if (session.expiresAt.getTime() <= Date.now() || session.phase !== "confirm" || session.version !== version) {
       throw new KpTicketError("注文が期限切れか、既に変更されています。最新の画面から操作してください。");
     }
+    if ((session.selection.customerIds?.length ?? 1) !== 1) {
+      throw new KpTicketError("2人利用は、それぞれのお客様が自分の支払いボタンから確定してください。");
+    }
     const [settings] = await tx.select().from(kpTicketSettingsTable)
       .where(eq(kpTicketSettingsTable.guildId, guildId)).for("share");
     const drinkIds = session.selection.drinkSelections?.map(line => line.itemId)
@@ -178,23 +181,28 @@ export async function settleKpTicket(
         eq(kpTicketSessionsTable.guildId, guildId), eq(kpTicketSessionsTable.channelId, channelId),
         eq(kpTicketSessionsTable.phase, "paid"),
       ));
-      if (paid.some(order => order.selection.vip && order.userId === userId)) {
+      if (paid.some(order => order.selection.vip
+        && (order.selection.customerIds ?? [order.userId]).includes(userId))) {
         throw new KpTicketError("VIP利用者はVIPの重複購入・延長を行えません。");
       }
     }
     const quote = quoteKpTicket(session.selection.drinkSelections ? orderedItems
-      : orderedItems[0] ?? null, settings, session.selection);
+      : orderedItems[0] ?? null, settings, session.selection, userId);
     if (!isDeepStrictEqual(quote, session.selection.quote)) {
       const [changed] = await tx.update(kpTicketSessionsTable).set({
         selection: { ...session.selection, quote }, version: session.version + 1,
       }).where(eq(kpTicketSessionsTable.id, id)).returning();
       return { status: "changed", session: changed! };
     }
+    const customerPayment = quote.customerPayments?.find(payment => payment.customerId === userId);
+    if (!customerPayment || customerPayment.total !== quote.total) {
+      throw new KpTicketError("支払い対象者と金額を確認できません。引き落としは行っていません。");
+    }
     await tx.insert(walletsTable).values({ guildId, userId, balance: 0 }).onConflictDoNothing();
     const [wallet] = await tx.update(walletsTable).set({
-      balance: sql`${walletsTable.balance} - ${quote.total}`,
+      balance: sql`${walletsTable.balance} - ${customerPayment.total}`,
     }).where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId),
-      sql`${walletsTable.balance} >= ${quote.total}`)).returning();
+      sql`${walletsTable.balance} >= ${customerPayment.total}`)).returning();
     if (!wallet) throw new KpTicketError("残高が不足しています。引き落としは行っていません。");
     for (const line of quote.items ?? []) {
       await tx.insert(inventoryItemsTable).values({ guildId, userId, shopItemId: line.itemId, quantity: line.quantity })
@@ -204,7 +212,7 @@ export async function settleKpTicket(
     const castIds = s.castIds ?? [s.castId!];
     const drinkReason = (quote.items ?? []).map(line => `${line.itemName} x${line.quantity}→${line.castId}`).join("; ") || "ドリンクなし";
     await tx.insert(transactionsTable).values({
-      guildId, userId, amount: -quote.total, relatedUserId: castIds[0],
+      guildId, userId, amount: -customerPayment.total, relatedUserId: castIds[0],
       sessionKey: `kp-ticket:${id}`,
       reason: `kp-ticket:${drinkReason}; casts=${castIds.join(",")}; VIP=${session.selection.vip}; 延長=${session.selection.extension}; ticket=${channelId}`,
     });
@@ -217,6 +225,119 @@ export async function settleKpTicket(
   });
 }
 
+/**
+ * Records an individual customer's approval and charges both customers atomically
+ * after both have confirmed. A changed quote clears approvals before any debit.
+ */
+export async function confirmKpTicketCustomerPayment(
+  id: string, customerId: string, messageId: string, guildId: string, channelId: string,
+  validatedRoleIds: string[], currentDiscountApplied: boolean,
+): Promise<{ status: "waiting" | "paid" | "already" | "changed"; session: KpTicketSession }> {
+  return db.transaction(async tx => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`kp-ticket:${guildId}:${channelId}`}))`);
+    const [session] = await tx.select().from(kpTicketSessionsTable)
+      .where(eq(kpTicketSessionsTable.id, id)).for("update");
+    if (!session || session.guildId !== guildId || session.channelId !== channelId) {
+      throw new KpTicketError("この注文は操作できません。");
+    }
+    if (session.phase === "paid") return { status: "already", session };
+    if (session.expiresAt.getTime() <= Date.now() || session.phase !== "confirm") {
+      throw new KpTicketError("注文が期限切れか、既に変更されています。最新の画面から操作してください。");
+    }
+    const s = session.selection;
+    const customerIds = s.customerIds ?? [session.userId];
+    if (customerIds.length !== 2 || !customerIds.includes(customerId)
+      || s.paymentMessageId !== messageId) {
+      throw new KpTicketError("この支払い確認は対象のお客様専用です。");
+    }
+    const [settings] = await tx.select().from(kpTicketSettingsTable)
+      .where(eq(kpTicketSettingsTable.guildId, guildId)).for("share");
+    const drinkIds = s.drinkSelections?.map(line => line.itemId)
+      ?? (s.itemId === undefined ? [] : [s.itemId]);
+    const foundItems = drinkIds.length ? await tx.select().from(shopItemsTable).where(and(
+      eq(shopItemsTable.guildId, guildId), inArray(shopItemsTable.id, [...new Set(drinkIds)]),
+    )).for("share") : [];
+    const itemsById = new Map(foundItems.map(item => [item.id, item]));
+    const orderedItems = drinkIds.map(itemId => itemsById.get(itemId))
+      .filter((item): item is NonNullable<typeof item> => !!item);
+    if (!settings || orderedItems.length !== drinkIds.length) {
+      throw new KpTicketError("商品または設定が削除されています。決済は行っていません。");
+    }
+    if (JSON.stringify([...settings.castRoleIds].sort()) !== JSON.stringify([...validatedRoleIds].sort())) {
+      throw new KpTicketError("キャスト対象ロールが変更されました。決済は行っていません。");
+    }
+    const quoteSelection: KpTicketSelection = {
+      ...s,
+      vipDiscountApplied: s.vip ? currentDiscountApplied : undefined,
+    };
+    const quote = quoteKpTicket(s.drinkSelections ? orderedItems : orderedItems[0] ?? null, settings,
+      quoteSelection, session.userId);
+    if (!isDeepStrictEqual(quote, s.quote)
+      || Boolean(s.vipDiscountApplied) !== Boolean(quoteSelection.vipDiscountApplied)) {
+      const selection = { ...quoteSelection, quote, paymentApprovals: [] };
+      const [changed] = await tx.update(kpTicketSessionsTable)
+        .set({ selection, version: session.version + 1 })
+        .where(eq(kpTicketSessionsTable.id, id)).returning();
+      return { status: "changed", session: changed! };
+    }
+    if (!quote.customerPayments || quote.customerPayments.length !== 2
+      || quote.customerPayments.reduce((sum, payment) => sum + payment.total, 0) !== quote.total) {
+      throw new KpTicketError("お客様ごとの支払額が不正です。管理者に確認してください。");
+    }
+    const existingApprovals = s.paymentApprovals ?? [];
+    if (existingApprovals.includes(customerId)) return { status: "waiting", session };
+    const approvals = [...existingApprovals, customerId];
+    if (customerIds.some(id => !approvals.includes(id))) {
+      const selection = { ...s, paymentApprovals: approvals };
+      const [waiting] = await tx.update(kpTicketSessionsTable)
+        .set({ selection, version: session.version + 1 })
+        .where(eq(kpTicketSessionsTable.id, id)).returning();
+      return { status: "waiting", session: waiting! };
+    }
+
+    if (s.vip) {
+      const paid = await tx.select().from(kpTicketSessionsTable).where(and(
+        eq(kpTicketSessionsTable.guildId, guildId), eq(kpTicketSessionsTable.channelId, channelId),
+        eq(kpTicketSessionsTable.phase, "paid"),
+      ));
+      if (paid.some(order => order.selection.vip
+        && (order.selection.customerIds ?? [order.userId]).some(id => customerIds.includes(id)))) {
+        throw new KpTicketError("お客様のいずれかは既に支払い済みVIPを利用しています。決済は行っていません。");
+      }
+    }
+
+    for (const payment of quote.customerPayments) {
+      await tx.insert(walletsTable).values({ guildId, userId: payment.customerId, balance: 0 }).onConflictDoNothing();
+      const [wallet] = await tx.update(walletsTable).set({
+        balance: sql`${walletsTable.balance} - ${payment.total}`,
+      }).where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, payment.customerId),
+        sql`${walletsTable.balance} >= ${payment.total}`)).returning();
+      if (!wallet) throw new KpTicketError(`お客様 <@${payment.customerId}> の残高が不足しています。両者とも引き落としは行っていません。`);
+    }
+    for (const line of quote.items ?? []) {
+      await tx.insert(inventoryItemsTable).values({
+        guildId, userId: line.customerId ?? session.userId, shopItemId: line.itemId, quantity: line.quantity,
+      }).onConflictDoUpdate({ target: [inventoryItemsTable.guildId, inventoryItemsTable.userId, inventoryItemsTable.shopItemId],
+        set: { quantity: sql`${inventoryItemsTable.quantity} + ${line.quantity}` } });
+    }
+    const castIds = s.castIds ?? [s.castId!];
+    for (const payment of quote.customerPayments) {
+      const drinkReason = (quote.items ?? []).filter(line => line.customerId === payment.customerId)
+        .map(line => `${line.itemName} x${line.quantity}→${line.castId}`).join("; ") || "ドリンクなし";
+      await tx.insert(transactionsTable).values({
+        guildId, userId: payment.customerId, amount: -payment.total, relatedUserId: castIds[0],
+        sessionKey: `kp-ticket:${id}:${payment.customerId}`,
+        reason: `kp-ticket:${drinkReason}; VIP=${payment.vipPrice}; casts=${castIds.join(",")}; ticket=${channelId}`,
+      });
+    }
+    const selection = { ...s, paymentApprovals: customerIds, quote };
+    const [paid] = await tx.update(kpTicketSessionsTable)
+      .set({ phase: "paid", paidAt: new Date(), selection })
+      .where(eq(kpTicketSessionsTable.id, id)).returning();
+    return { status: "paid", session: paid! };
+  });
+}
+
 /** Paid VIP entitlement only. A ticket must still exist; the Discord caller checks that live. */
 export async function listKpVipOrders(guildId: string, memberId?: string, roomId?: string) {
   return db.select().from(kpTicketSessionsTable).where(and(
@@ -224,6 +345,7 @@ export async function listKpVipOrders(guildId: string, memberId?: string, roomId
     sql`${kpTicketSessionsTable.selection}->>'serviceVersion' = '2'`,
     sql`${kpTicketSessionsTable.selection}->>'vip' = 'true'`,
     memberId ? or(eq(kpTicketSessionsTable.userId, memberId),
+      sql`${kpTicketSessionsTable.selection}->'customerIds' ? ${memberId}`,
       sql`${kpTicketSessionsTable.selection}->>'castId' = ${memberId}`,
       sql`${kpTicketSessionsTable.selection}->'castIds' ? ${memberId}`) : undefined,
     roomId ? sql`${kpTicketSessionsTable.selection}->>'vipRoomId' = ${roomId}` : undefined,

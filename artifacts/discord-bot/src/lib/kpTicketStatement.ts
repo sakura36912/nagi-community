@@ -17,13 +17,16 @@ export function kpTicketStatement(orders: KpTicketSession[], currency: string, a
     extension += BigInt(q.extensionPrice);
     const price = `${q.total.toLocaleString()}${currency}`;
     const itemLabel = q.items?.length
-      ? q.items.map(item => `${item.itemName} × ${item.quantity}個（キャストID: ${item.castId}）`).join(" / ")
+      ? q.items.map(item => `${item.itemName} × ${item.quantity}個（お客様ID: ${item.customerId ?? order.userId} / キャストID: ${item.castId}）`).join(" / ")
       : q.itemId === null ? q.itemName : `${q.itemName} × ${q.quantity}個`;
     const castIds = order.selection.castIds ?? (order.selection.castId ? [order.selection.castId] : []);
     lines.push(
       `${index + 1}. ${itemLabel}`,
       ...(allTickets ? [`チケットID: ${order.channelId}`] : []),
       `購入者ID: ${order.userId} / 指名キャストID: ${castIds.join(", ") || "未記録"}`,
+      ...(q.customerPayments?.length ? ["お客様ごとの支払額:",
+        ...q.customerPayments.map(payment => `  ${payment.customerId}: ${payment.total.toLocaleString()}${currency}`
+          + `（VIP ${payment.vipPrice.toLocaleString()}${currency} / ドリンク ${payment.drinkPrice.toLocaleString()}${currency}）`)] : []),
       ...(q.items?.length ? q.items.map(item =>
         `${item.itemName}（キャストID: ${item.castId}）: ${item.unitPrice.toLocaleString()}${currency} × ${item.quantity}`
       ) : [`単価: ${q.unitPrice.toLocaleString()}${currency}`]),

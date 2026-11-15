@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ButtonInteraction, ChatInputCommandInteraction, StringSelectMenuInteraction, ModalSubmitInteraction } from "discord.js";
+import type { ButtonInteraction, ChatInputCommandInteraction, StringSelectMenuInteraction, ModalSubmitInteraction, UserSelectMenuInteraction } from "discord.js";
 import type { KpTicketSession } from "@workspace/db";
 
 const m = vi.hoisted(() => ({
   settings: vi.fn(), configure: vi.fn(), getSession: vi.fn(), create: vi.fn(), advance: vi.fn(),
-  panel: vi.fn(), register: vi.fn(), settle: vi.fn(), deliver: vi.fn(), paidOrders: vi.fn(), createAdditional: vi.fn(),
+  panel: vi.fn(), register: vi.fn(), settle: vi.fn(), confirmCustomer: vi.fn(), deliver: vi.fn(), paidOrders: vi.fn(), createAdditional: vi.fn(),
   transfers: vi.fn(),
   guildSettings: vi.fn(), getItem: vi.fn(), listItems: vi.fn(), error: vi.fn(),
   vipSource: vi.fn(),
@@ -14,6 +14,7 @@ vi.mock("@workspace/db", async importOriginal => ({
   getKpTicketSettings: m.settings, configureKpTicket: m.configure,
   getKpTicketSession: m.getSession, createKpTicketSession: m.create, advanceKpTicketSession: m.advance,
   isKpTicketPanel: m.panel, registerKpTicketPanel: m.register, settleKpTicket: m.settle, deliverKpTicketLog: m.deliver,
+  confirmKpTicketCustomerPayment: m.confirmCustomer,
   listPaidKpTicketOrders: m.paidOrders, listTransfersToRecipient: m.transfers,
   createAdditionalKpTicketSession: m.createAdditional,
 }));
@@ -36,7 +37,7 @@ function member(id: string, roleIds: string[], bot = false) {
 }
 function fixture() {
   const eligible = [member("black-cast", ["black"]), member("white-cast", ["white"]),
-    member("both-cast", ["black", "white"]), member("outsider", []), member("robot", ["black"], true)];
+    member("both-cast", ["black", "white"]), member("outsider", []), member("guest", []), member("robot", ["black"], true)];
   const buyer = member("buyer", []);
   const members = new Map([...eligible, buyer].map(m => [m.id, m]));
   const roles = new Map([
@@ -59,7 +60,7 @@ function fixture() {
       members: { add: vi.fn().mockResolvedValue(undefined) },
       permissionOverwrites: { edit: vi.fn().mockResolvedValue(undefined) },
       send: vi.fn().mockResolvedValue({ id: "receipt" }) },
-    isButton: () => true, isStringSelectMenu: () => false,
+    isButton: () => true, isStringSelectMenu: () => false, isUserSelectMenu: () => false,
     reply: vi.fn().mockResolvedValue(undefined),
     deferReply: vi.fn().mockResolvedValue(undefined), deferUpdate: vi.fn().mockResolvedValue(undefined),
     editReply: vi.fn().mockResolvedValue(undefined), followUp: vi.fn().mockResolvedValue(undefined),
@@ -71,6 +72,12 @@ async function select(i: ReturnType<typeof fixture>, value: string) {
   i.values = [value];
   i.isButton = () => false; i.isStringSelectMenu = () => true;
   await handleKpTicketInteraction(i as unknown as StringSelectMenuInteraction);
+}
+async function selectGuest(i: ReturnType<typeof fixture>, value: string) {
+  i.customId = ticketId("guest", session);
+  i.values = [value];
+  i.isButton = () => false; i.isStringSelectMenu = () => false; i.isUserSelectMenu = () => true;
+  await handleKpTicketInteraction(i as unknown as UserSelectMenuInteraction);
 }
 async function skipSecondCast(i: ReturnType<typeof fixture>) {
   i.customId = ticketId("cast2-skip", session);
@@ -110,6 +117,11 @@ beforeEach(() => {
     session = { ...session, phase: "paid", paidAt: new Date() };
     return { status: "paid", session };
   });
+  m.confirmCustomer.mockImplementation(async (_id, customerId) => {
+    if (customerId === "guest") return { status: "waiting", session };
+    session = { ...session, phase: "paid", paidAt: new Date() };
+    return { status: "paid", session };
+  });
   m.deliver.mockImplementation(async (_id, send) => send(session));
   m.vipSource.mockResolvedValue(undefined);
 });
@@ -123,9 +135,9 @@ describe("KP ticket component flow", () => {
     const i = fixture(); await choose(i, "black-cast");
     expect(session.phase).toBe("vip");
     const menu = JSON.stringify(i.editReply.mock.calls.at(-1)![0].components);
-    expect(menu).toContain("お客様2人・キャスト1人 — 200,000＄");
+    expect(menu).toContain("お客様2人・キャスト1人 — 計400,000＄");
     expect(menu).toContain("お客様1人・キャスト1人 — 200,000＄");
-    expect(menu).toContain("KP島ブラック会員のお客様はVIP料金が半額の100,000＄");
+    expect(menu).toContain("注文者がKP島ブラック会員なら合計100,000＄");
     await choose(i, "solo");
     expect(session.phase).toBe("drink");
     await extrasOnly(i);
@@ -137,34 +149,66 @@ describe("KP ticket component flow", () => {
     expect(m.settle).toHaveBeenCalledOnce();
     expect(i.editReply.mock.calls.at(-1)![0].content).toContain("1570354388462215248");
   });
-  it("charges the standard 200,000 for shared VIP without selecting or adding a companion", async () => {
+  it("selects a second customer and requests a separate full payment from both", async () => {
     const i = fixture(); await choose(i, "black-cast"); await choose(i, "shared");
-    expect(session.phase).toBe("drink");
-    expect(session.selection.guestId).toBeUndefined();
-    await extrasOnly(i);
-    expect(session.selection.quote).toMatchObject({ total: 200000, vipPrice: 200000 });
-    i.customId = ticketId("confirm", session); await run(i);
-    expect(i.channel.members.add.mock.calls.every(call => call[0] === "black-cast")).toBe(true);
-    expect(m.settle).toHaveBeenCalledOnce();
-    expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(session.phase).toBe("guest");
+    await selectGuest(i, "guest");
+    expect(session.selection.customerIds).toEqual(["buyer", "guest"]);
+    await select(i, "1");
+    await select(i, "2");
+    expect(session.phase).toBe("confirm");
+    expect(session.selection.quote).toMatchObject({
+      total: 400350,
+      customerPayments: [
+        { customerId: "buyer", vipPrice: 200000, drinkPrice: 100, total: 200100 },
+        { customerId: "guest", vipPrice: 200000, drinkPrice: 250, total: 200250 },
+      ],
+    });
+    i.customId = ticketId("request-payments", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
+    await run(i);
+    expect(session.selection.paymentMessageId).toBe("receipt");
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(i.channel.members.add).toHaveBeenCalledWith("guest");
+    expect(i.channel.send).toHaveBeenCalledWith(expect.objectContaining({
+      allowedMentions: { users: ["buyer", "guest"] },
+      components: expect.any(Array),
+    }));
   });
-  it("charges 100,000 for a black member and requires reconfirmation if their role is removed", async () => {
+  it("requires each selected customer to confirm their own payment", async () => {
+    const i = fixture();
+    await choose(i, "black-cast"); await choose(i, "shared"); await selectGuest(i, "guest");
+    await select(i, "1"); await select(i, "2");
+    i.customId = ticketId("request-payments", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
+    await run(i);
+    const requestId = session.selection.paymentMessageId!;
+    i.customId = `${KP_TICKET_PREFIX}pay:${session.id}:guest`;
+    i.user = { id: "guest" }; i.message = { id: requestId };
+    await run(i);
+    expect(m.confirmCustomer).toHaveBeenCalledWith(session.id, "guest", requestId, "guild", "ticket", ["black", "white"], false);
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(i.editReply.mock.calls.at(-1)![0].content).toContain("もう一人の確認");
+  });
+  it("applies the initiator's black-member discount to both individual VIP payments", async () => {
     const i = fixture();
     i.members.set("buyer", member("buyer", ["black-member"]));
     await choose(i, "black-cast"); await choose(i, "shared");
+    await selectGuest(i, "guest");
     expect(session.selection.vipDiscountApplied).toBe(true);
     await extrasOnly(i);
-    expect(session.selection.quote).toMatchObject({ total: 100000, vipPrice: 100000 });
+    expect(session.selection.quote).toMatchObject({
+      total: 200000,
+      customerPayments: [
+        { customerId: "buyer", vipPrice: 100000, total: 100000 },
+        { customerId: "guest", vipPrice: 100000, total: 100000 },
+      ],
+    });
 
     i.members.set("buyer", member("buyer", []));
-    i.customId = ticketId("confirm", session); await run(i);
+    i.customId = ticketId("request-payments", session); i.isButton = () => true; i.isStringSelectMenu = () => false; await run(i);
     expect(m.settle).not.toHaveBeenCalled();
     expect(session.selection.vipDiscountApplied).toBe(false);
-    expect(session.selection.quote).toMatchObject({ total: 200000, vipPrice: 200000 });
-    expect(i.editReply.mock.calls.at(-1)![0].content).toContain("もう一度確定してください");
-
-    i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false; await run(i);
-    expect(m.settle).toHaveBeenCalledOnce();
+    expect(session.selection.quote).toMatchObject({ total: 400000, vipPrice: 400000 });
+    expect(i.editReply.mock.calls.at(-1)![0].content).toContain("料金または商品が変わった");
   });
   it("lets two nominated casts receive separately chosen first drinks in VIP", async () => {
     const i = fixture();
@@ -196,14 +240,14 @@ describe("KP ticket component flow", () => {
     expect(fields.find((field: { name: string }) => field.name === "ドリンク")?.value)
       .toContain("<@white-cast>：お茶 × 1個");
   });
-  it("rejects an old companion menu without granting access or charging", async () => {
+  it("rejects a string select menu for the second customer without granting access", async () => {
     const i = fixture();
     session.phase = "guest";
     session.selection = { castId: "black-cast", serviceVersion: 2, vip: true, vipTier: "shared", extension: false };
     await choose(i, "outsider");
     expect(i.channel.members.add).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
-    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("同伴者の選択はなくなりました") }));
+    expect(i.followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("ユーザー選択欄") }));
   });
   it("offers 50,000 extension only through additional normal orders, without forcing a drink", async () => {
     const i = fixture(); i.customId = `${KP_TICKET_PREFIX}additional`; await run(i);

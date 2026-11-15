@@ -2,11 +2,12 @@ import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, PermissionFlagsBits,
   ModalBuilder, TextInputBuilder, TextInputStyle,
   SlashCommandSubcommandBuilder, type ButtonInteraction, type ChatInputCommandInteraction,
-  type Guild, type StringSelectMenuInteraction, type ModalSubmitInteraction,
+  type Guild, type StringSelectMenuInteraction, type ModalSubmitInteraction, type UserSelectMenuInteraction,
 } from "discord.js";
+import { isDeepStrictEqual } from "node:util";
 import {
   advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, deliverKpTicketLog,
-  getKpTicketSession, getKpTicketSettings, isKpDrink, isKpTicketPanel, KpTicketError,
+  confirmKpTicketCustomerPayment, getKpTicketSession, getKpTicketSettings, isKpDrink, isKpTicketPanel, KpTicketError,
   quoteKpTicket, registerKpTicketPanel, settleKpTicket, listPaidKpTicketOrders, listTransfersToRecipient,
   KP_VIP_PRICES, KP_VIP_BLACK_MEMBER_PRICE, KP_EXTENSION_PRICE, KP_VIP_HUB_ID,
   type KpTicketSession, type KpTicketSettings,
@@ -14,13 +15,13 @@ import {
 import { getGuildSettings, getShopItem, listShopItems } from "../lib/economy";
 import { fetchForumCastMembers, isEligibleForumCast } from "../lib/forumCastPicker";
 import { KP_SHOP_CATEGORY, KP_SHOP_NAME } from "../lib/kpShop";
-import { confirmTicketRows, KP_TICKET_PREFIX, pagedTicketMenu, ticketControls,
-  ticketId, ticketMenu, ticketSummary } from "../lib/kpTicketUi";
+import { confirmTicketRows, customerPaymentRows, KP_TICKET_PREFIX, pagedTicketMenu, ticketControls,
+  ticketCustomerMenu, ticketId, ticketMenu, ticketSummary } from "../lib/kpTicketUi";
 import { logger } from "../lib/logger";
 import { kpTicketStatement } from "../lib/kpTicketStatement";
 import { kpCastSales } from "../lib/kpCastSales";
 import { kpCustomers } from "../lib/kpCustomers";
-import { grantKpTicketCastAccess } from "../lib/kpTicketAccess";
+import { grantKpTicketCastAccess, grantKpTicketCustomerAccess } from "../lib/kpTicketAccess";
 import { kpBusinessDay, latestKpBusinessDate, type KpBusinessDay } from "../lib/kpBusinessDay";
 import { validateKpVipSource } from "../lib/kpVipVc";
 import { kpTransferHistory } from "../lib/kpTransferHistory";
@@ -43,7 +44,7 @@ export const kpAllTicketSalesSubcommand = new SlashCommandSubcommandBuilder()
 export const kpNagiTransfersSubcommand = new SlashCommandSubcommandBuilder()
   .setName("nagi-transfers").setDescription("凪への送金履歴を確認（夜鴉・黒兵・管理者）");
 
-function canPost(interaction: ButtonInteraction | ChatInputCommandInteraction | StringSelectMenuInteraction) {
+function canPost(interaction: ButtonInteraction | ChatInputCommandInteraction | StringSelectMenuInteraction | UserSelectMenuInteraction) {
   const channel = interaction.channel, me = interaction.guild?.members.me;
   return !!channel && !!me && "send" in channel && "permissionsFor" in channel && !!channel.permissionsFor(me)?.has([
     PermissionFlagsBits.ViewChannel, PermissionFlagsBits.EmbedLinks,
@@ -65,7 +66,7 @@ async function resolveCastRoles(interaction: ChatInputCommandInteraction) {
   });
 }
 
-async function requireKpStaff(interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction | ModalSubmitInteraction) {
+async function requireKpStaff(interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction | UserSelectMenuInteraction | ModalSubmitInteraction) {
   const member = await interaction.guild!.members.fetch({ user: interaction.user.id, force: true })
     .catch(() => { throw new KpTicketError("操作権限を確認できませんでした。時間をおいて再実行してください。"); });
   if (member.permissions.has(PermissionFlagsBits.Administrator)) return;
@@ -124,8 +125,8 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
     if (subcommand === "ticket-prices") {
       const vip = interaction.options.getInteger("vip"), extension = interaction.options.getInteger("extension");
       const unset = interaction.options.getString("unset");
-      if (vip !== null || extension !== null || unset) throw new KpTicketError("料金は固定です。VIPはお客様2人・キャスト1人、お客様1人・キャスト1人とも20万＄です。KP島ブラック会員のお客様は半額の10万＄です。通常利用の延長は5万です。");
-      await interaction.editReply(`VIP（お客様2人・キャスト1人）: ${KP_VIP_PRICES.shared.toLocaleString()}＄\nVIP（お客様1人・キャスト1人）: ${KP_VIP_PRICES.solo.toLocaleString()}＄\nKP島ブラック会員のお客様: VIP料金半額 ${KP_VIP_BLACK_MEMBER_PRICE.toLocaleString()}＄\n延長1回: ${KP_EXTENSION_PRICE.toLocaleString()}${currencyName}（通常利用の追加注文のみ。VIP延長不可）`);
+      if (vip !== null || extension !== null || unset) throw new KpTicketError("料金は固定です。VIPは1人あたり20万＄、お客様2人なら計40万＄です。注文者がKP島ブラック会員なら各人10万＄になります。通常利用の延長は5万です。");
+      await interaction.editReply(`VIP（お客様1人）: ${KP_VIP_PRICES.solo.toLocaleString()}＄\nVIP（お客様2人）: 計${KP_VIP_PRICES.shared.toLocaleString()}＄（1人${(KP_VIP_PRICES.shared / 2).toLocaleString()}＄）\n注文者がKP島ブラック会員の場合: 各お客様半額（1人${KP_VIP_BLACK_MEMBER_PRICE.toLocaleString()}＄）\nキャスト2人指名時: VIP料金は各キャストへ均等配分\n延長1回: ${KP_EXTENSION_PRICE.toLocaleString()}${currencyName}（通常利用の追加注文のみ。VIP延長不可）`);
       return;
     }
     if (!interaction.channel || !(interaction.channel.type === ChannelType.GuildText || interaction.channel.isThread()) || !canPost(interaction)) {
@@ -158,7 +159,7 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
   }
 }
 
-type TicketInteraction = ButtonInteraction | StringSelectMenuInteraction;
+type TicketInteraction = ButtonInteraction | StringSelectMenuInteraction | UserSelectMenuInteraction;
 
 async function showKpSales(
   interaction: TicketInteraction | ModalSubmitInteraction | ChatInputCommandInteraction,
@@ -232,13 +233,26 @@ function selectedCastIds(selection: KpTicketSession["selection"]) {
   return selection.castIds ?? (selection.castId ? [selection.castId] : []);
 }
 
-async function quoteCurrentSelection(guildId: string, settings: KpTicketSettings, selection: KpTicketSession["selection"]) {
+function selectedCustomerIds(session: KpTicketSession) {
+  return session.selection.customerIds ?? [session.userId];
+}
+
+function nextDrinkPair(session: KpTicketSession) {
+  const customers = selectedCustomerIds(session);
+  const casts = selectedCastIds(session.selection);
+  const index = session.selection.drinkSelections?.length ?? 0;
+  return customers.flatMap(customerId => casts.map(castId => ({ customerId, castId })))[index];
+}
+
+async function quoteCurrentSelection(
+  guildId: string, settings: KpTicketSettings, selection: KpTicketSession["selection"], orderUserId?: string,
+) {
   const itemIds = selection.drinkSelections?.map(line => line.itemId)
     ?? (selection.itemId === undefined ? [] : [selection.itemId]);
   const items = await Promise.all(itemIds.map(id => getShopItem(guildId, id)));
   if (items.some(item => !item)) throw new KpTicketError("商品が削除されました。最初から選び直してください。");
   return quoteKpTicket(selection.drinkSelections ? items as NonNullable<typeof items[number]>[]
-    : items[0] ?? null, settings, selection);
+    : items[0] ?? null, settings, selection, orderUserId ?? selection.customerIds?.[0]);
 }
 
 export async function renderKpTicket(interaction: TicketInteraction, session: KpTicketSession, page = 0, notice = "") {
@@ -247,7 +261,7 @@ export async function renderKpTicket(interaction: TicketInteraction, session: Kp
   const content = `${notice ? `${notice}\n` : ""}`
     + (session.selection.castId ? `指名キャスト: ${selectedCastIds(session.selection).map(id => `<@${id}>`).join("、")}`
       + (session.selection.fixedCastId ? "（変更不可）" : "") + "\n" : "")
-    + `注文の操作は本人のみ可能です。有効期限: <t:${Math.floor(session.expiresAt.getTime() / 1000)}:R>`;
+    + `注文内容の変更は注文者のみ可能です。2人利用の支払いは各お客様本人が確定します。有効期限: <t:${Math.floor(session.expiresAt.getTime() / 1000)}:R>`;
   switch (session.phase) {
     case "cast": {
       const members = await fetchForumCastMembers(interaction.guild!, settings.castRoleIds);
@@ -273,17 +287,25 @@ export async function renderKpTicket(interaction: TicketInteraction, session: Kp
     }
     case "vip": {
       const castCount = selectedCastIds(session.selection).length;
+      const sharedTotal = KP_VIP_PRICES.shared;
+      const sharedPerCustomer = sharedTotal / 2;
+      const perCastShared = sharedPerCustomer / castCount;
+      const soloTotal = KP_VIP_PRICES.solo;
+      const perCastSolo = soloTotal / castCount;
       await interaction.editReply({ content, embeds: [], components: [
         ticketMenu(session, "vip", "VIPの利用方法を選択（VIPは延長不可）", [
           { label: "通常利用（VIPなし）", value: "none" },
-          { label: `VIP：お客様2人・キャスト${castCount}人 — 200,000＄`, value: "shared", description: "KP島ブラック会員のお客様はVIP料金が半額の100,000＄になります。" },
-          { label: `VIP：お客様1人・キャスト${castCount}人 — 200,000＄`, value: "solo", description: "KP島ブラック会員のお客様はVIP料金が半額の100,000＄になります。" },
+          { label: `VIP：お客様2人・キャスト${castCount}人 — 計${sharedTotal.toLocaleString()}＄`, value: "shared",
+            description: `1人${sharedPerCustomer.toLocaleString()}＄（キャスト${castCount}人なら各${perCastShared.toLocaleString()}＄）。注文者がKP島ブラック会員なら1人${KP_VIP_BLACK_MEMBER_PRICE.toLocaleString()}＄${castCount === 2 ? "（各キャスト50,000＄）" : ""}。` },
+          { label: `VIP：お客様1人・キャスト${castCount}人 — ${soloTotal.toLocaleString()}＄`, value: "solo",
+            description: `キャスト${castCount}人なら各${perCastSolo.toLocaleString()}＄。注文者がKP島ブラック会員なら合計${KP_VIP_BLACK_MEMBER_PRICE.toLocaleString()}＄${castCount === 2 ? "（各キャスト50,000＄）" : ""}。` },
         ]), ticketControls(session),
       ] });
       break;
     }
     case "guest":
-      throw new KpTicketError("同伴者の選択はなくなりました。「最初から選び直す」で注文を再開してください。引き落としはしていません。");
+      await interaction.editReply({ content, embeds: [], components: [ticketCustomerMenu(session), ticketControls(session)] });
+      break;
     case "extension":
       await interaction.editReply({ content, embeds: [], components: [
         ticketMenu(session, "extension", "通常利用の延長を追加しますか？", [
@@ -295,13 +317,19 @@ export async function renderKpTicket(interaction: TicketInteraction, session: Kp
       const items = (await listShopItems(session.guildId, KP_SHOP_CATEGORY)).filter(isKpDrink);
       if (!items.length && !session.selection.vip && !session.selection.extension) throw new KpTicketError("KPshopの通常ドリンク商品が未登録です。管理者が /shop add で登録してください。");
       const castIds = selectedCastIds(session.selection);
-      const placeholder = castIds.length === 2 ? "1人目のキャスト用1stドリンク" : "1stドリンクを選択";
+      const pair = nextDrinkPair(session);
+      const placeholder = selectedCustomerIds(session).length > 1
+        ? `${pair ? `<@${pair.customerId}>・` : ""}${pair ? `<@${pair.castId}>用` : ""}1stドリンク`
+        : castIds.length === 2 ? "1人目のキャスト用1stドリンク" : "1stドリンクを選択";
       const components = items.length ? pagedTicketMenu(session, "drink", placeholder, items.map(item => ({
         label: item.name, value: String(item.id), description: `${item.price.toLocaleString()}${currencyName}`,
       })), page) : [ticketControls(session)];
-      if (session.selection.vip || session.selection.extension) components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(ticketId("extras-only", session)).setLabel("ドリンクなしで確認へ").setStyle(ButtonStyle.Primary),
-      ));
+      const hasSelectedDrink = Boolean(session.selection.drinkSelections?.length) || session.selection.itemId !== undefined;
+      if ((session.selection.vip || session.selection.extension) && !hasSelectedDrink) {
+        components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(ticketId("extras-only", session)).setLabel("ドリンクなしで確認へ").setStyle(ButtonStyle.Primary),
+        ));
+      }
       await interaction.editReply({ content, embeds: [], components });
       break;
     }
@@ -407,6 +435,42 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
     }
     const [action, id, versionRaw, pageRaw] = encoded.split(":");
     const session = id ? await getKpTicketSession(id) : undefined;
+    if (action === "pay") {
+      const customerId = versionRaw;
+      if (!session || !interaction.isButton() || session.guildId !== interaction.guildId
+        || session.channelId !== interaction.channelId || !customerId || interaction.user.id !== customerId
+        || !selectedCustomerIds(session).includes(customerId)
+        || session.selection.paymentMessageId !== interaction.message.id) {
+        throw new KpTicketError("この支払いボタンは対象のお客様本人だけが、この注文で使用できます。");
+      }
+      if (session.phase === "paid") {
+        await postPaidReceipt(interaction, session, true);
+        return;
+      }
+      const settings = await currentSettings(session.guildId);
+      for (const castId of selectedCastIds(session.selection)) await checkCast(interaction.guild!, settings, castId);
+      let currentDiscount = false;
+      if (session.selection.vip) {
+        currentDiscount = await isKpBlackMemberCustomer(interaction.guild!, session.userId);
+        await validateKpVipSource(interaction.guild!);
+      }
+      const result = await confirmKpTicketCustomerPayment(session.id, customerId, interaction.message.id,
+        interaction.guildId, interaction.channelId, settings.castRoleIds,
+        currentDiscount);
+      const { currencyName } = await getGuildSettings(session.guildId);
+      if (result.status === "waiting" || result.status === "changed") {
+        await interaction.editReply({
+          content: result.status === "changed"
+            ? "料金または商品が変わったため、支払い確認をリセットしました。2人とも新しい金額を確認してください。引き落としはありません。"
+            : "このお客様の確認を記録しました。もう一人の確認が完了するまで、どちらも引き落としません。",
+          embeds: [ticketSummary(result.session, currencyName)],
+          components: customerPaymentRows(result.session),
+        });
+      } else {
+        await postPaidReceipt(interaction, result.session, result.status === "already");
+      }
+      return;
+    }
     if (!session || session.userId !== interaction.user.id || session.guildId !== interaction.guildId || session.channelId !== interaction.channelId) {
       throw new KpTicketError("他の人の注文や別チケットの注文は操作できません。自分で「注文する」から開始してください。");
     }
@@ -447,18 +511,81 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
     }
     if (action === "extras-only" && session.phase === "drink" && interaction.isButton()) {
       const selection = { ...session.selection, itemId: undefined, quantity: undefined, drinkSelections: undefined };
-      selection.quote = quoteKpTicket(null, settings, selection);
+      selection.quote = quoteKpTicket(null, settings, selection, session.userId);
       await renderKpTicket(interaction, await advanceKpTicketSession(session, "confirm", selection));
       return;
     }
+    if (action === "guest" && session.phase === "guest" && interaction.isUserSelectMenu()) {
+      const guestId = interaction.values[0];
+      if (!guestId || guestId === session.userId || selectedCastIds(session.selection).includes(guestId)) {
+        throw new KpTicketError("注文者・指名キャストとは別のお客様を選択してください。");
+      }
+      const guest = await interaction.guild.members.fetch({ user: guestId, force: true }).catch(() => null);
+      if (!guest || guest.user.bot) throw new KpTicketError("サーバー内のお客様を選択してください。");
+      await grantKpTicketCustomerAccess(interaction, guest);
+      const selection = { ...session.selection, customerIds: [session.userId, guest.id],
+        drinkSelections: undefined, itemId: undefined, quantity: undefined };
+      await renderKpTicket(interaction, await advanceKpTicketSession(session, "drink", selection),
+        0, "2人目のお客様を追加しました。2人とも自分の支払いを確定します。");
+      return;
+    }
+    if (action === "request-payments" && session.phase === "confirm" && interaction.isButton()) {
+      const customerIds = selectedCustomerIds(session);
+      if (customerIds.length !== 2 || !session.selection.vip || session.selection.vipTier !== "shared") {
+        throw new KpTicketError("2人利用の支払い依頼を確認できません。");
+      }
+      if (!canPost(interaction) || !interaction.channel || !("send" in interaction.channel)) {
+        throw new KpTicketError("チケット内に支払い依頼を投稿できません。決済は行っていません。");
+      }
+      const casts = await Promise.all(selectedCastIds(session.selection).map(castId => checkCast(interaction.guild!, settings, castId)));
+      const hasDiscount = await isKpBlackMemberCustomer(interaction.guild, session.userId);
+      const refreshedSelection = { ...session.selection, vipDiscountApplied: hasDiscount };
+      const refreshedQuote = await quoteCurrentSelection(session.guildId, settings, refreshedSelection, session.userId);
+      if (hasDiscount !== Boolean(session.selection.vipDiscountApplied)
+        || !isDeepStrictEqual(refreshedQuote, session.selection.quote)) {
+        const selection = { ...refreshedSelection, paymentApprovals: undefined, paymentMessageId: undefined,
+          quote: refreshedQuote };
+        const updated = await advanceKpTicketSession(session, "confirm", selection);
+        await renderKpTicket(interaction, updated, 0, "料金または商品が変わったため内容を更新しました。確認してから支払い依頼を送り直してください。");
+        return;
+      }
+      await validateKpVipSource(interaction.guild);
+      for (const cast of casts) await grantKpTicketCastAccess(interaction, cast);
+      const guest = await interaction.guild.members.fetch({ user: customerIds[1]!, force: true }).catch(() => null);
+      if (!guest || guest.user.bot) throw new KpTicketError("2人目のお客様を確認できません。決済は行っていません。");
+      await grantKpTicketCustomerAccess(interaction, guest);
+      const { currencyName } = await getGuildSettings(session.guildId);
+      const paymentMessage = await interaction.channel.send({
+        content: `VIP料金とドリンク代は各お客様が個別にお支払いください。\n${customerIds.map(id => `<@${id}>`).join("・")}`,
+        embeds: [ticketSummary(session, currencyName)],
+        components: customerPaymentRows(session, true),
+        allowedMentions: { users: customerIds },
+        nonce: `pay${session.id}`.slice(0, 25), enforceNonce: true,
+      });
+      const selection = { ...session.selection, paymentMessageId: paymentMessage.id, paymentApprovals: [] };
+      let updated: KpTicketSession;
+      try {
+        updated = await advanceKpTicketSession(session, "confirm", selection);
+      } catch (error) {
+        await paymentMessage.edit({ content: "支払い依頼を登録できませんでした。決済は行っていません。", components: [] }).catch(() => {});
+        throw error;
+      }
+      await paymentMessage.edit({ components: customerPaymentRows(updated) });
+      await interaction.editReply({ content: "支払い依頼をチケットに投稿しました。各お客様が自分のボタンで支払いを確定してください。両者の確認が完了するまで引き落としは行いません。",
+        embeds: [ticketSummary(updated, currencyName)], components: [] });
+      return;
+    }
     if (action === "confirm" && session.phase === "confirm" && interaction.isButton()) {
+      if (selectedCustomerIds(session).length === 2) {
+        throw new KpTicketError("2人利用は「2人へ支払い依頼を送る」を実行してください。");
+      }
       if (!canPost(interaction)) throw new KpTicketError("チケット内に購入ログを送信できません。権限を確認してください。引き落としは行っていません。");
       const casts = await Promise.all(selectedCastIds(session.selection).map(castId => checkCast(interaction.guild!, settings, castId)));
       if (session.selection.vip) {
         const hasDiscount = await isKpBlackMemberCustomer(interaction.guild, interaction.user.id);
         if (hasDiscount !== Boolean(session.selection.vipDiscountApplied)) {
           const selection = { ...session.selection, vipDiscountApplied: hasDiscount };
-          selection.quote = await quoteCurrentSelection(session.guildId, settings, selection);
+          selection.quote = await quoteCurrentSelection(session.guildId, settings, selection, interaction.user.id);
           const updated = await advanceKpTicketSession(session, "confirm", selection);
           await renderKpTicket(interaction, updated, 0, "ブラック会員資格が変更されたため、金額を更新しました。確認してもう一度確定してください。");
           return;
@@ -485,6 +612,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         await grantKpTicketCastAccess(interaction, cast);
         selection.castId = value;
         selection.castIds = [value];
+        selection.customerIds = [session.userId];
         notice = "指名キャストをこのチケットに追加しました。";
         selection.vip = false;
         selection.extension = false;
@@ -507,15 +635,18 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         selection.serviceVersion = 2;
         selection.vip = value !== "none";
         selection.vipTier = value === "shared" || value === "solo" ? value : undefined;
+        selection.customerIds = [session.userId];
         selection.vipDiscountApplied = selection.vip
           ? await isKpBlackMemberCustomer(interaction.guild!, interaction.user.id)
           : undefined;
         selection.guestId = undefined;
         selection.extension = false;
-        next = value === "none" && selection.fixedCastId ? "extension" : "drink";
+        selection.paymentApprovals = undefined;
+        selection.paymentMessageId = undefined;
+        next = value === "shared" ? "guest" : value === "none" && selection.fixedCastId ? "extension" : "drink";
         break;
       case "guest":
-        throw new KpTicketError("同伴者の選択はなくなりました。「最初から選び直す」で注文を再開してください。");
+        throw new KpTicketError("2人目のお客様はユーザー選択欄から選んでください。");
       case "extension":
         if (!selection.fixedCastId || !selection.baseOrderId || selection.vip || selection.vipActive) throw new KpTicketError("延長は通常利用の追加注文のみです。VIPは延長できません。");
         if (value !== "yes" && value !== "no") throw new KpTicketError("延長の有無を選択してください。");
@@ -525,6 +656,21 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         const item = await getShopItem(session.guildId, Number(value));
         if (!item || !isKpDrink(item)) throw new KpTicketError("このドリンクは購入できません。");
         const castIds = selectedCastIds(selection);
+        const customerIds = selection.customerIds ?? [session.userId];
+        if (customerIds.length === 2) {
+          const pairs = customerIds.flatMap(customerId => castIds.map(castId => ({ customerId, castId })));
+          const pair = pairs[selection.drinkSelections?.length ?? 0];
+          if (!pair) throw new KpTicketError("必要な1stドリンクは選択済みです。");
+          selection.itemId = undefined;
+          selection.quantity = undefined;
+          selection.drinkSelections = [...(selection.drinkSelections ?? []),
+            { customerId: pair.customerId, castId: pair.castId, itemId: item.id, quantity: 1 }];
+          if (selection.drinkSelections.length === pairs.length) {
+            selection.quote = await quoteCurrentSelection(session.guildId, settings, selection, session.userId);
+            next = "confirm";
+          } else next = "drink";
+          break;
+        }
         if (castIds.length === 2) {
           selection.itemId = undefined;
           selection.quantity = undefined;
@@ -543,7 +689,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         const item = await getShopItem(session.guildId, Number(value));
         if (!item || !isKpDrink(item)) throw new KpTicketError("このドリンクは購入できません。");
         selection.drinkSelections = [...selection.drinkSelections, { castId: castIds[1]!, itemId: item.id, quantity: 1 }];
-        selection.quote = await quoteCurrentSelection(session.guildId, settings, selection);
+        selection.quote = await quoteCurrentSelection(session.guildId, settings, selection, session.userId);
         next = "confirm";
         break;
       }
@@ -551,7 +697,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         selection.quantity = Number(value);
         const item = await getShopItem(session.guildId, selection.itemId!);
         if (!item) throw new KpTicketError("商品が削除されました。最初から選び直してください。");
-        selection.quote = quoteKpTicket(item, settings, selection);
+        selection.quote = quoteKpTicket(item, settings, selection, session.userId);
         next = "confirm";
         break;
       }

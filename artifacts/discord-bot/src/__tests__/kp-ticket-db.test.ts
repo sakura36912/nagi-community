@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, db, deliverKpTicketLog,
+  advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, confirmKpTicketCustomerPayment, db, deliverKpTicketLog,
   ensureKpTicketSchema, getKpTicketSession, kpTicketPanelsTable, kpTicketSessionsTable, kpTicketSettingsTable,
   inventoryItemsTable, quoteKpTicket, settleKpTicket, shopItemsTable, transactionsTable, walletsTable, listPaidKpTicketOrders,
   type KpTicketSelection, type KpTicketSession,
@@ -54,22 +54,23 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
   const payExtra = (s: KpTicketSession) => settleKpTicket(s.id, s.version, user, guild, s.channelId, ["black", "white"]);
   const vipSelection = (tier: "solo" | "shared"): KpTicketSelection => ({
     castId: "test-cast", vip: true, extension: false, serviceVersion: 2, vipTier: tier,
+    customerIds: tier === "shared" ? [user, "test-guest"] : [user],
   });
 
-  it.each([["solo", 200000], ["shared", 100000]] as const)("persists %s VIP once, without inventing drink inventory", async (tier, price) => {
+  it("persists solo VIP once, without inventing drink inventory", async () => {
     const ticket = randomUUID();
     await wallet(500000);
-    const order = await extraReady(ticket, vipSelection(tier));
+    const order = await extraReady(ticket, vipSelection("solo"));
     const result = await Promise.all([payExtra(order), payExtra(order)]);
     expect(result.map(r => r.status).sort()).toEqual(["already", "paid"]);
-    expect(await balance()).toBe(500000 - price);
+    expect(await balance()).toBe(500000 - 200000);
     const orders = await listKpVipOrders(guild, user);
     expect(orders.some(o => o.id === order.id)).toBe(true);
     expect((await listKpVipOrders(guild, "test-cast")).some(o => o.id === order.id)).toBe(true);
     expect((await listKpVipOrders(guild, "guest")).some(o => o.id === order.id)).toBe(false);
     expect(await listKpVipOrders(guild, "outsider")).toHaveLength(0);
     const rows = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${order.id}`));
-    expect(rows).toHaveLength(1); expect(rows[0]!.amount).toBe(-price);
+    expect(rows).toHaveLength(1); expect(rows[0]!.amount).toBe(-200000);
     const additional = await createAdditionalKpTicketSession(randomUUID(), guild, ticket, user);
     expect(additional.phase).toBe("drink");
     expect(additional.selection.vipActive).toBe(true);
@@ -77,7 +78,7 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
   it("does not authorize legacy companion IDs or retain them on new payments", async () => {
     const ticket = randomUUID();
     await wallet(500000);
-    const order = await extraReady(ticket, { ...vipSelection("shared"), guestId: "legacy-guest" });
+    const order = await extraReady(ticket, { ...vipSelection("solo"), guestId: "legacy-guest" });
     const paid = await payExtra(order);
     expect(paid.session.selection.guestId).toBeUndefined();
     // Preserve an older paid receipt as history, but never use its companion as an entitlement.
@@ -85,7 +86,66 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
       .where(eq(kpTicketSessionsTable.id, order.id));
     expect(await listKpVipOrders(guild, "legacy-guest")).toHaveLength(0);
     expect((await listKpVipOrders(guild, user)).some(o => o.id === order.id)).toBe(true);
-    expect(await balance()).toBe(400000);
+    expect(await balance()).toBe(300000);
+  });
+
+  async function readySharedTicket(ticket: string, guestId: string) {
+    const [guestWallet] = await db.insert(walletsTable).values({ guildId: guild, userId: guestId, balance: 500000 })
+      .onConflictDoUpdate({ target: [walletsTable.guildId, walletsTable.userId], set: { balance: 500000 } }).returning();
+    expect(guestWallet).toBeDefined();
+    const session = await createKpTicketSession(randomUUID(), guild, ticket, user);
+    const selection: KpTicketSelection = {
+      castId: "test-cast-a", castIds: ["test-cast-a", "test-cast-b"],
+      customerIds: [user, guestId], vip: true, vipTier: "shared", vipDiscountApplied: false, extension: false,
+      drinkSelections: [
+        { customerId: user, castId: "test-cast-a", itemId: product.id, quantity: 1 },
+        { customerId: user, castId: "test-cast-b", itemId: product.id, quantity: 1 },
+        { customerId: guestId, castId: "test-cast-a", itemId: product.id, quantity: 1 },
+        { customerId: guestId, castId: "test-cast-b", itemId: product.id, quantity: 1 },
+      ],
+    };
+    selection.quote = quoteKpTicket([product, product, product, product], { vipPrice: 1, extensionPrice: 1 }, selection, user);
+    const confirmed = await advanceKpTicketSession(session, "confirm", selection);
+    return advanceKpTicketSession(confirmed, "confirm", {
+      ...confirmed.selection, paymentMessageId: `payment-${ticket}`, paymentApprovals: [],
+    });
+  }
+  it("waits for both customers, then charges each full VIP and drink amount atomically", async () => {
+    const ticket = randomUUID(), guestId = "test-guest";
+    await wallet(500000);
+    const readyOrder = await readySharedTicket(ticket, guestId);
+    const first = await confirmKpTicketCustomerPayment(readyOrder.id, user, `payment-${ticket}`, guild, ticket, ["black", "white"], false);
+    expect(first.status).toBe("waiting");
+    expect(await balance()).toBe(500000);
+    const result = await confirmKpTicketCustomerPayment(readyOrder.id, guestId, `payment-${ticket}`, guild, ticket, ["black", "white"], false);
+    expect(result.status).toBe("paid");
+    expect(result.session.selection.quote).toMatchObject({
+      total: 400400,
+      customerPayments: [
+        { customerId: user, total: 200200 },
+        { customerId: guestId, total: 200200 },
+      ],
+    });
+    expect(await balance()).toBe(299800);
+    const [guestWallet] = await db.select().from(walletsTable).where(and(eq(walletsTable.guildId, guild), eq(walletsTable.userId, guestId)));
+    expect(guestWallet!.balance).toBe(299800);
+    expect((await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${readyOrder.id}:${user}`)))).toHaveLength(1);
+    expect((await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${readyOrder.id}:${guestId}`)))).toHaveLength(1);
+    expect((await listKpVipOrders(guild, guestId)).some(order => order.id === readyOrder.id)).toBe(true);
+  });
+  it("rolls back both balances if either customer's funds are insufficient", async () => {
+    const ticket = randomUUID(), guestId = "test-guest-poor";
+    await wallet(500000);
+    await db.insert(walletsTable).values({ guildId: guild, userId: guestId, balance: 100 })
+      .onConflictDoUpdate({ target: [walletsTable.guildId, walletsTable.userId], set: { balance: 100 } });
+    const readyOrder = await readySharedTicket(ticket, guestId);
+    await confirmKpTicketCustomerPayment(readyOrder.id, user, `payment-${ticket}`, guild, ticket, ["black", "white"], false);
+    await expect(confirmKpTicketCustomerPayment(readyOrder.id, guestId, `payment-${ticket}`, guild, ticket, ["black", "white"], false))
+      .rejects.toThrow("引き落としは行っていません");
+    expect(await balance()).toBe(500000);
+    const [guestWallet] = await db.select().from(walletsTable).where(and(eq(walletsTable.guildId, guild), eq(walletsTable.userId, guestId)));
+    expect(guestWallet!.balance).toBe(100);
+    expect((await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${readyOrder.id}:${user}`)))).toHaveLength(0);
   });
 
   it("charges extension-only once and retains the amount in deleted-ticket statements", async () => {
@@ -125,7 +185,7 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     }).returning();
     const extension = await extraReady(ticket, { castId: "test-cast", fixedCastId: "test-cast", baseOrderId: base!.id,
       vip: false, extension: true, serviceVersion: 2, vipActive: false });
-    await payExtra(await extraReady(ticket, vipSelection("shared")));
+    await payExtra(await extraReady(ticket, vipSelection("solo")));
     await expect(payExtra(extension)).rejects.toThrow("延長");
     expect(await balance()).toBe(400000);
   });

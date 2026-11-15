@@ -2566,7 +2566,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleKpTicketSalesDate(interaction);
       return;
     }
-    if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith(KP_TICKET_PREFIX)) {
+    if ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isUserSelectMenu())
+      && interaction.customId.startsWith(KP_TICKET_PREFIX)) {
       await handleKpTicketInteraction(interaction);
       return;
     }

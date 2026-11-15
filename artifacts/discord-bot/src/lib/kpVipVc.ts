@@ -45,9 +45,10 @@ export function kpVipOverwrites(
 
 export function kpVipPanel(order: KpTicketSession, roomId: string) {
   const castIds = order.selection.castIds ?? (order.selection.castId ? [order.selection.castId] : []);
+  const customerIds = order.selection.customerIds ?? [order.userId];
   return {
     embeds: [new EmbedBuilder().setTitle("KP島 VIPコントロールパネル").setColor(0xd4af37)
-      .setDescription(`購入者: <@${order.userId}>\n${order.selection.vipTier === "shared" ? "お客様2人" : "お客様1人"}・キャスト${castIds.length}人\n初期状態は非公開です。公開にすると他のメンバーも閲覧・入室できます。\n非公開に戻すと対象者以外を退出させます（管理者を除く）。\nVIPは延長対象外です。`)
+      .setDescription(`お客様: ${customerIds.map(id => `<@${id}>`).join("、")}\n${customerIds.length}人・キャスト${castIds.length}人\n初期状態は非公開です。公開にすると他のメンバーも閲覧・入室できます。\n非公開に戻すと対象者以外を退出させます（管理者を除く）。\nVIPは延長対象外です。`)
       .setFooter({ text: "購入者本人のみ操作できます。管理者はDiscordの仕様上、非公開VCも閲覧できます。" })],
     components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`${KP_VIP_PREFIX}private:${roomId}`).setLabel("非公開VC").setStyle(ButtonStyle.Secondary),
@@ -81,7 +82,8 @@ async function ticketExists(guild: Guild, order: KpTicketSession) {
 }
 
 function participants(order: KpTicketSession, botId: string) {
-  return [order.userId, ...(order.selection.castIds ?? [order.selection.castId!]), botId];
+  return [...new Set([...(order.selection.customerIds ?? [order.userId]),
+    ...(order.selection.castIds ?? [order.selection.castId!]), botId])];
 }
 
 /** VIP source is intercepted before the ordinary/free Hub handler. No purchase happens here. */
@@ -119,7 +121,7 @@ export async function handleKpVipHubJoin(state: VoiceState): Promise<boolean> {
       const owner = await state.guild.members.fetch({ user: locked.userId, force: true });
       created = await state.guild.channels.create({
         name: `VIP・${owner.displayName}`.slice(0, 100), type: ChannelType.GuildVoice,
-        parent: hub.parentId, userLimit: (locked.selection.vipTier === "shared" ? 2 : 1)
+        parent: hub.parentId, userLimit: (locked.selection.customerIds?.length ?? (locked.selection.vipTier === "shared" ? 2 : 1))
           + (locked.selection.castIds?.length ?? 1),
         permissionOverwrites: kpVipOverwrites([...hub.permissionOverwrites.cache.values()],
           state.guild.id, participants(locked, bot.id), false),

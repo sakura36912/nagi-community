@@ -31,7 +31,7 @@ describe("KP cast-only sales", () => {
     Object.assign(order.selection.quote!, { unitPrice: 200, vipPrice: 500, extensionPrice: 200 });
     expect(text(report([order]))).toContain("111：900通貨");
   });
-  it("attributes each first drink to its selected cast and the VIP fee to the lead cast", () => {
+  it("attributes drinks to their selected cast and splits VIP revenue across both casts", () => {
     const order = paid("lead", 100350);
     order.selection.castIds = ["lead", "second"];
     Object.assign(order.selection.quote!, {
@@ -41,8 +41,8 @@ describe("KP cast-only sales", () => {
         { castId: "second", itemId: 2, itemName: "お茶", unitPrice: 250, quantity: 1 },
       ],
     });
-    expect(text(report([order]))).toContain("lead：100,100通貨");
-    expect(text(report([order]))).toContain("second：250通貨");
+    expect(text(report([order]))).toContain("lead：50,100通貨");
+    expect(text(report([order]))).toContain("second：50,250通貨");
   });
   it("preserves missing cast records in a separate bucket and zero-price sales", () => {
     const result = report([paid(undefined, 50), paid(undefined, 60), paid("111", 0)]);

@@ -11,28 +11,34 @@ export function kpCustomers(
   orders: KpTicketSession[], currency: string, userId: string | undefined, page: number, period: KpBusinessDay,
 ) {
   const selected = orders.filter(order => order.phase === "paid" && order.paidAt
-    && order.paidAt >= period.start && order.paidAt < period.end && (!userId || order.userId === userId));
+    && order.paidAt >= period.start && order.paidAt < period.end
+    && (!userId || (order.selection.customerIds ?? [order.userId]).includes(userId)));
   const customers = new Map<string, {
     id: string; tickets: Set<string>; orders: number; total: bigint;
     first: Date | null; last: Date | null; casts: Set<string>;
   }>();
   for (const order of selected) {
     if (!order.selection.quote) throw new KpTicketError("支払い済み注文の明細が不完全です。管理者に確認を依頼してください。");
-    const customer = customers.get(order.userId) ?? {
-      id: order.userId, tickets: new Set<string>(), orders: 0, total: 0n,
-      first: null, last: null, casts: new Set<string>(),
-    };
-    customer.tickets.add(order.channelId);
-    customer.orders++;
-    customer.total += BigInt(order.selection.quote.total);
-    for (const castId of order.selection.castIds ?? (order.selection.castId ? [order.selection.castId] : [])) {
-      customer.casts.add(castId);
+    const payerIds = order.selection.quote.customerPayments?.map(payment => payment.customerId)
+      ?? order.selection.customerIds ?? [order.userId];
+    for (const payerId of payerIds) {
+      const customer = customers.get(payerId) ?? {
+        id: payerId, tickets: new Set<string>(), orders: 0, total: 0n,
+        first: null, last: null, casts: new Set<string>(),
+      };
+      customer.tickets.add(order.channelId);
+      customer.orders++;
+      const payment = order.selection.quote.customerPayments?.find(row => row.customerId === payerId);
+      customer.total += BigInt(payment?.total ?? order.selection.quote.total);
+      for (const castId of order.selection.castIds ?? (order.selection.castId ? [order.selection.castId] : [])) {
+        customer.casts.add(castId);
+      }
+      if (order.paidAt) {
+        if (!customer.first || order.paidAt < customer.first) customer.first = order.paidAt;
+        if (!customer.last || order.paidAt > customer.last) customer.last = order.paidAt;
+      }
+      customers.set(payerId, customer);
     }
-    if (order.paidAt) {
-      if (!customer.first || order.paidAt < customer.first) customer.first = order.paidAt;
-      if (!customer.last || order.paidAt > customer.last) customer.last = order.paidAt;
-    }
-    customers.set(order.userId, customer);
   }
   const rows = [...customers.values()].sort((a, b) =>
     (b.last?.getTime() ?? 0) - (a.last?.getTime() ?? 0) || a.id.localeCompare(b.id));
@@ -51,18 +57,23 @@ export function kpCustomers(
     const quote = order.selection.quote!;
     const castIds = order.selection.castIds ?? (order.selection.castId ? [order.selection.castId] : []);
     const drinks = quote.items?.length
-      ? quote.items.map(line => `${line.itemName} × ${line.quantity}（キャストID: ${line.castId}）`).join(" / ")
+      ? quote.items.filter(line => !userId || !line.customerId || line.customerId === userId)
+        .map(line => `${line.itemName} × ${line.quantity}（キャストID: ${line.castId}）`).join(" / ")
       : `${quote.itemName} × ${quote.quantity}`;
+    const payment = quote.customerPayments?.find(row => row.customerId === userId);
+    const amount = payment?.total ?? quote.total;
     return `支払日時: ${date(order.paidAt)}\n注文ID: ${order.id} / チケットID: ${order.channelId}\n`
       + `キャストID: ${castIds.join(", ") || "未記録"}\n`
-      + `${drinks} / 支払額: ${quote.total.toLocaleString()}${currency}`;
+      + `${drinks || "ドリンク明細なし"} / 支払額: ${amount.toLocaleString()}${currency}`;
   };
   const offset = (page - 1) * size;
   const preview = userId
     ? detail.slice(offset, offset + size).map(order =>
-      `${date(order.paidAt)} / ${escapeMarkdown((order.selection.quote!.items?.map(line => line.itemName).join(" / ")
+      `${date(order.paidAt)} / ${escapeMarkdown((order.selection.quote!.items?.filter(line => !line.customerId || line.customerId === userId)
+        .map(line => line.itemName).join(" / ")
         || order.selection.quote!.itemName).slice(0, 80))}\n`
-      + `${order.selection.quote!.total.toLocaleString()}${currency} / キャスト: ${(order.selection.castIds
+      + `${(order.selection.quote!.customerPayments?.find(payment => payment.customerId === userId)?.total
+        ?? order.selection.quote!.total).toLocaleString()}${currency} / キャスト: ${(order.selection.castIds
         ?? (order.selection.castId ? [order.selection.castId] : [])).map(id => `<@${id}>`).join(", ") || "未記録"}\nチケットID: ${order.channelId}`)
     : rows.slice(offset, offset + size).map(row =>
       `<@${row.id}>\nチケット ${row.tickets.size}件 / 注文 ${row.orders}件 / 累計 ${row.total.toLocaleString()}${currency}\n最終支払い: ${date(row.last)}`);
