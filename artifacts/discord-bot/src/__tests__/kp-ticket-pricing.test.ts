@@ -11,9 +11,14 @@ describe("KP ticket pricing and paging", () => {
   const vip = (tier: "solo" | "shared"): KpTicketSelection => ({
     castId: "cast", vip: true, extension: false, serviceVersion: 2, vipTier: tier,
   });
-  it.each([["shared", 100000], ["solo", 200000]] as const)("charges the fixed %s VIP rate, not old settings", (tier, price) => {
+  it.each([["shared", 200000], ["solo", 200000]] as const)("charges the fixed %s VIP rate, not old settings", (tier, price) => {
     expect(quoteKpTicket(null, settings, vip(tier))).toMatchObject({ itemId: null, quantity: 0, vipPrice: price, total: price });
     expect(quoteKpTicket(item, { vipPrice: 1, extensionPrice: 1 }, { ...selection, ...vip(tier) }).total).toBe(price + 300);
+  });
+  it.each(["shared", "solo"] as const)("halves %s VIP for the black-member customer", tier => {
+    const discounted = { ...vip(tier), vipDiscountApplied: true };
+    expect(quoteKpTicket(null, settings, discounted)).toMatchObject({ vipPrice: 100000, total: 100000 });
+    expect(quoteKpTicket(item, settings, { ...selection, ...discounted }).total).toBe(100300);
   });
   it("charges 50,000 only for additional extension with or without drinks", () => {
     const extension: KpTicketSelection = { castId: "cast", fixedCastId: "cast", baseOrderId: "paid",
@@ -26,7 +31,7 @@ describe("KP ticket pricing and paging", () => {
     expect(() => quoteKpTicket(null, settings, { ...extension, vip: true, vipTier: "solo" })).toThrow("延長を追加できません");
   });
   it("does not require a companion for shared VIP and rejects malformed extras", () => {
-    expect(quoteKpTicket(null, settings, vip("shared")).total).toBe(100000);
+    expect(quoteKpTicket(null, settings, vip("shared")).total).toBe(200000);
     expect(() => quoteKpTicket(null, settings, { ...vip("solo"), vipActive: true })).toThrow("重複");
     expect(() => quoteKpTicket(null, settings, { ...vip("solo"), vipTier: undefined })).toThrow("選び直し");
     expect(() => quoteKpTicket(null, settings, { ...vip("solo"), quantity: 1 })).toThrow("不完全");

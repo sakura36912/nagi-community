@@ -8,7 +8,7 @@ import {
   advanceKpTicketSession, configureKpTicket, createKpTicketSession, createAdditionalKpTicketSession, deliverKpTicketLog,
   getKpTicketSession, getKpTicketSettings, isKpDrink, isKpTicketPanel, KpTicketError,
   quoteKpTicket, registerKpTicketPanel, settleKpTicket, listPaidKpTicketOrders, listTransfersToRecipient,
-  KP_VIP_PRICES, KP_EXTENSION_PRICE, KP_VIP_HUB_ID,
+  KP_VIP_PRICES, KP_VIP_BLACK_MEMBER_PRICE, KP_EXTENSION_PRICE, KP_VIP_HUB_ID,
   type KpTicketSession, type KpTicketSettings,
 } from "@workspace/db";
 import { getGuildSettings, getShopItem, listShopItems } from "../lib/economy";
@@ -26,6 +26,7 @@ import { validateKpVipSource } from "../lib/kpVipVc";
 import { kpTransferHistory } from "../lib/kpTransferHistory";
 
 const KP_TRANSFER_RECIPIENT_ID = "1276893567599644715";
+const KP_BLACK_MEMBER_ROLE_NAME = "KP島ブラック会員";
 
 export const kpTicketPanelSubcommand = new SlashCommandSubcommandBuilder()
   .setName("ticket-panel").setDescription("チケット内にKPshopパネルを設置します（夜鴉・黒兵・管理者）")
@@ -74,6 +75,20 @@ async function requireKpStaff(interaction: ChatInputCommandInteraction | ButtonI
   if (!allowed) throw new KpTicketError("この操作は夜鴉・黒兵ロールの所持者、または管理者のみ使用できます。");
 }
 
+async function isKpBlackMemberCustomer(guild: Guild, userId: string) {
+  const roles = await guild.roles.fetch().catch(() => {
+    throw new KpTicketError("ブラック会員ロールを確認できませんでした。時間をおいて再実行してください。");
+  });
+  const matches = [...roles.values()].filter(role => role.name === KP_BLACK_MEMBER_ROLE_NAME);
+  if (matches.length !== 1) {
+    throw new KpTicketError(`「${KP_BLACK_MEMBER_ROLE_NAME}」ロールを一意に確認できません。管理者に確認してください。`);
+  }
+  const member = await guild.members.fetch({ user: userId, force: true }).catch(() => {
+    throw new KpTicketError("お客様のブラック会員資格を確認できませんでした。時間をおいて再実行してください。");
+  });
+  return member.roles.cache.has(matches[0]!.id);
+}
+
 export async function executeKpTicketCommand(interaction: ChatInputCommandInteraction) {
   if (!interaction.guildId || !interaction.guild) {
     await interaction.reply({ content: "サーバー内で実行してください。", ephemeral: true });
@@ -109,8 +124,8 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
     if (subcommand === "ticket-prices") {
       const vip = interaction.options.getInteger("vip"), extension = interaction.options.getInteger("extension");
       const unset = interaction.options.getString("unset");
-      if (vip !== null || extension !== null || unset) throw new KpTicketError("料金は固定です。VIP（お客様2人）は10万、VIP（お客様1人）は20万、通常利用の延長は5万です。旧料金設定は適用しません。");
-      await interaction.editReply(`VIP（お客様2人・キャスト1人）: ${KP_VIP_PRICES.shared.toLocaleString()}${currencyName}\nVIP（お客様1人・キャスト1人）: ${KP_VIP_PRICES.solo.toLocaleString()}${currencyName}\n延長1回: ${KP_EXTENSION_PRICE.toLocaleString()}${currencyName}（通常利用の追加注文のみ。VIP延長不可）`);
+      if (vip !== null || extension !== null || unset) throw new KpTicketError("料金は固定です。VIPはお客様2人・キャスト1人、お客様1人・キャスト1人とも20万＄です。KP島ブラック会員のお客様は半額の10万＄です。通常利用の延長は5万です。");
+      await interaction.editReply(`VIP（お客様2人・キャスト1人）: ${KP_VIP_PRICES.shared.toLocaleString()}＄\nVIP（お客様1人・キャスト1人）: ${KP_VIP_PRICES.solo.toLocaleString()}＄\nKP島ブラック会員のお客様: VIP料金半額 ${KP_VIP_BLACK_MEMBER_PRICE.toLocaleString()}＄\n延長1回: ${KP_EXTENSION_PRICE.toLocaleString()}${currencyName}（通常利用の追加注文のみ。VIP延長不可）`);
       return;
     }
     if (!interaction.channel || !(interaction.channel.type === ChannelType.GuildText || interaction.channel.isThread()) || !canPost(interaction)) {
@@ -232,8 +247,8 @@ export async function renderKpTicket(interaction: TicketInteraction, session: Kp
       await interaction.editReply({ content, embeds: [], components: [
         ticketMenu(session, "vip", "VIPの利用方法を選択（VIPは延長不可）", [
           { label: "通常利用（VIPなし）", value: "none" },
-          { label: "VIP：お客様2人・キャスト1人 — 100,000＄", value: "shared", description: "購入者が10万＄を支払います。同伴者の指定はありません。" },
-          { label: "VIP：お客様1人・キャスト1人 — 200,000＄", value: "solo" },
+          { label: "VIP：お客様2人・キャスト1人 — 200,000＄", value: "shared", description: "KP島ブラック会員のお客様はVIP料金が半額の100,000＄になります。" },
+          { label: "VIP：お客様1人・キャスト1人 — 200,000＄", value: "solo", description: "KP島ブラック会員のお客様はVIP料金が半額の100,000＄になります。" },
         ]), ticketControls(session),
       ] });
       break;
@@ -391,10 +406,22 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
     if (action === "confirm" && session.phase === "confirm" && interaction.isButton()) {
       if (!canPost(interaction)) throw new KpTicketError("チケット内に購入ログを送信できません。権限を確認してください。引き落としは行っていません。");
       const cast = await checkCast(interaction.guild, settings, session.selection.castId!);
-      await grantKpTicketCastAccess(interaction, cast);
       if (session.selection.vip) {
+        const hasDiscount = await isKpBlackMemberCustomer(interaction.guild, interaction.user.id);
+        if (hasDiscount !== Boolean(session.selection.vipDiscountApplied)) {
+          const selection = { ...session.selection, vipDiscountApplied: hasDiscount };
+          const item = selection.itemId === undefined ? null : await getShopItem(session.guildId, selection.itemId);
+          if (selection.itemId !== undefined && !item) {
+            throw new KpTicketError("商品が削除されました。最初から選び直してください。");
+          }
+          selection.quote = quoteKpTicket(item ?? null, settings, selection);
+          const updated = await advanceKpTicketSession(session, "confirm", selection);
+          await renderKpTicket(interaction, updated, 0, "ブラック会員資格が変更されたため、金額を更新しました。確認してもう一度確定してください。");
+          return;
+        }
         await validateKpVipSource(interaction.guild);
       }
+      await grantKpTicketCastAccess(interaction, cast);
       const result = await settleKpTicket(session.id, version, interaction.user.id, interaction.guildId, interaction.channelId, settings.castRoleIds);
       if (result.status === "changed") {
         await renderKpTicket(interaction, result.session, 0, "商品または追加料金が変更されたため、引き落としていません。新しい金額を確認し、もう一度確定してください。");
@@ -425,6 +452,9 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         selection.serviceVersion = 2;
         selection.vip = value !== "none";
         selection.vipTier = value === "shared" || value === "solo" ? value : undefined;
+        selection.vipDiscountApplied = selection.vip
+          ? await isKpBlackMemberCustomer(interaction.guild, interaction.user.id)
+          : undefined;
         selection.guestId = undefined;
         selection.extension = false;
         next = value === "none" && selection.fixedCastId ? "extension" : "drink";

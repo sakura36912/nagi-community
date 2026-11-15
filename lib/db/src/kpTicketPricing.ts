@@ -3,7 +3,8 @@ import type { KpTicketQuote, KpTicketSelection, KpTicketSettings } from "./schem
 export class KpTicketError extends Error {}
 export const KP_TICKET_MAX_PRICE = 2_147_483_647;
 export const KP_VIP_HUB_ID = "1570354388462215248";
-export const KP_VIP_PRICES = { shared: 100_000, solo: 200_000 } as const;
+export const KP_VIP_PRICES = { shared: 200_000, solo: 200_000 } as const;
+export const KP_VIP_BLACK_MEMBER_PRICE = 100_000;
 export const KP_EXTENSION_PRICE = 50_000;
 
 export function isKpDrink(item: { category: string; effectType: string | null; targetRoleId: string | null }): boolean {
@@ -40,7 +41,12 @@ export function quoteKpTicket(
     throw new KpTicketError("注文内容が不完全です。最初から選び直してください。");
   }
   const unitPrice = item?.price ?? 0, quantity = item ? selection.quantity! : 0;
-  const vipPrice = selection.vip ? KP_VIP_PRICES[selection.vipTier!] : 0;
+  if (selection.vipDiscountApplied && !selection.vip) {
+    throw new KpTicketError("VIP割引の対象が不正です。最初から選び直してください。");
+  }
+  const vipPrice = selection.vip
+    ? selection.vipDiscountApplied ? KP_VIP_BLACK_MEMBER_PRICE : KP_VIP_PRICES[selection.vipTier!]
+    : 0;
   const extensionPrice = selection.extension ? KP_EXTENSION_PRICE : 0;
   const total = unitPrice * quantity + vipPrice + extensionPrice;
   if ([unitPrice, total].some(n => !Number.isSafeInteger(n) || n < 0 || n > KP_TICKET_MAX_PRICE)) {

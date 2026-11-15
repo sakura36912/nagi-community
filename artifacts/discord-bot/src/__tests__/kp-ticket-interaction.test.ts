@@ -36,15 +36,22 @@ function member(id: string, roleIds: string[], bot = false) {
 function fixture() {
   const eligible = [member("black-cast", ["black"]), member("white-cast", ["white"]),
     member("both-cast", ["black", "white"]), member("outsider", []), member("robot", ["black"], true)];
-  const members = new Map(eligible.map(m => [m.id, m]));
+  const buyer = member("buyer", []);
+  const members = new Map([...eligible, buyer].map(m => [m.id, m]));
+  const roles = new Map([
+    ["black", { id: "black", name: "黒真珠" }],
+    ["white", { id: "white", name: "白真珠" }],
+    ["black-member", { id: "black-member", name: "KP島ブラック会員" }],
+  ]);
   return {
     id: "1000000000000000000", customId: `${KP_TICKET_PREFIX}start`,
     guildId: "guild", channelId: "ticket", user: { id: "buyer" }, message: { id: "panel" }, values: [] as string[],
     guild: {
-      id: "guild", roles: { fetch: vi.fn(async id => ({ id })) },
+      id: "guild", roles: { fetch: vi.fn(async (id?: string) => id ? roles.get(id) : roles) },
       members: { me: { id: "bot" }, fetch: vi.fn(async arg =>
         typeof arg === "string" ? members.get(arg) : arg && "user" in arg ? members.get(arg.user) : members) },
     },
+    members,
     channel: { id: "ticket", guildId: "guild", type: 12, isThread: () => true, permissionsFor: () => ({ has: () => true }),
       parent: { guildId: "guild", permissionsFor: vi.fn(() => ({ has: (): boolean => true })),
         permissionOverwrites: { edit: vi.fn() } },
@@ -104,6 +111,10 @@ describe("KP ticket component flow", () => {
   it("offers two VIP types on the first order, but never extension", async () => {
     const i = fixture(); await choose(i, "black-cast");
     expect(session.phase).toBe("vip");
+    const menu = JSON.stringify(i.editReply.mock.calls.at(-1)![0].components);
+    expect(menu).toContain("お客様2人・キャスト1人 — 200,000＄");
+    expect(menu).toContain("お客様1人・キャスト1人 — 200,000＄");
+    expect(menu).toContain("KP島ブラック会員のお客様はVIP料金が半額の100,000＄");
     await choose(i, "solo");
     expect(session.phase).toBe("drink");
     await extrasOnly(i);
@@ -115,16 +126,34 @@ describe("KP ticket component flow", () => {
     expect(m.settle).toHaveBeenCalledOnce();
     expect(i.editReply.mock.calls.at(-1)![0].content).toContain("1570354388462215248");
   });
-  it("purchases 100,000 VIP directly without selecting or adding a companion", async () => {
+  it("charges the standard 200,000 for shared VIP without selecting or adding a companion", async () => {
     const i = fixture(); await choose(i, "black-cast"); await choose(i, "shared");
     expect(session.phase).toBe("drink");
     expect(session.selection.guestId).toBeUndefined();
     await extrasOnly(i);
-    expect(session.selection.quote).toMatchObject({ total: 100000, vipPrice: 100000 });
+    expect(session.selection.quote).toMatchObject({ total: 200000, vipPrice: 200000 });
     i.customId = ticketId("confirm", session); await run(i);
     expect(i.channel.members.add.mock.calls.every(call => call[0] === "black-cast")).toBe(true);
     expect(m.settle).toHaveBeenCalledOnce();
     expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
+  });
+  it("charges 100,000 for a black member and requires reconfirmation if their role is removed", async () => {
+    const i = fixture();
+    i.members.set("buyer", member("buyer", ["black-member"]));
+    await choose(i, "black-cast"); await choose(i, "shared");
+    expect(session.selection.vipDiscountApplied).toBe(true);
+    await extrasOnly(i);
+    expect(session.selection.quote).toMatchObject({ total: 100000, vipPrice: 100000 });
+
+    i.members.set("buyer", member("buyer", []));
+    i.customId = ticketId("confirm", session); await run(i);
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(session.selection.vipDiscountApplied).toBe(false);
+    expect(session.selection.quote).toMatchObject({ total: 200000, vipPrice: 200000 });
+    expect(i.editReply.mock.calls.at(-1)![0].content).toContain("もう一度確定してください");
+
+    i.customId = ticketId("confirm", session); await run(i);
+    expect(m.settle).toHaveBeenCalledOnce();
   });
   it("rejects an old companion menu without granting access or charging", async () => {
     const i = fixture();
