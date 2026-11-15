@@ -126,7 +126,10 @@ import { gte, lt, and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { chinchiroDiceCommand } from "./chinchiroDice";
 import { uraRecruitmentCommand } from "./uraRecruitment";
 import { KP_SHOP_CATEGORY, KP_SHOP_NAME, purchaseKpItem, supportsKpEffect } from "../lib/kpShop";
-import { executeKpTicketCommand, kpTicketPanelSubcommand, kpTicketPricesSubcommand, kpCustomersSubcommand } from "./kpTicket";
+import {
+  executeKpTicketCommand, kpTicketPanelSubcommand, kpTicketPricesSubcommand, kpCustomersSubcommand,
+  kpAllTicketSalesSubcommand, kpNagiTransfersSubcommand,
+} from "./kpTicket";
 import { giveCommand } from "./give";
 
 interface Command {
@@ -1860,16 +1863,19 @@ const shopCommand: Command = {
     .addSubcommand(kpTicketPanelSubcommand)
     .addSubcommand(kpTicketPricesSubcommand)
     .addSubcommand(kpCustomersSubcommand)
+    .addSubcommand(kpAllTicketSalesSubcommand)
+    .addSubcommand(kpNagiTransfersSubcommand)
     ,
 
   async execute(interaction) {
     const guildId = requireGuild(interaction);
     const sub     = interaction.options.getSubcommand();
-    if (sub !== "ticket-panel" && sub !== "customers" && !requireManageGuild(interaction)) {
+    if (!["ticket-panel", "customers", "ticket-sales", "nagi-transfers"].includes(sub) && !requireManageGuild(interaction)) {
       await interaction.reply({ content: "このショップ操作には管理者権限が必要です。", ephemeral: true });
       return;
     }
-    if (sub === "ticket-panel" || sub === "ticket-prices" || sub === "customers") {
+    if (sub === "ticket-panel" || sub === "ticket-prices" || sub === "customers"
+      || sub === "ticket-sales" || sub === "nagi-transfers") {
       await executeKpTicketCommand(interaction);
       return;
     }

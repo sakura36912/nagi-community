@@ -17,12 +17,14 @@ vi.mock("@workspace/db", async importOriginal => ({
   listPaidKpTicketOrders: m.paidOrders, listTransfersToRecipient: m.transfers,
   createAdditionalKpTicketSession: m.createAdditional,
 }));
-vi.mock("../lib/economy", () => ({
+vi.mock("../lib/economy", async importOriginal => ({
+  ...await importOriginal<typeof import("../lib/economy")>(),
   getGuildSettings: m.guildSettings, getShopItem: m.getItem, listShopItems: m.listItems,
 }));
 vi.mock("../lib/logger", () => ({ logger: { error: m.error } }));
 vi.mock("../lib/kpVipVc", () => ({ validateKpVipSource: m.vipSource }));
 import { handleKpTicketInteraction, executeKpTicketCommand, handleKpTicketSalesDate } from "../commands/kpTicket";
+import { commands } from "../commands/index";
 import { KP_TICKET_PREFIX, ticketId } from "../lib/kpTicketUi";
 
 const drink = { id: 1, name: "ドリンク", price: 100, category: "kp", effectType: null, targetRoleId: null };
@@ -176,68 +178,16 @@ describe("KP ticket component flow", () => {
     ])) });
     return i;
   }
-  it.each(["夜鴉", "黒兵", "admin"])("privately totals every ticket in the guild for %s without charging", async role => {
-    const i = allStatementFixture(role === "admin" ? null : role, role === "admin");
-    await run(i); await run(i);
-    expect(i.deferReply).toHaveBeenCalledWith({ ephemeral: true });
-    expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "buyer", force: true });
-    expect(m.paidOrders).toHaveBeenCalledWith("guild", undefined, { start: expect.any(Date), end: expect.any(Date) });
-    expect(i.editReply.mock.calls[0]![0].embeds[0].toJSON().title).toContain("全チケット");
-    expect(m.transfers).not.toHaveBeenCalled();
-    expect(i.channel.send).not.toHaveBeenCalled();
-    expect(m.create).not.toHaveBeenCalled(); expect(m.advance).not.toHaveBeenCalled();
-    expect(m.settle).not.toHaveBeenCalled();
-  });
-  it.each(["夜鴉", "黒兵", "admin"])("privately lists every saved transfer to 凪 for %s", async role => {
-    const i = allStatementFixture(role === "admin" ? null : role, role === "admin");
-    i.customId = `${KP_TICKET_PREFIX}nagi-transfers`;
-    m.transfers.mockResolvedValue([{
-      senderId: "sender-1", amount: -2500, createdAt: new Date("2026-11-15T03:00:00.000Z"),
-    }]);
+  it.each(["all-statement", "nagi-transfers"])("moves legacy %s panel buttons to a slash command", async action => {
+    const i = fixture();
+    i.customId = `${KP_TICKET_PREFIX}${action}`;
     await run(i);
-    expect(i.deferReply).toHaveBeenCalledWith({ ephemeral: true });
-    expect(m.transfers).toHaveBeenCalledWith("guild", "1276893567599644715");
-    const report = i.editReply.mock.calls[0]![0];
-    expect(report.embeds[0].toJSON().description).toContain("<@sender-1>");
-    expect(report.embeds[0].toJSON().description).toContain("2,500円");
-    expect(report.files[0].name).toBe("nagi-transfer-history.txt");
-  });
-  it("does not disclose transfer history to non-staff or through an unregistered panel", async () => {
-    const nonStaff = allStatementFixture("黒真珠");
-    nonStaff.customId = `${KP_TICKET_PREFIX}nagi-transfers`;
-    await run(nonStaff);
-    expect(m.transfers).not.toHaveBeenCalled();
-
-    const unregistered = allStatementFixture("夜鴉");
-    unregistered.customId = `${KP_TICKET_PREFIX}nagi-transfers`;
-    m.panel.mockResolvedValueOnce(false);
-    await run(unregistered);
-    expect(m.transfers).not.toHaveBeenCalled();
-  });
-  it.each([null, "黒真珠", "夜鴉見習い"])("does not disclose other tickets to a non-staff member (%s)", async role => {
-    const i = allStatementFixture(role);
-    await run(i);
+    expect(i.reply).toHaveBeenCalledWith(expect.objectContaining({
+      ephemeral: true,
+      content: expect.stringContaining(action === "all-statement" ? "/shop ticket-sales" : "/shop nagi-transfers"),
+    }));
     expect(m.paidOrders).not.toHaveBeenCalled();
-    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("夜鴉・黒兵") }));
-  });
-  it("does not disclose all-ticket statements when fresh membership cannot be fetched", async () => {
-    const i = allStatementFixture("夜鴉");
-    i.guild.members.fetch.mockRejectedValueOnce(new Error("Discord unavailable"));
-    await run(i);
-    expect(m.paidOrders).not.toHaveBeenCalled();
-    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("操作権限を確認できません") }));
-  });
-  it("does not query all-ticket statements through unregistered panels", async () => {
-    const i = allStatementFixture("夜鴉"); m.panel.mockResolvedValueOnce(false);
-    await run(i);
-    expect(m.paidOrders).not.toHaveBeenCalled();
-  });
-  it("reports all-ticket query failures privately without claiming a successful total", async () => {
-    const i = allStatementFixture(null, true); m.paidOrders.mockRejectedValueOnce(new Error("Database unavailable"));
-    await run(i);
-    expect(i.deferReply).toHaveBeenCalledWith({ ephemeral: true });
-    expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("処理に失敗") }));
-    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.transfers).not.toHaveBeenCalled();
   });
   it.each(["夜鴉", "黒兵", "admin"])("allows the ticket statement only for fresh staff membership (%s), without charging", async role => {
     const i = allStatementFixture(role === "admin" ? null : role, role === "admin");
@@ -266,8 +216,8 @@ describe("KP ticket component flow", () => {
     expect(m.paidOrders).not.toHaveBeenCalled();
     expect(i.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("操作権限を確認できません") }));
   });
-  it.each(["statement", "all-statement"])("rechecks revoked staff membership on every %s click", async action => {
-    const i = allStatementFixture("夜鴉"); i.customId = `${KP_TICKET_PREFIX}${action}`;
+  it("rechecks revoked staff membership on every statement click", async () => {
+    const i = allStatementFixture("夜鴉"); i.customId = `${KP_TICKET_PREFIX}statement`;
     await run(i);
     m.paidOrders.mockClear();
     Object.assign(i.guild.members, { fetch: vi.fn().mockResolvedValue({
@@ -693,6 +643,47 @@ describe("KP ticket price administration", () => {
     expect(m.settle).not.toHaveBeenCalled();
     expect(JSON.stringify(interaction.editReply.mock.calls)).toContain("顧客の利用履歴");
   });
+  it.each([
+    { roles: ["夜鴉"], admin: false }, { roles: ["黒兵"], admin: false }, { roles: [], admin: true },
+  ])("lets approved staff privately run the separate all-ticket sales command: %j", async ({ roles, admin }) => {
+    const interaction = panelAccessFixture(roles, admin);
+    interaction.options.getSubcommand = () => "ticket-sales";
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(interaction.guild.members.fetch).toHaveBeenCalledWith({ user: "caller", force: true });
+    expect(m.paidOrders).toHaveBeenCalledWith("guild", undefined, expect.objectContaining({
+      start: expect.any(Date), end: expect.any(Date),
+    }));
+    expect(interaction.editReply.mock.calls[0]![0].components[0].toJSON().components[0].custom_id)
+      .toBe(`${KP_TICKET_PREFIX}sales-date:caller`);
+    expect(m.panel).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+  it.each([
+    { roles: ["夜鴉"], admin: false }, { roles: ["黒兵"], admin: false }, { roles: [], admin: true },
+  ])("lets approved staff privately run the separate Nagi transfer command: %j", async ({ roles, admin }) => {
+    const interaction = panelAccessFixture(roles, admin);
+    interaction.options.getSubcommand = () => "nagi-transfers";
+    m.transfers.mockResolvedValue([{
+      senderId: "sender-1", amount: -2500, createdAt: new Date("2026-11-15T03:00:00.000Z"),
+    }]);
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(m.transfers).toHaveBeenCalledWith("guild", "1276893567599644715");
+    const report = interaction.editReply.mock.calls[0]![0];
+    expect(report.embeds[0].toJSON().description).toContain("<@sender-1>");
+    expect(report.embeds[0].toJSON().description).toContain("2,500円");
+    expect(report.files[0].name).toBe("nagi-transfer-history.txt");
+    expect(m.panel).not.toHaveBeenCalled();
+  });
+  it.each(["ticket-sales", "nagi-transfers"])("blocks non-staff from the separate %s report", async subcommand => {
+    const interaction = panelAccessFixture(["黒真珠"]);
+    interaction.options.getSubcommand = () => subcommand;
+    await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
+    expect(m.paidOrders).not.toHaveBeenCalled();
+    expect(m.transfers).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.stringContaining("夜鴉・黒兵"));
+  });
   it("does not read customer data after staff role revocation despite stale permissions", async () => {
     const interaction = panelAccessFixture([]);
     interaction.options.getSubcommand = () => "customers";
@@ -765,13 +756,14 @@ describe("KP ticket price administration", () => {
     expect(channel.send).toHaveBeenCalledOnce();
     const panel = channel.send.mock.calls[0]![0];
     expect(panel.embeds[0].toJSON().description).toBe("キミノヒトミニKP予約受付");
-    expect(panel.components[0].toJSON().components).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: "注文する", custom_id: `${KP_TICKET_PREFIX}start` }),
-      expect.objectContaining({ label: "追加注文", custom_id: `${KP_TICKET_PREFIX}additional` }),
-      expect.objectContaining({ label: "明細を集計", custom_id: `${KP_TICKET_PREFIX}statement` }),
-      expect.objectContaining({ label: "全チケットを集計", custom_id: `${KP_TICKET_PREFIX}all-statement` }),
-      expect.objectContaining({ label: "凪への送金履歴", custom_id: `${KP_TICKET_PREFIX}nagi-transfers` }),
-    ]));
+    expect(panel.components[0].toJSON().components.map((component: { label?: string }) => component.label))
+      .toEqual(["注文する", "追加注文", "明細を集計"]);
+  });
+  it("registers the moved reports as separate /shop subcommands", () => {
+    const shop = commands.find(command => command.data.name === "shop")!;
+    const names = (shop.data.toJSON() as { options: { name: string }[] }).options.map(option => option.name);
+    expect(names).toContain("ticket-sales");
+    expect(names).toContain("nagi-transfers");
   });
 
   it("lets an administrator set a price later without resetting the other price", async () => {

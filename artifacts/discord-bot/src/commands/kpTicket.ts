@@ -37,6 +37,10 @@ export const kpCustomersSubcommand = new SlashCommandSubcommandBuilder()
   .setName("customers").setDescription("KP島の支払い済み利用顧客・履歴を確認（夜鴉・黒兵・管理者）")
   .addUserOption(o => o.setName("user").setDescription("指定すると、この顧客の利用履歴を表示"))
   .addIntegerOption(o => o.setName("page").setDescription("表示ページ（省略時は1）").setMinValue(1));
+export const kpAllTicketSalesSubcommand = new SlashCommandSubcommandBuilder()
+  .setName("ticket-sales").setDescription("全チケットの営業日売上を確認（夜鴉・黒兵・管理者）");
+export const kpNagiTransfersSubcommand = new SlashCommandSubcommandBuilder()
+  .setName("nagi-transfers").setDescription("凪への送金履歴を確認（夜鴉・黒兵・管理者）");
 
 function canPost(interaction: ButtonInteraction | ChatInputCommandInteraction | StringSelectMenuInteraction) {
   const channel = interaction.channel, me = interaction.guild?.members.me;
@@ -78,7 +82,7 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
   await interaction.deferReply({ ephemeral: true });
   try {
     const subcommand = interaction.options.getSubcommand();
-    if (subcommand === "ticket-panel" || subcommand === "customers") {
+    if (["ticket-panel", "customers", "ticket-sales", "nagi-transfers"].includes(subcommand)) {
       // Re-fetch the caller: a removed role must not remain authorized through cached membership.
       await requireKpStaff(interaction);
     } else if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
@@ -91,6 +95,15 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
       const period = kpBusinessDay(latestKpBusinessDate());
       const orders = await listPaidKpTicketOrders(interaction.guildId, undefined, period);
       await interaction.editReply(kpCustomers(orders, currencyName, target?.id, page, period));
+      return;
+    }
+    if (subcommand === "ticket-sales") {
+      await showKpSales(interaction, kpBusinessDay());
+      return;
+    }
+    if (subcommand === "nagi-transfers") {
+      const transfers = await listTransfersToRecipient(interaction.guildId, KP_TRANSFER_RECIPIENT_ID);
+      await interaction.editReply(kpTransferHistory(transfers, currencyName, KP_TRANSFER_RECIPIENT_ID));
       return;
     }
     if (subcommand === "ticket-prices") {
@@ -114,8 +127,6 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}start`).setLabel("注文する").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}additional`).setLabel("追加注文").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}statement`).setLabel("明細を集計").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}all-statement`).setLabel("全チケットを集計").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`${KP_TICKET_PREFIX}nagi-transfers`).setLabel("凪への送金履歴").setStyle(ButtonStyle.Secondary),
       )],
       allowedMentions: { parse: [] },
     });
@@ -135,7 +146,7 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
 type TicketInteraction = ButtonInteraction | StringSelectMenuInteraction;
 
 async function showKpSales(
-  interaction: TicketInteraction | ModalSubmitInteraction,
+  interaction: TicketInteraction | ModalSubmitInteraction | ChatInputCommandInteraction,
   period: KpBusinessDay,
 ) {
   const orders = await listPaidKpTicketOrders(interaction.guildId!, undefined, { start: period.start, end: period.end });
@@ -165,7 +176,7 @@ async function showKpSales(
 export async function handleKpTicketSalesDate(interaction: ButtonInteraction | ModalSubmitInteraction) {
   const [action, owner] = interaction.customId.slice(KP_TICKET_PREFIX.length).split(":");
   if (!interaction.guildId || !interaction.guild || owner !== interaction.user.id) {
-    await interaction.reply({ content: "この集計操作は使用できません。自分で全チケット集計を開いてください。", ephemeral: true });
+    await interaction.reply({ content: "この集計操作は使用できません。/shop ticket-sales を実行してください。", ephemeral: true });
     return;
   }
   if (action === "sales-date" && interaction.isButton()) {
@@ -296,12 +307,18 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
     return;
   }
   const encoded = interaction.customId.slice(KP_TICKET_PREFIX.length);
+  if (encoded === "all-statement" || encoded === "nagi-transfers") {
+    await interaction.reply({
+      content: encoded === "all-statement"
+        ? "全チケット売上は /shop ticket-sales から確認できます。"
+        : "凪への送金履歴は /shop nagi-transfers から確認できます。",
+      ephemeral: true,
+    });
+    return;
+  }
   const starting = encoded === "start" || encoded === "additional";
-  const allTickets = encoded === "all-statement";
-  const nagiTransfers = encoded === "nagi-transfers";
-  const statement = encoded === "statement" || allTickets;
-  if (allTickets || nagiTransfers) await interaction.deferReply({ ephemeral: true });
-  else if (statement) await interaction.deferReply();
+  const statement = encoded === "statement";
+  if (statement) await interaction.deferReply();
   else if (starting) await interaction.deferReply({ ephemeral: true });
   else await interaction.deferUpdate();
   try {
@@ -310,23 +327,9 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
         throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
       }
       await requireKpStaff(interaction);
-      if (allTickets) {
-        await showKpSales(interaction, kpBusinessDay());
-        return;
-      }
       const orders = await listPaidKpTicketOrders(interaction.guildId, interaction.channelId);
       const { currencyName } = await getGuildSettings(interaction.guildId);
-      await interaction.editReply(kpTicketStatement(orders, currencyName, allTickets));
-      return;
-    }
-    if (nagiTransfers) {
-      if (!await isKpTicketPanel(interaction.message.id, interaction.guildId, interaction.channelId)) {
-        throw new KpTicketError("このパネルは未登録です。管理者に再設置を依頼してください。");
-      }
-      await requireKpStaff(interaction);
-      const transfers = await listTransfersToRecipient(interaction.guildId, KP_TRANSFER_RECIPIENT_ID);
-      const { currencyName } = await getGuildSettings(interaction.guildId);
-      await interaction.editReply(kpTransferHistory(transfers, currencyName, KP_TRANSFER_RECIPIENT_ID));
+      await interaction.editReply(kpTicketStatement(orders, currencyName));
       return;
     }
     if (starting) {
@@ -453,7 +456,7 @@ export async function handleKpTicketInteraction(interaction: TicketInteraction) 
   } catch (error) {
     if (!(error instanceof KpTicketError)) logger.error("[kp-ticket] Interaction failed", error);
     const content = error instanceof KpTicketError ? error.message : "注文の処理に失敗しました。支払い操作の場合は同じ確定ボタンから結果を確認できます。";
-    if (starting || statement || nagiTransfers) await interaction.editReply({ content, components: [] });
+    if (starting || statement) await interaction.editReply({ content, components: [] });
     else await interaction.followUp({ content, ephemeral: true });
   }
 }
