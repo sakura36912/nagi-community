@@ -1,5 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import {
+  CHINCHIRO_MAX_BET,
   db, walletsTable, transactionsTable, chinchiroTablePlayersTable,
   type ChinchiroTable, type ChinchiroTablePlayer,
 } from "@workspace/db";
@@ -43,6 +44,9 @@ async function changeBalance(tx: Tx, guildId: string, userId: string, amount: nu
 export async function reserveBet(
   tx: Tx, table: ChinchiroTable, player: ChinchiroTablePlayer, bet: number, playerCount: number,
 ) {
+  if (!Number.isSafeInteger(bet) || bet < 1 || bet > CHINCHIRO_MAX_BET) {
+    throw new Error("チンチロの最大掛け金は50,000です。");
+  }
   const previous = player.bet ? exposure(table, player.userId, player.bet, playerCount) : 0;
   const next = exposure(table, player.userId, bet, playerCount);
   const delta = next - previous;

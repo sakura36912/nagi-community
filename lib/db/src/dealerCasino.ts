@@ -25,6 +25,7 @@ import type {
   DealerCasinoSettings,
 } from "./schema/dealerCasino";
 import { vcHubChannelsTable, vcHubSessionsTable } from "./schema/vcHub";
+import { CHOHAN_MAX_BET, dealerCasinoMaximumBet } from "./gameBetLimits";
 
 export type DealerCasinoType = "chohan" | "poker";
 export type DealerCasinoState =
@@ -115,10 +116,14 @@ function assertConfiguredSettings(
   if (!settings.maxPlayers || settings.maxPlayers < 1) {
     throw new DealerCasinoError("Configure a positive maximum player count before opening a game.", "SETTINGS_REQUIRED");
   }
-  if (settings.maxBet < settings.minBet || settings.minBet < 1) {
+  const maxBet = dealerCasinoMaximumBet(gameType, settings.maxBet);
+  if (maxBet < settings.minBet || settings.minBet < 1) {
     throw new DealerCasinoError("The configured betting range is invalid.", "INVALID_SETTINGS");
   }
   if (gameType === "chohan") {
+    if (settings.minBet > CHOHAN_MAX_BET) {
+      throw new DealerCasinoError("丁半の最低掛け金は最大掛け金50,000以下にしてください。", "INVALID_SETTINGS");
+    }
     if (
       settings.chohanEnabled !== 1 ||
       !settings.chohanMultipliers ||
@@ -463,8 +468,9 @@ export async function placeDealerCasinoBet(
       .where(eq(dealerCasinoSettingsTable.guildId, game.guildId))
       .limit(1);
     if (!settings) throw new DealerCasinoError("Dealer casino settings are missing.", "SETTINGS_REQUIRED");
-    if (input.amount < settings.minBet || input.amount > settings.maxBet) {
-      throw new DealerCasinoError(`Bet must be between ${settings.minBet} and ${settings.maxBet}.`, "BET_OUT_OF_RANGE");
+    const maxBet = dealerCasinoMaximumBet(game.gameType, settings.maxBet);
+    if (input.amount < settings.minBet || input.amount > maxBet) {
+      throw new DealerCasinoError(`Bet must be between ${settings.minBet} and ${maxBet}.`, "BET_OUT_OF_RANGE");
     }
 
     const [existingBet] = await tx
@@ -556,7 +562,9 @@ export async function updateDealerCasinoBet(input: {
       .from(dealerCasinoSettingsTable)
       .where(eq(dealerCasinoSettingsTable.guildId, game.guildId))
       .limit(1);
-    if (!settings || input.amount < settings.minBet || input.amount > settings.maxBet) {
+    if (!settings) throw new DealerCasinoError("Dealer casino settings are missing.", "SETTINGS_REQUIRED");
+    const maxBet = dealerCasinoMaximumBet(game.gameType, settings.maxBet);
+    if (input.amount < settings.minBet || input.amount > maxBet) {
       throw new DealerCasinoError("Bet is outside the configured range.", "BET_OUT_OF_RANGE");
     }
     const [bet] = await tx.select()

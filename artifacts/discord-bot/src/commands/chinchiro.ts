@@ -14,6 +14,8 @@ import {
   db,
   transactionsTable,
   walletsTable,
+  CHINCHIRO_MAX_BET,
+  clampChinchiroMaxBet,
   type ChinchiroGame,
 } from "@workspace/db";
 import { getGuildSettings, getOrCreateWallet } from "../lib/economy";
@@ -506,6 +508,7 @@ async function createChallenge(
   bet: number,
   currencyName: string,
 ): Promise<CreateChallengeResult> {
+  if (bet > CHINCHIRO_MAX_BET) return { ok: false, reason: "bet_too_high" };
   const reserve = bet * MAX_PAYOUT_MULTIPLIER;
   if (!Number.isSafeInteger(reserve) || reserve > MAX_DATABASE_BALANCE) {
     return { ok: false, reason: "bet_too_high" };
@@ -978,7 +981,7 @@ async function handleChallenge(interaction: ChatInputCommandInteraction): Promis
 
   await interaction.deferReply();
   const settings = await getGuildSettings(interaction.guildId);
-  const maxBet = settings.casinoMaxBet ?? CASINO_DEFAULT_MAX_BET;
+  const maxBet = clampChinchiroMaxBet(settings.casinoMaxBet ?? CASINO_DEFAULT_MAX_BET);
   if (bet > maxBet) {
     await interaction.editReply(
       `賭け金が上限（**${maxBet.toLocaleString()}** ${settings.currencyName}）を超えています。`,

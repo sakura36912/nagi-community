@@ -5,7 +5,7 @@ export const chinchiroMultiplayerSettingsTable = pgTable("chinchiro_multiplayer_
   guildId: text("guild_id").primaryKey(),
   voiceChannelId: text("voice_channel_id"),
   minBet: integer("min_bet").notNull().default(1000),
-  maxBet: integer("max_bet").notNull().default(100000),
+  maxBet: integer("max_bet").notNull().default(50000),
   logChannelId: text("log_channel_id"),
   testMode: integer("test_mode").notNull().default(1),
 });

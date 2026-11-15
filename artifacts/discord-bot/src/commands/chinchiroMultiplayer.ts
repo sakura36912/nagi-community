@@ -7,6 +7,8 @@ import {
 } from "discord.js";
 import { and, asc, eq, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
 import {
+  CHINCHIRO_MAX_BET,
+  clampChinchiroMaxBet,
   chinchiroMultiplayerSettingsTable, chinchiroTablePlayersTable, chinchiroTablesTable,
   dealerCasinoSettingsTable, db, type ChinchiroTable, type ChinchiroTablePlayer,
 } from "@workspace/db";
@@ -100,14 +102,20 @@ function displayNameFor(ps: ChinchiroTablePlayer[], userId: string | null): stri
   return ps.find((player) => player.userId === userId)?.displayName ?? "参加者";
 }
 
+function withBetLimit(
+  row: typeof chinchiroMultiplayerSettingsTable.$inferSelect,
+): typeof chinchiroMultiplayerSettingsTable.$inferSelect {
+  return { ...row, maxBet: clampChinchiroMaxBet(row.maxBet) };
+}
+
 async function settings(guildId: string) {
   const [row] = await db.select().from(chinchiroMultiplayerSettingsTable)
     .where(eq(chinchiroMultiplayerSettingsTable.guildId, guildId));
-  if (row) return row;
+  if (row) return withBetLimit(row);
   const [created] = await db.insert(chinchiroMultiplayerSettingsTable)
     .values({ guildId }).onConflictDoNothing().returning();
-  return created ?? (await db.select().from(chinchiroMultiplayerSettingsTable)
-    .where(eq(chinchiroMultiplayerSettingsTable.guildId, guildId)))[0]!;
+  return withBetLimit(created ?? (await db.select().from(chinchiroMultiplayerSettingsTable)
+    .where(eq(chinchiroMultiplayerSettingsTable.guildId, guildId)))[0]!);
 }
 async function table(id: number) {
   const [row] = await db.select().from(chinchiroTablesTable).where(eq(chinchiroTablesTable.id, id));
@@ -527,8 +535,8 @@ export const chinchiroRecruitCommand = {
     .addSubcommand((s) => s.setName("recruit").setDescription("チンチロ参加者を募集する"))
     .addSubcommand((s) => s.setName("config").setDescription("管理者設定").addChannelOption((o) =>
       o.setName("voice").setDescription("参加必須VC").addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice))
-      .addIntegerOption((o) => o.setName("min_bet").setDescription("最低賭け金").setMinValue(1))
-      .addIntegerOption((o) => o.setName("max_bet").setDescription("最高賭け金").setMinValue(1))
+      .addIntegerOption((o) => o.setName("min_bet").setDescription("最低賭け金").setMinValue(1).setMaxValue(CHINCHIRO_MAX_BET))
+      .addIntegerOption((o) => o.setName("max_bet").setDescription("最高賭け金").setMinValue(1).setMaxValue(CHINCHIRO_MAX_BET))
       .addBooleanOption((o) => o.setName("live").setDescription("実残高での精算を有効にする（falseでテストモード）"))
       .addChannelOption((o) =>
         o.setName("logs").setDescription("ログ送信先").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)))
@@ -557,6 +565,9 @@ export const chinchiroRecruitCommand = {
         const voice = voiceChannel?.id, logs = logChannel?.id;
         const current = await settings(interaction.guildId);
         const nextMin = minBet ?? current.minBet, nextMax = maxBet ?? current.maxBet;
+        if (nextMin > CHINCHIRO_MAX_BET || nextMax > CHINCHIRO_MAX_BET) {
+          await interaction.reply({ content: "チンチロの掛け金は50,000以下にしてください。", flags: MessageFlags.Ephemeral }); return;
+        }
         if (nextMin > nextMax) { await interaction.reply({ content: "最低賭け金は最高賭け金以下にしてください。", flags: MessageFlags.Ephemeral }); return; }
         if (!hasExplicitOption && !voice) {
           await interaction.reply({
@@ -795,7 +806,8 @@ export async function handleMultiplayerChinchiroModal(interaction: ModalSubmitIn
   const id = Number(interaction.customId.split(":")[2]); const t = await table(id);
   if (!t || t.guildId !== interaction.guildId || t.status !== "betting") { await interaction.reply({ content: "賭け金入力の期限が切れています。", flags: MessageFlags.Ephemeral }); return; }
   const config = await settings(t.guildId), bet = Number(interaction.fields.getTextInputValue("bet"));
-  if (!Number.isSafeInteger(bet) || bet < config.minBet || bet > config.maxBet) { await interaction.reply({ content: `賭け金は${config.minBet}〜${config.maxBet}の整数にしてください。`, flags: MessageFlags.Ephemeral }); return; }
+  const maxBet = clampChinchiroMaxBet(config.maxBet);
+  if (!Number.isSafeInteger(bet) || bet < config.minBet || bet > maxBet) { await interaction.reply({ content: `賭け金は${config.minBet}〜${maxBet}の整数にしてください。`, flags: MessageFlags.Ephemeral }); return; }
   let updated: ChinchiroTable | null;
   try {
     updated = await db.transaction(async (tx) => {

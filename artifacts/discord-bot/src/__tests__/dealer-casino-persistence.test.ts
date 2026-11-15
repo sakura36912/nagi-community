@@ -222,6 +222,27 @@ hubIntegrationDescribe("dealer casino Hub transfer persistence", () => {
 });
 
 integrationDescribe("dealer casino DB persistence", () => {
+  it("allows 50,000 for 丁半 but preserves the configured Poker maximum", async () => {
+    const chohan = await makeGame("chohan");
+    const chohanPlayer = userId();
+    await setBalance(chohan.guildId, chohanPlayer, 50_000);
+
+    await expect(placeDealerCasinoBet({
+      gameId: chohan.gameId, userId: chohanPlayer, amount: 50_001, choice: "cho",
+    })).rejects.toMatchObject({ code: "BET_OUT_OF_RANGE" });
+    const chohanBet = await placeDealerCasinoBet({
+      gameId: chohan.gameId, userId: chohanPlayer, amount: 50_000, choice: "cho",
+    });
+    expect(chohanBet.betAmount).toBe(50_000);
+
+    const poker = await makeGame("poker");
+    const pokerPlayer = userId();
+    await setBalance(poker.guildId, pokerPlayer, 50_000);
+    await expect(placeDealerCasinoBet({
+      gameId: poker.gameId, userId: pokerPlayer, amount: 50_000,
+    })).rejects.toMatchObject({ code: "BET_OUT_OF_RANGE" });
+  });
+
   it.each(["chohan", "poker"] as const)("%s credits its dealer share exactly once", async (gameType) => {
     const context = await makeGame(gameType);
     const playerId = userId();

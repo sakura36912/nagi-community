@@ -19,8 +19,10 @@ import {
 import {
   applyDealerCasinoChohanStreakDecision,
   cancelDealerCasinoGame,
+  CHOHAN_MAX_BET,
   createDealerCasinoGame,
   dealDealerCasinoPoker,
+  dealerCasinoMaximumBet,
   DealerCasinoError,
   endDealerCasinoSession,
   getActiveDealerCasinoGame,
@@ -343,9 +345,10 @@ function statusLabel(state: string): string {
 export function gameEmbed(game: DealerCasinoGame, settings: DealerCasinoSettings | null, bets: DealerCasinoBet[]): EmbedBuilder {
   const kind = game.gameType as DealerCasinoType;
   const title = LABELS[kind] ?? "🎲 賭博場ゲーム";
+  const maxBet = settings ? dealerCasinoMaximumBet(kind, settings.maxBet) : null;
   const description = [
     `ディーラー: <@${game.dealerId}>`,
-    `賭け金: **${settings?.minBet.toLocaleString() ?? "未設定"}〜${settings?.maxBet.toLocaleString() ?? "未設定"}**`,
+    `賭け金: **${settings?.minBet.toLocaleString() ?? "未設定"}〜${maxBet?.toLocaleString() ?? "未設定"}**`,
     `状態: **${statusLabel(game.state)}**`,
     `参加人数: **${bets.length}${settings?.maxPlayers ? `/${settings.maxPlayers}` : ""}**`,
   ];
@@ -527,11 +530,12 @@ async function postPanel(interaction: ChatInputCommandInteraction, game: DealerC
     getDealerCasinoSettings(game.guildId),
     getGuildSettings(game.guildId),
   ]);
+  const maxBet = settings ? dealerCasinoMaximumBet(game.gameType, settings.maxBet) : null;
   try {
     const message = await channel.send({
       embeds: [gameEmbed(game, settings, []).setDescription([
         `ディーラー: <@${game.dealerId}>`,
-        `掛け金: **${settings?.minBet.toLocaleString()}〜${settings?.maxBet.toLocaleString()} ${currency.currencyName}**`,
+        `掛け金: **${settings?.minBet.toLocaleString()}〜${maxBet?.toLocaleString()} ${currency.currencyName}**`,
         "状態: **参加受付中**",
         "参加するには下の丁・半ボタンから予想と掛け金を入力してください。賭博師は「受付終了」ボタンで締め切れます。",
       ].join("\n"))],
@@ -564,7 +568,8 @@ function settingsStatus(
     { name: "利用ロール", value: settings.dealerRoleId ? `<@&${settings.dealerRoleId}>` : "未設定", inline: true },
     { name: "賭博頭領ロール", value: settings.directorRoleId ? `<@&${settings.directorRoleId}>` : "未設定", inline: true },
     { name: "進行可能な管理者ロール", value: settings.adminRoleId ? `<@&${settings.adminRoleId}>` : "未設定", inline: true },
-    { name: "賭け金範囲", value: `${settings.minBet.toLocaleString()}〜${settings.maxBet.toLocaleString()}`, inline: true },
+    { name: "ポーカー掛け金範囲", value: `${settings.minBet.toLocaleString()}〜${settings.maxBet.toLocaleString()}`, inline: true },
+    { name: "丁半掛け金範囲", value: `${settings.minBet.toLocaleString()}〜${CHOHAN_MAX_BET.toLocaleString()}`, inline: true },
     { name: "最大参加人数", value: settings.maxPlayers?.toString() ?? "未設定", inline: true },
     { name: "丁半", value: settings.chohanEnabled === 1 ? `有効 — ${streaks}` : "無効または未設定", inline: false },
     { name: "丁半倍率上限", value: settings.chohanMaxStreakMultiplier === null ? "未設定" : `×${settings.chohanMaxStreakMultiplier}`, inline: true },
@@ -998,7 +1003,7 @@ async function openBetModal(interaction: ButtonInteraction, gameId: number, choi
       .setCustomId("amount")
       .setLabel("掛け金（整数）")
       .setStyle(TextInputStyle.Short)
-      .setPlaceholder("1000")
+      .setPlaceholder(game.gameType === "chohan" ? `最大 ${CHOHAN_MAX_BET.toLocaleString()}` : "1000")
       .setRequired(true)
       .setMaxLength(10),
   ));
@@ -1011,6 +1016,9 @@ async function submitBetModal(interaction: ModalSubmitInteraction, gameId: numbe
   if (game.state !== "RECRUITING") throw new Error("募集終了後は参加・変更できません。");
   const member = await requireGameParticipant(interaction, game);
   const amount = integerValue(interaction.fields.getTextInputValue("amount"), "掛け金");
+  if (game.gameType === "chohan" && amount > CHOHAN_MAX_BET) {
+    throw new Error(`丁半の最大掛け金は${CHOHAN_MAX_BET.toLocaleString()}です。`);
+  }
   if (game.gameType === "chohan" && choice !== "cho" && choice !== "han") throw new Error("丁または半を選択してください。");
   const existing = (await listDealerCasinoBets(gameId)).find((entry) => entry.userId === member.id);
   if (existing) {

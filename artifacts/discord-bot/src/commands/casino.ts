@@ -593,7 +593,7 @@ export const casinoCommand = {
           .addRoleOption((opt) => opt.setName("manager").setDescription("追加の管理者ロール").setRequired(false)))
         .addSubcommand((sub) => sub.setName("dealer_rule").setDescription("【管理者】賭博師ゲームのルールを設定する")
           .addStringOption((opt) => opt.setName("key").setDescription("設定項目").setRequired(true).addChoices(
-            { name: "最低掛け金", value: "min_bet" }, { name: "最高掛け金", value: "max_bet" },
+            { name: "最低掛け金", value: "min_bet" }, { name: "ポーカー最高掛け金（丁半は50,000）", value: "max_bet" },
             { name: "最大参加人数", value: "max_players" }, { name: "丁半の連勝倍率 (カンマ区切り)", value: "streak_multipliers" },
             { name: "丁半の連勝上限倍率", value: "streak_cap" },
             { name: "連勝維持時間（分）", value: "streak_minutes" },
