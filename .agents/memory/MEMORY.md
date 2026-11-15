@@ -35,7 +35,7 @@
 - [Bounty panel access scope](bounty-panel-access-scope.md) — 広報部・本船員へのパネル操作の委譲を、初期設定や月次保留精算の承認権限へ自動的に広げない。
 - [Forum copy policy](forum-copy-policy.md) — 別フォーラムへの移行は元投稿を維持するコピーとし、管理者の公開範囲確認後に実行する。
 - [GitHub repository scope](github-repository-scope.md) — 凪通貨BOTと多機能BOTは別々の新規非公開リポジトリへ保存する。
-- [KP shop policy](kp-shop-policy.md) — 2人まで指名可能。初回はキャストごとに1stドリンクを選択し合算請求、VIPにも2人指名を適用する。
+- [KP shop policy](kp-shop-policy.md) — 2人VIPは顧客ごとに全額を個別請求し、双方の承認後に決済。注文者の割引・顧客ごとの1stドリンクを維持する。
 - [島民の一般コマンド開放](island-command-access.md) — 島民を理由とした共通制限は撤廃。管理操作・追放者制限・個別の参加条件は維持する。
 - [鍛冶屋統合方針](forge-integration-policy.md) — 操作は多機能Bot、残高は銀行と共有。本船員限定・内部数値非公開・失敗時も費用消費。
 - [ボス討伐方針](boss-event-policy.md) — 参加時所持金を最大HPに固定、通常回復は最大HPの10%。武器補正維持、攻撃無料・回復有料。
