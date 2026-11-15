@@ -1,5 +1,6 @@
 import { AttachmentBuilder, EmbedBuilder, escapeMarkdown } from "discord.js";
 import { KpTicketError, type KpTicketSession } from "@workspace/db";
+import type { KpBusinessDay } from "./kpBusinessDay";
 
 const date = (value: Date | null) => value
   ? value.toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", hour12: false }) + " JST"
@@ -7,9 +8,10 @@ const date = (value: Date | null) => value
 
 /** Paid order snapshots are the source of truth: no second customer ledger or new debit. */
 export function kpCustomers(
-  orders: KpTicketSession[], currency: string, userId?: string, page = 1,
+  orders: KpTicketSession[], currency: string, userId: string | undefined, page: number, period: KpBusinessDay,
 ) {
-  const selected = orders.filter(order => order.phase === "paid" && (!userId || order.userId === userId));
+  const selected = orders.filter(order => order.phase === "paid" && order.paidAt
+    && order.paidAt >= period.start && order.paidAt < period.end && (!userId || order.userId === userId));
   const customers = new Map<string, {
     id: string; tickets: Set<string>; orders: number; total: bigint;
     first: Date | null; last: Date | null; casts: Set<string>;
@@ -59,7 +61,7 @@ export function kpCustomers(
   const embed = new EmbedBuilder().setTitle(userId ? "KP島 — 顧客の利用履歴" : "KP島 — 利用顧客一覧")
     .setColor(0xd49b43)
     .setDescription(preview.join("\n\n") || "支払い済みの利用記録はありません。")
-    .setFooter({ text: `${page}/${pages}ページ・全期間・削除済みチケットを含む・追加の引き落としなし` });
+    .setFooter({ text: `${page}/${pages}ページ・${period.label}・削除済みチケットを含む・追加の引き落としなし` });
   if (userId) {
     const row = customers.get(userId);
     embed.addFields({ name: "顧客", value: `<@${userId}>（${userId}）` },
@@ -67,7 +69,7 @@ export function kpCustomers(
   } else {
     embed.addFields({ name: "顧客数", value: `${rows.length}人` });
   }
-  const text = "KP島 利用顧客記録（全期間・支払い済みのみ・日時は日本時間）\n"
+  const text = `KP島 利用顧客記録（${period.label}・支払い済みのみ・日時は日本時間）\n`
     + "チケット数はチャンネルIDの重複を除外。追加注文は注文数に含みます。\n\n"
     + rows.map(summary).join("\n\n")
     + (userId ? "\n\n【全注文履歴】\n" + detail.map(orderText).join("\n\n") : "");

@@ -101,9 +101,9 @@ export async function getKpTicketSession(id: string) {
 }
 
 /** Read-only settled orders, including expired sessions. Omit channelId for this guild's full statement. */
-export async function listPaidKpTicketOrders(guildId: string, channelId?: string, period?: { start: Date; end: Date }) {
-  if (period && (!Number.isFinite(period.start.getTime()) || !Number.isFinite(period.end.getTime())
-    || period.start.getTime() >= period.end.getTime())) {
+export async function listPaidKpTicketOrders(guildId: string, channelId?: string, period?: { start: Date; end?: Date }) {
+  if (period && (!Number.isFinite(period.start.getTime())
+    || (period.end && (!Number.isFinite(period.end.getTime()) || period.start.getTime() >= period.end.getTime())))) {
     throw new KpTicketError("集計期間が不正です。");
   }
   await ensureKpTicketSchema();
@@ -112,7 +112,7 @@ export async function listPaidKpTicketOrders(guildId: string, channelId?: string
     channelId === undefined ? undefined : eq(kpTicketSessionsTable.channelId, channelId),
     eq(kpTicketSessionsTable.phase, "paid"),
     period ? gte(kpTicketSessionsTable.paidAt, period.start) : undefined,
-    period ? lt(kpTicketSessionsTable.paidAt, period.end) : undefined,
+    period?.end ? lt(kpTicketSessionsTable.paidAt, period.end) : undefined,
   )).orderBy(kpTicketSessionsTable.createdAt, kpTicketSessionsTable.id);
 }
 

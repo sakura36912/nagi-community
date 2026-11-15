@@ -88,8 +88,9 @@ export async function executeKpTicketCommand(interaction: ChatInputCommandIntera
     if (subcommand === "customers") {
       const target = interaction.options.getUser("user");
       const page = interaction.options.getInteger("page") ?? 1;
-      const orders = await listPaidKpTicketOrders(interaction.guildId);
-      await interaction.editReply(kpCustomers(orders, currencyName, target?.id, page));
+      const period = kpBusinessDay(latestKpBusinessDate());
+      const orders = await listPaidKpTicketOrders(interaction.guildId, undefined, period);
+      await interaction.editReply(kpCustomers(orders, currencyName, target?.id, page, period));
       return;
     }
     if (subcommand === "ticket-prices") {

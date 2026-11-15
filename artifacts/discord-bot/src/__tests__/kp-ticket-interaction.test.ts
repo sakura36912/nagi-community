@@ -685,7 +685,9 @@ describe("KP ticket price administration", () => {
     interaction.options.getSubcommand = () => "customers";
     Object.assign(interaction.options, { getUser: () => ({ id: "buyer" }), getInteger: () => 1 });
     await executeKpTicketCommand(interaction as unknown as ChatInputCommandInteraction);
-    expect(m.paidOrders).toHaveBeenCalledWith("guild");
+    expect(m.paidOrders).toHaveBeenCalledWith("guild", undefined, expect.objectContaining({
+      start: expect.any(Date), end: expect.any(Date),
+    }));
     expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
     expect(interaction.channel.send).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();

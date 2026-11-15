@@ -234,6 +234,8 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
       expect(await listPaidKpTicketOrders(queryGuild, undefined, {
         start: new Date("2025-01-01T09:00:00Z"), end: new Date("2025-01-02T01:00:00Z"),
       })).toHaveLength(0);
+      expect(await listPaidKpTicketOrders(queryGuild, undefined, { start: new Date("2026-11-08T09:00:00Z") }))
+        .toHaveLength(5);
       await expect(listPaidKpTicketOrders(queryGuild, undefined, { start: period.end, end: period.start })).rejects.toThrow("集計期間");
     } finally {
       await db.delete(kpTicketSessionsTable).where(eq(kpTicketSessionsTable.guildId, queryGuild));
