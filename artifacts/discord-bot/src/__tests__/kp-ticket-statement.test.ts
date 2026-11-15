@@ -41,6 +41,22 @@ describe("KP ticket paid statement", () => {
     expect(text).toContain("チケットID: other-ticket");
     expect(result.files[0]!.name).toBe("kp-all-tickets-statement.txt");
   });
+  it("shows two cast-specific drinks and includes both in the drink total", () => {
+    const order = paid("two-cast", true);
+    order.selection.castIds = ["cast-a", "cast-b"];
+    order.selection.quote!.items = [
+      { castId: "cast-a", itemId: 1, itemName: "ドリンク", unitPrice: 100, quantity: 1 },
+      { castId: "cast-b", itemId: 2, itemName: "お茶", unitPrice: 250, quantity: 1 },
+    ];
+    order.selection.quote!.unitPrice = 100;
+    order.selection.quote!.quantity = 2;
+    order.selection.quote!.total = 1050;
+    const result = kpTicketStatement([order], "円");
+    expect(result.embeds[0]!.toJSON().fields![0]!.value).toContain("ドリンク代: 350円");
+    const text = (result.files[0]!.attachment as Buffer).toString("utf8");
+    expect(text).toContain("指名キャストID: cast-a, cast-b");
+    expect(text).toContain("お茶（キャストID: cast-b）: 250円 × 1");
+  });
   it("clearly labels an empty all-ticket statement as server-wide", () => {
     const result = kpTicketStatement([], "円", true);
     expect(result.embeds[0]!.toJSON().description).toContain("このサーバー");

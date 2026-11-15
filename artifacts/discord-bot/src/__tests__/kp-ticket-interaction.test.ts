@@ -28,6 +28,7 @@ import { commands } from "../commands/index";
 import { KP_TICKET_PREFIX, ticketId } from "../lib/kpTicketUi";
 
 const drink = { id: 1, name: "ドリンク", price: 100, category: "kp", effectType: null, targetRoleId: null };
+const drink2 = { id: 2, name: "お茶", price: 250, category: "kp", effectType: null, targetRoleId: null };
 let session: KpTicketSession;
 let settings: { guildId: string; castRoleIds: string[]; vipPrice: number | null; extensionPrice: number | null };
 function member(id: string, roleIds: string[], bot = false) {
@@ -65,11 +66,21 @@ function fixture() {
   };
 }
 const run = (i: ReturnType<typeof fixture>) => handleKpTicketInteraction(i as unknown as ButtonInteraction);
-async function choose(i: ReturnType<typeof fixture>, value: string) {
+async function select(i: ReturnType<typeof fixture>, value: string) {
   i.customId = ticketId(session.phase, session);
   i.values = [value];
   i.isButton = () => false; i.isStringSelectMenu = () => true;
   await handleKpTicketInteraction(i as unknown as StringSelectMenuInteraction);
+}
+async function skipSecondCast(i: ReturnType<typeof fixture>) {
+  i.customId = ticketId("cast2-skip", session);
+  i.isButton = () => true; i.isStringSelectMenu = () => false;
+  await run(i);
+}
+async function choose(i: ReturnType<typeof fixture>, value: string) {
+  if (session.phase === "cast2") await skipSecondCast(i);
+  await select(i, value);
+  if (session.phase === "cast2") await skipSecondCast(i);
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -93,8 +104,8 @@ beforeEach(() => {
   m.paidOrders.mockResolvedValue([]);
   m.transfers.mockResolvedValue([]);
   m.guildSettings.mockResolvedValue({ currencyName: "円" });
-  m.getItem.mockResolvedValue(drink);
-  m.listItems.mockResolvedValue([drink]);
+  m.getItem.mockImplementation(async (_guildId: string, itemId: number) => itemId === drink2.id ? drink2 : drink);
+  m.listItems.mockResolvedValue([drink, drink2]);
   m.settle.mockImplementation(async () => {
     session = { ...session, phase: "paid", paidAt: new Date() };
     return { status: "paid", session };
@@ -121,7 +132,7 @@ describe("KP ticket component flow", () => {
     expect(session.phase).toBe("confirm");
     expect(session.selection.quote).toMatchObject({ total: 200000, vipPrice: 200000, extensionPrice: 0, itemId: null });
     expect(m.settle).not.toHaveBeenCalled();
-    i.customId = ticketId("confirm", session); await run(i);
+    i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false; await run(i);
     expect(m.vipSource).toHaveBeenCalledWith(i.guild);
     expect(m.settle).toHaveBeenCalledOnce();
     expect(i.editReply.mock.calls.at(-1)![0].content).toContain("1570354388462215248");
@@ -152,8 +163,38 @@ describe("KP ticket component flow", () => {
     expect(session.selection.quote).toMatchObject({ total: 200000, vipPrice: 200000 });
     expect(i.editReply.mock.calls.at(-1)![0].content).toContain("もう一度確定してください");
 
-    i.customId = ticketId("confirm", session); await run(i);
+    i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false; await run(i);
     expect(m.settle).toHaveBeenCalledOnce();
+  });
+  it("lets two nominated casts receive separately chosen first drinks in VIP", async () => {
+    const i = fixture();
+    i.members.set("buyer", member("buyer", ["black-member"]));
+    await select(i, "black-cast");
+    expect(session.phase).toBe("cast2");
+    await select(i, "white-cast");
+    expect(session.selection.castIds).toEqual(["black-cast", "white-cast"]);
+    await choose(i, "solo");
+    expect(session.selection.vipDiscountApplied).toBe(true);
+    await choose(i, "1");
+    expect(session.phase).toBe("drink2");
+    expect(session.selection.drinkSelections).toEqual([{ castId: "black-cast", itemId: 1, quantity: 1 }]);
+    await choose(i, "2");
+    expect(session.phase).toBe("confirm");
+    expect(session.selection.quote).toMatchObject({
+      total: 100350, vipPrice: 100000,
+      items: [
+        { castId: "black-cast", itemId: 1, itemName: "ドリンク", unitPrice: 100, quantity: 1 },
+        { castId: "white-cast", itemId: 2, itemName: "お茶", unitPrice: 250, quantity: 1 },
+      ],
+    });
+    i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false; await run(i);
+    expect(m.settle).toHaveBeenCalledOnce();
+    const paidLog = i.channel.send.mock.calls[0]![0];
+    const fields = paidLog.embeds[0].toJSON().fields;
+    expect(fields.find((field: { name: string }) => field.name === "指名キャスト")?.value)
+      .toBe("<@black-cast>\n<@white-cast>");
+    expect(fields.find((field: { name: string }) => field.name === "ドリンク")?.value)
+      .toContain("<@white-cast>：お茶 × 1個");
   });
   it("rejects an old companion menu without granting access or charging", async () => {
     const i = fixture();
@@ -370,7 +411,7 @@ describe("KP ticket component flow", () => {
     expect(m.settle).not.toHaveBeenCalled();
     i.customId = ticketId("confirm", session); i.isButton = () => true; i.isStringSelectMenu = () => false;
     await run(i);
-    expect(m.settle).toHaveBeenCalledWith(session.id, 4, "buyer", "guild", "ticket", ["black", "white"]);
+    expect(m.settle).toHaveBeenCalledWith(session.id, 5, "buyer", "guild", "ticket", ["black", "white"]);
     expect(i.channel.send).toHaveBeenCalledOnce();
     const log = i.channel.send.mock.calls[0]![0];
     expect(log.embeds[0].toJSON().fields.map((field: { name: string }) => field.name).join(" ")).not.toMatch(/VIP|延長/);
@@ -596,14 +637,14 @@ describe("KP ticket cast access integration", () => {
     expect(m.settle).not.toHaveBeenCalled();
     expect(m.deliver).not.toHaveBeenCalled();
   });
-  it("adds the cast immediately to the thread only before offering VIP", async () => {
+  it("adds the selected cast immediately to the ticket before continuing", async () => {
     const i = fixture(); await choose(i, "black-cast");
     expect(i.guild.members.fetch).toHaveBeenCalledWith({ user: "black-cast", force: true });
     expect(i.channel.members.add).toHaveBeenCalledWith("black-cast");
     expect(i.channel.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(i.channel.parent.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(session.phase).toBe("vip");
-    expect(i.editReply.mock.calls.at(-1)![0].content).toContain("チケットに追加しました");
+    expect(i.editReply.mock.calls.at(-1)![0].content).toContain("<@black-cast>");
     expect(m.settle).not.toHaveBeenCalled();
   });
   it("does not advance or charge when granting cast access fails and allows retry", async () => {

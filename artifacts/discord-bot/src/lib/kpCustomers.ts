@@ -25,7 +25,9 @@ export function kpCustomers(
     customer.tickets.add(order.channelId);
     customer.orders++;
     customer.total += BigInt(order.selection.quote.total);
-    if (order.selection.castId) customer.casts.add(order.selection.castId);
+    for (const castId of order.selection.castIds ?? (order.selection.castId ? [order.selection.castId] : [])) {
+      customer.casts.add(castId);
+    }
     if (order.paidAt) {
       if (!customer.first || order.paidAt < customer.first) customer.first = order.paidAt;
       if (!customer.last || order.paidAt > customer.last) customer.last = order.paidAt;
@@ -47,15 +49,21 @@ export function kpCustomers(
   ].join("\n");
   const orderText = (order: KpTicketSession) => {
     const quote = order.selection.quote!;
+    const castIds = order.selection.castIds ?? (order.selection.castId ? [order.selection.castId] : []);
+    const drinks = quote.items?.length
+      ? quote.items.map(line => `${line.itemName} × ${line.quantity}（キャストID: ${line.castId}）`).join(" / ")
+      : `${quote.itemName} × ${quote.quantity}`;
     return `支払日時: ${date(order.paidAt)}\n注文ID: ${order.id} / チケットID: ${order.channelId}\n`
-      + `キャストID: ${order.selection.castId ?? "未記録"}\n`
-      + `${quote.itemName} × ${quote.quantity} / 支払額: ${quote.total.toLocaleString()}${currency}`;
+      + `キャストID: ${castIds.join(", ") || "未記録"}\n`
+      + `${drinks} / 支払額: ${quote.total.toLocaleString()}${currency}`;
   };
   const offset = (page - 1) * size;
   const preview = userId
     ? detail.slice(offset, offset + size).map(order =>
-      `${date(order.paidAt)} / ${escapeMarkdown(order.selection.quote!.itemName.slice(0, 80))} × ${order.selection.quote!.quantity}\n`
-      + `${order.selection.quote!.total.toLocaleString()}${currency} / キャスト: ${order.selection.castId ? `<@${order.selection.castId}>` : "未記録"}\nチケットID: ${order.channelId}`)
+      `${date(order.paidAt)} / ${escapeMarkdown((order.selection.quote!.items?.map(line => line.itemName).join(" / ")
+        || order.selection.quote!.itemName).slice(0, 80))}\n`
+      + `${order.selection.quote!.total.toLocaleString()}${currency} / キャスト: ${(order.selection.castIds
+        ?? (order.selection.castId ? [order.selection.castId] : [])).map(id => `<@${id}>`).join(", ") || "未記録"}\nチケットID: ${order.channelId}`)
     : rows.slice(offset, offset + size).map(row =>
       `<@${row.id}>\nチケット ${row.tickets.size}件 / 注文 ${row.orders}件 / 累計 ${row.total.toLocaleString()}${currency}\n最終支払い: ${date(row.last)}`);
   const embed = new EmbedBuilder().setTitle(userId ? "KP島 — 顧客の利用履歴" : "KP島 — 利用顧客一覧")

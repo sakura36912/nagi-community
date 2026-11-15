@@ -1,18 +1,29 @@
 import { integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
-export type KpTicketPhase = "cast" | "vip" | "guest" | "extension" | "drink" | "quantity" | "confirm" | "paid" | "cancelled";
+export type KpTicketPhase = "cast" | "cast2" | "vip" | "guest" | "extension" | "drink" | "drink2" | "quantity" | "confirm" | "paid" | "cancelled";
+export interface KpTicketQuoteItem {
+  castId: string;
+  itemId: number;
+  itemName: string;
+  unitPrice: number;
+  quantity: number;
+}
 export interface KpTicketQuote {
   itemId: number | null;
   itemName: string;
   unitPrice: number;
   quantity: number;
+  items?: KpTicketQuoteItem[];
   vipPrice: number;
   extensionPrice: number;
   total: number;
 }
 export interface KpTicketSelection {
   castId?: string;
+  castIds?: string[];
+  /** Each first drink is linked to the cast who receives it. */
+  drinkSelections?: { castId: string; itemId: number; quantity: number }[];
   /** Additional orders keep the cast of the buyer's paid order in this ticket. */
   fixedCastId?: string;
   serviceVersion?: 2;

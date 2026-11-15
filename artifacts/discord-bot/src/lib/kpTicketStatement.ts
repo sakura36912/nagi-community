@@ -11,22 +11,28 @@ export function kpTicketStatement(orders: KpTicketSession[], currency: string, a
     const q = order.selection.quote;
     if (order.phase !== "paid" || !q) throw new Error("支払い済み注文の明細が不完全です。");
     total += BigInt(q.total);
-    drinks += BigInt(q.unitPrice) * BigInt(q.quantity);
+    drinks += BigInt(q.items?.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+      ?? q.unitPrice * q.quantity);
     vip += BigInt(q.vipPrice);
     extension += BigInt(q.extensionPrice);
     const price = `${q.total.toLocaleString()}${currency}`;
-    const itemLabel = q.itemId === null ? q.itemName : `${q.itemName} × ${q.quantity}個`;
+    const itemLabel = q.items?.length
+      ? q.items.map(item => `${item.itemName} × ${item.quantity}個（キャストID: ${item.castId}）`).join(" / ")
+      : q.itemId === null ? q.itemName : `${q.itemName} × ${q.quantity}個`;
+    const castIds = order.selection.castIds ?? (order.selection.castId ? [order.selection.castId] : []);
     lines.push(
       `${index + 1}. ${itemLabel}`,
       ...(allTickets ? [`チケットID: ${order.channelId}`] : []),
-      `購入者ID: ${order.userId} / 指名キャストID: ${order.selection.castId ?? "未記録"}`,
-      `単価: ${q.unitPrice.toLocaleString()}${currency}`,
+      `購入者ID: ${order.userId} / 指名キャストID: ${castIds.join(", ") || "未記録"}`,
+      ...(q.items?.length ? q.items.map(item =>
+        `${item.itemName}（キャストID: ${item.castId}）: ${item.unitPrice.toLocaleString()}${currency} × ${item.quantity}`
+      ) : [`単価: ${q.unitPrice.toLocaleString()}${currency}`]),
       ...(q.vipPrice || q.extensionPrice ? [`VIP: ${q.vipPrice.toLocaleString()}${currency} / 延長: ${q.extensionPrice.toLocaleString()}${currency}`] : []),
       `支払額: ${price}`,
       `支払日時: ${order.paidAt?.toISOString() ?? "未記録"} / 注文ID: ${order.id}`, "",
     );
     if (index < 10) preview.push(
-      `${index + 1}. ${escapeMarkdown(itemLabel.slice(0, 100))} — ${price}\n購入者: <@${order.userId}> / キャスト: <@${order.selection.castId}>`,
+      `${index + 1}. ${escapeMarkdown(itemLabel.slice(0, 100))} — ${price}\n購入者: <@${order.userId}> / キャスト: ${castIds.map(id => `<@${id}>`).join(", ") || "未記録"}`,
     );
   }
   const amount = (value: bigint) => `${value.toLocaleString()}${currency}`;

@@ -21,7 +21,7 @@ export function ticketMenu(session: KpTicketSession, action: KpTicketPhase, plac
 }
 
 export function pagedTicketMenu(
-  session: KpTicketSession, action: "cast" | "drink", placeholder: string,
+  session: KpTicketSession, action: "cast" | "cast2" | "drink" | "drink2", placeholder: string,
   options: { label: string; value: string; description?: string }[], page = 0,
 ) {
   const pages = Math.ceil(options.length / 25);
@@ -39,16 +39,23 @@ export function pagedTicketMenu(
 
 export function ticketSummary(session: KpTicketSession, currency: string, paid = false) {
   const s = session.selection, q = s.quote;
+  const castIds = s.castIds ?? (s.castId ? [s.castId] : []);
+  const drinkDescription = q?.items?.length
+    ? q.items.map(item => `<@${item.castId}>：${item.itemName} × ${item.quantity}個`).join("\n")
+    : q?.itemName ?? "未選択";
+  const drinkPrices = q?.items?.length
+    ? q.items.map(item => `<@${item.castId}>：${item.unitPrice.toLocaleString()}${currency} × ${item.quantity}`).join("\n")
+    : q?.itemId === null ? "ドリンクなし" : `${q?.unitPrice.toLocaleString()}${currency} × ${q?.quantity}個`;
   const embed = new EmbedBuilder().setTitle(`${KP_SHOP_NAME} ${paid ? "購入ログ" : "支払い内容の確認"}`)
     .setColor(paid ? 0x2ecc71 : 0xf5a623)
     .addFields(
       { name: "購入者", value: `<@${session.userId}>`, inline: true },
-      { name: "指名キャスト", value: `<@${s.castId}>`, inline: true },
-      ...(s.vip ? [{ name: "VIP", value: `${s.vipTier === "shared" ? "お客様2人・キャスト1人" : s.vipTier === "solo" ? "お客様1人・キャスト1人" : "希望する"}（${q?.vipPrice.toLocaleString()}${currency}）` }] : []),
+      { name: "指名キャスト", value: castIds.map(id => `<@${id}>`).join("\n") || "未選択", inline: true },
+      ...(s.vip ? [{ name: "VIP", value: `${s.vipTier === "shared" ? "お客様2人" : s.vipTier === "solo" ? "お客様1人" : "希望する"}・キャスト${castIds.length}人（${q?.vipPrice.toLocaleString()}${currency}）` }] : []),
       ...(paid && s.vip && s.guestId ? [{ name: "同伴のお客様（過去の記録）", value: `<@${s.guestId}>` }] : []),
       ...(s.extension ? [{ name: "延長", value: `1回（${q?.extensionPrice.toLocaleString()}${currency}）` }] : []),
-      { name: "ドリンク", value: q?.itemName.slice(0, 1024) ?? "未選択" },
-      { name: "単価・数量", value: q?.itemId === null ? "ドリンクなし" : `${q?.unitPrice.toLocaleString()}${currency} × ${q?.quantity}個` },
+      { name: "ドリンク", value: drinkDescription.slice(0, 1024) },
+      { name: "単価・数量", value: drinkPrices.slice(0, 1024) },
       { name: "合計金額", value: `${q?.total.toLocaleString()}${currency}` },
     ).setFooter({ text: `注文ID: ${session.id}` });
   if (paid) embed.setTimestamp(session.paidAt ?? new Date());

@@ -38,6 +38,17 @@ describe("KP customers from settled order snapshots", () => {
     expect(text(result)).toContain("JST");
     expect(result.allowedMentions.parse).toEqual([]);
   });
+  it("lists both selected casts and each cast's first drink in customer history", () => {
+    const row = order("two-cast");
+    row.selection.castIds = ["cast", "cast2"];
+    row.selection.quote!.items = [
+      { castId: "cast", itemId: 1, itemName: "ドリンク", unitPrice: 100, quantity: 1 },
+      { castId: "cast2", itemId: 2, itemName: "お茶", unitPrice: 250, quantity: 1 },
+    ];
+    const result = kpCustomers([row], "円", "buyer", 1, kpBusinessDay("2026-11-12"));
+    expect(text(result)).toContain("キャストID: cast, cast2");
+    expect(text(result)).toContain("ドリンク × 1（キャストID: cast） / お茶 × 1（キャストID: cast2）");
+  });
   it("keeps pending/cancelled orders out, isolates the selected customer and includes complete paid history", () => {
     const result = kpCustomers([order("1"), order("2", "other"),
       { ...order("pending"), phase: "confirm" }, { ...order("cancelled"), phase: "cancelled" }], "$", "buyer", 1,

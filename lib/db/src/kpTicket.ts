@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
 import { db } from "./index";
 import { inventoryItemsTable, shopItemsTable, transactionsTable, walletsTable } from "./schema/economy";
@@ -117,8 +117,9 @@ export async function listPaidKpTicketOrders(guildId: string, channelId?: string
 }
 
 export async function advanceKpTicketSession(session: KpTicketSession, phase: KpTicketPhase, selection: KpTicketSelection) {
-  if (session.selection.fixedCastId && (phase === "cast" || selection.castId !== session.selection.fixedCastId
-    || selection.fixedCastId !== session.selection.fixedCastId)) {
+    if (session.selection.fixedCastId && (phase === "cast" || phase === "cast2"
+      || selection.castId !== session.selection.fixedCastId || selection.fixedCastId !== session.selection.fixedCastId
+      || (selection.castIds && (selection.castIds.length !== 1 || selection.castIds[0] !== session.selection.fixedCastId)))) {
     throw new KpTicketError("追加注文の指名キャストは変更できません。");
   }
   if (session.selection.fixedCastId && (selection.baseOrderId !== session.selection.baseOrderId
@@ -150,9 +151,14 @@ export async function settleKpTicket(
     }
     const [settings] = await tx.select().from(kpTicketSettingsTable)
       .where(eq(kpTicketSettingsTable.guildId, guildId)).for("share");
-    const [item] = session.selection.itemId === undefined ? [] : await tx.select().from(shopItemsTable)
-      .where(and(eq(shopItemsTable.guildId, guildId), eq(shopItemsTable.id, session.selection.itemId))).for("share");
-    if (!settings || (session.selection.itemId !== undefined && !item)) {
+    const drinkIds = session.selection.drinkSelections?.map(line => line.itemId)
+      ?? (session.selection.itemId === undefined ? [] : [session.selection.itemId]);
+    const foundItems = drinkIds.length ? await tx.select().from(shopItemsTable).where(and(
+      eq(shopItemsTable.guildId, guildId), inArray(shopItemsTable.id, [...new Set(drinkIds)]),
+    )).for("share") : [];
+    const itemsById = new Map(foundItems.map(item => [item.id, item]));
+    const orderedItems = drinkIds.map(itemId => itemsById.get(itemId)).filter((item): item is NonNullable<typeof item> => !!item);
+    if (!settings || orderedItems.length !== drinkIds.length) {
       throw new KpTicketError("商品または設定が削除されています。最初から選び直してください。");
     }
     if (JSON.stringify([...settings.castRoleIds].sort()) !== JSON.stringify([...validatedRoleIds].sort())) {
@@ -176,7 +182,8 @@ export async function settleKpTicket(
         throw new KpTicketError("VIP利用者はVIPの重複購入・延長を行えません。");
       }
     }
-    const quote = quoteKpTicket(item ?? null, settings, session.selection);
+    const quote = quoteKpTicket(session.selection.drinkSelections ? orderedItems
+      : orderedItems[0] ?? null, settings, session.selection);
     if (!isDeepStrictEqual(quote, session.selection.quote)) {
       const [changed] = await tx.update(kpTicketSessionsTable).set({
         selection: { ...session.selection, quote }, version: session.version + 1,
@@ -189,15 +196,17 @@ export async function settleKpTicket(
     }).where(and(eq(walletsTable.guildId, guildId), eq(walletsTable.userId, userId),
       sql`${walletsTable.balance} >= ${quote.total}`)).returning();
     if (!wallet) throw new KpTicketError("残高が不足しています。引き落としは行っていません。");
-    if (item) {
-      await tx.insert(inventoryItemsTable).values({ guildId, userId, shopItemId: item.id, quantity: quote.quantity })
+    for (const line of quote.items ?? []) {
+      await tx.insert(inventoryItemsTable).values({ guildId, userId, shopItemId: line.itemId, quantity: line.quantity })
         .onConflictDoUpdate({ target: [inventoryItemsTable.guildId, inventoryItemsTable.userId, inventoryItemsTable.shopItemId],
-          set: { quantity: sql`${inventoryItemsTable.quantity} + ${quote.quantity}` } });
+          set: { quantity: sql`${inventoryItemsTable.quantity} + ${line.quantity}` } });
     }
+    const castIds = s.castIds ?? [s.castId!];
+    const drinkReason = (quote.items ?? []).map(line => `${line.itemName} x${line.quantity}→${line.castId}`).join("; ") || "ドリンクなし";
     await tx.insert(transactionsTable).values({
-      guildId, userId, amount: -quote.total, relatedUserId: session.selection.castId,
+      guildId, userId, amount: -quote.total, relatedUserId: castIds[0],
       sessionKey: `kp-ticket:${id}`,
-      reason: `kp-ticket:${quote.itemName} x${quote.quantity}; VIP=${session.selection.vip}; 延長=${session.selection.extension}; ticket=${channelId}`,
+      reason: `kp-ticket:${drinkReason}; casts=${castIds.join(",")}; VIP=${session.selection.vip}; 延長=${session.selection.extension}; ticket=${channelId}`,
     });
     // Unpaid screens from the earlier companion flow cannot grant companion access.
     const selection = { ...session.selection };
@@ -215,7 +224,8 @@ export async function listKpVipOrders(guildId: string, memberId?: string, roomId
     sql`${kpTicketSessionsTable.selection}->>'serviceVersion' = '2'`,
     sql`${kpTicketSessionsTable.selection}->>'vip' = 'true'`,
     memberId ? or(eq(kpTicketSessionsTable.userId, memberId),
-      sql`${kpTicketSessionsTable.selection}->>'castId' = ${memberId}`) : undefined,
+      sql`${kpTicketSessionsTable.selection}->>'castId' = ${memberId}`,
+      sql`${kpTicketSessionsTable.selection}->'castIds' ? ${memberId}`) : undefined,
     roomId ? sql`${kpTicketSessionsTable.selection}->>'vipRoomId' = ${roomId}` : undefined,
   )).orderBy(desc(kpTicketSessionsTable.paidAt));
 }

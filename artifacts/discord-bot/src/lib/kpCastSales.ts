@@ -8,8 +8,16 @@ export function kpCastSales(orders: KpTicketSession[], currency: string, period:
   for (const order of orders) {
     const quote = order.selection.quote;
     if (order.phase !== "paid" || !quote) throw new Error("支払い済み注文の明細が不完全です。");
-    const cast = order.selection.castId || "";
-    totals.set(cast, (totals.get(cast) ?? 0n) + BigInt(quote.total));
+    const primaryCast = order.selection.castIds?.[0] ?? order.selection.castId ?? "";
+    if (quote.items?.length) {
+      for (const item of quote.items) {
+        totals.set(item.castId, (totals.get(item.castId) ?? 0n) + BigInt(item.unitPrice) * BigInt(item.quantity));
+      }
+      const shared = BigInt(quote.vipPrice + quote.extensionPrice);
+      totals.set(primaryCast, (totals.get(primaryCast) ?? 0n) + shared);
+    } else {
+      totals.set(primaryCast, (totals.get(primaryCast) ?? 0n) + BigInt(quote.total));
+    }
   }
   const sorted = [...totals].sort(([a, x], [b, y]) => x === y ? a.localeCompare(b) : x > y ? -1 : 1);
   const amount = (value: bigint) => `${value.toLocaleString()}${currency}`;

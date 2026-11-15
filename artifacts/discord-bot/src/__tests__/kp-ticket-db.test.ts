@@ -326,4 +326,31 @@ describe.skipIf(process.env.RUN_KP_TICKET_DB_TESTS !== "1")("KP ticket real data
     expect((await settle(session)).status).toBe("already");
     expect(await balance()).toBe(4800);
   });
+  it("settles both cast-specific first drinks atomically and grants inventory for each", async () => {
+    const [secondProduct] = await db.insert(shopItemsTable).values({
+      guildId: guild, name: "テストお茶", price: 250, category: "kp",
+    }).returning();
+    await wallet(200000);
+    const session = await createKpTicketSession(randomUUID(), guild, channel, user);
+    const selection: KpTicketSelection = {
+      castId: "test-cast-a", castIds: ["test-cast-a", "test-cast-b"],
+      vip: true, extension: false, serviceVersion: 2, vipTier: "solo", vipDiscountApplied: true,
+      drinkSelections: [
+        { castId: "test-cast-a", itemId: product.id, quantity: 1 },
+        { castId: "test-cast-b", itemId: secondProduct!.id, quantity: 1 },
+      ],
+    };
+    selection.quote = quoteKpTicket([product, secondProduct!], { vipPrice: null, extensionPrice: null }, selection);
+    const confirm = await advanceKpTicketSession(session, "confirm", selection);
+    const result = await settle(confirm);
+    expect(result.status).toBe("paid");
+    expect(result.session.selection.quote).toMatchObject({ total: 100350, vipPrice: 100000 });
+    expect(await balance()).toBe(99650);
+    const inventory = await db.select().from(inventoryItemsTable).where(eq(inventoryItemsTable.guildId, guild));
+    expect(inventory.find(row => row.shopItemId === product.id)?.quantity).toBe(1);
+    expect(inventory.find(row => row.shopItemId === secondProduct!.id)?.quantity).toBe(1);
+    const [ledger] = await db.select().from(transactionsTable).where(eq(transactionsTable.sessionKey, `kp-ticket:${session.id}`));
+    expect(ledger?.reason).toContain("test-cast-b");
+    expect(await listKpVipOrders(guild, "test-cast-b")).toEqual([result.session]);
+  });
 });

@@ -21,7 +21,7 @@ beforeEach(() => {
     selection: { serviceVersion: 2, vip: true, vipTier: "shared", castId: "cast", guestId: "guest" },
     expiresAt: new Date(0), createdAt: new Date(), paidAt: new Date(), logMessageId: "receipt" };
   m.list.mockImplementation(async (guild, member, room) => guild === "guild"
-    && (!member || ["buyer", "cast"].includes(member))
+    && (!member || ["buyer", "cast", "cast2"].includes(member))
     && (!room || room === order.selection.vipRoomId) ? [order] : []);
   m.deliver.mockImplementation(async (_id, _guild, use) => {
     const room = await use(order);
@@ -134,6 +134,18 @@ describe("VIP transfer and persisted room recovery", () => {
     expect(f.guild.channels.create).toHaveBeenCalledOnce();
     expect(f.member.voice.setChannel).toHaveBeenCalledTimes(2);
   });
+  it("includes both nominated casts in the VIP room and grants each transfer access", async () => {
+    order.selection.castIds = ["cast", "cast2"];
+    const f = fixture("cast2");
+    await handleKpVipHubJoin(f.state as unknown as VoiceState);
+    expect(m.list).toHaveBeenCalledWith("guild", "cast2");
+    expect(f.guild.channels.create).toHaveBeenCalledWith(expect.objectContaining({ userLimit: 4 }));
+    const options = f.guild.channels.create.mock.calls[0]![0] as unknown as {
+      permissionOverwrites: { id: string }[];
+    };
+    expect(options.permissionOverwrites.map(row => row.id)).toEqual(expect.arrayContaining(["buyer", "cast", "cast2", "bot"]));
+    expect(f.member.voice.setChannel).toHaveBeenCalledWith("room");
+  });
   it("does not affect unrelated Hub rooms", async () => {
     const f = fixture(); f.state.channelId = "ordinary-hub";
     expect(await handleKpVipHubJoin(f.state as unknown as VoiceState)).toBe(false);
@@ -173,7 +185,12 @@ describe("VIP transfer and persisted room recovery", () => {
 describe("VIP controls and cleanup", () => {
   it("renders all three requested controls", () => {
     const panel = kpVipPanel(order, "room");
+    expect(panel.embeds[0]!.toJSON().description).toContain("キャスト1人");
     expect(panel.components[0]!.toJSON().components.map(c => "label" in c ? c.label : "")).toEqual(["非公開VC", "公開VC", "VC名変更"]);
+  });
+  it("describes both casts in a two-cast VIP panel", () => {
+    order.selection.castIds = ["cast", "cast2"];
+    expect(kpVipPanel(order, "room").embeds[0]!.toJSON().description).toContain("キャスト2人");
   });
   it.each(["public", "private"])("lets only the purchaser set %s and never edits the source/category", async action => {
     const f = fixture(); f.channels.set("room", f.room); order.selection.vipRoomId = "room";

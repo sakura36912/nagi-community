@@ -4,6 +4,7 @@ import type { KpTicketSelection } from "@workspace/db";
 import { pagedTicketMenu } from "../lib/kpTicketUi";
 
 const item = { id: 1, name: "ドリンク", price: 100, category: "kp", effectType: null, targetRoleId: null };
+const item2 = { id: 2, name: "お茶", price: 250, category: "kp", effectType: null, targetRoleId: null };
 const selection: KpTicketSelection = { castId: "cast", itemId: 1, quantity: 3, vip: false, extension: false };
 
 describe("KP ticket pricing and paging", () => {
@@ -19,6 +20,39 @@ describe("KP ticket pricing and paging", () => {
     const discounted = { ...vip(tier), vipDiscountApplied: true };
     expect(quoteKpTicket(null, settings, discounted)).toMatchObject({ vipPrice: 100000, total: 100000 });
     expect(quoteKpTicket(item, settings, { ...selection, ...discounted }).total).toBe(100300);
+  });
+  it("sums two cast-specific first drinks and the same VIP charge", () => {
+    const twoCast: KpTicketSelection = {
+      castId: "cast-a", castIds: ["cast-a", "cast-b"], vip: true, extension: false,
+      serviceVersion: 2, vipTier: "solo", vipDiscountApplied: true,
+      drinkSelections: [
+        { castId: "cast-a", itemId: 1, quantity: 1 },
+        { castId: "cast-b", itemId: 2, quantity: 1 },
+      ],
+    };
+    expect(quoteKpTicket([item, item2], settings, twoCast)).toMatchObject({
+      total: 100350, vipPrice: 100000, quantity: 2,
+      items: [
+        { castId: "cast-a", itemId: 1, unitPrice: 100, quantity: 1 },
+        { castId: "cast-b", itemId: 2, unitPrice: 250, quantity: 1 },
+      ],
+    });
+    expect(() => quoteKpTicket([item], settings, twoCast)).toThrow("不完全");
+    expect(() => quoteKpTicket([item], settings, {
+      ...twoCast, drinkSelections: [{ castId: "cast-a", itemId: 1, quantity: 1 }],
+    })).toThrow("各キャスト");
+  });
+  it("records two different first drinks against their selected casts", () => {
+    const twoCast: KpTicketSelection = {
+      castId: "cast-a", castIds: ["cast-a", "cast-b"], vip: false, extension: false,
+      drinkSelections: [
+        { castId: "cast-a", itemId: 1, quantity: 1 },
+        { castId: "cast-b", itemId: 2, quantity: 1 },
+      ],
+    };
+    expect(quoteKpTicket([item, item2], settings, twoCast)).toMatchObject({
+      total: 350, items: [{ castId: "cast-a" }, { castId: "cast-b" }],
+    });
   });
   it("charges 50,000 only for additional extension with or without drinks", () => {
     const extension: KpTicketSelection = { castId: "cast", fixedCastId: "cast", baseOrderId: "paid",
